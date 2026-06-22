@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- 继承父工程：拿到 Spring Boot 与 Spring AI 的版本管理 -->
+    <parent>
+        <groupId>com.example.springai</groupId>
+        <artifactId>springai-agentdemo</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>springai-core-demo</artifactId>
+    <name>springai-core-demo</name>
+    <description>Spring AI 核心能力演示：对话 / Prompt 模板 / 流式 / 结构化输出 / Embedding / RAG</description>
+
+    <dependencies>
+        <!-- Spring Boot 基础（提供 IoC 容器、自动配置等；本项目是控制台应用，不需要 web） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!--
+          DeepSeek 对话模型 starter：自动装配 DeepSeekChatModel、ChatClient.Builder 等。
+          配置见 application.properties 的 spring.ai.deepseek.*
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-deepseek</artifactId>
+        </dependency>
+
+        <!--
+          本地向量（Embedding）模型 starter：基于 ONNX/Transformers，自动装配一个 EmbeddingModel。
+          默认使用 all-MiniLM-L6-v2，完全本地运行、无需 API Key（首次会下载模型文件）。
+          之所以用它做向量，是因为 DeepSeek 官方 API 只提供“对话”，不提供“向量”能力。
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-transformers</artifactId>
+        </dependency>
+
+        <!--
+          向量库模块：提供 SimpleVectorStore（内存向量库）、SearchRequest 等。
+          Spring AI 2.0 把向量库相关类独立成了这个模块，做 RAG 时需显式引入。
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-vector-store</artifactId>
+        </dependency>
+
+        <!-- 测试（可选） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- 让模块可以用 mvn spring-boot:run 启动，并打成可执行 jar -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

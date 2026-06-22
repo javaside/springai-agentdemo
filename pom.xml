@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      父工程（聚合 + 版本管理）
+      packaging=pom 表示这是一个父/聚合工程，本身不产出 jar，只负责：
+        1. 通过 <modules> 聚合两个子模块，一条命令即可统一构建
+        2. 通过继承 spring-boot-starter-parent 拿到 Spring Boot 的依赖/插件版本管理
+        3. 通过 dependencyManagement 引入 spring-ai-bom，统一所有 Spring AI 组件的版本
+      这样子模块里写依赖时就不用再写 <version>，由 BOM 统一决定，避免版本冲突。
+    -->
+    <groupId>com.example.springai</groupId>
+    <artifactId>springai-agentdemo</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>springai-agentdemo</name>
+    <description>Spring AI 2.0 学习示例（DeepSeek + 本地向量模型）</description>
+
+    <!-- 继承 Spring Boot 官方父工程：获得 Spring Boot 4.0.7 的全套依赖与插件版本管理 -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.7</version>
+        <relativePath/>
+    </parent>
+
+    <!-- 聚合的两个子模块 -->
+    <modules>
+        <module>springai-core-demo</module>
+        <module>springai-agent-demo</module>
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Spring AI 版本：当前最新稳定版 2.0.0 -->
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <!--
+      只在父工程里“管理”版本，不在这里“引入”依赖。
+      子模块声明 org.springframework.ai 的依赖时无需写版本，由这个 BOM 决定。
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+</project>
