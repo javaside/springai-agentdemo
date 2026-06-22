@@ -4,7 +4,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
-import org.springframework.stereotype.Component;
 
 /**
  * 示例 2：多轮对话记忆（ChatMemory）。
@@ -15,7 +14,6 @@ import org.springframework.stereotype.Component;
  *
  * <p>本示例发起两轮对话：第二轮的问题依赖第一轮的内容（指代“它”），以此验证“记住了”。
  */
-@Component
 public class ChatMemoryDemo implements Demo {
 
     private final ChatClient chatClient;

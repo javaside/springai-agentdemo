@@ -1,7 +1,6 @@
 package com.example.springai.core.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.stereotype.Component;
 
 /**
  * 示例 3：流式输出（打字机效果）。
@@ -9,7 +8,6 @@ import org.springframework.stereotype.Component;
  * <p>用 stream() 代替 call()，返回的是一个 Flux（响应式数据流），模型每生成一小段就推送一段。
  * 这里用 toStream() 把响应式流转成普通 Java Stream，逐段打印，模拟“边想边说”的效果。
  */
-@Component
 public class StreamDemo implements Demo {
 
     private final ChatClient chatClient;

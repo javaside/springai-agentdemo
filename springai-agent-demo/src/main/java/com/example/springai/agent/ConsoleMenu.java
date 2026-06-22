@@ -1,32 +1,27 @@
 package com.example.springai.agent;
 
 import com.example.springai.agent.demo.Demo;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
-import org.springframework.stereotype.Component;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Scanner;
 
 /**
- * 交互式菜单：启动后列出所有 {@link Demo}，输入数字执行。
- * 通过构造器注入 {@code List<Demo>} 自动收集所有示例 Bean。
+ * 纯 Java 的交互式控制台菜单（与 core 模块同理，无 Spring）。
  */
-@Component
-public class DemoMenuRunner implements ApplicationRunner {
+public class ConsoleMenu {
 
+    private final String title;
     private final List<Demo> demos;
 
-    public DemoMenuRunner(List<Demo> demos) {
+    public ConsoleMenu(String title, List<Demo> demos) {
+        this.title = title;
         this.demos = demos.stream()
                 .sorted(Comparator.comparingInt(Demo::order))
                 .toList();
     }
 
-    @Override
-    public void run(ApplicationArguments args) {
-        warnIfApiKeyMissing();
+    public void run() {
         try (Scanner scanner = new Scanner(System.in)) {
             while (true) {
                 printMenu();
@@ -57,7 +52,7 @@ public class DemoMenuRunner implements ApplicationRunner {
                     demo.run();
                 } catch (Exception e) {
                     System.out.println("\n❌ 运行出错：" + e.getMessage());
-                    System.out.println("   （常见原因：未设置 DEEPSEEK_API_KEY、网络不通、或 MCP 示例未配置外部 Server）");
+                    System.out.println("   （常见原因：未设置 DEEPSEEK_API_KEY、网络不通）");
                 }
                 System.out.println("========== ✔ 完成（耗时 " + (System.currentTimeMillis() - start) + " ms） ==========\n");
             }
@@ -65,19 +60,11 @@ public class DemoMenuRunner implements ApplicationRunner {
     }
 
     private void printMenu() {
-        System.out.println("==================== Spring AI 智能体（Agent）示例 ====================");
+        System.out.println("==================== " + title + " ====================");
         for (int i = 0; i < demos.size(); i++) {
             System.out.printf("  %d. %s%n", i + 1, demos.get(i).title());
         }
         System.out.println("  0. 退出");
-        System.out.println("====================================================================");
-    }
-
-    private void warnIfApiKeyMissing() {
-        String key = System.getenv("DEEPSEEK_API_KEY");
-        if (key == null || key.isBlank()) {
-            System.out.println("\n⚠️  未检测到环境变量 DEEPSEEK_API_KEY，调用 DeepSeek 的示例会失败。");
-            System.out.println("   设置方式（macOS/Linux）：export DEEPSEEK_API_KEY=你的key  然后重新启动。\n");
-        }
+        System.out.println("==========================================================");
     }
 }

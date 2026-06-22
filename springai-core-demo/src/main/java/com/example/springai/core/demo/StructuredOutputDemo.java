@@ -1,7 +1,6 @@
 package com.example.springai.core.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.stereotype.Component;
 
 import java.util.List;
 
@@ -11,7 +10,6 @@ import java.util.List;
  * <p>不用自己解析 JSON：调用 entity(...) 时，Spring AI 会自动在提示词里加入“请按这个结构返回”的说明，
  * 并把模型返回的 JSON 反序列化成你的 Java 类型。
  */
-@Component
 public class StructuredOutputDemo implements Demo {
 
     private final ChatClient chatClient;

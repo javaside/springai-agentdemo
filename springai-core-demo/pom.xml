@@ -4,7 +4,6 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- 继承父工程：拿到 Spring Boot 与 Spring AI 的版本管理 -->
     <parent>
         <groupId>com.example.springai</groupId>
         <artifactId>springai-agentdemo</artifactId>
@@ -13,57 +12,80 @@
 
     <artifactId>springai-core-demo</artifactId>
     <name>springai-core-demo</name>
-    <description>Spring AI 核心能力演示：对话 / Prompt 模板 / 流式 / 结构化输出 / Embedding / RAG</description>
+    <description>Spring AI 核心能力（纯 Java，使用原始 API，不依赖 Spring Boot）</description>
 
+    <!--
+      注意：这里【没有任何 spring-boot 依赖】。引入的都是 Spring AI 的“原始库”（不是 starter）。
+      starter 与原始库的区别：
+        - starter（如 spring-ai-starter-model-deepseek）= 原始库 + 自动配置，配合 Spring Boot 零代码装配
+        - 原始库（如 spring-ai-deepseek）= 只有功能本体，需要你自己 new 出来、自己接线
+      本模块用原始库，正是为了让你看清“对象是怎么一步步被创建出来的”。
+    -->
     <dependencies>
-        <!-- Spring Boot 基础（提供 IoC 容器、自动配置等；本项目是控制台应用，不需要 web） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter</artifactId>
-        </dependency>
-
-        <!--
-          DeepSeek 对话模型 starter：自动装配 DeepSeekChatModel、ChatClient.Builder 等。
-          配置见 application.properties 的 spring.ai.deepseek.*
-        -->
+        <!-- DeepSeek 对话模型（原始库：提供 DeepSeekApi / DeepSeekChatModel） -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-deepseek</artifactId>
+            <artifactId>spring-ai-deepseek</artifactId>
         </dependency>
 
-        <!--
-          本地向量（Embedding）模型 starter：基于 ONNX/Transformers，自动装配一个 EmbeddingModel。
-          默认使用 all-MiniLM-L6-v2，完全本地运行、无需 API Key（首次会下载模型文件）。
-          之所以用它做向量，是因为 DeepSeek 官方 API 只提供“对话”，不提供“向量”能力。
-        -->
+        <!-- ChatClient 及其 advisor、记忆等（对话客户端本体） -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-transformers</artifactId>
+            <artifactId>spring-ai-client-chat</artifactId>
         </dependency>
 
-        <!--
-          向量库模块：提供 SimpleVectorStore（内存向量库）、SearchRequest 等。
-          Spring AI 2.0 把向量库相关类独立成了这个模块，做 RAG 时需显式引入。
-        -->
+        <!-- 本地向量模型（原始库：提供 TransformersEmbeddingModel，本地 ONNX，无需 Key） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-transformers</artifactId>
+        </dependency>
+
+        <!-- 内存向量库 SimpleVectorStore，用于 RAG -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-vector-store</artifactId>
         </dependency>
 
-        <!-- 测试（可选） -->
+        <!-- 日志后端（非 Boot 工程需自己提供 SLF4J 实现；用 logback + logback.xml 控制输出级别） -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
         </dependency>
     </dependencies>
 
     <build>
+        <finalName>${project.artifactId}</finalName>
         <plugins>
-            <!-- 让模块可以用 mvn spring-boot:run 启动，并打成可执行 jar -->
+            <!-- 把所有依赖复制到 target/lib/ -->
             <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-deps</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- 打成可执行 jar：Main-Class + 引用 target/lib 下的依赖 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.example.springai.core.CoreDemoApplication</mainClass>
+                            <addClasspath>true</addClasspath>
+                            <classpathPrefix>lib/</classpathPrefix>
+                        </manifest>
+                    </archive>
+                </configuration>
             </plugin>
         </plugins>
     </build>

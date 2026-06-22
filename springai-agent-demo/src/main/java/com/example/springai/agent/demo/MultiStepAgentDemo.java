@@ -2,7 +2,6 @@ package com.example.springai.agent.demo;
 
 import com.example.springai.agent.tools.DateTimeTools;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.stereotype.Component;
 
 /**
  * 示例 3：多步 Agent（自动串联多个工具）。
@@ -17,7 +16,6 @@ import org.springframework.stereotype.Component;
  * </ol>
  * 模型会自动完成这条链路——我们只管提问，不用手写调用顺序。
  */
-@Component
 public class MultiStepAgentDemo implements Demo {
 
     private final ChatClient chatClient;

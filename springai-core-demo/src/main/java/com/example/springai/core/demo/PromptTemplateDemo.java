@@ -1,7 +1,6 @@
 package com.example.springai.core.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.stereotype.Component;
 
 /**
  * 示例 2：Prompt 模板 + 临时系统提示词。
@@ -9,7 +8,6 @@ import org.springframework.stereotype.Component;
  * <p>用占位符 {@code {xxx}} 写提示词模板，再用 param 填值，避免手工拼字符串。
  * 同时演示在单次请求里用 system(...) 覆盖默认角色设定。
  */
-@Component
 public class PromptTemplateDemo implements Demo {
 
     private final ChatClient chatClient;

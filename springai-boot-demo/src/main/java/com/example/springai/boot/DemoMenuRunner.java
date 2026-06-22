@@ -1,6 +1,6 @@
-package com.example.springai.core;
+package com.example.springai.boot;
 
-import com.example.springai.core.demo.Demo;
+import com.example.springai.boot.demo.Demo;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
@@ -10,10 +10,8 @@ import java.util.List;
 import java.util.Scanner;
 
 /**
- * 交互式菜单：应用启动后自动运行，列出所有 {@link Demo}，由你输入数字选择执行。
- *
- * <p>实现要点：构造器注入 {@code List<Demo>} —— Spring 会把容器里所有 Demo 类型的 Bean
- * 自动装配成一个 List，所以新增示例无需改这里。
+ * 交互式菜单。注意 {@code List<Demo>} 是 Spring 自动注入的——容器里所有 Demo 类型的 Bean
+ * 都会被收集进来，新增示例无需改这里。这正是与 core/agent“手动装 List”相对的“自动装配”。
  */
 @Component
 public class DemoMenuRunner implements ApplicationRunner {
@@ -21,7 +19,6 @@ public class DemoMenuRunner implements ApplicationRunner {
     private final List<Demo> demos;
 
     public DemoMenuRunner(List<Demo> demos) {
-        // 按 order() 升序，保证菜单顺序稳定、由易到难
         this.demos = demos.stream()
                 .sorted(Comparator.comparingInt(Demo::order))
                 .toList();
@@ -29,7 +26,11 @@ public class DemoMenuRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        warnIfApiKeyMissing();
+        String key = System.getenv("DEEPSEEK_API_KEY");
+        if (key == null || key.isBlank()) {
+            System.out.println("\n⚠️  未检测到环境变量 DEEPSEEK_API_KEY，调用 DeepSeek 的示例会失败。");
+            System.out.println("   设置方式（macOS/Linux）：export DEEPSEEK_API_KEY=你的key  然后重新启动。\n");
+        }
         try (Scanner scanner = new Scanner(System.in)) {
             while (true) {
                 printMenu();
@@ -60,7 +61,6 @@ public class DemoMenuRunner implements ApplicationRunner {
                     demo.run();
                 } catch (Exception e) {
                     System.out.println("\n❌ 运行出错：" + e.getMessage());
-                    System.out.println("   （常见原因：未设置 DEEPSEEK_API_KEY、网络不通、或首次下载本地向量模型较慢）");
                 }
                 System.out.println("========== ✔ 完成（耗时 " + (System.currentTimeMillis() - start) + " ms） ==========\n");
             }
@@ -68,19 +68,11 @@ public class DemoMenuRunner implements ApplicationRunner {
     }
 
     private void printMenu() {
-        System.out.println("==================== Spring AI 核心能力示例 ====================");
+        System.out.println("==================== Spring AI 自动装配示例（Spring Boot） ====================");
         for (int i = 0; i < demos.size(); i++) {
             System.out.printf("  %d. %s%n", i + 1, demos.get(i).title());
         }
         System.out.println("  0. 退出");
-        System.out.println("==============================================================");
-    }
-
-    private void warnIfApiKeyMissing() {
-        String key = System.getenv("DEEPSEEK_API_KEY");
-        if (key == null || key.isBlank()) {
-            System.out.println("\n⚠️  未检测到环境变量 DEEPSEEK_API_KEY，调用 DeepSeek 的示例会失败。");
-            System.out.println("   设置方式（macOS/Linux）：export DEEPSEEK_API_KEY=你的key  然后重新启动。\n");
-        }
+        System.out.println("===========================================================================");
     }
 }

@@ -5,12 +5,15 @@
     <modelVersion>4.0.0</modelVersion>
 
     <!--
-      父工程（聚合 + 版本管理）
-      packaging=pom 表示这是一个父/聚合工程，本身不产出 jar，只负责：
-        1. 通过 <modules> 聚合两个子模块，一条命令即可统一构建
-        2. 通过继承 spring-boot-starter-parent 拿到 Spring Boot 的依赖/插件版本管理
-        3. 通过 dependencyManagement 引入 spring-ai-bom，统一所有 Spring AI 组件的版本
-      这样子模块里写依赖时就不用再写 <version>，由 BOM 统一决定，避免版本冲突。
+      父工程（聚合 + 版本管理）。
+
+      与上一版不同：本工程【不再继承 spring-boot-starter-parent】。
+      原因：core / agent 两个模块要演示「不依赖 Spring Boot、直接用 Spring AI 原始 API」，
+      所以父工程刻意保持中立，只通过 dependencyManagement 导入两个 BOM 来【统一版本】，
+      但不会给任何模块强加 Spring Boot 依赖：
+        - spring-ai-bom         : 统一所有 Spring AI 组件版本
+        - spring-boot-dependencies : 仅用于统一第三方库（如 logback、junit）和 boot 模块 starter 的版本
+      “导入 BOM” 只管版本、不引入任何实际依赖，因此 core/agent 仍然是纯净的非 Boot 工程。
     -->
     <groupId>com.example.springai</groupId>
     <artifactId>springai-agentdemo</artifactId>
@@ -18,35 +21,25 @@
     <packaging>pom</packaging>
 
     <name>springai-agentdemo</name>
-    <description>Spring AI 2.0 学习示例（DeepSeek + 本地向量模型）</description>
+    <description>Spring AI 2.0 学习示例：原始 API（core/agent） vs 自动装配（boot）</description>
 
-    <!-- 继承 Spring Boot 官方父工程：获得 Spring Boot 4.0.7 的全套依赖与插件版本管理 -->
-    <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.7</version>
-        <relativePath/>
-    </parent>
-
-    <!-- 聚合的两个子模块 -->
     <modules>
         <module>springai-core-demo</module>
         <module>springai-agent-demo</module>
+        <module>springai-boot-demo</module>
     </modules>
 
     <properties>
         <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- Spring AI 版本：当前最新稳定版 2.0.0 -->
         <spring-ai.version>2.0.0</spring-ai.version>
+        <spring-boot.version>4.0.7</spring-boot.version>
     </properties>
 
-    <!--
-      只在父工程里“管理”版本，不在这里“引入”依赖。
-      子模块声明 org.springframework.ai 的依赖时无需写版本，由这个 BOM 决定。
-    -->
     <dependencyManagement>
         <dependencies>
+            <!-- Spring AI 组件版本 -->
             <dependency>
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
@@ -54,7 +47,54 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- 第三方库 / Spring Boot starter 版本（仅版本管理，不强加依赖） -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <build>
+        <!-- 因为不再继承 spring-boot-starter-parent，需自行声明插件版本与配置 -->
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.14.1</version>
+                </plugin>
+                <!-- 给「原始 API」模块打可执行 jar：写入 Main-Class 与 lib/ 类路径 -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.4.1</version>
+                </plugin>
+                <!-- 把依赖复制到 target/lib，供上面的 jar 通过 Class-Path 引用（原生库可正常加载） -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-dependency-plugin</artifactId>
+                    <version>3.8.1</version>
+                </plugin>
+                <!-- 仅 boot 模块使用 -->
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <version>${spring-boot.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
+        <plugins>
+            <!-- 所有模块统一用 Java 21 编译 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.example.springai</groupId>
+        <artifactId>springai-agentdemo</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>springai-boot-demo</artifactId>
+    <name>springai-boot-demo</name>
+    <description>用 Spring Boot starter 演示「自动装配」：对比 core/agent 的手动接线，体会自动配置省了多少代码</description>
+
+    <!--
+      关键区别：这里用的是 spring-ai 的【starter】（不是原始库）。
+      starter = 原始库 + 自动配置。配合 spring-boot，启动时会自动把 ChatModel / EmbeddingModel /
+      ChatClient.Builder 等 Bean 创建好，你无需写一行“new”。对比 core/agent 的 main 方法即可看出差别。
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- DeepSeek 对话模型 starter（自动配置 DeepSeekChatModel、ChatClient.Builder 等） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-deepseek</artifactId>
+        </dependency>
+
+        <!-- 本地向量模型 starter（自动配置 EmbeddingModel） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-transformers</artifactId>
+        </dependency>
+
+        <!-- MCP 客户端 starter（几行 properties 即可接入外部 MCP Server） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+              Spring Boot 插件：支持 mvn spring-boot:run，并把应用打成可执行 fat jar。
+              注意：因为本项目不再继承 spring-boot-starter-parent，repackage 目标不会被自动绑定，
+              需要在这里显式声明 execution，否则打出的 jar 缺少主清单（无法 java -jar 运行）。
+            -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

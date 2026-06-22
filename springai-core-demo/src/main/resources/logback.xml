@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  非 Spring Boot 工程的日志配置。logback 会自动加载 classpath 下的 logback.xml。
+  这里把根日志级别设为 WARN，让控制台菜单输出保持清爽（屏蔽模型加载、HTTP 等大量 INFO 日志）。
+-->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss} %-5level %logger{0} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="WARN">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

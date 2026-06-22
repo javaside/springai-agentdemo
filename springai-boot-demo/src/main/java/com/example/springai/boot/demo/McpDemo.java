@@ -1,4 +1,4 @@
-package com.example.springai.agent.demo;
+package com.example.springai.boot.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
@@ -7,17 +7,13 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 /**
- * 示例 4：MCP（Model Context Protocol）客户端。
+ * 示例：MCP（Model Context Protocol）客户端。
  *
- * <p>MCP 是一套开放协议：外部进程作为 “MCP Server” 暴露一批工具/资源，你的应用作为
- * “MCP 客户端” 连上去，就能把这些工具交给模型调用——无需为每个外部能力手写 Java 工具。
+ * <p>MCP 让你“即插即用”地把外部进程暴露的工具交给模型调用。用 Spring Boot 的 MCP starter，
+ * 只需在 application.properties 写几行配置就能连接一个外部 MCP Server——这正是放在 boot 模块的原因：
+ * 配置很重的事，交给自动配置最省心（在 core/agent 里手写这套连接代码会相当繁琐）。
  *
- * <p>要真正连通需要一个外部 MCP Server（通常用 npx 启动，依赖 Node.js），所以本示例默认
- * “未连接”。它会自动检测：若已在 application.properties 配置好 MCP Server，就列出其工具并试用；
- * 否则打印配置指引。这样不影响其它示例“启动即运行”。
- *
- * <p>注入 {@link ObjectProvider} 而非直接注入：MCP 未配置时该 Bean 可能不存在，用
- * ObjectProvider 可以“可有可无”地获取，避免启动报错。
+ * <p>默认未连接任何 Server（不影响其它示例），会自动检测：配了就列出工具并试用，没配就打印指引。
  */
 @Component
 public class McpDemo implements Demo {
@@ -37,7 +33,7 @@ public class McpDemo implements Demo {
 
     @Override
     public int order() {
-        return 4;
+        return 2;
     }
 
     @Override
@@ -55,7 +51,6 @@ public class McpDemo implements Demo {
             System.out.println("  - " + t.getToolDefinition().name());
         }
 
-        // 把 MCP 工具交给模型，让它按需调用
         String answer = chatClient.prompt()
                 .user("请利用可用的工具，完成一个能体现这些工具用途的小任务，并说明你做了什么。")
                 .toolCallbacks(provider)

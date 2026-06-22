@@ -1,7 +1,6 @@
 package com.example.springai.core.demo;
 
 import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.stereotype.Component;
 
 /**
  * 示例 5：文本向量化（Embedding）。
@@ -11,16 +10,14 @@ import org.springframework.stereotype.Component;
  *
  * <p>演示：把 3 句话转成向量，并用「余弦相似度」比较它们的语义接近程度。
  */
-@Component
 public class EmbeddingDemo implements Demo {
 
     private final EmbeddingModel embeddingModel;
 
     /**
-     * 这里注入的 EmbeddingModel 从哪来？
-     * —— 不是我们 new 的，也没在任何 @Bean 里声明，而是 spring-ai-starter-model-transformers
-     *    这个 starter【自动配置】出来的（实现类是本地 ONNX 的 TransformersEmbeddingModel）。
-     *    想亲眼确认它的实现类和所在 jar，请运行菜单里的「自动配置揭秘」示例。
+     * 这里的 EmbeddingModel 是在 {@code CoreDemoApplication} 里【手动】 new TransformersEmbeddingModel()
+     * 并调用 afterPropertiesSet() 加载好后传进来的——一切都看得见。
+     * （对比 springai-boot-demo：那边同样一个 EmbeddingModel 是 starter 自动配置的，一行手动代码都没有。）
      */
     public EmbeddingDemo(EmbeddingModel embeddingModel) {
         this.embeddingModel = embeddingModel;

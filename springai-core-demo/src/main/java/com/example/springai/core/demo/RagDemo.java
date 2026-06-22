@@ -5,7 +5,6 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
-import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -23,16 +22,13 @@ import java.util.stream.Collectors;
  *   <li>把检索结果作为「上下文」放进提示词，交给 DeepSeek 回答</li>
  * </ol>
  */
-@Component
 public class RagDemo implements Demo {
 
     private final ChatClient chatClient;
     private final EmbeddingModel embeddingModel;
 
     /**
-     * 两个依赖的来源（运行「自动配置揭秘」示例可亲眼验证）：
-     *   - chatClient    : 我们手写的 @Bean（见 config/ChatClientConfig）
-     *   - embeddingModel: spring-ai-starter-model-transformers 自动配置的本地向量模型
+     * chatClient 与 embeddingModel 都由 {@code CoreDemoApplication} 手动创建后传入。
      */
     public RagDemo(ChatClient chatClient, EmbeddingModel embeddingModel) {
         this.chatClient = chatClient;

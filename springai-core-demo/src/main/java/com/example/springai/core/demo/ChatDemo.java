@@ -1,14 +1,13 @@
 package com.example.springai.core.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.stereotype.Component;
 
 /**
  * 示例 1：最基础的对话。
  *
  * <p>核心就是一行链式调用：prompt() -> user(问题) -> call()（同步等待结果）-> content()（取文本）。
+ * 本类是个普通 Java 类，{@code chatClient} 由 {@code CoreDemoApplication} 手动 new 好后传进来。
  */
-@Component
 public class ChatDemo implements Demo {
 
     private final ChatClient chatClient;
