@@ -11,6 +11,10 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class ChatClientConfig {
 
+    /**
+     * 参数 {@code ChatClient.Builder} 由 starter【自动配置】；返回的 {@code ChatClient} 由我们【手动 @Bean】。
+     * 运行「自动配置揭秘」示例可对照查看二者来源。
+     */
     @Bean
     public ChatClient chatClient(ChatClient.Builder builder) {
         return builder

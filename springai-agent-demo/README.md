@@ -9,12 +9,16 @@ mvn -pl springai-agent-demo spring-boot:run
 
 ## 示例清单
 
-| 序号 | 示例 | 关键类 | 你将学到 |
+| 菜单项 | 示例 | 关键类 | 你将学到 |
 |------|------|--------|---------|
-| 1 | 工具调用 | `ToolCallingDemo` | 用 `@Tool` 定义方法、`tools(...)` 注册，让模型按需调用 Java 代码 |
-| 2 | 对话记忆 | `ChatMemoryDemo` | 用 `MessageWindowChatMemory` + `MessageChatMemoryAdvisor` 实现多轮记忆 |
-| 3 | 多步 Agent | `MultiStepAgentDemo` | 模型自动规划并连续调用多个工具完成一个任务 |
-| 4 | MCP 客户端 | `McpDemo` | 通过 MCP 协议接入外部工具（需外部 Server，默认未连接） |
+| 1 | 自动配置揭秘 ★建议先看 | `AutoConfigInspectDemo` | 这些 AI Bean 是谁、来自哪个 jar、是自动配置还是手写（零成本，不调模型） |
+| 2 | 工具调用 | `ToolCallingDemo` | 用 `@Tool` 定义方法、`tools(...)` 注册，让模型按需调用 Java 代码 |
+| 3 | 对话记忆 | `ChatMemoryDemo` | 用 `MessageWindowChatMemory` + `MessageChatMemoryAdvisor` 实现多轮记忆 |
+| 4 | 多步 Agent | `MultiStepAgentDemo` | 模型自动规划并连续调用多个工具完成一个任务 |
+| 5 | MCP 客户端 | `McpDemo` | 通过 MCP 协议接入外部工具（需外部 Server，默认未连接） |
+
+> 第 1 项「自动配置揭秘」专门解答新手疑问：`ChatModel`/`ChatClient.Builder` 这些没 `new`、没 `@Bean`
+> 的对象是哪来的（答：starter 自动配置）。详见根目录 README 的「自动配置」说明。
 
 ## 工具是怎么定义的
 

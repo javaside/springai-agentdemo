@@ -29,6 +29,11 @@ public class RagDemo implements Demo {
     private final ChatClient chatClient;
     private final EmbeddingModel embeddingModel;
 
+    /**
+     * 两个依赖的来源（运行「自动配置揭秘」示例可亲眼验证）：
+     *   - chatClient    : 我们手写的 @Bean（见 config/ChatClientConfig）
+     *   - embeddingModel: spring-ai-starter-model-transformers 自动配置的本地向量模型
+     */
     public RagDemo(ChatClient chatClient, EmbeddingModel embeddingModel) {
         this.chatClient = chatClient;
         this.embeddingModel = embeddingModel;

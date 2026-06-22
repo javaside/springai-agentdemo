@@ -16,6 +16,12 @@ public class EmbeddingDemo implements Demo {
 
     private final EmbeddingModel embeddingModel;
 
+    /**
+     * 这里注入的 EmbeddingModel 从哪来？
+     * —— 不是我们 new 的，也没在任何 @Bean 里声明，而是 spring-ai-starter-model-transformers
+     *    这个 starter【自动配置】出来的（实现类是本地 ONNX 的 TransformersEmbeddingModel）。
+     *    想亲眼确认它的实现类和所在 jar，请运行菜单里的「自动配置揭秘」示例。
+     */
     public EmbeddingDemo(EmbeddingModel embeddingModel) {
         this.embeddingModel = embeddingModel;
     }
