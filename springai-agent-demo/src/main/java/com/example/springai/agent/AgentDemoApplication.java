@@ -4,6 +4,7 @@ import com.example.springai.agent.demo.ChatMemoryDemo;
 import com.example.springai.agent.demo.Demo;
 import com.example.springai.agent.demo.MultiStepAgentDemo;
 import com.example.springai.agent.demo.ToolCallingDemo;
+import com.example.springai.agent.demo.ToolMemoryAdvisorDemo;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
@@ -47,7 +48,8 @@ public class AgentDemoApplication {
         List<Demo> demos = List.of(
                 new ToolCallingDemo(chatClient),
                 new ChatMemoryDemo(chatClient),
-                new MultiStepAgentDemo(chatClient)
+                new MultiStepAgentDemo(chatClient),
+                new ToolMemoryAdvisorDemo(chatClient)
         );
 
         new ConsoleMenu("Spring AI 智能体（Agent）示例（原始 API）", demos).run();
