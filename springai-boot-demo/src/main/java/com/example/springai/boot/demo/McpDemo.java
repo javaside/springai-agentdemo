@@ -51,9 +51,11 @@ public class McpDemo implements Demo {
             System.out.println("  - " + t.getToolDefinition().name());
         }
 
+        // 统一用 tools(Object...) 注册工具——它能直接接收 ToolCallbackProvider，
+        // 而各种 toolCallbacks(...) 重载在 2.0 都已 @Deprecated(forRemoval)。
         String answer = chatClient.prompt()
                 .user("请利用可用的工具，完成一个能体现这些工具用途的小任务，并说明你做了什么。")
-                .toolCallbacks(provider)
+                .tools(provider)
                 .call()
                 .content();
 

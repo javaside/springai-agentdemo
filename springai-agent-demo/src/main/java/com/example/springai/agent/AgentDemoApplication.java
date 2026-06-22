@@ -31,10 +31,11 @@ public class AgentDemoApplication {
                 .baseUrl("https://api.deepseek.com")
                 .build();
 
+        // 模型名用字符串 "deepseek-chat"（枚举常量 DEEPSEEK_CHAT 在 2.0 已 @Deprecated）
         DeepSeekChatModel chatModel = DeepSeekChatModel.builder()
                 .deepSeekApi(deepSeekApi)
                 .options(DeepSeekChatOptions.builder()
-                        .model(DeepSeekApi.ChatModel.DEEPSEEK_CHAT)
+                        .model("deepseek-chat")
                         .temperature(0.7)
                         .build())
                 .build();
