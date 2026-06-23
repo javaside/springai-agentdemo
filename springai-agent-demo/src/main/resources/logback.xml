@@ -6,6 +6,12 @@
             <pattern>%d{HH:mm:ss} %-5level %logger{0} - %msg%n</pattern>
         </encoder>
     </appender>
+    <!--
+      让 SimpleLoggerAdvisor 的 DEBUG 日志输出，从而看到「发给模型的请求 / 模型的响应」完整交互过程。
+      仅当某个示例把 SimpleLoggerAdvisor 加入 advisor 链时才会有输出（目前是示例 5 工具搜索）。
+    -->
+    <logger name="org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor" level="DEBUG"/>
+
     <root level="WARN">
         <appender-ref ref="STDOUT"/>
     </root>

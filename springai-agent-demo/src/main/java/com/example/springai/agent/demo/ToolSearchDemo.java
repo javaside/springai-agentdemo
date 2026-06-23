@@ -4,8 +4,15 @@ import com.example.springai.agent.tools.DateTimeTools;
 import com.example.springai.agent.tools.OfficeTools;
 import com.example.springai.agent.tools.WeatherTools;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
+import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.client.advisor.toolsearch.ToolSearchToolCallingAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.toolsearch.ToolIndex;
 import org.springframework.ai.tool.toolsearch.ToolReference;
 import org.springframework.ai.tool.toolsearch.ToolSearchRequest;
@@ -66,12 +73,22 @@ public class ToolSearchDemo implements Demo {
         System.out.println("问：" + question);
         System.out.println("（已注册大量工具：请假/会议室/快递/翻译/乘法/时间/天气……但只有“查年假”与本问题相关）\n");
 
+        // 日志 advisor：放到工具搜索 advisor 的【内层】（order 更大），这样工具调用循环里
+        // 每一轮“发给模型的请求 / 模型的响应”都会被打印，完整交互过程一览无余。
+        // 默认格式会把每个工具的完整 JSON Schema 都打出来，太长；这里用精简的自定义格式：
+        //   请求 → 本轮模型“能看到哪些工具”；响应 → 模型“决定调用哪个工具，还是直接回答”。
+        SimpleLoggerAdvisor loggerAdvisor = SimpleLoggerAdvisor.builder()
+                .order(ToolCallingAdvisor.DEFAULT_ORDER + 100)
+                .requestToString(ToolSearchDemo::formatRequest)
+                .responseToString(ToolSearchDemo::formatResponse)
+                .build();
+
         String answer = chatClient.prompt()
                 .user(question)
                 // 像平常一样注册全部工具——区别在于：advisor 不会把它们一次性发给模型，
                 // 而是先建索引、让模型搜索、再注入命中的工具。
                 .tools(new OfficeTools(), new DateTimeTools(), new WeatherTools())
-                .advisors(toolSearchAdvisor)
+                .advisors(toolSearchAdvisor, loggerAdvisor)
                 // 工具搜索 advisor 按会话缓存工具索引，需提供一个会话 id（默认键就是 ChatMemory.CONVERSATION_ID）
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "tool-search-demo"))
                 .call()
@@ -84,6 +101,44 @@ public class ToolSearchDemo implements Demo {
                 而是先用自然语言搜索“年假”，命中 queryAnnualLeave 后才注入并调用它。
                 工具越多，这种“按需发现”省下的 token 越可观。
                 """);
+    }
+
+    /** 精简打印“本轮发给模型的请求”：只列出这一轮模型能看到哪些工具。 */
+    private static String formatRequest(ChatClientRequest request) {
+        String tools = "（无）";
+        if (request.prompt().getOptions() instanceof ToolCallingChatOptions opts) {
+            List<String> names = opts.getToolCallbacks().stream()
+                    .map(tc -> tc.getToolDefinition().name())
+                    .toList();
+            if (!names.isEmpty()) {
+                tools = String.join(", ", names);
+            }
+        }
+        return "↗ 发给模型 | 本轮可用工具: " + tools;
+    }
+
+    /** 精简打印“模型这一轮的响应”：是请求调用某个工具，还是直接给出最终文本。 */
+    private static String formatResponse(ChatResponse response) {
+        if (response == null || response.getResult() == null) {
+            return "↘ 模型响应 | (空)";
+        }
+        AssistantMessage out = response.getResult().getOutput();
+        if (out.getToolCalls() != null && !out.getToolCalls().isEmpty()) {
+            String calls = out.getToolCalls().stream()
+                    .map(tc -> tc.name() + "(" + clean(tc.arguments()) + ")")
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("");
+            return "↘ 模型响应 | 请求调用工具: " + calls;
+        }
+        return "↘ 模型响应 | 直接回答: " + truncate(clean(out.getText()), 50);
+    }
+
+    private static String clean(String s) {
+        return s == null ? "" : s.replaceAll("\\s+", " ").trim();
+    }
+
+    private static String truncate(String s, int max) {
+        return s.length() > max ? s.substring(0, max) + "…" : s;
     }
 
     /**

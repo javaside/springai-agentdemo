@@ -46,19 +46,33 @@ java -jar springai-agent-demo/target/springai-agent-demo.jar
 3. 把搜到的工具**注入**后，模型再真正调用。
 
 示例注册了 9 个工具（请假/会议室/快递/翻译/乘法/时间/天气…），只问一个“年假”问题。
-运行时你会看到模型先搜索、命中 `queryAnnualLeave` 才调用它：
+为了把**完整交互过程**显示出来，示例额外加了一个内层的 `SimpleLoggerAdvisor`（配精简格式），
+运行时可清楚看到三轮交互：
 
 ```
 📇 已为本次会话建立工具索引，共 9 个工具（但不会全部发给模型）
-🔎 模型搜索工具：query="查询员工年假余额 剩余年假天数" → 命中 [queryAnnualLeave]
-答：张三当前剩余年假为 7 天。
+
+轮1  ↗ 本轮可用工具: toolSearchTool                          ← 一开始模型只看到“搜索工具”
+     ↘ 请求调用工具: toolSearchTool({"arg0":"查询员工年假..."})  ← 模型决定先搜索
+     🔎 命中 [queryAnnualLeave]
+
+轮2  ↗ 本轮可用工具: queryAnnualLeave, toolSearchTool         ← 命中的工具被注入进来
+     ↘ 请求调用工具: queryAnnualLeave({"arg0":"张三"})         ← 模型调用它
+
+轮3  ↗ 本轮可用工具: queryAnnualLeave, toolSearchTool
+     ↘ 直接回答: 张三当前剩余年假为 7 天。                      ← 拿到结果，给出最终答案
 ```
 
-依赖：`spring-ai-tool-search-advisor`（提供 advisor）+ `spring-ai-tool-search-tool`（提供 `ToolIndex`）。
-索引实现有三种：**regex**（本示例用，关键词匹配，零额外依赖）、**lucene**、**vector**（语义检索，需向量模型）。
-示例里还用一个 `LoggingToolIndex` 装饰器包住 `RegexToolIndex`，把搜索过程打印出来，让“按需发现”看得见。
-参考官方文档
-[Tool Calling / Tool Search Tool](https://docs.spring.io/spring-ai/reference/api/tools.html#tool-search-tool)。
+可见第一轮模型手里**只有** `toolSearchTool`（其余 8 个工具没发给它），搜索命中后工具才被注入——这正是“按需发现”省 token 的原理。
+
+**实现要点：**
+- 依赖：`spring-ai-tool-search-advisor`（提供 advisor）+ `spring-ai-tool-search-tool`（提供 `ToolIndex`）。
+- 索引实现三选一：**regex**（本示例用，关键词匹配，零额外依赖）、**lucene**、**vector**（语义检索，需向量模型）。
+- `LoggingToolIndex` 装饰器包住 `RegexToolIndex`，打印每次工具搜索（🔎 行）。
+- `SimpleLoggerAdvisor` 放在工具搜索 advisor 的**内层**（order 更大），才能打印循环里每一轮的请求/响应；
+  其 DEBUG 日志已在 `logback.xml` 开启。
+- 参考官方文档
+  [Tool Calling / Tool Search Tool](https://docs.spring.io/spring-ai/reference/api/tools.html#tool-search-tool)。
 
 ## 工具是怎么定义的
 
