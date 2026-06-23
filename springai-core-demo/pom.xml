@@ -46,6 +46,15 @@
             <artifactId>spring-ai-vector-store</artifactId>
         </dependency>
 
+        <!--
+          模块化 RAG 模块：提供 RetrievalAugmentationAdvisor 及检索/增强组件，
+          是比“手写检索+拼接”（RagDemo）更地道的 RAG 用法（见 RagAdvisorDemo）。
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-rag</artifactId>
+        </dependency>
+
         <!-- 日志后端（非 Boot 工程需自己提供 SLF4J 实现；用 logback + logback.xml 控制输出级别） -->
         <dependency>
             <groupId>ch.qos.logback</groupId>

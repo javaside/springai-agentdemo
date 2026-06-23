@@ -4,6 +4,7 @@ import com.example.springai.core.demo.ChatDemo;
 import com.example.springai.core.demo.Demo;
 import com.example.springai.core.demo.EmbeddingDemo;
 import com.example.springai.core.demo.PromptTemplateDemo;
+import com.example.springai.core.demo.RagAdvisorDemo;
 import com.example.springai.core.demo.RagDemo;
 import com.example.springai.core.demo.StreamDemo;
 import com.example.springai.core.demo.StructuredOutputDemo;
@@ -65,7 +66,8 @@ public class CoreDemoApplication {
                 new StreamDemo(chatClient),
                 new StructuredOutputDemo(chatClient),
                 new EmbeddingDemo(embeddingModel),
-                new RagDemo(chatClient, embeddingModel)
+                new RagDemo(chatClient, embeddingModel),
+                new RagAdvisorDemo(chatClient, embeddingModel)
         );
 
         new ConsoleMenu("Spring AI 核心能力示例（原始 API）", demos).run();

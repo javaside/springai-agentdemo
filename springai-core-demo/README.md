@@ -23,7 +23,23 @@ java -jar springai-core-demo/target/springai-core-demo.jar
 | 3 | 流式输出 | `StreamDemo` | 用 `stream()` 获得打字机式的逐段输出（Flux） |
 | 4 | 结构化输出 | `StructuredOutputDemo` | 用 `entity(...)` 让模型直接返回 Java 对象 / List |
 | 5 | 文本向量化 | `EmbeddingDemo` | 用本地 `EmbeddingModel` 把文字转向量，并算余弦相似度 |
-| 6 | RAG 检索增强 | `RagDemo` | 手写「存知识 → 检索 → 拼上下文 → 提问」的完整 RAG 流程 |
+| 6 | RAG 检索增强（手写） | `RagDemo` | 手写「存知识 → 检索 → 拼上下文 → 提问」，看清 RAG 每一步原理 |
+| 7 | 模块化 RAG（advisor） | `RagAdvisorDemo` | 用 `RetrievalAugmentationAdvisor`，一行 `.advisors(rag)` 自动完成检索+增强 |
+
+## 两种 RAG 写法对比（示例 6 vs 示例 7）
+
+RAG 在本模块给了**两种写法**，建议对照看：
+
+- **示例 6 `RagDemo`（手写）**：自己 `vectorStore.similaritySearch(...)`、自己把检索到的文本拼进提示词。
+  代码长，但每一步都看得见，适合理解 RAG 原理。
+- **示例 7 `RagAdvisorDemo`（模块化）**：把检索器交给 `RetrievalAugmentationAdvisor`，业务代码只需
+  `.advisors(ragAdvisor)` 一行，检索→拼上下文→增强提问全自动。这才是官方推荐的地道写法。
+
+`RetrievalAugmentationAdvisor` 是“模块化”的——检索（`DocumentRetriever`）、查询改写（`QueryTransformer`）、
+查询扩展（`QueryExpander`）、结果合并（`DocumentJoiner`）、提示增强（`QueryAugmenter`）都是可插拔组件，
+本示例只用了基于向量库的 `VectorStoreDocumentRetriever`，其余用默认。需要 `spring-ai-rag` 依赖。
+示例里用 `LoggingRetriever` 装饰器把“自动检索到了哪些文档”打印出来。参考官方文档
+[Retrieval Augmented Generation / RetrievalAugmentationAdvisor](https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html#_retrievalaugmentationadvisor)。
 
 ## 看点：手动接线
 

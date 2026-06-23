@@ -37,7 +37,7 @@ public class RagDemo implements Demo {
 
     @Override
     public String title() {
-        return "RAG 检索增强生成（内存向量库，手写流程）";
+        return "RAG 检索增强生成（手写流程：自己检索+拼接）";
     }
 
     @Override
