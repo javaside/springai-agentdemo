@@ -24,6 +24,22 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-client-chat</artifactId>
         </dependency>
+
+        <!--
+          工具搜索（动态工具发现）。当工具数量很多时，把所有工具定义一次性发给模型既费 token 又降准确率。
+          ToolSearchToolCallingAdvisor 改为「按需发现」：先让模型用自然语言搜索工具，再注入命中的工具去调用。
+          - spring-ai-tool-search-advisor : 提供 ToolSearchToolCallingAdvisor
+          - spring-ai-tool-search-tool    : 提供 ToolIndex 及其实现（regex / lucene / vector）
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-tool-search-advisor</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-tool-search-tool</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>

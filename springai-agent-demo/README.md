@@ -19,6 +19,7 @@ java -jar springai-agent-demo/target/springai-agent-demo.jar
 | 2 | 对话记忆 | `ChatMemoryDemo` | 用 `MessageWindowChatMemory` + `MessageChatMemoryAdvisor` 实现多轮记忆 |
 | 3 | 多步 Agent | `MultiStepAgentDemo` | 模型自动规划并连续调用多个工具完成一个任务 |
 | 4 | Advisor 顺序 | `ToolMemoryAdvisorDemo` | `ToolCallingAdvisor` 配合 `MessageChatMemoryAdvisor`，演示两者**顺序**决定工具调用的中间消息是否进入记忆 |
+| 5 | 工具搜索 | `ToolSearchDemo` | `ToolSearchToolCallingAdvisor` 实现“按需发现工具”，工具很多时省 token |
 
 ## 示例 4 详解：ToolCallingAdvisor 与记忆的「顺序」意义
 
@@ -35,6 +36,30 @@ java -jar springai-agent-demo/target/springai-agent-demo.jar
 默认顺序存 2 条，反转顺序存 6 条，眼见为实。参考官方文档
 [Recursive Advisors / ToolCallingAdvisor](https://docs.spring.io/spring-ai/reference/api/advisors-recursive.html#_toolcallingadvisor)。
 
+## 示例 5 详解：工具搜索 / 动态工具发现（ToolSearchToolCallingAdvisor）
+
+工具一多，传统做法把**所有**工具定义一次性发给模型，既费 token 又容易选错。
+`ToolSearchToolCallingAdvisor` 改为「按需发现（progressive tool disclosure）」：
+
+1. 启动时把你注册的全部工具建立**索引**，但不直接暴露给模型；
+2. 只给模型一个内置元工具 `toolSearchTool`，让它用自然语言**搜索**所需工具；
+3. 把搜到的工具**注入**后，模型再真正调用。
+
+示例注册了 9 个工具（请假/会议室/快递/翻译/乘法/时间/天气…），只问一个“年假”问题。
+运行时你会看到模型先搜索、命中 `queryAnnualLeave` 才调用它：
+
+```
+📇 已为本次会话建立工具索引，共 9 个工具（但不会全部发给模型）
+🔎 模型搜索工具：query="查询员工年假余额 剩余年假天数" → 命中 [queryAnnualLeave]
+答：张三当前剩余年假为 7 天。
+```
+
+依赖：`spring-ai-tool-search-advisor`（提供 advisor）+ `spring-ai-tool-search-tool`（提供 `ToolIndex`）。
+索引实现有三种：**regex**（本示例用，关键词匹配，零额外依赖）、**lucene**、**vector**（语义检索，需向量模型）。
+示例里还用一个 `LoggingToolIndex` 装饰器包住 `RegexToolIndex`，把搜索过程打印出来，让“按需发现”看得见。
+参考官方文档
+[Tool Calling / Tool Search Tool](https://docs.spring.io/spring-ai/reference/api/tools.html#tool-search-tool)。
+
 ## 工具是怎么定义的
 
 见 `tools/` 目录：在普通类的方法上加 `@Tool(description=...)`、参数加 `@ToolParam(description=...)`，
@@ -43,6 +68,7 @@ description 就是给模型看的“说明书”，模型据此决定**何时调
 
 - `DateTimeTools`：获取当前时间、计算日期差
 - `WeatherTools`：查询天气（演示用，返回假数据）
+- `OfficeTools`：一组数量较多的办公类工具（请假/会议室/快递/翻译/乘法），用于示例 5 的工具搜索
 
 ## MCP 去哪了？
 
