@@ -46,8 +46,6 @@ public class CoreDemoApplication {
         DeepSeekChatModel chatModel = DeepSeekChatModel.builder()
                 .deepSeekApi(deepSeekApi)
                 .options(DeepSeekChatOptions.builder()
-                        .model("deepseek-chat")
-                        .temperature(0.7)
                         .build())
                 .build();
 
