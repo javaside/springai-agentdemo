@@ -5,14 +5,15 @@ import com.example.springai.agent.tools.OfficeTools;
 import com.example.springai.agent.tools.WeatherTools;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientRequest;
-import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
+import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.toolsearch.ToolSearchToolCallingAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
-import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.toolsearch.ToolIndex;
 import org.springframework.ai.tool.toolsearch.ToolReference;
 import org.springframework.ai.tool.toolsearch.ToolSearchRequest;
@@ -38,6 +39,10 @@ import java.util.List;
  *
  * <p>本示例用 {@link RegexToolIndex}（基于关键词/正则匹配，<b>无需向量模型、零外部依赖</b>），
  * 是最适合入门的索引实现；另有 Lucene、向量（语义检索）两种实现可按需替换。
+ *
+ * <p>为了把<b>完整交互过程</b>看清楚，示例自带一个小型 {@link RoundLoggingAdvisor}：它用
+ * {@code System.out} 按“轮次”整齐打印每一轮“发给模型有哪些工具 / 模型决定调哪个工具”，
+ * 不走日志框架，所以不会出现 {@code DEBUG xxx -} 前缀，也不会和其它输出错乱。
  */
 public class ToolSearchDemo implements Demo {
 
@@ -69,68 +74,100 @@ public class ToolSearchDemo implements Demo {
                 .maxResults(5)
                 .build();
 
+        // 轮次日志 advisor：放到工具搜索 advisor 的【内层】（order 更大），这样工具调用循环里
+        // 每一轮的请求/响应都会经过它。用 System.out 整齐打印，避免日志框架前缀打乱版面。
+        RoundLoggingAdvisor roundLogger = new RoundLoggingAdvisor(ToolCallingAdvisor.DEFAULT_ORDER + 100);
+
         String question = "帮我查一下张三还有多少年假？";
         System.out.println("问：" + question);
         System.out.println("（已注册大量工具：请假/会议室/快递/翻译/乘法/时间/天气……但只有“查年假”与本问题相关）\n");
-
-        // 日志 advisor：放到工具搜索 advisor 的【内层】（order 更大），这样工具调用循环里
-        // 每一轮“发给模型的请求 / 模型的响应”都会被打印，完整交互过程一览无余。
-        // 默认格式会把每个工具的完整 JSON Schema 都打出来，太长；这里用精简的自定义格式：
-        //   请求 → 本轮模型“能看到哪些工具”；响应 → 模型“决定调用哪个工具，还是直接回答”。
-        SimpleLoggerAdvisor loggerAdvisor = SimpleLoggerAdvisor.builder()
-                .order(ToolCallingAdvisor.DEFAULT_ORDER + 100)
-                .requestToString(ToolSearchDemo::formatRequest)
-                .responseToString(ToolSearchDemo::formatResponse)
-                .build();
 
         String answer = chatClient.prompt()
                 .user(question)
                 // 像平常一样注册全部工具——区别在于：advisor 不会把它们一次性发给模型，
                 // 而是先建索引、让模型搜索、再注入命中的工具。
                 .tools(new OfficeTools(), new DateTimeTools(), new WeatherTools())
-                .advisors(toolSearchAdvisor, loggerAdvisor)
+                .advisors(toolSearchAdvisor, roundLogger)
                 // 工具搜索 advisor 按会话缓存工具索引，需提供一个会话 id（默认键就是 ChatMemory.CONVERSATION_ID）
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, "tool-search-demo"))
                 .call()
                 .content();
 
-        System.out.println("答：" + answer);
+        System.out.println("\n答：" + answer);
         System.out.println("""
 
-                说明：上面 🔎 开头的行就是模型在【搜索工具】——它没有拿到全部工具定义，
-                而是先用自然语言搜索“年假”，命中 queryAnnualLeave 后才注入并调用它。
-                工具越多，这种“按需发现”省下的 token 越可观。
+                说明：从上面的轮次可以看到——第 1 轮模型手里【只有 toolSearchTool】（其余 8 个工具没发给它），
+                它先搜索，命中 queryAnnualLeave 后该工具才被【注入】（下一轮的“可用工具”里多了出来），
+                模型再调用它并给出答案。工具越多，这种“按需发现”省下的 token 越可观。
                 """);
     }
 
-    /** 精简打印“本轮发给模型的请求”：只列出这一轮模型能看到哪些工具。 */
-    private static String formatRequest(ChatClientRequest request) {
-        String tools = "（无）";
-        if (request.prompt().getOptions() instanceof ToolCallingChatOptions opts) {
-            List<String> names = opts.getToolCallbacks().stream()
-                    .map(tc -> tc.getToolDefinition().name())
-                    .toList();
-            if (!names.isEmpty()) {
-                tools = String.join(", ", names);
-            }
-        }
-        return "↗ 发给模型 | 本轮可用工具: " + tools;
-    }
+    /**
+     * 自定义的 CallAdvisor：拦截工具调用循环的每一轮，用 System.out 整齐打印
+     * “本轮模型可用的工具” 与 “模型本轮的决定（调哪个工具 / 直接回答）”。
+     *
+     * <p>之所以不用内置的 SimpleLoggerAdvisor：它走 SLF4J/logback，每行会被加上
+     * “时间 DEBUG SimpleLoggerAdvisor -” 前缀，和示例自己的 System.out 输出混在一起、难以阅读。
+     */
+    private static final class RoundLoggingAdvisor implements CallAdvisor {
 
-    /** 精简打印“模型这一轮的响应”：是请求调用某个工具，还是直接给出最终文本。 */
-    private static String formatResponse(ChatResponse response) {
-        if (response == null || response.getResult() == null) {
-            return "↘ 模型响应 | (空)";
+        private final int order;
+        private int round = 0;
+
+        RoundLoggingAdvisor(int order) {
+            this.order = order;
         }
-        AssistantMessage out = response.getResult().getOutput();
-        if (out.getToolCalls() != null && !out.getToolCalls().isEmpty()) {
-            String calls = out.getToolCalls().stream()
-                    .map(tc -> tc.name() + "(" + clean(tc.arguments()) + ")")
-                    .reduce((a, b) -> a + ", " + b)
-                    .orElse("");
-            return "↘ 模型响应 | 请求调用工具: " + calls;
+
+        @Override
+        public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+            int current = ++round;
+            System.out.println("  ┌─ 第 " + current + " 轮 ──────────────");
+            System.out.println("  │ ↗ 本轮模型可用工具: " + availableTools(request));
+
+            ChatClientResponse response = chain.nextCall(request);   // 继续调用链，拿到模型这一轮的响应
+
+            System.out.println("  │ ↘ 模型决定: " + decision(response));
+            System.out.println("  └────────────────────────");
+            return response;
         }
-        return "↘ 模型响应 | 直接回答: " + truncate(clean(out.getText()), 50);
+
+        @Override
+        public String getName() {
+            return "RoundLoggingAdvisor";
+        }
+
+        @Override
+        public int getOrder() {
+            return this.order;
+        }
+
+        private static String availableTools(ChatClientRequest request) {
+            if (request.prompt().getOptions() instanceof ToolCallingChatOptions opts) {
+                List<String> names = opts.getToolCallbacks().stream()
+                        .map(tc -> tc.getToolDefinition().name())
+                        .toList();
+                if (!names.isEmpty()) {
+                    return String.join(", ", names);
+                }
+            }
+            return "（无）";
+        }
+
+        private static String decision(ChatClientResponse response) {
+            ChatResponse cr = response.chatResponse();
+            if (cr == null || cr.getResult() == null) {
+                return "(空响应)";
+            }
+            AssistantMessage out = cr.getResult().getOutput();
+            if (out.getToolCalls() != null && !out.getToolCalls().isEmpty()) {
+                String calls = out.getToolCalls().stream()
+                        .map(tc -> tc.name() + "(" + clean(tc.arguments()) + ")")
+                        .reduce((a, b) -> a + ", " + b)
+                        .orElse("");
+                return "请求调用工具 → " + calls;
+            }
+            return "直接回答 → " + truncate(clean(out.getText()), 50);
+        }
     }
 
     private static String clean(String s) {
@@ -157,7 +194,7 @@ public class ToolSearchDemo implements Demo {
         public ToolSearchResponse search(ToolSearchRequest request) {
             ToolSearchResponse response = delegate.search(request);
             List<String> hits = response.toolReferences().stream().map(ToolReference::toolName).toList();
-            System.out.printf("  🔎 模型搜索工具：query=\"%s\" → 命中 %s%n", request.query(), hits);
+            System.out.printf("  │ 🔎 模型搜索工具: query=\"%s\" → 命中 %s%n", request.query(), hits);
             return response;
         }
 

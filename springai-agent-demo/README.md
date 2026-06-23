@@ -46,31 +46,40 @@ java -jar springai-agent-demo/target/springai-agent-demo.jar
 3. 把搜到的工具**注入**后，模型再真正调用。
 
 示例注册了 9 个工具（请假/会议室/快递/翻译/乘法/时间/天气…），只问一个“年假”问题。
-为了把**完整交互过程**显示出来，示例额外加了一个内层的 `SimpleLoggerAdvisor`（配精简格式），
-运行时可清楚看到三轮交互：
+为了把**完整交互过程**看清楚，示例自带一个小型 `RoundLoggingAdvisor`，按“轮次”整齐打印
+（用 `System.out`，不走日志框架，所以没有 `DEBUG ... -` 前缀、不会与其它输出错乱）。真实运行片段：
 
 ```
 📇 已为本次会话建立工具索引，共 9 个工具（但不会全部发给模型）
-
-轮1  ↗ 本轮可用工具: toolSearchTool                          ← 一开始模型只看到“搜索工具”
-     ↘ 请求调用工具: toolSearchTool({"arg0":"查询员工年假..."})  ← 模型决定先搜索
-     🔎 命中 [queryAnnualLeave]
-
-轮2  ↗ 本轮可用工具: queryAnnualLeave, toolSearchTool         ← 命中的工具被注入进来
-     ↘ 请求调用工具: queryAnnualLeave({"arg0":"张三"})         ← 模型调用它
-
-轮3  ↗ 本轮可用工具: queryAnnualLeave, toolSearchTool
-     ↘ 直接回答: 张三当前剩余年假为 7 天。                      ← 拿到结果，给出最终答案
+  ┌─ 第 1 轮 ──────────────
+  │ ↗ 本轮模型可用工具: toolSearchTool                       ← 一开始只给“搜索工具”
+  │ ↘ 模型决定: 请求调用工具 → toolSearchTool({"arg0":"查询员工年假余额 张三", ...})
+  └────────────────────────
+  │ 🔎 模型搜索工具: query="查询员工年假余额 张三" → 命中 []   ← regex 没匹配上
+  ┌─ 第 2 轮 ──────────────
+  │ ↗ 本轮模型可用工具: toolSearchTool
+  │ ↘ 模型决定: 请求调用工具 → toolSearchTool({"arg0":"年假 查询 员工 假期余额", ...})  ← 模型自己换词重试
+  └────────────────────────
+  │ 🔎 模型搜索工具: query="年假 查询 员工 假期余额" → 命中 [queryAnnualLeave, ...]
+  ┌─ 第 3 轮 ──────────────
+  │ ↗ 本轮模型可用工具: queryAnnualLeave, checkMeetingRoom, ...  ← 命中的工具被注入进来
+  │ ↘ 模型决定: 请求调用工具 → queryAnnualLeave({"arg0":"张三"})
+  └────────────────────────
+  ┌─ 第 4 轮 ──────────────
+  │ ↘ 模型决定: 直接回答 → 张三当前剩余年假为 7 天。
+  └────────────────────────
 ```
 
-可见第一轮模型手里**只有** `toolSearchTool`（其余 8 个工具没发给它），搜索命中后工具才被注入——这正是“按需发现”省 token 的原理。
+可见第 1 轮模型手里**只有** `toolSearchTool`（其余 8 个工具没发给它），搜索命中后工具才被注入——
+这正是“按需发现”省 token 的原理。（顺带还能看到：regex 索引第一次没命中时，模型会**自己换关键词重试**，
+这也是为什么生产环境常改用 **vector 语义索引**，对自然语言更鲁棒。）
 
 **实现要点：**
 - 依赖：`spring-ai-tool-search-advisor`（提供 advisor）+ `spring-ai-tool-search-tool`（提供 `ToolIndex`）。
 - 索引实现三选一：**regex**（本示例用，关键词匹配，零额外依赖）、**lucene**、**vector**（语义检索，需向量模型）。
 - `LoggingToolIndex` 装饰器包住 `RegexToolIndex`，打印每次工具搜索（🔎 行）。
-- `SimpleLoggerAdvisor` 放在工具搜索 advisor 的**内层**（order 更大），才能打印循环里每一轮的请求/响应；
-  其 DEBUG 日志已在 `logback.xml` 开启。
+- `RoundLoggingAdvisor` 是示例自带的一个简单 `CallAdvisor`，放在工具搜索 advisor 的**内层**（order 更大）
+  才能拦截到循环里每一轮；用 `System.out` 打印，输出整齐、无日志前缀。
 - 参考官方文档
   [Tool Calling / Tool Search Tool](https://docs.spring.io/spring-ai/reference/api/tools.html#tool-search-tool)。
 
