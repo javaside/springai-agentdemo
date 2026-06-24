@@ -16,11 +16,16 @@ import java.util.List;
 /**
  * 示例 4：ToolCallingAdvisor + MessageChatMemoryAdvisor，以及「两者顺序」的意义。
  *
- * <p>背景知识：
+ * <p>背景知识（Spring AI 2.0 的变化）：
  * <ul>
- *   <li>默认情况下，工具调用循环是在 ChatModel【内部】完成的，其它 advisor 看不到中间过程。</li>
- *   <li>{@link ToolCallingAdvisor} 把这个“调用工具→拿结果→再问模型”的循环搬到了【advisor 链】里，
- *       于是链上其它 advisor（比如记忆）就有机会介入每一轮工具调用。</li>
+ *   <li>1.x 时工具调用循环是在 ChatModel【内部】完成的；<b>2.0 已移除 ChatModel 内部的工具执行</b>，
+ *       工具调用统一改由 {@link ToolCallingAdvisor} 在【advisor 链】里完成
+ *       （参见官方升级说明 Tool Calling 一节）。</li>
+ *   <li>正因为如此，只要你用 {@code .tools(...)} 注册了工具，{@code ChatClient} 会<b>自动注册</b>
+ *       一个 {@link ToolCallingAdvisor}（除非链里已存在一个 ToolAdvisor；且最多只允许一个）。
+ *       本示例显式 {@code new} 一个 ToolCallingAdvisor，正是为了<b>控制它在链中的顺序</b>，
+ *       从而决定记忆 advisor 与工具循环的“里外关系”。</li>
+ *   <li>工具调用循环既然在 advisor 链里，链上其它 advisor（比如记忆）就有机会介入每一轮工具调用。</li>
  * </ul>
  *
  * <p>advisor 的执行顺序由 {@code getOrder()} 决定：<b>order 值越小越靠“外层”</b>

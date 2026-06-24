@@ -23,9 +23,10 @@ java -jar springai-agent-demo/target/springai-agent-demo.jar
 
 ## 示例 4 详解：ToolCallingAdvisor 与记忆的「顺序」意义
 
-默认情况下工具调用循环发生在 ChatModel **内部**，其它 advisor 看不到。`ToolCallingAdvisor` 把这个
-循环搬进 **advisor 链**，于是记忆 advisor 能否“看见”每一轮工具调用，就取决于两者的 `getOrder()`
-（**order 越小越靠外层**）：
+Spring AI **2.0 已移除 ChatModel 内部的工具执行**（1.x 时工具循环在 ChatModel 内部完成），
+现在工具调用统一由 `ToolCallingAdvisor` 在 **advisor 链**里完成——只要用 `.tools(...)` 注册了工具，
+`ChatClient` 就会自动注册一个 `ToolCallingAdvisor`（最多一个）。既然工具循环在 advisor 链里，
+记忆 advisor 能否“看见”每一轮工具调用，就取决于两者的 `getOrder()`（**order 越小越靠外层**）：
 
 | 顺序 | 记忆位置 | 工具调用中间消息是否入记忆 | 适用场景 |
 |------|---------|--------------------------|---------|
