@@ -37,6 +37,8 @@ import java.util.List;
  */
 public class TodoWriteToolDemo implements Demo {
 
+    private static final String ANSI_CLEAR_SCREEN = "\033[H\033[2J";
+
     private static final String TODO_SYSTEM_PROMPT = """
             你是一个会显式管理任务进度的中文 AI 助手。
             当任务包含 3 个或更多明确步骤，或用户要求你组织任务时，必须先调用 TodoWrite 创建任务清单。
@@ -63,27 +65,23 @@ public class TodoWriteToolDemo implements Demo {
 
     @Override
     public void run() {
-        TodoWriteTool rawTodoWriteTool = TodoWriteTool.builder()
-                .todoEventHandler(todos -> {
-                    System.out.println();
-                    System.out.print(renderProgress(todos));
-                })
-                .build();
-        ToolCallback todoWriteTool = new LoggingTodoWriteTool(ToolCallbacks.from(rawTodoWriteTool)[0]);
-
-        ChatMemory chatMemory = MessageWindowChatMemory.builder().maxMessages(80).build();
-        MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
-        ToolCallingAdvisor toolCallingAdvisor = ToolCallingAdvisor.builder().build();
-        RoundLoggingAdvisor roundLogger = new RoundLoggingAdvisor(ToolCallingAdvisor.DEFAULT_ORDER + 100);
-
         String task = """
                 请帮我组织一个小型开发计划：为在线商城增加优惠券功能。
                 你需要先拆解任务，再依次说明数据模型、接口、测试点和发布注意事项。
                 请使用 TodoWrite 来组织你的任务。
                 """;
+        ConsoleDashboard dashboard = new ConsoleDashboard(clean(task), System.console() != null);
+        dashboard.render();
 
-        System.out.println("任务：" + clean(task));
-        System.out.println("（观察下方 Progress 输出：它来自 TodoWriteTool 的 todoEventHandler）\n");
+        TodoWriteTool rawTodoWriteTool = TodoWriteTool.builder()
+                .todoEventHandler(todos -> dashboard.updateTodos(todos).render())
+                .build();
+        ToolCallback todoWriteTool = new LoggingTodoWriteTool(ToolCallbacks.from(rawTodoWriteTool)[0], dashboard);
+
+        ChatMemory chatMemory = MessageWindowChatMemory.builder().maxMessages(80).build();
+        MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
+        ToolCallingAdvisor toolCallingAdvisor = ToolCallingAdvisor.builder().build();
+        RoundLoggingAdvisor roundLogger = new RoundLoggingAdvisor(ToolCallingAdvisor.DEFAULT_ORDER + 100, dashboard);
 
         String answer = chatClient.prompt()
                 .system(TODO_SYSTEM_PROMPT)
@@ -94,13 +92,14 @@ public class TodoWriteToolDemo implements Demo {
                 .call()
                 .content();
 
+        dashboard.finish(answer).render();
         System.out.println("\n答：\n" + answer);
         System.out.println("""
 
                 说明：TodoWriteTool 会校验每次提交的任务清单：任务内容不能为空，状态只能是
                 pending / in_progress / completed，且同一时间最多只能有一个 in_progress。
-                本示例通过 todoEventHandler 把模型每次更新后的清单直接打印出来，因此能看到
-                Agent 从“拆任务”到“逐项完成”的过程。
+                本示例通过固定控制台面板展示 TodoWrite 的状态变化，因此任务确认后只刷新状态，
+                不会每次更新都追加一整屏日志。
                 """);
     }
 
@@ -148,12 +147,106 @@ public class TodoWriteToolDemo implements Demo {
         return "[" + message.getMessageType() + "] " + truncate(clean(message.getText()), 160);
     }
 
+    static final class ConsoleDashboard {
+
+        private final String task;
+        private final boolean animated;
+        private Todos todos = new Todos(List.of());
+        private String round = "-";
+        private String availableTools = "-";
+        private String interactionStatus = "-";
+        private String modelMessage = "-";
+        private String toolCallRequest = "-";
+        private String latestToolEvent = "-";
+        private String finalAnswer = "";
+
+        ConsoleDashboard(String task, boolean animated) {
+            this.task = task;
+            this.animated = animated;
+        }
+
+        ConsoleDashboard updateTodos(Todos todos) {
+            this.todos = todos;
+            return this;
+        }
+
+        ConsoleDashboard updateRound(int round, String availableTools) {
+            this.round = String.valueOf(round);
+            this.availableTools = availableTools;
+            this.interactionStatus = "等待模型响应...";
+            return this;
+        }
+
+        ConsoleDashboard updateAssistantResponse(String modelMessage, String toolCallRequest) {
+            this.interactionStatus = "已收到模型响应";
+            this.modelMessage = modelMessage == null || modelMessage.isBlank() ? "-" : modelMessage;
+            this.toolCallRequest = toolCallRequest == null || toolCallRequest.isBlank() ? "-" : toolCallRequest;
+            return this;
+        }
+
+        ConsoleDashboard updateToolEvent(String latestToolEvent) {
+            this.latestToolEvent = latestToolEvent;
+            return this;
+        }
+
+        ConsoleDashboard finish(String finalAnswer) {
+            this.finalAnswer = finalAnswer == null ? "" : finalAnswer;
+            this.interactionStatus = "完成";
+            this.modelMessage = truncate(clean(this.finalAnswer), 160);
+            return this;
+        }
+
+        void render() {
+            if (animated) {
+                System.out.print(ANSI_CLEAR_SCREEN);
+            }
+            System.out.print(renderFrame());
+            System.out.flush();
+        }
+
+        String renderFrame() {
+            int completed = (int) todos.todos().stream()
+                    .filter(todo -> todo.status() == Todos.Status.completed)
+                    .count();
+            int total = todos.todos().size();
+            int percent = total == 0 ? 0 : (int) Math.round(completed * 100.0 / total);
+
+            StringBuilder out = new StringBuilder();
+            out.append("TodoWrite 任务进度\n");
+            out.append("任务: ").append(task).append("\n");
+            out.append("进度: ").append(completed).append("/").append(total).append(" (").append(percent).append("%)\n\n");
+            out.append("任务清单\n");
+            if (todos.todos().isEmpty()) {
+                out.append("  （等待模型调用 TodoWrite 创建任务清单）\n");
+            }
+            else {
+                for (TodoItem item : todos.todos()) {
+                    out.append("  ").append(statusMarker(item.status())).append(" ").append(item.content()).append("\n");
+                }
+            }
+            out.append("\n模型交互\n");
+            out.append("  当前轮次: ").append(round).append("\n");
+            out.append("  可用工具: ").append(availableTools).append("\n");
+            out.append("  状态: ").append(interactionStatus).append("\n");
+            out.append("  大模型返回: ").append(modelMessage).append("\n");
+            out.append("  工具调用请求: ").append(toolCallRequest).append("\n");
+            out.append("  最近工具: ").append(latestToolEvent).append("\n");
+            if (!finalAnswer.isBlank()) {
+                out.append("\n最终摘要\n");
+                out.append("  ").append(truncate(clean(finalAnswer), 160)).append("\n");
+            }
+            return out.toString();
+        }
+    }
+
     private static final class LoggingTodoWriteTool implements ToolCallback {
 
         private final ToolCallback delegate;
+        private final ConsoleDashboard dashboard;
 
-        private LoggingTodoWriteTool(ToolCallback delegate) {
+        private LoggingTodoWriteTool(ToolCallback delegate, ConsoleDashboard dashboard) {
             this.delegate = delegate;
+            this.dashboard = dashboard;
         }
 
         @Override
@@ -172,12 +265,9 @@ public class TodoWriteToolDemo implements Demo {
         }
 
         private String logAround(String toolInput, java.util.function.Supplier<String> invocation) {
-            System.out.println("  │ 🛠 TodoWrite 被调用，入参:");
-            for (String line : prettyJsonish(toolInput).split("\n")) {
-                System.out.println("  │     " + line);
-            }
+            dashboard.updateToolEvent("TodoWrite 入参: " + truncate(clean(toolInput), 120)).render();
             String result = invocation.get();
-            System.out.println("  │ ↩ TodoWrite 返回: " + clean(result));
+            dashboard.updateToolEvent("TodoWrite 返回: " + truncate(clean(result), 120)).render();
             return result;
         }
     }
@@ -185,27 +275,23 @@ public class TodoWriteToolDemo implements Demo {
     private static final class RoundLoggingAdvisor implements CallAdvisor {
 
         private final int order;
+        private final ConsoleDashboard dashboard;
         private int round = 0;
 
-        private RoundLoggingAdvisor(int order) {
+        private RoundLoggingAdvisor(int order, ConsoleDashboard dashboard) {
             this.order = order;
+            this.dashboard = dashboard;
         }
 
         @Override
         public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
             int current = ++round;
-            System.out.println("  ┌─ 第 " + current + " 轮模型交互 ──────────────");
-            System.out.println("  │ ↗ 本轮模型可用工具: " + availableToolNames(request));
-            System.out.println("  │ ↗ 发给模型的消息:");
-            List<Message> messages = request.prompt().getInstructions();
-            for (int i = 0; i < messages.size(); i++) {
-                System.out.println("  │     " + (i + 1) + ". " + describeMessage(messages.get(i)));
-            }
+            dashboard.updateRound(current, availableToolNames(request)).render();
 
             ChatClientResponse response = chain.nextCall(request);
 
-            System.out.println("  │ ↘ 模型本轮决定: " + decision(response));
-            System.out.println("  └────────────────────────");
+            AssistantMessage output = output(response);
+            dashboard.updateAssistantResponse(modelMessage(output), toolCallRequest(output)).render();
             return response;
         }
 
@@ -231,19 +317,36 @@ public class TodoWriteToolDemo implements Demo {
             return "（无）";
         }
 
-        private static String decision(ChatClientResponse response) {
+        private static AssistantMessage output(ChatClientResponse response) {
             ChatResponse chatResponse = response.chatResponse();
             if (chatResponse == null || chatResponse.getResult() == null) {
+                return null;
+            }
+            return chatResponse.getResult().getOutput();
+        }
+
+        private static String modelMessage(AssistantMessage output) {
+            if (output == null) {
                 return "(空响应)";
             }
-            AssistantMessage output = chatResponse.getResult().getOutput();
-            return describeMessage(output).replaceFirst("^\\[ASSISTANT] ", "");
+            String text = clean(output.getText());
+            return text.isBlank() ? "(无文本，见工具调用请求)" : truncate(text, 160);
+        }
+
+        private static String toolCallRequest(AssistantMessage output) {
+            if (output == null || !output.hasToolCalls()) {
+                return "-";
+            }
+            return output.getToolCalls().stream()
+                    .map(toolCall -> toolCall.name() + "(" + truncate(clean(toolCall.arguments()), 120) + ")")
+                    .reduce((left, right) -> left + ", " + right)
+                    .orElse("-");
         }
     }
 
     private static String statusMarker(Todos.Status status) {
         return switch (status) {
-            case completed -> "[x]";
+            case completed -> "[✓]";
             case in_progress -> "[>]";
             case pending -> "[ ]";
         };
@@ -251,22 +354,6 @@ public class TodoWriteToolDemo implements Demo {
 
     private static String clean(String s) {
         return s == null ? "" : s.replaceAll("\\s+", " ").trim();
-    }
-
-    private static String prettyJsonish(String s) {
-        if (s == null || s.isBlank()) {
-            return "";
-        }
-        return s.replace("{", "{\n")
-                .replace("}", "\n}")
-                .replace("[", "[\n")
-                .replace("]", "\n]")
-                .replace(",", ",\n")
-                .lines()
-                .map(String::trim)
-                .filter(line -> !line.isEmpty())
-                .reduce((left, right) -> left + "\n" + right)
-                .orElse("");
     }
 
     private static String truncate(String s, int max) {

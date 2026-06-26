@@ -148,56 +148,59 @@ Todo 项只有 3 种状态：
 工具会校验每次提交的清单：任务内容不能为空，`activeForm` 不能为空，状态必须合法，并且**同一时间最多只能有一个
 `in_progress`**。这能防止模型把多个步骤同时标成“正在做”，让进度展示更可信。
 
-运行该示例（菜单 7）时，会看到类似输出：
+运行该示例（菜单 7）时，会看到一个固定刷新的控制台面板。模型第一次确认任务后，任务行会稳定显示；
+后续 TodoWrite 更新只改变状态符号和进度数字，不再每次追加整段日志把屏幕顶走：
 
 ```
-任务：请帮我组织一个小型开发计划：为在线商城增加优惠券功能……
-（观察下方 Progress 输出：它来自 TodoWriteTool 的 todoEventHandler）
+TodoWrite 任务进度
+任务: 请帮我组织一个小型开发计划：为在线商城增加优惠券功能……
+进度: 0/4 (0%)
 
-  ┌─ 第 1 轮模型交互 ──────────────
-  │ ↗ 本轮模型可用工具: TodoWrite
-  │ ↗ 发给模型的消息:
-  │     1. [SYSTEM] 你是一个会显式管理任务进度的中文 AI 助手……
-  │     2. [USER] 请帮我组织一个小型开发计划：为在线商城增加优惠券功能……
-  │ ↘ 模型本轮决定: 请求调用工具 TodoWrite({"todos":[...]})
-  └────────────────────────
-  │ 🛠 TodoWrite 被调用，入参:
-  │     {
-  │     "todos": [
-  │     ...
-  │     ]
-  │     }
-  │ ↩ TodoWrite 返回: Todos have been modified successfully...
-
-Progress: 0/4 tasks completed (0%)
+任务清单
   [>] 拆解优惠券功能需求
   [ ] 设计数据模型和接口
   [ ] 编写测试点
   [ ] 整理发布注意事项
 
-  ┌─ 第 2 轮模型交互 ──────────────
-  │ ↗ 发给模型的消息:
-  │     ...
-  │     3. [ASSISTANT] 请求调用工具 TodoWrite(...)
-  │     4. [TOOL] TodoWrite 返回: Todos have been modified successfully...
-  │ ↘ 模型本轮决定: 请求调用工具 TodoWrite({"todos":[...]})
-  └────────────────────────
+模型交互
+  当前轮次: 1
+  可用工具: TodoWrite
+  状态: 已收到模型响应
+  大模型返回: (无文本，见工具调用请求)
+  工具调用请求: TodoWrite({"todos":[...]})
+  最近工具: TodoWrite 返回: Todos have been modified successfully...
+```
 
-Progress: 1/4 tasks completed (25%)
-  [x] 拆解优惠券功能需求
+下一次刷新时仍是同一个面板，只改状态：
+
+```
+TodoWrite 任务进度
+任务: 请帮我组织一个小型开发计划：为在线商城增加优惠券功能……
+进度: 1/4 (25%)
+
+任务清单
+  [✓] 拆解优惠券功能需求
   [>] 设计数据模型和接口
   [ ] 编写测试点
   [ ] 整理发布注意事项
+
+模型交互
+  当前轮次: 2
+  可用工具: TodoWrite
+  状态: 已收到模型响应
+  大模型返回: 我会继续更新任务状态。
+  工具调用请求: TodoWrite({"todos":[...]})
+  最近工具: TodoWrite 入参: {"todos":[...]}
 ```
 
 **实现要点：**
 - 依赖仍是 `org.springaicommunity:spring-ai-agent-utils:0.10.0`，本仓库无需升级到 snapshot。
 - `TodoWriteTool.builder().todoEventHandler(...).build()` 创建一个普通工具对象，像 `@Tool` 工具一样传给
   `.tools(todoWriteTool)`。
-- `todoEventHandler` 会在模型每次调用 `TodoWrite` 后收到完整任务清单；本示例直接渲染到控制台，上游
-  Spring Boot 示例则可以把它发布成事件、推给 WebSocket 或 UI。
-- `RoundLoggingAdvisor` 打印工具循环里的每一轮模型交互：本轮可用工具、发给模型的消息列表、模型决定；
-  `LoggingTodoWriteTool` 包住真正的 TodoWrite callback，打印工具入参与返回值。
+- `todoEventHandler` 会在模型每次调用 `TodoWrite` 后收到完整任务清单；本示例把它交给 `ConsoleDashboard`
+  原地刷新状态，上游 Spring Boot 示例则可以把它发布成事件、推给 WebSocket 或 UI。
+- `RoundLoggingAdvisor` 更新面板里的当前轮次、可用工具、大模型返回文本和工具调用请求；`LoggingTodoWriteTool`
+  包住真正的 TodoWrite callback，更新“最近工具”摘要。两者都不再不停追加日志。
 - 示例显式注册 `ToolCallingAdvisor`，并搭配 `MessageChatMemoryAdvisor`，让工具循环中的多轮 Todo 更新
   能持续使用同一段上下文。
 
