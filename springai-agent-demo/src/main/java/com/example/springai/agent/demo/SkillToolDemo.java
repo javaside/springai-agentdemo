@@ -183,7 +183,11 @@ public class SkillToolDemo implements Demo {
         public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
             int current = ++round;
             System.out.println("  ┌─ 第 " + current + " 轮 ──────────────");
-            System.out.println("  │ ↗ 本轮模型可用工具: " + availableTools(request));
+            System.out.println("  │ ↗ 本轮模型可用工具: " + availableToolNames(request));
+            // 关键：工具列表里只显示一个名字“Skill”，但模型真正“看到”的是它的【描述】——
+            // 描述里嵌着每个技能的 name+description（<available_skills> 区块）。把描述打印出来，
+            // 才能看清模型是凭这些信息决定调用哪个技能的。
+            printToolDescriptions(request);
 
             ChatClientResponse response = chain.nextCall(request);
 
@@ -202,7 +206,7 @@ public class SkillToolDemo implements Demo {
             return this.order;
         }
 
-        private static String availableTools(ChatClientRequest request) {
+        private static String availableToolNames(ChatClientRequest request) {
             if (request.prompt().getOptions() instanceof ToolCallingChatOptions opts) {
                 List<String> names = opts.getToolCallbacks().stream()
                         .map(tc -> tc.getToolDefinition().name())
@@ -212,6 +216,23 @@ public class SkillToolDemo implements Demo {
                 }
             }
             return "（无）";
+        }
+
+        /** 逐个打印工具的描述（多行缩进）。模型据此判断该不该调用、传什么技能名。 */
+        private static void printToolDescriptions(ChatClientRequest request) {
+            if (!(request.prompt().getOptions() instanceof ToolCallingChatOptions opts)) {
+                return;
+            }
+            for (ToolCallback tc : opts.getToolCallbacks()) {
+                String name = tc.getToolDefinition().name();
+                String desc = tc.getToolDefinition().description();
+                System.out.println("  │     └ 工具 " + name + " 的描述（模型真正看到的内容）:");
+                // 完整打印，不截断——因为描述【末尾】的 <available_skills> 区块才是关键：
+                // 那里嵌着每个技能真正的 name 与 description，模型正是据此选择技能的。
+                for (String line : desc.split("\n")) {
+                    System.out.println("  │         " + line);
+                }
+            }
         }
 
         private static String decision(ChatClientResponse response) {
