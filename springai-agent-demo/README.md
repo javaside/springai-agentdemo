@@ -148,8 +148,8 @@ Todo 项只有 3 种状态：
 工具会校验每次提交的清单：任务内容不能为空，`activeForm` 不能为空，状态必须合法，并且**同一时间最多只能有一个
 `in_progress`**。这能防止模型把多个步骤同时标成“正在做”，让进度展示更可信。
 
-运行该示例（菜单 7）时，会看到一个固定刷新的控制台面板。模型第一次确认任务后，任务行会稳定显示；
-后续 TodoWrite 更新只改变状态符号和进度数字，不再每次追加整段日志把屏幕顶走：
+运行该示例（菜单 7）时，在真实终端里会看到一个固定刷新的控制台面板。模型第一次确认任务后，
+任务行会稳定显示；后续 TodoWrite 更新只改变状态符号和进度数字，不再每次追加整段日志把屏幕顶走：
 
 ```
 TodoWrite 任务进度
@@ -195,6 +195,8 @@ TodoWrite 任务进度
 
 **实现要点：**
 - 依赖仍是 `org.springaicommunity:spring-ai-agent-utils:0.10.0`，本仓库无需升级到 snapshot。
+- 控制台动画使用 `org.jline:jline-terminal` 的 `Display`。它会保留上一帧和下一帧，利用光标移动、
+  局部清行等终端能力增量刷新，不再手写 `clear screen` 整屏重画；非交互环境会退回普通文本输出。
 - `TodoWriteTool.builder().todoEventHandler(...).build()` 创建一个普通工具对象，像 `@Tool` 工具一样传给
   `.tools(todoWriteTool)`。
 - `todoEventHandler` 会在模型每次调用 `TodoWrite` 后收到完整任务清单；本示例把它交给 `ConsoleDashboard`

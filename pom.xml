@@ -37,6 +37,7 @@
         <spring-boot.version>4.0.7</spring-boot.version>
         <!-- 社区项目 spring-ai-agent-utils（提供 SkillsTool 等），针对 Spring AI 2.0 -->
         <spring-ai-agent-utils.version>0.10.0</spring-ai-agent-utils.version>
+        <jline.version>3.30.13</jline.version>
     </properties>
 
     <dependencyManagement>

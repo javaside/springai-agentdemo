@@ -6,9 +6,11 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos.TodoItem;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.springaicommunity.agent.tools.TodoWriteTool.Todos.Status.completed;
 import static org.springaicommunity.agent.tools.TodoWriteTool.Todos.Status.in_progress;
 import static org.springaicommunity.agent.tools.TodoWriteTool.Todos.Status.pending;
@@ -157,5 +159,31 @@ class TodoWriteToolDemoTest {
                   工具调用请求: TodoWrite({"todos":[...]})
                   最近工具: -
                 """, dashboard.renderFrame());
+    }
+
+    @Test
+    void dashboardUsesRendererInsteadOfClearScreenWhenAnimated() {
+        CapturingDashboardRenderer renderer = new CapturingDashboardRenderer();
+        TodoWriteToolDemo.ConsoleDashboard dashboard = new TodoWriteToolDemo.ConsoleDashboard("示例任务", renderer);
+
+        dashboard.render();
+        dashboard.updateRound(1, "TodoWrite").render();
+
+        assertEquals(2, renderer.frames.size());
+        assertFalse(renderer.joinedFrames().contains("\033[H\033[2J"));
+    }
+
+    private static final class CapturingDashboardRenderer implements TodoWriteToolDemo.DashboardRenderer {
+
+        private final List<String> frames = new ArrayList<>();
+
+        @Override
+        public void render(String frame) {
+            frames.add(frame);
+        }
+
+        private String joinedFrames() {
+            return String.join("", frames);
+        }
     }
 }

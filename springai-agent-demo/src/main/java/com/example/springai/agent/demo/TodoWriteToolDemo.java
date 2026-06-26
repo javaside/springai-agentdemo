@@ -1,5 +1,9 @@
 package com.example.springai.agent.demo;
 
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
+import org.jline.utils.AttributedString;
+import org.jline.utils.Display;
 import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos.TodoItem;
@@ -22,6 +26,7 @@ import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -36,8 +41,6 @@ import java.util.List;
  * WebSocket 或 UI，这里为了教学只打印文本。
  */
 public class TodoWriteToolDemo implements Demo {
-
-    private static final String ANSI_CLEAR_SCREEN = "\033[H\033[2J";
 
     private static final String TODO_SYSTEM_PROMPT = """
             你是一个会显式管理任务进度的中文 AI 助手。
@@ -70,7 +73,7 @@ public class TodoWriteToolDemo implements Demo {
                 你需要先拆解任务，再依次说明数据模型、接口、测试点和发布注意事项。
                 请使用 TodoWrite 来组织你的任务。
                 """;
-        ConsoleDashboard dashboard = new ConsoleDashboard(clean(task), System.console() != null);
+        ConsoleDashboard dashboard = new ConsoleDashboard(clean(task), DashboardRenderer.create());
         dashboard.render();
 
         TodoWriteTool rawTodoWriteTool = TodoWriteTool.builder()
@@ -98,8 +101,8 @@ public class TodoWriteToolDemo implements Demo {
 
                 说明：TodoWriteTool 会校验每次提交的任务清单：任务内容不能为空，状态只能是
                 pending / in_progress / completed，且同一时间最多只能有一个 in_progress。
-                本示例通过固定控制台面板展示 TodoWrite 的状态变化，因此任务确认后只刷新状态，
-                不会每次更新都追加一整屏日志。
+                本示例通过 JLine Display 在真实终端中增量刷新固定控制台面板，因此任务确认后只刷新状态，
+                不会每次更新都追加一整屏日志；非交互环境会自动退回普通文本输出。
                 """);
     }
 
@@ -150,7 +153,7 @@ public class TodoWriteToolDemo implements Demo {
     static final class ConsoleDashboard {
 
         private final String task;
-        private final boolean animated;
+        private final DashboardRenderer renderer;
         private Todos todos = new Todos(List.of());
         private String round = "-";
         private String availableTools = "-";
@@ -160,9 +163,13 @@ public class TodoWriteToolDemo implements Demo {
         private String latestToolEvent = "-";
         private String finalAnswer = "";
 
-        ConsoleDashboard(String task, boolean animated) {
+        ConsoleDashboard(String task, DashboardRenderer renderer) {
             this.task = task;
-            this.animated = animated;
+            this.renderer = renderer;
+        }
+
+        ConsoleDashboard(String task, boolean animated) {
+            this(task, animated ? DashboardRenderer.create() : new PlainDashboardRenderer());
         }
 
         ConsoleDashboard updateTodos(Todos todos) {
@@ -197,11 +204,7 @@ public class TodoWriteToolDemo implements Demo {
         }
 
         void render() {
-            if (animated) {
-                System.out.print(ANSI_CLEAR_SCREEN);
-            }
-            System.out.print(renderFrame());
-            System.out.flush();
+            renderer.render(renderFrame());
         }
 
         String renderFrame() {
@@ -236,6 +239,56 @@ public class TodoWriteToolDemo implements Demo {
                 out.append("  ").append(truncate(clean(finalAnswer), 160)).append("\n");
             }
             return out.toString();
+        }
+    }
+
+    interface DashboardRenderer {
+
+        void render(String frame);
+
+        static DashboardRenderer create() {
+            if (System.console() == null) {
+                return new PlainDashboardRenderer();
+            }
+            try {
+                return new JLineDashboardRenderer();
+            }
+            catch (IOException | RuntimeException ex) {
+                return new PlainDashboardRenderer();
+            }
+        }
+    }
+
+    private static final class PlainDashboardRenderer implements DashboardRenderer {
+
+        @Override
+        public void render(String frame) {
+            System.out.print(frame);
+            System.out.flush();
+        }
+    }
+
+    private static final class JLineDashboardRenderer implements DashboardRenderer {
+
+        private final Terminal terminal;
+        private final Display display;
+
+        private JLineDashboardRenderer() throws IOException {
+            this.terminal = TerminalBuilder.builder()
+                    .name("todo-write-demo")
+                    .system(true)
+                    .build();
+            this.display = new Display(terminal, false);
+        }
+
+        @Override
+        public void render(String frame) {
+            List<AttributedString> lines = frame.lines()
+                    .map(AttributedString::fromAnsi)
+                    .toList();
+            display.resize(terminal.getHeight(), terminal.getWidth());
+            display.update(lines, -1);
+            terminal.flush();
         }
     }
 
