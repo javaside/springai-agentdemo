@@ -40,6 +40,18 @@
             <artifactId>spring-ai-tool-search-tool</artifactId>
         </dependency>
 
+        <!--
+          Skill 能力（第三方社区库 spring-ai-agent-utils）：提供 SkillsTool。
+          Skill = 一个含 SKILL.md（YAML frontmatter + 指令）的文件夹，是“可复用的知识/操作说明模块”。
+          模型在需要时调用 Skill 工具，拿到该 SKILL.md 的完整内容后按其指令执行。
+          针对 Spring AI 2.0，坐标 org.springaicommunity:spring-ai-agent-utils。
+        -->
+        <dependency>
+            <groupId>org.springaicommunity</groupId>
+            <artifactId>spring-ai-agent-utils</artifactId>
+            <version>${spring-ai-agent-utils.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
