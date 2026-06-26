@@ -4,6 +4,7 @@ import com.example.springai.agent.demo.ChatMemoryDemo;
 import com.example.springai.agent.demo.Demo;
 import com.example.springai.agent.demo.MultiStepAgentDemo;
 import com.example.springai.agent.demo.SkillToolDemo;
+import com.example.springai.agent.demo.TodoWriteToolDemo;
 import com.example.springai.agent.demo.ToolCallingDemo;
 import com.example.springai.agent.demo.ToolMemoryAdvisorDemo;
 import com.example.springai.agent.demo.ToolSearchDemo;
@@ -51,7 +52,8 @@ public class AgentDemoApplication {
                 new MultiStepAgentDemo(chatClient),
                 new ToolMemoryAdvisorDemo(chatClient),
                 new ToolSearchDemo(chatClient),
-                new SkillToolDemo(chatClient)
+                new SkillToolDemo(chatClient),
+                new TodoWriteToolDemo(chatClient)
         );
 
         new ConsoleMenu("Spring AI 智能体（Agent）示例（原始 API）", demos).run();
