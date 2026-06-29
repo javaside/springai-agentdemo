@@ -52,6 +52,7 @@ JLine 3 核心组件使用示例，用于后续构建 AI 智能体的交互界�
 
 | 场景 | 类 | 演示的 Terminal 能力 |
 |------|----|----------------------|
+| **Terminal API 讲解（先看这个）** | `TerminalApiGuideDemo` | 按接口 Javadoc 7 大块（Creating/Capabilities/IO/Attributes/Signals/Mouse/Lifecycle）逐节讲解 + 现场调用 + 代码片段 |
 | 基础能力调色台 | `TerminalPlaygroundDemo` | 终端信息、encoding、AttributedString 全样式、非阻塞按键 |
 | 可中断流式输出 | `InterruptibleStreamDemo` | Signal.INT（Ctrl+C）、非阻塞 read(timeout)、Attributes 回显控制、bell |
 | 自适应窗口仪表盘 | `AdaptiveDashboardDemo` | Signal.WINCH、getSize()、clear_screen、cursor_address 绝对定位、Status 状态栏 |
