@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class MenuModelTest {
 
@@ -38,5 +39,10 @@ class MenuModelTest {
         assertEquals(List.of("a", "b"), m.items());
         m.down();
         assertEquals("b", m.selectedLabel());
+    }
+
+    @Test
+    void emptyItemsThrows() {
+        assertThrows(IllegalArgumentException.class, () -> new MenuModel(List.of()));
     }
 }

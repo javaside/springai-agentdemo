@@ -23,20 +23,23 @@ public final class Terminals {
         return terminal.getStringCapability(cap) != null;
     }
 
-    /** 把终端复原到干净状态：退备用屏、显示光标、移到左上、清屏。 */
+    /** 把终端复原到干净状态：退备用屏、显示光标、清屏、移到左上。 */
     public static void restore(Terminal terminal) {
         if (isDumb(terminal)) {
             return;
         }
         terminal.puts(Capability.exit_ca_mode);
         terminal.puts(Capability.cursor_visible);
-        terminal.puts(Capability.cursor_home);
         terminal.puts(Capability.clear_screen);
+        terminal.puts(Capability.cursor_home);
         terminal.flush();
     }
 
     /** 在真实终端上清屏并把光标移到左上。 */
     public static void clear(Terminal terminal) {
+        if (isDumb(terminal)) {
+            return;
+        }
         terminal.puts(Capability.clear_screen);
         terminal.puts(Capability.cursor_home);
         terminal.flush();
