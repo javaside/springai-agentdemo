@@ -49,9 +49,14 @@ public final class FullScreenMenuDemo implements Demo {
                 terminal.writer().printf("当前光标位置: x=%d, y=%d%n", cursor.getX(), cursor.getY());
             }
         }
-        terminal.writer().println("（按回车返回菜单）");
+        terminal.writer().println("（按任意键返回菜单）");
         terminal.writer().flush();
-        terminal.reader().read();
+        Attributes back = terminal.enterRawMode();
+        try {
+            terminal.reader().read();
+        } finally {
+            terminal.setAttributes(back);
+        }
     }
 
     /**
