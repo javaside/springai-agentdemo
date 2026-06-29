@@ -27,6 +27,7 @@
         <module>springai-core-demo</module>
         <module>springai-agent-demo</module>
         <module>springai-boot-demo</module>
+        <module>springai-jline-demo</module>
     </modules>
 
     <properties>
