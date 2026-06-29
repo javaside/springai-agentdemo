@@ -542,7 +542,7 @@ import org.jline.terminal.Attributes;
 import org.jline.terminal.Terminal;
 import org.jline.utils.AttributedStringBuilder;
 import org.jline.utils.AttributedStyle;
-import org.jline.utils.Cursor;
+import org.jline.terminal.Cursor;
 import org.jline.utils.InfoCmp.Capability;
 import org.jline.utils.NonBlockingReader;
 
