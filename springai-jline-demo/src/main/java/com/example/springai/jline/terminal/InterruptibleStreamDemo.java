@@ -44,12 +44,14 @@ public final class InterruptibleStreamDemo implements Demo {
         Attributes prev = terminal.getAttributes();
         Attributes raw = new Attributes(prev);
         raw.setLocalFlag(Attributes.LocalFlag.ECHO, false);
+        // 保留 ISIG：让 Ctrl+C 仍触发 SIGINT → 由 Signal.INT handler 捕获；不可用 enterRawMode() 替代（它会清除 ISIG）
         raw.setLocalFlag(Attributes.LocalFlag.ICANON, false);
-        terminal.setAttributes(raw);
 
         AtomicBoolean stopped = new AtomicBoolean(false);
-        Terminal.SignalHandler oldInt = terminal.handle(Terminal.Signal.INT, sig -> stopped.set(true));
+        Terminal.SignalHandler oldInt = null;
         try {
+            terminal.setAttributes(raw);
+            oldInt = terminal.handle(Terminal.Signal.INT, sig -> stopped.set(true));
             NonBlockingReader reader = terminal.reader();
             for (int i = 0; i < TEXT.length(); i++) {
                 if (stopped.get()) {
@@ -69,11 +71,13 @@ public final class InterruptibleStreamDemo implements Demo {
             if (!stopped.get()) {
                 terminal.writer().println("\n\n[输出完成]");
             }
+            // 末尾阻塞读取前临时恢复默认 INT，让 Ctrl+C 生效；finally 仍会把 INT 恢复成 oldInt
+            terminal.handle(Terminal.Signal.INT, Terminal.SignalHandler.SIG_DFL);
             terminal.writer().println("（按回车返回菜单）");
             terminal.writer().flush();
             reader.read();
         } finally {
-            terminal.handle(Terminal.Signal.INT, oldInt);
+            terminal.handle(Terminal.Signal.INT, oldInt != null ? oldInt : Terminal.SignalHandler.SIG_DFL);
             terminal.setAttributes(prev);
         }
     }

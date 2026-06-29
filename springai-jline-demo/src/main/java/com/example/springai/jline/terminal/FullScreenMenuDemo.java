@@ -57,6 +57,7 @@ public final class FullScreenMenuDemo implements Demo {
     /**
      * 在备用屏上渲染一个可上下选择的列表，返回选中下标；q/Esc 返回 -1。
      * 该方法自管理原始模式与备用屏，退出时复原。
+     * 此静态方法被 TerminalDemoLauncher 复用作菜单基础设施；删除/重命名本类前须先迁移 select()。
      */
     public static int select(Terminal terminal, String title, List<String> items) throws IOException {
         MenuModel model = new MenuModel(items);
@@ -69,20 +70,22 @@ public final class FullScreenMenuDemo implements Demo {
             while (true) {
                 render(terminal, title, model);
                 int c = reader.read();
-                if (c == 'q' || c == 27 && reader.peek(1) < 0) { // q 或单独的 Esc
+                if (c == 'q' || (c == 27 && reader.peek(50) < 0)) { // q 或单独的 Esc（50ms 内无后续字节）
                     return -1;
                 }
                 if (c == '\r' || c == '\n') {
                     return model.selectedIndex();
                 }
-                if (c == 27) { // ESC，尝试读取 '[' 与终结字节
-                    int bracket = reader.read();
+                if (c == 27) { // ESC，尝试读取 '[' 与终结字节（加超时防止残缺 CSI 卡死）
+                    int bracket = reader.read(100L);
                     if (bracket == '[') {
-                        int finalByte = reader.read();
-                        switch (KeyDecoder.arrowFromCsiFinal((char) finalByte)) {
-                            case UP -> model.up();
-                            case DOWN -> model.down();
-                            default -> { /* 忽略 */ }
+                        int finalByte = reader.read(100L);
+                        if (finalByte >= 0) { // 同时挡掉 -1(EOF)/-2(超时)
+                            switch (KeyDecoder.arrowFromCsiFinal((char) finalByte)) {
+                                case UP -> model.up();
+                                case DOWN -> model.down();
+                                default -> { /* 忽略 */ }
+                            }
                         }
                     }
                 }

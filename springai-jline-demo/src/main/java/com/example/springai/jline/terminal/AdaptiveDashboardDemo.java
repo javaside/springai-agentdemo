@@ -40,9 +40,11 @@ public final class AdaptiveDashboardDemo implements Demo {
         }
         Attributes prev = terminal.enterRawMode();
         AtomicBoolean dirty = new AtomicBoolean(true);
-        Terminal.SignalHandler oldWinch = terminal.handle(Terminal.Signal.WINCH, sig -> dirty.set(true));
-        Status status = Status.getStatus(terminal, false);
+        Terminal.SignalHandler oldWinch = null;
+        Status status = null;
         try {
+            oldWinch = terminal.handle(Terminal.Signal.WINCH, sig -> dirty.set(true));
+            status = Status.getStatus(terminal, false);
             NonBlockingReader reader = terminal.reader();
             int tokens = 0;
             while (true) {
@@ -53,14 +55,16 @@ public final class AdaptiveDashboardDemo implements Demo {
                 if (c == 'q' || c == 'Q') {
                     return;
                 }
-                tokens += 7; // 模拟 token 增长
-                dirty.set(true);
+                if (c == NonBlockingReader.READ_EXPIRED) {
+                    tokens += 7; // 模拟 token 增长（仅在无按键超时时推进）
+                    dirty.set(true);
+                }
             }
         } finally {
             if (status != null) {
                 status.update(List.of()); // 清空状态栏
             }
-            terminal.handle(Terminal.Signal.WINCH, oldWinch);
+            terminal.handle(Terminal.Signal.WINCH, oldWinch != null ? oldWinch : Terminal.SignalHandler.SIG_DFL);
             terminal.setAttributes(prev);
             Terminals.clear(terminal);
         }

@@ -40,7 +40,7 @@ public final class MouseInteractionDemo implements Demo {
         terminal.trackMouse(Terminal.MouseTracking.Normal);
         try {
             // 演示 output()：直接向底层字节流写一行 ANSI（绿色），对比 writer()
-            byte[] banner = "[32m=== 鼠标点选演示：点击或滚动，按 q 退出 ===[0m\r\n"
+            byte[] banner = "\033[32m=== 鼠标点选演示：点击或滚动，按 q 退出 ===\033[0m\r\n"
                     .getBytes(StandardCharsets.UTF_8);
             terminal.output().write(banner);
             terminal.output().flush();
