@@ -22,6 +22,10 @@ import org.jline.utils.NonBlockingReader;
  *     // ... 使用 terminal ...
  * } // 自动 close()，恢复终端原始状态
  * </pre>
+ *
+ * <p>本入门覆盖接口 doc 里的：Input/Output、Terminal Attributes、Terminal Capabilities、Lifecycle。
+ * 另两大块——Signal Handling（{@code handle(Signal, ...)}）与 Mouse Support（{@code trackMouse}/
+ * {@code readMouseEvent}）——见同包的 {@code InterruptibleStreamDemo} 与 {@code MouseInteractionDemo}。</p>
  */
 public final class TerminalBasics implements Demo {
 
@@ -61,14 +65,17 @@ public final class TerminalBasics implements Demo {
         terminal.writer().println(sb.toAnsi(terminal));
         terminal.flush();
 
-        // ⑤ 清屏 + 光标回到左上角：puts(Capability) 会发送该能力对应的控制序列。
-        //    要【看到】效果，必须先让屏幕上有内容（上面那几行），按键后再清——你会看到内容被抹掉、
-        //    光标跳回左上角。若一上来就清空屏，屏幕本就是空的，肉眼看不出任何变化。
+        // ⑤ 清屏：puts(Capability) 发送该能力对应的控制序列，并【返回 boolean】——
+        //    终端支持该能力才发送并返回 true；不支持（如 dumb）则什么都不发、返回 false。
+        //    这正是“dumb 下看不到清屏”的本质。要【看到】效果，得先让屏幕有内容、按键后再清。
+        //    （注：clear_screen 通常已把光标移到左上角，后面的 cursor_home 只是显式保险。）
         pressAnyKey(terminal, "\n↑ 以上内容，按任意键演示 clear_screen 把它们清掉……");
-        terminal.puts(Capability.clear_screen);
+        boolean cleared = terminal.puts(Capability.clear_screen);
         terminal.puts(Capability.cursor_home);
         terminal.flush();
-        terminal.writer().println("（屏幕已清空、光标回到左上角——这就是 clear_screen + cursor_home 的效果）");
+        terminal.writer().println(cleared
+                ? "（屏幕已清空、光标回到左上角——这就是 clear_screen 的效果）"
+                : "（本终端不支持 clear_screen：puts 返回 false，未发送任何序列）");
         terminal.flush();
 
         // ⑥ 非阻塞读取：read(超时毫秒)。超时没输入返回 READ_EXPIRED(-2)，输入流结束返回 EOF(-1)。
