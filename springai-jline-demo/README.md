@@ -50,9 +50,23 @@ JLine 3 核心组件使用示例，用于后续构建 AI 智能体的交互界�
 入口：`com.example.springai.jline.terminal.TerminalDemoLauncher`
 真实终端中启动后用 ↑/↓ 选择场景、Enter 运行、q 退出；dumb 终端（IDE/管道）退化为编号选择。
 
+### 先读这个：`TerminalBasics`（入门）
+
+`com.example.springai.jline.terminal.TerminalBasics` 是一个**读源码就能学会**的单文件示例：
+一个 `main()` 里线性、朴素地把 Terminal 最常用的几件事各做一遍（创建、输出+flush、查信息/能力、彩色文本、清屏、原始模式读键、非阻塞读、close），**每步都有注释**。没有任何分屏/样式/抽象——照着抄即可。
+
+```bash
+mvn -q -pl springai-jline-demo package
+java -cp "springai-jline-demo/target/springai-jline-demo-1.0.0.jar:springai-jline-demo/target/lib/*" \
+     com.example.springai.jline.terminal.TerminalBasics
+```
+
+### 进阶：交互效果场景（启动器）
+
+学会基础后，再看这些场景如何把上面的 API 组合成真实交互：
+
 | 场景 | 类 | 演示的 Terminal 能力 |
 |------|----|----------------------|
-| **Terminal API 讲解（先看这个）** | `TerminalApiGuideDemo` | 按接口 Javadoc 7 大块（Creating/Capabilities/IO/Attributes/Signals/Mouse/Lifecycle）逐节讲解 + 现场调用 + 代码片段 |
 | 基础能力调色台 | `TerminalPlaygroundDemo` | 终端信息、encoding、AttributedString 全样式、非阻塞按键 |
 | 可中断流式输出 | `InterruptibleStreamDemo` | Signal.INT（Ctrl+C）、非阻塞 read(timeout)、Attributes 回显控制、bell |
 | 自适应窗口仪表盘 | `AdaptiveDashboardDemo` | Signal.WINCH、getSize()、clear_screen、cursor_address 绝对定位、Status 状态栏 |

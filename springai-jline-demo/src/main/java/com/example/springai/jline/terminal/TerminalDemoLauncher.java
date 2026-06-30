@@ -32,7 +32,6 @@ public final class TerminalDemoLauncher {
 
     private static List<Demo> registerDemos() {
         List<Demo> demos = new ArrayList<>();
-        demos.add(new TerminalApiGuideDemo());
         demos.add(new TerminalPlaygroundDemo());
         demos.add(new InterruptibleStreamDemo());
         demos.add(new AdaptiveDashboardDemo());
