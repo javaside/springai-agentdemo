@@ -15,17 +15,19 @@ import org.jline.utils.NonBlockingReader;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.jline.keymap.KeyMap.key;
 
 /**
  * Terminal 基础用法（先看这个）——每个方法都用【真实运行的代码】演示一遍。
  *
- * <p>按 Terminal 接口 Javadoc 的 7 大块组织，{@link #run} 依次调用 7 个小方法。每块都不是“打印说明”，
- * 而是真的调用该块的 API 并让你看到效果。</p>
+ * <p>按 Terminal 接口 Javadoc 的几大块组织，{@link #run} 依次调用各小方法。每块都不是“打印说明”，
+ * 而是真的调用该块的 API 并让你【看到/操作】效果：交互块会提示你按键/按 Ctrl+C/点鼠标，你操作后立刻有反应；
+ * 每节之间会停下来等你按键，不会一闪而过。</p>
  *
- * <p>注：本场景共用启动器创建并持有的 {@code terminal}（不可关闭它）。为了真实演示「创建」与「关闭」，
- * 第 1 块会用 {@link TerminalBuilder} 另外 build 一个临时 Terminal，第 7 块再 close 它。</p>
+ * <p>注：本场景共用启动器创建并持有的 {@code terminal}（不可关闭它）。第 1 块用 {@link TerminalBuilder}
+ * 另外 build 一个临时 Terminal、用它、再 close 它，来真实演示「创建 → 使用 → 关闭」。</p>
  */
 public final class TerminalBasics implements Demo {
 
@@ -42,10 +44,15 @@ public final class TerminalBasics implements Demo {
     @Override
     public void run(Terminal terminal) throws java.io.IOException {
         block1CreatingAndLifecycle(terminal);
+        sep(terminal);
         block2InputOutput(terminal);
+        sep(terminal);
         block3Capabilities(terminal);
+        sep(terminal);
         block4Attributes(terminal);
+        sep(terminal);
         block5Signals(terminal);
+        sep(terminal);
         block6Mouse(terminal);
         pressAnyKey(terminal, "\n全部演示完毕，按任意键返回菜单。");
     }
@@ -190,22 +197,21 @@ public final class TerminalBasics implements Demo {
         return b.toString();
     }
 
-    /** 第 4 块 Terminal Attributes：真实进入原始模式并读一个键。 */
+    /** 第 4 块 Terminal Attributes：进入原始模式，等你按一个键，看“无回显、不等回车”的效果。 */
     private void block4Attributes(Terminal terminal) throws java.io.IOException {
         title(terminal, "4. Terminal Attributes（属性/模式）");
-        // enterRawMode()：进入原始模式（逐字符、不回显、不等回车），返回旧属性；用完 setAttributes 复原。
-        // read(超时毫秒)：非阻塞读，超时返回 READ_EXPIRED(-2)、流结束返回 EOF(-1)。
-        terminal.writer().println("进入原始模式，2 秒内按一个键（不按则超时）……");
+        // 默认是“行模式”（要回车、有回显）。enterRawMode() 进入“原始模式”：逐字符、不回显、不等回车，
+        // 返回旧属性；用完务必 setAttributes(prev) 复原（try/finally）。
+        terminal.writer().print("请按一个键（原始模式下会立刻读到、且看不到回显）……");
         terminal.flush();
         Attributes prev = terminal.enterRawMode();
         try {
-            int ch = terminal.reader().read(2000L);
-            if (ch == NonBlockingReader.READ_EXPIRED) {
-                terminal.writer().println("超时，没等到按键。");
-            } else if (ch == NonBlockingReader.EOF) {
-                terminal.writer().println("输入已结束(EOF)。");
+            int ch = terminal.reader().read();   // 阻塞等你真的按下（不再用超时一闪而过）
+            if (ch == NonBlockingReader.EOF) {
+                terminal.writer().println("\n（没有输入 / EOF）");
             } else {
-                terminal.writer().println("收到：'" + (char) ch + "'  (ASCII " + ch + ")  —— 注意没有回显、无需回车");
+                terminal.writer().println("\n你按了：'" + visibleChar(ch) + "'（码值 " + ch + "）"
+                        + " —— 看到了吗？没有回显、也没等回车，按下立刻就读到了。");
             }
             terminal.flush();
         } finally {
@@ -213,22 +219,35 @@ public final class TerminalBasics implements Demo {
         }
     }
 
-    /** 第 5 块 Signal Handling：真实注册处理器并触发。 */
-    private void block5Signals(Terminal terminal) {
+    /** 第 5 块 Signal Handling：注册处理器后，提示你按 Ctrl+C，由你触发、当场看到处理器接管。 */
+    private void block5Signals(Terminal terminal) throws java.io.IOException {
         title(terminal, "5. Signal Handling（信号）");
-        // handle(Signal, handler)：注册处理器，返回旧 handler 便于复原。
-        Terminal.SignalHandler oldInt = terminal.handle(Terminal.Signal.INT, sig -> {
-            terminal.writer().println("  → [handler] 收到信号 " + sig);
+        // handle(Signal, handler)：注册信号处理器，返回旧 handler 便于复原。
+        // 用户按 Ctrl+C 时，终端产生 SIGINT，JLine 调用这个处理器（程序不会被杀死）——这正是 handle 的意义。
+        AtomicBoolean got = new AtomicBoolean(false);
+        Terminal.SignalHandler old = terminal.handle(Terminal.Signal.INT, sig -> {
+            got.set(true);
+            terminal.writer().println("\n  → [handler] 捕获到 " + sig + " 信号！程序没被杀死，交给你的处理器接管了。");
             terminal.flush();
         });
-        // raise(Signal)：主动触发一次（真实里：Ctrl+C 触发 INT、改窗口大小触发 WINCH）。
-        terminal.writer().println("已注册 INT 处理器，调用 raise(Signal.INT) 触发它：");
-        terminal.flush();
-        terminal.raise(Terminal.Signal.INT);
-        terminal.handle(Terminal.Signal.INT, oldInt != null ? oldInt : Terminal.SignalHandler.SIG_DFL);
+        try {
+            terminal.writer().println("已注册 INT 处理器。现在请【按 Ctrl+C】试试（或按回车跳过）……");
+            terminal.flush();
+            // 等你操作：直到捕获到 Ctrl+C，或你按回车/EOF 跳过。
+            // 关键：这里保持普通（行）模式、ISIG 开着，Ctrl+C 才会被转成 SIGINT；原始模式会把它变成普通字节 0x03。
+            while (!got.get()) {
+                int c = terminal.reader().read(200L);   // 轮询；handler 在信号线程里触发并打印
+                if (c == '\r' || c == '\n' || c == NonBlockingReader.EOF) {
+                    break;
+                }
+            }
+        } finally {
+            // 复原成旧 handler（没有旧的就用默认 SIG_DFL，即恢复“Ctrl+C 直接结束程序”的默认行为）。
+            terminal.handle(Terminal.Signal.INT, old != null ? old : Terminal.SignalHandler.SIG_DFL);
+        }
     }
 
-    /** 第 6 块 Mouse Support：真实开启鼠标跟踪并读一个鼠标事件。 */
+    /** 第 6 块 Mouse Support：开启鼠标跟踪后，循环显示你每一次点击的坐标，按 q 结束。 */
     private void block6Mouse(Terminal terminal) throws java.io.IOException {
         title(terminal, "6. Mouse Support（鼠标）");
         terminal.writer().println("hasMouseSupport() = " + terminal.hasMouseSupport());
@@ -239,22 +258,27 @@ public final class TerminalBasics implements Demo {
             return;
         }
         Attributes prev = terminal.enterRawMode();
-        terminal.trackMouse(Terminal.MouseTracking.Normal);     // 开启鼠标跟踪
+        terminal.trackMouse(Terminal.MouseTracking.Normal);     // 开启鼠标跟踪：鼠标事件会作为输入序列发来
         try {
-            terminal.writer().println("点一下鼠标（或按任意键跳过）……");
+            terminal.writer().println("现在用鼠标在窗口里【点几下】，每点一下都会显示一行坐标；按 q 结束……");
             terminal.flush();
             BindingReader br = new BindingReader(terminal.reader());
             KeyMap<String> km = new KeyMap<>();
-            km.bind("mouse", key(terminal, Capability.key_mouse));   // 鼠标事件的输入序列
-            km.setNomatch("key");
-            if ("mouse".equals(br.readBinding(km))) {
-                MouseEvent e = terminal.readMouseEvent();            // 解析鼠标事件
-                terminal.writer().printf("鼠标事件：%s 按钮=%s 位置=(%d,%d)%n",
-                        e.getType(), e.getButton(), e.getX(), e.getY());
-            } else {
-                terminal.writer().println("（按键跳过鼠标演示）");
+            km.bind("quit", "q");
+            km.bind("mouse", key(terminal, Capability.key_mouse)); // 鼠标事件的输入序列前缀
+            km.setNomatch("other");
+            while (true) {
+                String op = br.readBinding(km);
+                if ("quit".equals(op)) {
+                    break;
+                }
+                if ("mouse".equals(op)) {
+                    MouseEvent e = terminal.readMouseEvent();        // 解析出鼠标事件
+                    terminal.writer().printf("  鼠标 %s  按钮=%s  位置=(%d,%d)%n",
+                            e.getType(), e.getButton(), e.getX(), e.getY());
+                    terminal.flush();
+                }
             }
-            terminal.flush();
         } finally {
             terminal.trackMouse(Terminal.MouseTracking.Off);        // 关闭跟踪
             terminal.setAttributes(prev);
@@ -270,6 +294,25 @@ public final class TerminalBasics implements Demo {
                 .append("\n===== ").append(text).append(" =====");
         terminal.writer().println(b.toAnsi(terminal));
         terminal.flush();
+    }
+
+    /** 节与节之间停一下，等用户按键再继续，避免内容一闪而过。 */
+    private static void sep(Terminal terminal) throws java.io.IOException {
+        pressAnyKey(terminal, "\n—— 按任意键看下一节 ——");
+    }
+
+    /** 把一个字符显示成可读形式：回车/控制字符不直接打印，免得看起来像乱码。 */
+    private static String visibleChar(int c) {
+        if (c == '\r' || c == '\n') {
+            return "回车";
+        }
+        if (c == 27) {
+            return "^[";
+        }
+        if (c >= 0 && c < 32) {
+            return "^" + (char) (c + 64);
+        }
+        return String.valueOf((char) c);
     }
 
     /** 等待按下任意一个键（无回显）：原始模式读一个键的标准写法（同第 4 块）。 */
