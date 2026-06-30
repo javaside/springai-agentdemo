@@ -41,30 +41,45 @@ public final class TerminalBasics implements Demo {
 
     @Override
     public void run(Terminal terminal) throws java.io.IOException {
-        Terminal temp = block1Creating(terminal);   // 真实创建一个临时 Terminal，返回它
+        block1CreatingAndLifecycle(terminal);
         block2InputOutput(terminal);
         block3Capabilities(terminal);
         block4Attributes(terminal);
         block5Signals(terminal);
         block6Mouse(terminal);
-        block7Lifecycle(terminal, temp);             // 真实 close 掉第 1 块创建的临时 Terminal
+        pressAnyKey(terminal, "\n全部演示完毕，按任意键返回菜单。");
     }
 
-    /** 第 1 块 Creating：用 TerminalBuilder 真实创建一个 Terminal 并返回。 */
-    private Terminal block1Creating(Terminal terminal) throws java.io.IOException {
-        title(terminal, "1. Creating Terminals（创建）");
-        // 真实创建：TerminalBuilder 流式配置后 build()。这里用内存流建一个临时终端（不抢占真实 tty）。
-        Terminal temp = TerminalBuilder.builder()
-                .name("演示用临时终端")
-                .system(false)
-                .streams(new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream())
-                .build();
-        terminal.writer().println("已用 TerminalBuilder.build() 创建一个临时 Terminal：");
-        terminal.writer().println("  getName() = " + temp.getName());
-        terminal.writer().println("  getType() = " + temp.getType());
-        terminal.writer().println("（它会在第 7 块被 close()。本场景共用的主 terminal 由启动器创建/关闭。）");
+    /**
+     * 第 1 块 Creating + 第 7 块 Lifecycle：真实演示一个 Terminal 的完整一生——建 → 用 → 关。
+     *
+     * <p>建：TerminalBuilder.build()；用：向它写两行（含彩色），并把它实际产出的字节打印出来证明它在工作；
+     * 关：try-with-resources 离开时自动 close()。创建和关闭是同一个对象的两端，放一起演示才不脱节。</p>
+     */
+    private void block1CreatingAndLifecycle(Terminal terminal) throws java.io.IOException {
+        title(terminal, "1. Creating & Lifecycle（创建 → 使用 → 关闭）");
+        terminal.writer().println("用 TerminalBuilder 建一个临时 Terminal，往它写两行，再看它实际产出的内容：");
         terminal.flush();
-        return temp;
+
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();   // 用它来“接住”临时终端的输出
+        try (Terminal demo = TerminalBuilder.builder()                 // 建
+                .name("临时演示终端")
+                .system(false)
+                .streams(new ByteArrayInputStream(new byte[0]), captured)
+                .build()) {
+            // 用：真的往这个新建的 Terminal 写东西
+            demo.writer().println("第一行：你好，我是被新建出来的 Terminal");
+            AttributedStringBuilder color = new AttributedStringBuilder();
+            color.style(AttributedStyle.DEFAULT.foreground(AttributedStyle.RED).bold()).append("第二行：红色加粗字");
+            demo.writer().println(color.toAnsi(demo));
+            demo.writer().flush();
+        }   // 关：try 结束自动 close()（这就是 Lifecycle——释放资源、复原状态）
+
+        // 证明它真在工作：把它产出的字节原样打印出来（含 ANSI，所以红色会真的显示成红色）。
+        terminal.writer().println("—— 临时 Terminal 实际产出的内容 ↓ ——");
+        terminal.writer().print(captured.toString(terminal.encoding()));
+        terminal.writer().println("—— 上面内容由临时 Terminal 产出，它已 close() ——");
+        terminal.flush();
     }
 
     /** 第 2 块 Input and Output：真实地输出、查编码、并读一行输入。 */
@@ -182,18 +197,6 @@ public final class TerminalBasics implements Demo {
             terminal.trackMouse(Terminal.MouseTracking.Off);        // 关闭跟踪
             terminal.setAttributes(prev);
         }
-    }
-
-    /** 第 7 块 Lifecycle：真实 close() 掉第 1 块创建的临时 Terminal。 */
-    private void block7Lifecycle(Terminal terminal, Terminal temp) throws java.io.IOException {
-        title(terminal, "7. Lifecycle（生命周期）");
-        // close()：用完关闭，恢复其状态、释放资源。这里关掉第 1 块创建的临时 Terminal。
-        terminal.writer().println("调用临时 Terminal 的 close()……");
-        temp.close();
-        terminal.writer().println("已 close()。（本场景共用的主 terminal 不在这里关——它由启动器的"
-                + " try-with-resources 负责，离开时自动 close 复原。）");
-        terminal.flush();
-        pressAnyKey(terminal, "全部演示完毕，按任意键返回菜单。");
     }
 
     // ===== 小工具 =====
