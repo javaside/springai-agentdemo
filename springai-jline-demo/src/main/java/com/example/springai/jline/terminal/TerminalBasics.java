@@ -1,6 +1,5 @@
 package com.example.springai.jline.terminal;
 
-import com.example.springai.jline.Demo;
 import org.jline.keymap.BindingReader;
 import org.jline.keymap.KeyMap;
 import org.jline.terminal.Attributes;
@@ -15,7 +14,6 @@ import org.jline.utils.NonBlockingReader;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.jline.keymap.KeyMap.key;
 
@@ -23,25 +21,25 @@ import static org.jline.keymap.KeyMap.key;
  * Terminal 基础用法（先看这个）——每个方法都用【真实运行的代码】演示一遍。
  *
  * <p>按 Terminal 接口 Javadoc 的几大块组织，{@link #run} 依次调用各小方法。每块都不是“打印说明”，
- * 而是真的调用该块的 API 并让你【看到/操作】效果：交互块会提示你按键/按 Ctrl+C/点鼠标，你操作后立刻有反应；
+ * 而是真的调用该块的 API 并让你【看到/操作】效果：交互块会提示你按键/拖动窗口/点鼠标，你操作后立刻有反应；
  * 每节之间会停下来等你按键，不会一闪而过。</p>
  *
- * <p>注：本场景共用启动器创建并持有的 {@code terminal}（不可关闭它）。第 1 块用 {@link TerminalBuilder}
- * 另外 build 一个临时 Terminal、用它、再 close 它，来真实演示「创建 → 使用 → 关闭」。</p>
+ * <p>独立运行（自带 main，会自己创建并关闭一个真实终端）。请在真实终端里运行：</p>
+ * <pre>
+ * mvn -q -pl springai-jline-demo package
+ * java -jar springai-jline-demo/target/springai-jline-demo-1.0.0.jar
+ * </pre>
  */
-public final class TerminalBasics implements Demo {
+public final class TerminalBasics {
 
-    @Override
-    public String name() {
-        return "Terminal 基础用法（先看这个）";
+    public static void main(String[] args) throws java.io.IOException {
+        // 第 1 块的“创建/关闭”最直观的标准写法就在这里：try-with-resources 创建一个真实终端，
+        // 用完离开 try 自动 close() 复原。下面把这个 terminal 交给 run() 演示各块用法。
+        try (Terminal terminal = TerminalBuilder.builder().system(true).build()) {
+            new TerminalBasics().run(terminal);
+        }
     }
 
-    @Override
-    public String description() {
-        return "每个方法都用真实代码演示一遍";
-    }
-
-    @Override
     public void run(Terminal terminal) throws java.io.IOException {
         block1CreatingAndLifecycle(terminal);
         sep(terminal);
@@ -219,31 +217,31 @@ public final class TerminalBasics implements Demo {
         }
     }
 
-    /** 第 5 块 Signal Handling：注册处理器后，提示你按 Ctrl+C，由你触发、当场看到处理器接管。 */
+    /** 第 5 块 Signal Handling：注册 WINCH 处理器，提示你拖动改变窗口大小，由你触发、当场看到处理器打印新尺寸。 */
     private void block5Signals(Terminal terminal) throws java.io.IOException {
         title(terminal, "5. Signal Handling（信号）");
         // handle(Signal, handler)：注册信号处理器，返回旧 handler 便于复原。
-        // 用户按 Ctrl+C 时，终端产生 SIGINT，JLine 调用这个处理器（程序不会被杀死）——这正是 handle 的意义。
-        AtomicBoolean got = new AtomicBoolean(false);
-        Terminal.SignalHandler old = terminal.handle(Terminal.Signal.INT, sig -> {
-            got.set(true);
-            terminal.writer().println("\n  → [handler] 捕获到 " + sig + " 信号！程序没被杀死，交给你的处理器接管了。");
+        // 这里用 WINCH（窗口大小变化）演示——你拖动改变终端窗口大小，终端就发 WINCH 信号，处理器被调用、打印新尺寸。
+        // （另一个常见信号是 INT：用户按 Ctrl+C 触发。这里选 WINCH 是因为它最容易由你亲手触发、最直观，
+        //   而且 WINCH 在任何终端模式下都能收到，不受下面 enterRawMode 影响。）
+        Terminal.SignalHandler old = terminal.handle(Terminal.Signal.WINCH, sig -> {
+            Size s = terminal.getSize();
+            terminal.writer().println("  → [handler] 收到 " + sig + " 信号！窗口新尺寸 = "
+                    + s.getColumns() + " 列 x " + s.getRows() + " 行");
             terminal.flush();
         });
+        // 进入无回显模式：避免你等待时按键回显成乱码。WINCH 不受此影响，仍会照常触发。
+        Attributes prev = terminal.enterRawMode();
         try {
-            terminal.writer().println("已注册 INT 处理器。现在请【按 Ctrl+C】试试（或按回车跳过）……");
+            terminal.writer().println("已注册 WINCH 处理器。现在【拖动改变终端窗口大小】试试（可多拖几次）；按任意键继续……");
             terminal.flush();
-            // 等你操作：直到捕获到 Ctrl+C，或你按回车/EOF 跳过。
-            // 关键：这里保持普通（行）模式、ISIG 开着，Ctrl+C 才会被转成 SIGINT；原始模式会把它变成普通字节 0x03。
-            while (!got.get()) {
-                int c = terminal.reader().read(200L);   // 轮询；handler 在信号线程里触发并打印
-                if (c == '\r' || c == '\n' || c == NonBlockingReader.EOF) {
-                    break;
-                }
+            // 一直轮询等待：你每改一次窗口大小，上面的 handler 就打印一次新尺寸；按任意键则退出本节。
+            while (terminal.reader().read(200L) == NonBlockingReader.READ_EXPIRED) {
+                // 超时即继续轮询，给 WINCH 留出触发时间；读到任意按键/EOF 则跳出。
             }
         } finally {
-            // 复原成旧 handler（没有旧的就用默认 SIG_DFL，即恢复“Ctrl+C 直接结束程序”的默认行为）。
-            terminal.handle(Terminal.Signal.INT, old != null ? old : Terminal.SignalHandler.SIG_DFL);
+            terminal.handle(Terminal.Signal.WINCH, old != null ? old : Terminal.SignalHandler.SIG_DFL);
+            terminal.setAttributes(prev);   // 复原
         }
     }
 
@@ -258,9 +256,11 @@ public final class TerminalBasics implements Demo {
             return;
         }
         Attributes prev = terminal.enterRawMode();
-        terminal.trackMouse(Terminal.MouseTracking.Normal);     // 开启鼠标跟踪：鼠标事件会作为输入序列发来
+        // trackMouse(Normal) 返回是否成功开启鼠标跟踪：true 才会有鼠标事件发来。打印出来便于排查。
+        boolean tracking = terminal.trackMouse(Terminal.MouseTracking.Normal);
         try {
-            terminal.writer().println("现在用鼠标在窗口里【点几下】，每点一下都会显示一行坐标；按 q 结束……");
+            terminal.writer().println("trackMouse(Normal) = " + tracking
+                    + "。现在用鼠标在窗口里【点几下】，每点一下显示一行坐标；按 q 结束……");
             terminal.flush();
             BindingReader br = new BindingReader(terminal.reader());
             KeyMap<String> km = new KeyMap<>();
