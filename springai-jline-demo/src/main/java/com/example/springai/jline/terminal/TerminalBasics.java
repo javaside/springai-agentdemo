@@ -94,14 +94,35 @@ public final class TerminalBasics implements Demo {
         terminal.output().flush();
         // 编码：encoding()。
         terminal.writer().println("【encoding()】= " + terminal.encoding());
-        // 输入：reader() 真实读一行（行模式下逐字符读到回车为止）。
-        terminal.writer().print("【reader()】请输入一行文字后回车：");
+        // 输入：reader() 读一行。进入原始模式逐字符读取，对可见字符【手动回显】，回车结束。
+        // 这样无论终端当前处于什么模式都稳定工作，也演示了“原始模式下回显要自己做、控制键要自己处理”。
+        terminal.writer().print("【reader()】请输入一行文字，回车结束：");
         terminal.flush();
         StringBuilder line = new StringBuilder();
-        int c;
-        while ((c = terminal.reader().read()) != -1 && c != '\n' && c != '\r') {
-            line.append((char) c);
+        Attributes prev = terminal.enterRawMode();
+        try {
+            while (true) {
+                int c = terminal.reader().read();
+                if (c == -1 || c == '\r' || c == '\n') {
+                    break;                                   // 回车 / 流结束 → 结束输入
+                }
+                if (c == 127 || c == 8) {                    // 退格 / Backspace
+                    if (line.length() > 0) {
+                        line.deleteCharAt(line.length() - 1);
+                        terminal.writer().write("\b \b");    // 在屏幕上抹掉一个字符
+                        terminal.flush();
+                    }
+                } else if (c >= 32) {                        // 可见字符：记录并手动回显
+                    line.append((char) c);
+                    terminal.writer().write(c);
+                    terminal.flush();
+                }
+                // 其它控制字符（方向键等发出的转义序列）忽略，避免回显成乱码
+            }
+        } finally {
+            terminal.setAttributes(prev);                    // 复原
         }
+        terminal.writer().println();
         terminal.writer().println("你输入了：" + line);
         terminal.flush();
     }

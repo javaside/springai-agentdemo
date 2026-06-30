@@ -23,10 +23,14 @@ public final class Terminals {
         return terminal.getStringCapability(cap) != null;
     }
 
-    /** 把终端复原到干净状态：退备用屏、显示光标、清屏、移到左上。 */
+    /** 把终端复原到干净状态：关鼠标跟踪、退备用屏、显示光标、清屏、移到左上。 */
     public static void restore(Terminal terminal) {
         if (isDumb(terminal)) {
             return;
+        }
+        // 关掉鼠标跟踪：避免上一个场景残留的鼠标跟踪让后续场景把鼠标移动读成乱码、且无法选中复制。
+        if (terminal.hasMouseSupport()) {
+            terminal.trackMouse(Terminal.MouseTracking.Off);
         }
         terminal.puts(Capability.exit_ca_mode);
         terminal.puts(Capability.cursor_visible);
