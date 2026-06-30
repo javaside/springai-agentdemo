@@ -127,26 +127,51 @@ public final class TerminalBasics implements Demo {
         terminal.flush();
     }
 
-    /** 第 3 块 Terminal Capabilities：真实查能力并用 puts 清屏。 */
+    /** 第 3 块 Terminal Capabilities：把能力“看见/听见”——画颜色、看控制序列、响铃。 */
     private void block3Capabilities(Terminal terminal) {
         title(terminal, "3. Terminal Capabilities（能力）");
-        // getNumericCapability：数值能力，不支持返回 null。
+        terminal.writer().println("终端“能做什么”“某操作的控制序列是什么”都记录在 terminfo，分三类查询：");
+
+        // ① 数值能力：支持多少种颜色。不止打印数字——直接用这些颜色画色块给你看。
         Integer maxColors = terminal.getNumericCapability(Capability.max_colors);
-        terminal.writer().println("getNumericCapability(max_colors) = " + maxColors);
-        // getStringCapability：字符串能力（控制序列本身）。
-        String clr = terminal.getStringCapability(Capability.clear_screen);
-        terminal.writer().println("getStringCapability(clear_screen) 是否存在 = " + (clr != null));
-        // puts：发送该能力的控制序列，返回 boolean（不支持则返回 false 且什么都不发）。
-        terminal.writer().println("（2 秒后用 puts(clear_screen) 清屏……）");
+        terminal.writer().println("① getNumericCapability(max_colors) = " + maxColors
+                + "。下面用其中 8 种作背景各画一块：");
+        AttributedStringBuilder swatches = new AttributedStringBuilder();
+        for (int i = 0; i < 8; i++) {
+            swatches.style(AttributedStyle.DEFAULT.background(i)).append("   ");
+        }
+        terminal.writer().println(swatches.toAnsi(terminal));
+
+        // ② 字符串能力：某操作的控制序列本身。打印出来看它长什么样（不可见的 ESC 显示成 ^[）。
+        String boldSeq = terminal.getStringCapability(Capability.enter_bold_mode);
+        terminal.writer().println("② getStringCapability(enter_bold_mode) = " + visible(boldSeq)
+                + "（这就是“加粗”对应的控制序列；puts 就是把这种序列发出去）");
+
+        // ③ puts：把某能力的控制序列真正发出去并返回是否支持。用 bell（响铃）——立刻能听到/看到，且不破坏屏幕。
+        terminal.writer().println("③ 调用 puts(bell)（终端应响一声或闪一下）……");
+        boolean rang = terminal.puts(Capability.bell);
         terminal.flush();
-        sleep(2000);
-        boolean cleared = terminal.puts(Capability.clear_screen);
-        terminal.puts(Capability.cursor_home);
+        terminal.writer().println(rang ? "   puts 返回 true：已发送 bell" : "   puts 返回 false：本终端不支持 bell");
         terminal.flush();
-        terminal.writer().println(cleared
-                ? "puts 返回 true：屏幕已清空、光标回左上角"
-                : "puts 返回 false：本终端不支持 clear_screen，未发送任何序列");
-        terminal.flush();
+    }
+
+    /** 把控制序列里的不可见字符显示出来：ESC → ^[，其它控制符 → ^X。 */
+    private static String visible(String s) {
+        if (s == null) {
+            return "null（本终端不支持该能力）";
+        }
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == 27) {
+                b.append("^[");
+            } else if (c < 32) {
+                b.append('^').append((char) (c + 64));
+            } else {
+                b.append(c);
+            }
+        }
+        return b.toString();
     }
 
     /** 第 4 块 Terminal Attributes：真实进入原始模式并读一个键。 */
@@ -240,14 +265,6 @@ public final class TerminalBasics implements Demo {
             terminal.reader().read();
         } finally {
             terminal.setAttributes(prev);
-        }
-    }
-
-    private static void sleep(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
 }
