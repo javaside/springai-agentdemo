@@ -7,18 +7,25 @@ import org.jline.terminal.Attributes;
 import org.jline.terminal.MouseEvent;
 import org.jline.terminal.Size;
 import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
 import org.jline.utils.AttributedStringBuilder;
 import org.jline.utils.AttributedStyle;
 import org.jline.utils.InfoCmp.Capability;
 import org.jline.utils.NonBlockingReader;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+
 import static org.jline.keymap.KeyMap.key;
 
 /**
- * Terminal 基础用法（先看这个）——一个例子学完 Terminal 接口的全部用法。
+ * Terminal 基础用法（先看这个）——每个方法都用【真实运行的代码】演示一遍。
  *
- * <p>按 Terminal 接口 Javadoc 的 7 大块组织：{@link #run} 像一份目录，依次调用 7 个小方法，
- * 每个方法只讲清楚一块、短小专注、逐行注释。读源码就能学会。</p>
+ * <p>按 Terminal 接口 Javadoc 的 7 大块组织，{@link #run} 依次调用 7 个小方法。每块都不是“打印说明”，
+ * 而是真的调用该块的 API 并让你看到效果。</p>
+ *
+ * <p>注：本场景共用启动器创建并持有的 {@code terminal}（不可关闭它）。为了真实演示「创建」与「关闭」，
+ * 第 1 块会用 {@link TerminalBuilder} 另外 build 一个临时 Terminal，第 7 块再 close 它。</p>
  */
 public final class TerminalBasics implements Demo {
 
@@ -29,78 +36,88 @@ public final class TerminalBasics implements Demo {
 
     @Override
     public String description() {
-        return "一个例子学完 Terminal 接口 7 大块用法";
+        return "每个方法都用真实代码演示一遍";
     }
 
-    /** 目录：按接口 Javadoc 的 7 大块顺序依次演示。 */
     @Override
     public void run(Terminal terminal) throws java.io.IOException {
-        block1Creating(terminal);
+        Terminal temp = block1Creating(terminal);   // 真实创建一个临时 Terminal，返回它
         block2InputOutput(terminal);
         block3Capabilities(terminal);
         block4Attributes(terminal);
         block5Signals(terminal);
         block6Mouse(terminal);
-        block7Lifecycle(terminal);
+        block7Lifecycle(terminal, temp);             // 真实 close 掉第 1 块创建的临时 Terminal
     }
 
-    /** 第 1 块 Creating Terminals：如何创建。 */
-    private void block1Creating(Terminal terminal) {
+    /** 第 1 块 Creating：用 TerminalBuilder 真实创建一个 Terminal 并返回。 */
+    private Terminal block1Creating(Terminal terminal) throws java.io.IOException {
         title(terminal, "1. Creating Terminals（创建）");
-        // Terminal 由 TerminalBuilder 创建，用完要 close()（见第 7 块）。标准写法是 try-with-resources：
-        //     try (Terminal t = TerminalBuilder.builder().system(true).build()) { ... }
-        // 本演示由启动器统一创建并传入，所以这里直接用传入的 terminal、不自行创建。
-        terminal.writer().println("Terminal t = TerminalBuilder.builder().system(true).build();");
-        terminal.writer().println("（创建由启动器统一负责，本场景直接使用传入的 terminal）");
+        // 真实创建：TerminalBuilder 流式配置后 build()。这里用内存流建一个临时终端（不抢占真实 tty）。
+        Terminal temp = TerminalBuilder.builder()
+                .name("演示用临时终端")
+                .system(false)
+                .streams(new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream())
+                .build();
+        terminal.writer().println("已用 TerminalBuilder.build() 创建一个临时 Terminal：");
+        terminal.writer().println("  getName() = " + temp.getName());
+        terminal.writer().println("  getType() = " + temp.getType());
+        terminal.writer().println("（它会在第 7 块被 close()。本场景共用的主 terminal 由启动器创建/关闭。）");
         terminal.flush();
+        return temp;
     }
 
-    /** 第 2 块 Input and Output：输出、查信息、彩色、输入入口。 */
-    private void block2InputOutput(Terminal terminal) {
+    /** 第 2 块 Input and Output：真实地输出、查编码、并读一行输入。 */
+    private void block2InputOutput(Terminal terminal) throws java.io.IOException {
         title(terminal, "2. Input and Output（输入输出）");
-        // 输出：writer() 拿到 PrintWriter；写完要 flush() 才会真正显示（终端可能缓冲）。
-        terminal.writer().println("你好，Terminal！");
-        // 终端信息：类型 / 名称 / 尺寸 / 编码。
-        terminal.writer().println("getType()  = " + terminal.getType());
-        terminal.writer().println("getName()  = " + terminal.getName());
-        Size size = terminal.getSize();
-        terminal.writer().println("getSize()  = " + size.getColumns() + " 列 x " + size.getRows() + " 行");
-        terminal.writer().println("encoding() = " + terminal.encoding());
-        // 彩色也是输出：AttributedStringBuilder 设样式 → toAnsi(terminal) → writer() 打印。
-        AttributedStringBuilder sb = new AttributedStringBuilder();
-        sb.style(AttributedStyle.DEFAULT.foreground(AttributedStyle.RED).bold()).append("这是一段红色加粗文字");
-        terminal.writer().println(sb.toAnsi(terminal));
-        // 输入入口是 reader()（NonBlockingReader）；具体怎么读取决于终端模式，见第 4 块。
+        // 输出：writer() 是高层文本输出；写完 flush()（否则会被缓冲、晚于下面的 output() 显示）。
+        terminal.writer().println("【writer()】这行是用 writer() 打印的");
+        terminal.flush();
+        // 原始字节输出：output() 是底层 OutputStream，直接写字节（这里写一段 ANSI 绿色）。
+        terminal.output().write("\033[32m【output()】这行是用底层字节流 output() 写的（绿色）\033[0m\r\n"
+                .getBytes(terminal.encoding()));
+        terminal.output().flush();
+        // 编码：encoding()。
+        terminal.writer().println("【encoding()】= " + terminal.encoding());
+        // 输入：reader() 真实读一行（行模式下逐字符读到回车为止）。
+        terminal.writer().print("【reader()】请输入一行文字后回车：");
+        terminal.flush();
+        StringBuilder line = new StringBuilder();
+        int c;
+        while ((c = terminal.reader().read()) != -1 && c != '\n' && c != '\r') {
+            line.append((char) c);
+        }
+        terminal.writer().println("你输入了：" + line);
         terminal.flush();
     }
 
-    /** 第 3 块 Terminal Capabilities：查 terminfo 能力，并用 puts 发送控制序列（清屏）。 */
+    /** 第 3 块 Terminal Capabilities：真实查能力并用 puts 清屏。 */
     private void block3Capabilities(Terminal terminal) {
         title(terminal, "3. Terminal Capabilities（能力）");
-        // 能力来自 terminfo，分三类查：getString / getBoolean / getNumericCapability。
+        // getNumericCapability：数值能力，不支持返回 null。
         Integer maxColors = terminal.getNumericCapability(Capability.max_colors);
-        terminal.writer().println("getNumericCapability(max_colors) = " + maxColors + "（dumb 终端为 null）");
-        // puts(Capability) 发送该能力的控制序列，并【返回 boolean】：支持才发送并返回 true，
-        // 不支持（如 dumb）则什么都不发、返回 false——这就是 dumb 下看不到清屏的原因。
-        // 要【看到】清屏效果，先让屏幕有内容、停顿一下，再清。
-        terminal.writer().println("（2 秒后用 clear_screen 清屏……）");
+        terminal.writer().println("getNumericCapability(max_colors) = " + maxColors);
+        // getStringCapability：字符串能力（控制序列本身）。
+        String clr = terminal.getStringCapability(Capability.clear_screen);
+        terminal.writer().println("getStringCapability(clear_screen) 是否存在 = " + (clr != null));
+        // puts：发送该能力的控制序列，返回 boolean（不支持则返回 false 且什么都不发）。
+        terminal.writer().println("（2 秒后用 puts(clear_screen) 清屏……）");
         terminal.flush();
         sleep(2000);
         boolean cleared = terminal.puts(Capability.clear_screen);
-        terminal.puts(Capability.cursor_home);   // clear_screen 通常已归位，这里显式保险
+        terminal.puts(Capability.cursor_home);
         terminal.flush();
         terminal.writer().println(cleared
-                ? "（屏幕已清空、光标回到左上角——这就是 clear_screen 的效果）"
-                : "（本终端不支持 clear_screen：puts 返回 false，未发送任何序列）");
+                ? "puts 返回 true：屏幕已清空、光标回左上角"
+                : "puts 返回 false：本终端不支持 clear_screen，未发送任何序列");
         terminal.flush();
     }
 
-    /** 第 4 块 Terminal Attributes：原始模式 + 读取输入。 */
+    /** 第 4 块 Terminal Attributes：真实进入原始模式并读一个键。 */
     private void block4Attributes(Terminal terminal) throws java.io.IOException {
         title(terminal, "4. Terminal Attributes（属性/模式）");
-        // 默认「行模式」（要回车、有回显）。enterRawMode() 进入「原始模式」：逐字符、不回显、不等回车，
-        // 返回旧属性；用完务必 setAttributes(prev) 复原（try/finally）。
-        // read(超时毫秒) 是非阻塞读：超时返回 READ_EXPIRED(-2)，输入流结束返回 EOF(-1)。
+        // enterRawMode()：进入原始模式（逐字符、不回显、不等回车），返回旧属性；用完 setAttributes 复原。
+        // read(超时毫秒)：非阻塞读，超时返回 READ_EXPIRED(-2)、流结束返回 EOF(-1)。
         terminal.writer().println("进入原始模式，2 秒内按一个键（不按则超时）……");
         terminal.flush();
         Attributes prev = terminal.enterRawMode();
@@ -111,7 +128,7 @@ public final class TerminalBasics implements Demo {
             } else if (ch == NonBlockingReader.EOF) {
                 terminal.writer().println("输入已结束(EOF)。");
             } else {
-                terminal.writer().println("收到：'" + (char) ch + "'  (ASCII " + ch + ")");
+                terminal.writer().println("收到：'" + (char) ch + "'  (ASCII " + ch + ")  —— 注意没有回显、无需回车");
             }
             terminal.flush();
         } finally {
@@ -119,23 +136,22 @@ public final class TerminalBasics implements Demo {
         }
     }
 
-    /** 第 5 块 Signal Handling：注册信号处理器并触发。 */
+    /** 第 5 块 Signal Handling：真实注册处理器并触发。 */
     private void block5Signals(Terminal terminal) {
         title(terminal, "5. Signal Handling（信号）");
-        // handle(Signal, handler) 注册处理器，返回【旧 handler】便于复原。
-        // raise(Signal) 主动触发一次（真实场景：Ctrl+C 触发 INT、改变窗口大小触发 WINCH）。
+        // handle(Signal, handler)：注册处理器，返回旧 handler 便于复原。
         Terminal.SignalHandler oldInt = terminal.handle(Terminal.Signal.INT, sig -> {
             terminal.writer().println("  → [handler] 收到信号 " + sig);
             terminal.flush();
         });
+        // raise(Signal)：主动触发一次（真实里：Ctrl+C 触发 INT、改窗口大小触发 WINCH）。
         terminal.writer().println("已注册 INT 处理器，调用 raise(Signal.INT) 触发它：");
         terminal.flush();
-        terminal.raise(Terminal.Signal.INT);   // 立刻看到上面 handler 打印的那行
-        // 复原成旧 handler（没有旧的就用默认 SIG_DFL）。
+        terminal.raise(Terminal.Signal.INT);
         terminal.handle(Terminal.Signal.INT, oldInt != null ? oldInt : Terminal.SignalHandler.SIG_DFL);
     }
 
-    /** 第 6 块 Mouse Support：开启鼠标跟踪并读一个鼠标事件。 */
+    /** 第 6 块 Mouse Support：真实开启鼠标跟踪并读一个鼠标事件。 */
     private void block6Mouse(Terminal terminal) throws java.io.IOException {
         title(terminal, "6. Mouse Support（鼠标）");
         terminal.writer().println("hasMouseSupport() = " + terminal.hasMouseSupport());
@@ -145,19 +161,17 @@ public final class TerminalBasics implements Demo {
             terminal.flush();
             return;
         }
-        // trackMouse(Normal) 开启跟踪；输入里遇到鼠标序列时用 readMouseEvent() 解析；用完 trackMouse(Off)。
-        // 用 BindingReader + KeyMap 区分「鼠标事件」与「普通按键」。
         Attributes prev = terminal.enterRawMode();
-        terminal.trackMouse(Terminal.MouseTracking.Normal);
+        terminal.trackMouse(Terminal.MouseTracking.Normal);     // 开启鼠标跟踪
         try {
             terminal.writer().println("点一下鼠标（或按任意键跳过）……");
             terminal.flush();
             BindingReader br = new BindingReader(terminal.reader());
             KeyMap<String> km = new KeyMap<>();
-            km.bind("mouse", key(terminal, Capability.key_mouse));
-            km.setNomatch("key");   // 非鼠标输入归为 "key"
+            km.bind("mouse", key(terminal, Capability.key_mouse));   // 鼠标事件的输入序列
+            km.setNomatch("key");
             if ("mouse".equals(br.readBinding(km))) {
-                MouseEvent e = terminal.readMouseEvent();
+                MouseEvent e = terminal.readMouseEvent();            // 解析鼠标事件
                 terminal.writer().printf("鼠标事件：%s 按钮=%s 位置=(%d,%d)%n",
                         e.getType(), e.getButton(), e.getX(), e.getY());
             } else {
@@ -165,20 +179,24 @@ public final class TerminalBasics implements Demo {
             }
             terminal.flush();
         } finally {
-            terminal.trackMouse(Terminal.MouseTracking.Off);
+            terminal.trackMouse(Terminal.MouseTracking.Off);        // 关闭跟踪
             terminal.setAttributes(prev);
         }
     }
 
-    /** 第 7 块 Lifecycle：生命周期。 */
-    private void block7Lifecycle(Terminal terminal) throws java.io.IOException {
+    /** 第 7 块 Lifecycle：真实 close() 掉第 1 块创建的临时 Terminal。 */
+    private void block7Lifecycle(Terminal terminal, Terminal temp) throws java.io.IOException {
         title(terminal, "7. Lifecycle（生命周期）");
-        // Terminal 用完必须 close() 以恢复终端原始状态。本演示由启动器（try-with-resources）负责 close，
-        // 各场景共用同一个 terminal，所以本类绝不 close 它。
+        // close()：用完关闭，恢复其状态、释放资源。这里关掉第 1 块创建的临时 Terminal。
+        terminal.writer().println("调用临时 Terminal 的 close()……");
+        temp.close();
+        terminal.writer().println("已 close()。（本场景共用的主 terminal 不在这里关——它由启动器的"
+                + " try-with-resources 负责，离开时自动 close 复原。）");
+        terminal.flush();
         pressAnyKey(terminal, "全部演示完毕，按任意键返回菜单。");
     }
 
-    // ===== 两个小工具 =====
+    // ===== 小工具 =====
 
     /** 打印一个分块标题（青色加粗）。 */
     private static void title(Terminal terminal, String text) {
@@ -189,7 +207,7 @@ public final class TerminalBasics implements Demo {
         terminal.flush();
     }
 
-    /** 等待按下任意一个键（无回显）：原始模式读一个键的标准写法（见第 4 块）。 */
+    /** 等待按下任意一个键（无回显）：原始模式读一个键的标准写法（同第 4 块）。 */
     private static void pressAnyKey(Terminal terminal, String prompt) throws java.io.IOException {
         terminal.writer().println(prompt);
         terminal.flush();
