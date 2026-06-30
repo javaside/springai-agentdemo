@@ -149,10 +149,16 @@ public final class TerminalBasics implements Demo {
 
         // ② 字符串能力：一段“控制序列”——发给终端让它做某操作的字节。比如“加粗”就是发 ESC[1m。
         //    关键：同一操作在不同终端类型上的字节可能不同；terminfo 按当前终端类型查出正确的那段，
-        //    于是你的程序不用硬编码转义码、能跨终端工作。下面把这段序列打印出来看（ESC 显示成 ^[）。
+        //    于是你的程序不用硬编码转义码、能跨终端工作。
+        //    先把这段序列打印出来看（ESC 显示成 ^[），再【真的用它】打印一段加粗文字给你看。
         String boldSeq = terminal.getStringCapability(Capability.enter_bold_mode);
         terminal.writer().println("② getStringCapability(enter_bold_mode) = " + visible(boldSeq)
                 + "  ←“加粗”对应的控制序列");
+        terminal.writer().print("   用 puts 把它发出去 → ");
+        terminal.puts(Capability.enter_bold_mode);          // 发“开始加粗”序列
+        terminal.writer().print("这几个字真的加粗了");
+        terminal.puts(Capability.exit_attribute_mode);      // 发“关闭属性”序列，恢复正常
+        terminal.writer().println(" ← 已用 exit_attribute_mode 关掉加粗");
 
         // ③ puts(cap, 参数...)：替你“查出该能力的序列 → 填好参数 → 发给终端执行”，并返回是否支持。
         //    为什么不直接打印 getStringCapability 的串？因为带参数的能力（如 cursor_address 含 %p1/%p2
