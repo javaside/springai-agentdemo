@@ -130,28 +130,38 @@ public final class TerminalBasics implements Demo {
     /** 第 3 块 Terminal Capabilities：把能力“看见/听见”——画颜色、看控制序列、响铃。 */
     private void block3Capabilities(Terminal terminal) {
         title(terminal, "3. Terminal Capabilities（能力）");
-        terminal.writer().println("终端“能做什么”“某操作的控制序列是什么”都记录在 terminfo，分三类查询：");
+        // 终端“能做什么”都记录在 terminfo 数据库里，按值的类型分三类查询：
+        //   getNumericCapability  —— 数值（如 max_colors：支持多少种颜色）
+        //   getBooleanCapability  —— 布尔（如 auto_right_margin：是否自动折行）
+        //   getStringCapability   —— 字符串（某操作对应的“控制序列”）
+        terminal.writer().println("终端能力来自 terminfo，分数值/布尔/字符串三类。下面各看一个：");
 
-        // ① 数值能力：支持多少种颜色。不止打印数字——直接用这些颜色画色块给你看。
+        // ① 数值能力 max_colors：终端调色板能用多少种颜色（你能往 background(i) 填的 i 的上限）。
+        //    不止打印数字——直接用前 8 个颜色索引画色块，数字才有意义。
         Integer maxColors = terminal.getNumericCapability(Capability.max_colors);
         terminal.writer().println("① getNumericCapability(max_colors) = " + maxColors
-                + "。下面用其中 8 种作背景各画一块：");
+                + "（能用的颜色数）。下面用颜色索引 0~7 各画一块：");
         AttributedStringBuilder swatches = new AttributedStringBuilder();
         for (int i = 0; i < 8; i++) {
             swatches.style(AttributedStyle.DEFAULT.background(i)).append("   ");
         }
         terminal.writer().println(swatches.toAnsi(terminal));
 
-        // ② 字符串能力：某操作的控制序列本身。打印出来看它长什么样（不可见的 ESC 显示成 ^[）。
+        // ② 字符串能力：一段“控制序列”——发给终端让它做某操作的字节。比如“加粗”就是发 ESC[1m。
+        //    关键：同一操作在不同终端类型上的字节可能不同；terminfo 按当前终端类型查出正确的那段，
+        //    于是你的程序不用硬编码转义码、能跨终端工作。下面把这段序列打印出来看（ESC 显示成 ^[）。
         String boldSeq = terminal.getStringCapability(Capability.enter_bold_mode);
         terminal.writer().println("② getStringCapability(enter_bold_mode) = " + visible(boldSeq)
-                + "（这就是“加粗”对应的控制序列；puts 就是把这种序列发出去）");
+                + "  ←“加粗”对应的控制序列");
 
-        // ③ puts：把某能力的控制序列真正发出去并返回是否支持。用 bell（响铃）——立刻能听到/看到，且不破坏屏幕。
+        // ③ puts(cap, 参数...)：替你“查出该能力的序列 → 填好参数 → 发给终端执行”，并返回是否支持。
+        //    为什么不直接打印 getStringCapability 的串？因为带参数的能力（如 cursor_address 含 %p1/%p2
+        //    占位符）必须填入行列才有效，正是 puts 在做这件事。这里用 bell（无参数）演示：发出去会响一声，
+        //    效果立刻能感知、且不破坏屏幕已有内容。
         terminal.writer().println("③ 调用 puts(bell)（终端应响一声或闪一下）……");
         boolean rang = terminal.puts(Capability.bell);
         terminal.flush();
-        terminal.writer().println(rang ? "   puts 返回 true：已发送 bell" : "   puts 返回 false：本终端不支持 bell");
+        terminal.writer().println(rang ? "   puts 返回 true：已发送 bell 序列" : "   puts 返回 false：本终端不支持 bell");
         terminal.flush();
     }
 
