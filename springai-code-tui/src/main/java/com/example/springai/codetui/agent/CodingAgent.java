@@ -7,6 +7,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import reactor.core.Disposable;
+import reactor.core.Disposables;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -44,15 +45,22 @@ public final class CodingAgent implements SubmitHandler {
         long turnId = activeTurnId.incrementAndGet();
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
         listener.onUserMessage(turnId, text);
-        return chatClient.prompt()
-                .user(text)
-                .toolContext(Map.of("turnId", turnId))
-                .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
-                .stream().chatClientResponse()
-                .doOnNext(resp -> handleChunk(resp, turnId))
-                .doOnError(err -> handleError(err, turnId))
-                .doOnComplete(() -> handleComplete(turnId))
-                .subscribe();
+        try {
+            return chatClient.prompt()
+                    .user(text)
+                    .toolContext(Map.of("turnId", turnId))
+                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
+                    .stream().chatClientResponse()
+                    .doOnNext(resp -> handleChunk(resp, turnId))
+                    .doOnError(err -> handleError(err, turnId))
+                    .doOnComplete(() -> handleComplete(turnId))
+                    .subscribe();
+        } catch (RuntimeException ex) {
+            // 同步组装/订阅异常不走 doOnError：手动复位状态（onError → IDLE），
+            // 否则 UI 会永远卡在 THINKING（无终态事件），且异常会逃逸出 View.handle。
+            listener.onError(turnId, ex);
+            return Disposables.disposed();
+        }
     }
 
     /** 从一个流式块里抽取文本增量并发给 listener。全链路 null-guard：工具调用块常常没有输出/文本。 */

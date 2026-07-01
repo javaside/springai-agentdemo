@@ -49,10 +49,10 @@ public final class CodeTuiView implements EventHandler, Renderer {
         if (!(e instanceof KeyEvent k)) return false;
         if (k.isCtrlC()) { runner.quit(); return true; }
         if (k.isCancel()) {                       // Esc：UI 层取消当前回合
-            boolean had = current != null;
-            if (had) { current.dispose(); current = null; }
+            boolean running = !state.isIdle();    // 真有回合在飞才算「取消」（自然完成后 current 可能是已 dispose 的陈旧句柄）
+            if (current != null) { current.dispose(); current = null; }
             state.cancelCurrent();
-            state.setNotice(had ? "已取消当前回合" : "Esc：当前无进行中回合");  // 状态栏可见反馈
+            state.setNotice(running ? "已取消当前回合" : "Esc：当前无进行中回合");  // 状态栏可见反馈
             return true;
         }
         if (k.isConfirm()) {                      // Enter
