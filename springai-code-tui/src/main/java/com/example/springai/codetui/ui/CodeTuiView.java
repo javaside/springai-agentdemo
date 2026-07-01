@@ -11,10 +11,12 @@ import dev.tamboui.tui.event.Event;
 import dev.tamboui.tui.event.KeyEvent;
 import dev.tamboui.tui.event.TickEvent;
 import dev.tamboui.text.CharWidth;
+import dev.tamboui.style.Overflow;
 import dev.tamboui.widgets.paragraph.Paragraph;
 import reactor.core.Disposable;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -79,26 +81,64 @@ public final class CodeTuiView implements EventHandler, Renderer {
         Rect inputR  = new Rect(a.x(), a.y() + h - 2, a.width(), 1);
         Rect statusR = new Rect(a.x(), a.y() + h - 1, a.width(), 1);
 
-        List<String> all = state.transcriptSnapshot();
-        String shown = String.join("\n", tail(all, body.height()));
-        f.renderWidget(Paragraph.from(shown), body);
+        int w = Math.max(1, body.width());
 
-        String prompt = "> " + state.currentInput();
-        f.renderWidget(Paragraph.from(prompt), inputR);
+        // 对话区：每条逻辑行按显示宽度折成视觉行，再取末尾 body.height() 行 → 自动贴底跟随流式，
+        // 不会因长行/流式增长把最新内容挤出屏幕。
+        List<String> visual = new ArrayList<>();
+        for (String line : state.transcriptSnapshot()) {
+            visual.addAll(wrap(line, w));
+        }
+        f.renderWidget(clip(String.join("\n", tail(visual, body.height()))), body);
+
+        // 输入行：过长时只显示尾部（光标在末尾），保证正在输入处可见，且不折到状态栏。
+        String prefix = "> ";
+        int inputAvail = Math.max(1, w - CharWidth.of(prefix));
+        String inputText = state.currentInput();
+        String shownInput = CharWidth.of(inputText) <= inputAvail
+                ? inputText
+                : CharWidth.substringByWidthFromEnd(inputText, inputAvail);
+        String prompt = prefix + shownInput;
+        f.renderWidget(clip(prompt), inputR);
 
         String base = state.isIdle()
                 ? "Enter 发送 · Esc 取消 · Ctrl+C 退出"
                 : "上一回合进行中，Esc 取消后再输入 · Ctrl+C 退出";
         String notice = state.notice();
         String hint = notice.isEmpty() ? base : (notice + " · " + base);
-        f.renderWidget(Paragraph.from(hint), statusR);
+        f.renderWidget(clip(hint), statusR);
 
-        // 光标列用显示宽度（CJK 占 2 列），而非字符数，否则中文输入光标错位、看起来「混乱」
+        // 光标列用显示宽度（CJK 占 2 列），而非字符数
         f.setCursorPosition(inputR.x() + CharWidth.of(prompt), inputR.y());
     }
 
+    /** 定宽渲染：内容已按宽度折好，CLIP 防止 Paragraph 二次折行溢出到相邻区域。 */
+    private static Paragraph clip(String s) {
+        return Paragraph.builder().text(s).overflow(Overflow.CLIP).build();
+    }
+
+    /** 把逻辑行按显示宽度 width 折成视觉行（CharWidth 感知 CJK 双宽，不断开宽字符）。空行保留为一行。 */
+    private static List<String> wrap(String line, int width) {
+        List<String> rows = new ArrayList<>();
+        if (line.isEmpty()) {
+            rows.add("");
+            return rows;
+        }
+        String rest = line;
+        while (!rest.isEmpty()) {
+            String row = CharWidth.substringByWidth(rest, width);
+            if (row.isEmpty()) {          // 安全网：宽度容不下下一个字符时也吃一个，避免死循环
+                row = rest.substring(0, 1);
+            }
+            rows.add(row);
+            rest = rest.substring(row.length());
+        }
+        return rows;
+    }
+
     private static List<String> tail(List<String> lines, int n) {
-        if (n <= 0 || lines.size() <= n) return lines;
+        if (n <= 0) return List.of();
+        if (lines.size() <= n) return lines;
         return lines.subList(lines.size() - n, lines.size());
     }
 }
