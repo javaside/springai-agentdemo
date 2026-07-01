@@ -11,50 +11,37 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** ConversationState 的并发/取消过滤/状态机 行为断言（Task 4 TDD）。 */
+/** ConversationState 行内滚动模型的并发/取消过滤/状态机 行为断言（Claude Code 式）。 */
 class ConversationStateTest {
 
-    /** 1. 并发无异常 + 一致快照 + token 合并成一行（数量守恒）。 */
+    /** 1. 并发写在建助手行无异常 + 一致读 + 完成后定稿成一行（数量守恒）。 */
     @Test
-    void concurrentTokens_noException_andCoalesceIntoOneLine() throws Exception {
+    void concurrentTokens_noException_flushToOnePendingLine() throws Exception {
         ConversationState state = new ConversationState();
         long turn = 1L;
         state.onTurnStarted(turn);
 
-        int threads = 8;
-        int perThread = 500;
-        String token = "x";
+        int threads = 8, perThread = 500;
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(threads);
         AtomicBoolean failed = new AtomicBoolean(false);
 
         for (int i = 0; i < threads; i++) {
-            Thread writer = new Thread(() -> {
+            new Thread(() -> {
                 try {
                     start.await();
-                    for (int j = 0; j < perThread; j++) {
-                        state.onAssistantToken(turn, token);
-                    }
+                    for (int j = 0; j < perThread; j++) state.onAssistantToken(turn, "x");
                 } catch (Throwable t) {
                     failed.set(true);
                 } finally {
                     done.countDown();
                 }
-            });
-            writer.start();
+            }).start();
         }
-
-        // 主线程边写边读快照：不得抛 ConcurrentModificationException
         Thread reader = new Thread(() -> {
             try {
                 start.await();
-                while (done.getCount() > 0) {
-                    List<String> snap = state.transcriptSnapshot();
-                    // 遍历快照，若底层被并发修改会暴露问题
-                    for (String s : snap) {
-                        s.length();
-                    }
-                }
+                while (done.getCount() > 0) state.streaming().length();   // 并发只读，不得抛异常
             } catch (Throwable t) {
                 failed.set(true);
             }
@@ -64,63 +51,61 @@ class ConversationStateTest {
         start.countDown();
         assertTrue(done.await(30, TimeUnit.SECONDS), "writers should finish");
         reader.join(5000);
-
         assertFalse(failed.get(), "no exception during concurrent read/write");
 
-        // token 合并成一行：找到 AI 行，其内容长度 == 写入的 token 总数
-        List<String> snap = state.transcriptSnapshot();
-        long aiLines = snap.stream().filter(l -> l.startsWith("AI> ")).count();
-        assertEquals(1, aiLines, "所有 token 应合并到唯一一行 AI 行");
-        String aiLine = snap.stream().filter(l -> l.startsWith("AI> ")).findFirst().orElseThrow();
-        String content = aiLine.substring("AI> ".length());
-        assertEquals(threads * perThread, content.length(), "token 数量守恒");
+        assertEquals(threads * perThread, state.streaming().length(), "在建行累积所有 token");
+        state.onTurnComplete(turn);                       // 定稿 → 进 pending
+        assertEquals("", state.streaming(), "完成后在建行清空");
+        List<String> drained = state.drainPending();
+        assertEquals(1, drained.size(), "定稿成唯一一行");
+        assertEquals(threads * perThread, drained.get(0).length(), "token 数量守恒");
     }
 
-    /** 2. 取消后同回合的迟到 token 被丢弃。 */
+    /** 2. 取消：在建行定稿进 pending，之后同回合迟到 token 被丢弃。 */
     @Test
-    void lateTokenAfterCancel_isDropped() {
+    void cancel_flushesPartial_thenDropsLateTokens() {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
         state.onAssistantToken(1L, "abc");
-        String before = assistantContent(state);
-        assertEquals("abc", before);
 
-        state.cancelCurrent();  // acceptingTurnId = -1
+        state.cancelCurrent();                            // 定稿 "abc" + acceptingTurnId=-1
+        assertEquals("", state.streaming());
+        assertEquals(List.of("abc"), state.drainPending(), "取消把已产出的部分定稿");
 
-        state.onAssistantToken(1L, "DEF");  // 迟到，应被丢弃
-        String after = assistantContent(state);
-        assertEquals("abc", after, "取消后同回合迟到 token 不应增长内容");
+        state.onAssistantToken(1L, "DEF");                // 迟到，丢弃
+        assertEquals("", state.streaming());
+        assertTrue(state.drainPending().isEmpty(), "取消后迟到 token 不产生输出");
     }
 
-    /** 2b. 切换到新回合后，旧回合迟到 token 被丢弃。 */
+    /** 2b. 切到新回合后，旧回合迟到 token 被丢弃，新回合正常。 */
     @Test
-    void lateTokenAfterSwitchTurn_isDropped() {
+    void switchTurn_dropsOldLateTokens() {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
         state.onAssistantToken(1L, "old");
-        state.onTurnStarted(2L);            // 切走
-        state.onAssistantToken(1L, "late"); // 旧回合迟到，丢弃
-        state.onAssistantToken(2L, "new");  // 新回合正常
+        state.onTurnComplete(1L);                         // 定稿 old
+        state.onTurnStarted(2L);
+        state.onAssistantToken(1L, "late");               // 旧回合迟到，丢弃
+        state.onAssistantToken(2L, "new");
+        state.onTurnComplete(2L);
 
-        List<String> snap = state.transcriptSnapshot();
-        assertTrue(snap.stream().anyMatch(l -> l.equals("AI> old")), "旧回合 old 行保留");
-        assertTrue(snap.stream().anyMatch(l -> l.equals("AI> new")), "新回合 new 行记录");
-        assertTrue(snap.stream().noneMatch(l -> l.contains("late")), "旧回合迟到 token 丢弃");
+        List<String> drained = state.drainPending();
+        assertTrue(drained.contains("old"), "旧回合 old 定稿");
+        assertTrue(drained.contains("new"), "新回合 new 定稿");
+        assertTrue(drained.stream().noneMatch(l -> l.contains("late")), "旧回合迟到 token 丢弃");
     }
 
-    /** 3. 运行态：ToolStarted→RUNNING_TOOL；ToolFinished→THINKING；TurnComplete→IDLE。 */
+    /** 3. 状态机：ToolStarted→RUNNING_TOOL；ToolFinished→THINKING；TurnComplete→IDLE。 */
     @Test
     void statusMachine_tools_andComplete() {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
         assertEquals(ConversationState.Status.THINKING, state.status());
-
         state.onToolStarted(1L, "read", "file.txt");
         assertEquals(ConversationState.Status.RUNNING_TOOL, state.status());
-
+        assertEquals("read", state.activeTool());
         state.onToolFinished(1L, "read", "ok", true);
         assertEquals(ConversationState.Status.THINKING, state.status());
-
         state.onTurnComplete(1L);
         assertEquals(ConversationState.Status.IDLE, state.status());
     }
@@ -128,53 +113,45 @@ class ConversationStateTest {
     /** 4. 单飞判据：初始 idle；start 后非 idle；complete/error/cancel 后回 idle。 */
     @Test
     void singleFlight_isIdleTransitions() {
-        ConversationState complete = new ConversationState();
-        assertTrue(complete.isIdle());
-        complete.onTurnStarted(1L);
-        assertFalse(complete.isIdle());
-        complete.onTurnComplete(1L);
-        assertTrue(complete.isIdle());
+        ConversationState c = new ConversationState();
+        assertTrue(c.isIdle());
+        c.onTurnStarted(1L);
+        assertFalse(c.isIdle());
+        c.onTurnComplete(1L);
+        assertTrue(c.isIdle());
 
-        ConversationState err = new ConversationState();
-        err.onTurnStarted(1L);
-        assertFalse(err.isIdle());
-        err.onError(1L, new RuntimeException("boom"));
-        assertTrue(err.isIdle());
+        ConversationState e = new ConversationState();
+        e.onTurnStarted(1L);
+        e.onError(1L, new RuntimeException("boom"));
+        assertTrue(e.isIdle());
 
-        ConversationState cancel = new ConversationState();
-        cancel.onTurnStarted(1L);
-        assertFalse(cancel.isIdle());
-        cancel.cancelCurrent();
-        assertTrue(cancel.isIdle());
+        ConversationState x = new ConversationState();
+        x.onTurnStarted(1L);
+        x.cancelCurrent();
+        assertTrue(x.isIdle());
     }
 
-    /** onUserMessage 落 transcript；onTodoUpdated 替换快照。 */
+    /** onUserMessage / onToolFinished / onTodoUpdated / onError 都进 pending（滚入 scrollback）。 */
     @Test
-    void userMessage_andTodoSnapshot() {
+    void finalizedLines_goToPending() {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
         state.onUserMessage(1L, "hello");
-        assertTrue(state.transcriptSnapshot().stream().anyMatch(l -> l.equals("你> hello")));
-
+        state.onToolStarted(1L, "grep", "foo");
+        state.onToolFinished(1L, "grep", "out", true);
         state.onTodoUpdated(1L, List.of("[ ] a", "[x] b"));
-        assertEquals(List.of("[ ] a", "[x] b"), state.todoSnapshot());
-        // 再次更新替换而非追加
-        state.onTodoUpdated(1L, List.of("[x] c"));
-        assertEquals(List.of("[x] c"), state.todoSnapshot());
+        state.onError(1L, new RuntimeException("bad"));
+
+        List<String> p = state.drainPending();
+        assertTrue(p.stream().anyMatch(l -> l.contains("hello")), "用户行进 pending");
+        assertTrue(p.stream().anyMatch(l -> l.equals("🛠 grep ✓")), "工具完成行进 pending");
+        assertTrue(p.stream().anyMatch(l -> l.contains("计划")), "todo 进 pending");
+        assertTrue(p.stream().anyMatch(l -> l.contains("bad")), "错误进 pending");
     }
 
-    /** 取在建助手行的内容（去掉 "AI> " 前缀）；无则空串。 */
-    private static String assistantContent(ConversationState state) {
-        return state.transcriptSnapshot().stream()
-                .filter(l -> l.startsWith("AI> "))
-                .map(l -> l.substring("AI> ".length()))
-                .findFirst()
-                .orElse("");
-    }
-
-    /** 预存的里程碑1 方法仍可用（回归保护）。 */
+    /** 里程碑1 输入方法仍可用（回归保护）。 */
     @Test
-    void milestone1_methodsPreserved() {
+    void inputMethodsPreserved() {
         ConversationState state = new ConversationState();
         state.typeString("ab");
         state.typeChar('c');
@@ -185,7 +162,5 @@ class ConversationStateTest {
         assertEquals("hi", state.notice());
         assertEquals("ab", state.takeInput());
         assertEquals("", state.notice());
-        state.appendLine("line1");
-        assertTrue(state.transcriptSnapshot().contains("line1"));
     }
 }
