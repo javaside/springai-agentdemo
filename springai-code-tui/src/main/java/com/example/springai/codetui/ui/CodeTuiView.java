@@ -8,8 +8,9 @@ import dev.tamboui.tui.Renderer;
 import dev.tamboui.tui.TuiConfig;
 import dev.tamboui.tui.TuiRunner;
 import dev.tamboui.tui.event.Event;
-import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
+import dev.tamboui.tui.event.TickEvent;
+import dev.tamboui.text.CharWidth;
 import dev.tamboui.widgets.paragraph.Paragraph;
 import reactor.core.Disposable;
 
@@ -17,9 +18,13 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * TamboUI 单栏视图。tickRate 周期重绘；render 画「对话区/输入行/状态栏」；
+ * TamboUI 单栏视图。render 画「对话区/输入行/状态栏」；
  * event 处理 字符/Backspace/Enter/Esc/Ctrl+C。
  * 关键：Enter 只 submit + 清输入，绝不直接写 transcript（用户行由 onUserMessage 统一落）。
+ *
+ * 重绘机制（实测修正）：TamboUI 的 run() 循环【仅在 handle 返回 true 时才 render】，
+ * tickRate 只负责按 ~30fps 把 TickEvent 投进事件队列，并不自动重绘。故 handle 必须对
+ * TickEvent 返回 true——这才让「后台线程写状态 → 周期重绘刷出」成立（里程碑1 被动重绘闸门）。
  */
 public final class CodeTuiView implements EventHandler, Renderer {
     private final ConversationState state;
@@ -40,11 +45,14 @@ public final class CodeTuiView implements EventHandler, Renderer {
 
     @Override
     public boolean handle(Event e, TuiRunner runner) {
+        if (e instanceof TickEvent) return true;  // 周期重绘：run 循环仅在 handle 返回 true 时 render
         if (!(e instanceof KeyEvent k)) return false;
         if (k.isCtrlC()) { runner.quit(); return true; }
         if (k.isCancel()) {                       // Esc：UI 层取消当前回合
-            if (current != null) { current.dispose(); current = null; }
+            boolean had = current != null;
+            if (had) { current.dispose(); current = null; }
             state.cancelCurrent();
+            state.setNotice(had ? "已取消当前回合" : "Esc：当前无进行中回合");  // 状态栏可见反馈
             return true;
         }
         if (k.isConfirm()) {                      // Enter
@@ -54,8 +62,13 @@ public final class CodeTuiView implements EventHandler, Renderer {
             return true;
         }
         if (k.isDeleteBackward()) { state.backspace(); return true; }
-        if (k.code() == KeyCode.CHAR) { state.typeChar(k.character()); return true; }
-        return false;                             // 其它（含 TickEvent）交给 tickRate 触发重绘
+        // 可打印输入：用 codePoint 支持 CJK/非 ASCII/星际字符，不再仅认 KeyCode.CHAR（否则中文被漏掉）
+        int cp = k.codePoint();
+        if (cp > 0 && !Character.isISOControl(cp) && !k.hasCtrl() && !k.hasAlt()) {
+            state.typeString(new String(Character.toChars(cp)));
+            return true;
+        }
+        return false;                             // 未知/未消费事件：不强制重绘
     }
 
     @Override
@@ -73,12 +86,15 @@ public final class CodeTuiView implements EventHandler, Renderer {
         String prompt = "> " + state.currentInput();
         f.renderWidget(Paragraph.from(prompt), inputR);
 
-        String hint = state.isIdle()
+        String base = state.isIdle()
                 ? "Enter 发送 · Esc 取消 · Ctrl+C 退出"
                 : "上一回合进行中，Esc 取消后再输入 · Ctrl+C 退出";
+        String notice = state.notice();
+        String hint = notice.isEmpty() ? base : (notice + " · " + base);
         f.renderWidget(Paragraph.from(hint), statusR);
 
-        f.setCursorPosition(inputR.x() + prompt.length(), inputR.y());  // 宽字符光标偏移暂简化
+        // 光标列用显示宽度（CJK 占 2 列），而非字符数，否则中文输入光标错位、看起来「混乱」
+        f.setCursorPosition(inputR.x() + CharWidth.of(prompt), inputR.y());
     }
 
     private static List<String> tail(List<String> lines, int n) {
