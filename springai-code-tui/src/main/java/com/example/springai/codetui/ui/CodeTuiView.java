@@ -31,15 +31,14 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
 
     private static final int LIVE_HEIGHT = 5;   // 预览 + 上边框 + 输入 + 下边框 + 状态
 
-    // 配色（层次感）
+    // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
     private static final Style DIM     = Style.create().fg(Color.DARK_GRAY);
-    private static final Style USER    = Style.create().fg(Color.CYAN).bold();
+    private static final Style USER    = Style.create().fg(Color.GRAY);     // 用户输入：灰色，次要
     private static final Style TOOL    = Style.create().fg(Color.DARK_GRAY);
     private static final Style OK      = Style.create().fg(Color.GREEN);
     private static final Style FAIL    = Style.create().fg(Color.RED);
     private static final Style TODO    = Style.create().fg(Color.YELLOW);
     private static final Style ERROR   = Style.create().fg(Color.RED).bold();
-    private static final Style PROMPT  = Style.create().fg(Color.CYAN).bold();
     private static final Style THINK   = Style.create().fg(Color.YELLOW);
     private static final Style RUNNING = Style.create().fg(Color.CYAN);
 
@@ -67,8 +66,8 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
                 if (st == null) runner.println(ol.text());           // 助手正文：默认色
                 else runner.println(Text.styled(ol.text(), st));
             }
-            for (String row : state.takeCompleteStreamingLines(runner.width())) {
-                runner.println(row);                                 // 流式整行：默认色
+            for (String row : state.takeCompleteStreamingLines()) {
+                runner.println(row);                                 // 流式完整行（按真实换行切）：默认亮色
             }
             return true;
         }
@@ -121,9 +120,9 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         int yTop = bottom - 3;
         int yPreview = bottom - 4;
 
-        // 流式残段预览（暗色）
+        // 流式残行预览（AI 生成中——默认亮色，是焦点）
         if (yPreview >= a.y()) {
-            put(f, x, yPreview, a.width(), Text.styled(fit(state.streaming(), w), DIM));
+            put(f, x, yPreview, a.width(), Text.from(fitEnd(state.streaming(), w)));
         }
         // 圆角输入框
         if (w >= 4) {
@@ -149,7 +148,7 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         int pad = Math.max(0, inner - used);
         return Text.from(Line.from(
                 Span.styled("│ ", DIM),
-                Span.styled("› ", PROMPT),
+                Span.raw("› "),
                 Span.raw(shownInput),
                 Span.raw(" ".repeat(pad)),
                 Span.styled(" │", DIM)));
@@ -180,8 +179,9 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         f.renderWidget(Paragraph.builder().text(t).overflow(Overflow.CLIP).build(), new Rect(x, y, w, 1));
     }
 
-    private static String fit(String s, int w) {
+    /** 显示尾部（最新生成的部分），供流式预览用。 */
+    private static String fitEnd(String s, int w) {
         if (s.isEmpty() || CharWidth.of(s) <= w) return s;
-        return CharWidth.substringByWidth(s, w);
+        return CharWidth.substringByWidthFromEnd(s, w);
     }
 }

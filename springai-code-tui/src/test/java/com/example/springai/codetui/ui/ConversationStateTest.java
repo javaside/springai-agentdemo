@@ -156,18 +156,17 @@ class ConversationStateTest {
         assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.ERROR && l.text().contains("bad")));
     }
 
-    /** 流式整行下沉：凑满整行的部分下沉进 scrollback，只留最后残段。 */
+    /** 流式按真实换行下沉：遇到 \n 的完整逻辑行下沉 scrollback，只留最后未换行残行。 */
     @Test
-    void takeCompleteStreamingLines_flushesFullRows_keepsPartial() {
+    void takeCompleteStreamingLines_splitsOnNewline_keepsPartial() {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
-        state.onAssistantToken(1L, "aaaaa");
-        List<String> flushed = state.takeCompleteStreamingLines(2);   // 宽度 2 → ["aa","aa","a"]
-        assertEquals(List.of("aa", "aa"), flushed, "整行下沉 scrollback");
-        assertEquals("a", state.streaming(), "残段留在 live 区");
-        assertTrue(state.takeCompleteStreamingLines(2).isEmpty());
+        state.onAssistantToken(1L, "L1\nL2\npart");
+        assertEquals(List.of("L1", "L2"), state.takeCompleteStreamingLines(), "换行完整行下沉");
+        assertEquals("part", state.streaming(), "未换行残行留在 live 区");
+        assertTrue(state.takeCompleteStreamingLines().isEmpty(), "无新换行则不下沉");
         state.onTurnComplete(1L);
-        assertEquals(List.of("a"), texts(state.drainPending()));
+        assertEquals(List.of("part"), texts(state.drainPending()), "完成时残行定稿");
     }
 
     /** 里程碑1 输入方法仍可用（回归保护）。 */

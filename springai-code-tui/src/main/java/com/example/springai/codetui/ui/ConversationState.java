@@ -65,21 +65,25 @@ public final class ConversationState implements AgentListener {
     }
 
     /**
-     * 渲染线程调用：把在建助手行里<b>已凑满整行</b>的部分（按显示宽度折行）取出去下沉 scrollback，
-     * 只保留最后残段继续预览。锁内完成，避免与 {@link #onAssistantToken} 并发 append 竞争。
+     * 渲染线程调用：把在建助手行里<b>已换行（遇到真实 \n）</b>的完整逻辑行取出去下沉 scrollback，
+     * 只保留最后一段未换行的残行继续预览。按真实 {@code \n} 切分（不是按显示宽度——终端自己会折长行），
+     * 从根上避免多行内容 + 预览叠加造成的重复。锁内完成，避免与 {@link #onAssistantToken} 竞争。
      */
-    public synchronized List<String> takeCompleteStreamingLines(int width) {
-        if (streaming.length() == 0) return List.of();
-        List<String> rows = wrapByWidth(streaming.toString(), width);
-        if (rows.size() <= 1) return List.of();
-        List<String> complete = new ArrayList<>(rows.subList(0, rows.size() - 1));
-        String partial = rows.get(rows.size() - 1);
+    public synchronized List<String> takeCompleteStreamingLines() {
+        int idx = streaming.lastIndexOf("\n");
+        if (idx < 0) return List.of();                      // 还没换行，全留着预览
+        String complete = streaming.substring(0, idx);      // 含 idx 之前的若干完整行
+        String partial = streaming.substring(idx + 1);
         streaming.setLength(0);
         streaming.append(partial);
-        return complete;
+        List<String> out = new ArrayList<>();
+        for (String l : complete.split("\n", -1)) {
+            out.add(l.endsWith("\r") ? l.substring(0, l.length() - 1) : l);
+        }
+        return out;
     }
 
-    /** live 区显示：在建助手行的当前残段（≤ 一个视觉行）。 */
+    /** live 区显示：在建助手行的当前残行（未换行段）。 */
     public synchronized String streaming() { return streaming.toString(); }
 
     /** Esc 取消当前回合：定稿在建行、acceptingTurnId=-1、状态回 IDLE。 */
@@ -102,6 +106,7 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onUserMessage(long turnId, String text) {
         if (turnId != acceptingTurnId) return;
+        pending.add(new OutputLine("", OutputLine.Kind.ASSISTANT));   // 回合间留白，分隔更清晰
         pending.add(new OutputLine(USER_PREFIX + text, OutputLine.Kind.USER));
     }
 
@@ -173,19 +178,5 @@ public final class ConversationState implements AgentListener {
         if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);
         if (CharWidth.of(oneLine) <= 80) return oneLine;
         return CharWidth.substringByWidth(oneLine, 79) + "…";
-    }
-
-    private static List<String> wrapByWidth(String line, int width) {
-        int w = Math.max(1, width);
-        List<String> rows = new ArrayList<>();
-        if (line.isEmpty()) { rows.add(""); return rows; }
-        String rest = line;
-        while (!rest.isEmpty()) {
-            String row = CharWidth.substringByWidth(rest, w);
-            if (row.isEmpty()) row = rest.substring(0, 1);
-            rows.add(row);
-            rest = rest.substring(row.length());
-        }
-        return rows;
     }
 }
