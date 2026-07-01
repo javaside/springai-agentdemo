@@ -78,12 +78,13 @@ public final class AgentTools {
     /**
      * 组装编码 Agent 的 ChatClient。仅做装配，不发起任何网络请求，也不要求有效的 API key。
      *
-     * @param model     DeepSeek 模型（由上游创建）
-     * @param root      项目根目录（FileSystemTools 的强制边界 + Grep/Glob 的默认工作目录）
-     * @param listener  工具 / Todo 事件出口
-     * @param sessionId 会话 id，作为 conversationId 由调用方每次请求传入（不在这里绑定）
+     * @param model    DeepSeek 模型（由上游创建）
+     * @param root     项目根目录（FileSystemTools 的强制边界 + Grep/Glob 的默认工作目录）
+     * @param listener 工具 / Todo 事件出口
+     *                 <p>注：conversationId（会话记忆）由 {@code CodingAgent.submit} 每次请求传入，
+     *                 不在装配期绑定，故此处不需要 sessionId 参数。
      */
-    public static ChatClient build(DeepSeekChatModel model, Path root, AgentListener listener, String sessionId) {
+    public static ChatClient build(DeepSeekChatModel model, Path root, AgentListener listener) {
         FileSystemTools fs = FileSystemTools.builder().allowedDirectory(root).build();
         ShellTools sh = ShellTools.builder().build();
         GrepTool grep = GrepTool.builder().workingDirectory(root).build();
