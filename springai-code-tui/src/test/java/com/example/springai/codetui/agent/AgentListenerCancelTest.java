@@ -1,6 +1,7 @@
 package com.example.springai.codetui.agent;
 
 import com.example.springai.codetui.ui.ConversationState;
+import com.example.springai.codetui.ui.ConversationState.OutputLine;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -11,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 钉死「取消后再过滤」回归（行内滚动模型）：
- * turn=1 进行中 → cancelCurrent() → turn=1 的所有迟到事件全部忽略（不进 pending/streaming）；
+ * turn=1 进行中 → cancelCurrent() → turn=1 的所有迟到事件全部忽略；
  * 随后 onTurnStarted(2) → turn=2 事件正常定稿进 pending。
  */
 class AgentListenerCancelTest {
@@ -28,9 +29,9 @@ class AgentListenerCancelTest {
 
         impl.cancelCurrent();
         assertTrue(impl.isIdle(), "取消后回 IDLE");
-        List<String> afterCancel = impl.drainPending();     // 应含 q1 与已产出的 partial（定稿）
-        assertTrue(afterCancel.stream().anyMatch(l -> l.contains("q1")), "用户消息已定稿");
-        assertTrue(afterCancel.contains("partial"), "取消把已产出部分定稿");
+        List<OutputLine> afterCancel = impl.drainPending();
+        assertTrue(afterCancel.stream().anyMatch(l -> l.text().contains("q1")), "用户消息已定稿");
+        assertTrue(afterCancel.stream().anyMatch(l -> l.text().equals("partial")), "取消把已产出部分定稿");
 
         // turn=1 的迟到事件全部忽略
         listener.onAssistantToken(1L, "MORE");
@@ -55,12 +56,13 @@ class AgentListenerCancelTest {
         listener.onTurnComplete(2L);
         assertTrue(impl.isIdle(), "turn=2 完成回 IDLE");
 
-        List<String> t2 = impl.drainPending();
-        assertTrue(t2.stream().anyMatch(l -> l.contains("q2")), "turn=2 用户消息");
-        assertTrue(t2.contains("answer"), "turn=2 助手行定稿");
-        assertTrue(t2.stream().anyMatch(l -> l.equals("✓ write")), "turn=2 工具完成");
-        assertTrue(t2.stream().anyMatch(l -> l.contains("fresh")), "turn=2 todo");
-        assertTrue(t2.stream().noneMatch(l -> l.contains("MORE") || l.contains("stale")),
+        List<OutputLine> t2 = impl.drainPending();
+        assertTrue(t2.stream().anyMatch(l -> l.text().contains("q2")), "turn=2 用户消息");
+        assertTrue(t2.stream().anyMatch(l -> l.text().equals("answer")), "turn=2 助手行定稿");
+        assertTrue(t2.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TOOL_OK && l.text().contains("write")),
+                "turn=2 工具完成");
+        assertTrue(t2.stream().anyMatch(l -> l.text().contains("fresh")), "turn=2 todo");
+        assertTrue(t2.stream().noneMatch(l -> l.text().contains("MORE") || l.text().contains("stale")),
                 "无 turn=1 迟到内容混入");
     }
 }

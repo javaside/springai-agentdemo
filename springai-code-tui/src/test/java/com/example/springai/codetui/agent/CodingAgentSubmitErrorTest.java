@@ -42,7 +42,7 @@ class CodingAgentSubmitErrorTest {
 
         assertTrue(state.isIdle(), "onError 应把状态复位到 IDLE（不卡在 THINKING）");
         assertTrue(d.isDisposed(), "同步失败应返回已 dispose 的句柄");
-        assertTrue(state.drainPending().stream().anyMatch(l -> l.contains("assembly-boom")),
+        assertTrue(state.drainPending().stream().anyMatch(l -> l.text().contains("assembly-boom")),
                 "错误信息应经 onError 落进 pending（滚入 scrollback）");
     }
 }

@@ -12,9 +12,10 @@ import java.util.List;
  * 线程安全共享状态，兼任 {@link AgentListener} 落地端。<b>Claude Code 式行内滚动模型</b>：
  *
  * <ul>
- *   <li><b>pending</b>：已定稿的输出行，交渲染线程用 {@code InlineTuiRunner.println} 推进终端 scrollback。</li>
- *   <li><b>streaming</b>：在建助手行；每凑满一整（显示宽度）视觉行就 {@link #takeCompleteStreamingLines}
- *       下沉进 scrollback，只把最后不满一行的残段留在底部 live 区预览。</li>
+ *   <li><b>pending</b>：已定稿的输出行（带 {@link OutputLine.Kind 类型}，供 UI 分色做层次），
+ *       交渲染线程用 {@code InlineTuiRunner.println} 推进终端 scrollback。</li>
+ *   <li><b>streaming</b>：在建助手行；凑满整（显示宽度）行即 {@link #takeCompleteStreamingLines}
+ *       下沉 scrollback，只把最后残段留在底部 live 区预览。</li>
  * </ul>
  *
  * 并发：写在 Reactor 线程、读/drain 在渲染线程；复合操作 {@code synchronized}、标志 {@code volatile}；
@@ -23,15 +24,20 @@ import java.util.List;
 public final class ConversationState implements AgentListener {
     public enum Status { IDLE, THINKING, RUNNING_TOOL }
 
+    /** 一条定稿输出行 + 其语义类型（UI 据此上色）。 */
+    public record OutputLine(String text, Kind kind) {
+        public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR }
+    }
+
     private static final String USER_PREFIX = "你 › ";
 
-    private final Deque<String> pending = new ArrayDeque<>();
+    private final Deque<OutputLine> pending = new ArrayDeque<>();
     private final StringBuilder streaming = new StringBuilder();
     private final StringBuilder input = new StringBuilder();
     private volatile Status status = Status.IDLE;
     private volatile String notice = "";
-    private volatile String activeTool = "";        // 正在运行的工具名
-    private volatile String activeToolSummary = ""; // 正在运行的工具摘要（如 shell 命令）
+    private volatile String activeTool = "";
+    private volatile String activeToolSummary = "";
     private volatile long acceptingTurnId = -1L;
 
     // ── 输入缓冲 ────────────────────────────────────────────────────────
@@ -51,21 +57,21 @@ public final class ConversationState implements AgentListener {
     public long acceptingTurnId() { return acceptingTurnId; }
 
     /** 渲染线程调用：取走并清空「待 println」的定稿行。 */
-    public synchronized List<String> drainPending() {
+    public synchronized List<OutputLine> drainPending() {
         if (pending.isEmpty()) return List.of();
-        List<String> out = new ArrayList<>(pending);
+        List<OutputLine> out = new ArrayList<>(pending);
         pending.clear();
         return out;
     }
 
     /**
-     * 渲染线程调用：把在建助手行里<b>已凑满整行</b>的部分（按显示宽度折行）取出去 println 进 scrollback，
-     * 只保留最后不满一行的残段继续在 live 区预览。锁内完成，避免与 {@link #onAssistantToken} 并发 append 竞争。
+     * 渲染线程调用：把在建助手行里<b>已凑满整行</b>的部分（按显示宽度折行）取出去下沉 scrollback，
+     * 只保留最后残段继续预览。锁内完成，避免与 {@link #onAssistantToken} 并发 append 竞争。
      */
     public synchronized List<String> takeCompleteStreamingLines(int width) {
         if (streaming.length() == 0) return List.of();
         List<String> rows = wrapByWidth(streaming.toString(), width);
-        if (rows.size() <= 1) return List.of();          // 还不足一整行，全留着
+        if (rows.size() <= 1) return List.of();
         List<String> complete = new ArrayList<>(rows.subList(0, rows.size() - 1));
         String partial = rows.get(rows.size() - 1);
         streaming.setLength(0);
@@ -96,7 +102,7 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onUserMessage(long turnId, String text) {
         if (turnId != acceptingTurnId) return;
-        pending.add(USER_PREFIX + text);
+        pending.add(new OutputLine(USER_PREFIX + text, OutputLine.Kind.USER));
     }
 
     @Override
@@ -108,11 +114,12 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onToolStarted(long turnId, String toolName, String toolInput) {
         if (turnId != acceptingTurnId) return;
-        flushStreaming();                                // 工具前把在建助手行定稿
+        flushStreaming();
         status = Status.RUNNING_TOOL;
         activeTool = toolName;
         activeToolSummary = summarize(toolInput);
-        pending.add("⏳ " + toolName + (activeToolSummary.isEmpty() ? "" : "  " + activeToolSummary));
+        String line = "⏺ " + toolName + (activeToolSummary.isEmpty() ? "" : "  " + activeToolSummary);
+        pending.add(new OutputLine(line, OutputLine.Kind.TOOL_START));
     }
 
     @Override
@@ -121,14 +128,15 @@ public final class ConversationState implements AgentListener {
         status = Status.THINKING;
         activeTool = "";
         activeToolSummary = "";
-        pending.add((ok ? "✓ " : "✗ ") + toolName);
+        pending.add(new OutputLine("  ⎿ " + toolName + (ok ? " ✓" : " ✗"),
+                ok ? OutputLine.Kind.TOOL_OK : OutputLine.Kind.TOOL_FAIL));
     }
 
     @Override
     public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
         if (turnId != acceptingTurnId) return;
-        pending.add("📋 计划：");
-        for (String l : todoLines) pending.add("   " + l);
+        pending.add(new OutputLine("📋 计划", OutputLine.Kind.TODO));
+        for (String l : todoLines) pending.add(new OutputLine("   • " + l, OutputLine.Kind.TODO));
     }
 
     @Override
@@ -144,31 +152,29 @@ public final class ConversationState implements AgentListener {
     public synchronized void onError(long turnId, Throwable error) {
         if (turnId != acceptingTurnId) return;
         flushStreaming();
-        pending.add("⚠ 出错：" + (error == null ? "unknown" : String.valueOf(error.getMessage())));
+        pending.add(new OutputLine("⚠ 出错：" + (error == null ? "unknown" : String.valueOf(error.getMessage())),
+                OutputLine.Kind.ERROR));
         activeTool = "";
         activeToolSummary = "";
         status = Status.IDLE;
     }
 
     // ── 内部 ────────────────────────────────────────────────────────────
-    /** 把在建助手行（含残段）整体定稿进 pending。 */
     private void flushStreaming() {
         if (streaming.length() > 0) {
-            pending.add(streaming.toString());
+            pending.add(new OutputLine(streaming.toString(), OutputLine.Kind.ASSISTANT));
             streaming.setLength(0);
         }
     }
 
-    /** 工具入参摘要：单行化 + 截断到 ~80 显示列（如 shell 的命令、grep 的模式）。 */
     private static String summarize(String toolInput) {
         if (toolInput == null) return "";
         String oneLine = toolInput.replaceAll("\\s+", " ").trim();
-        if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);   // 先粗砍，避免超大输入
+        if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);
         if (CharWidth.of(oneLine) <= 80) return oneLine;
         return CharWidth.substringByWidth(oneLine, 79) + "…";
     }
 
-    /** 按显示宽度把一行折成多视觉行（CJK 双宽，不断开宽字符）。空串 → 一个空行。 */
     private static List<String> wrapByWidth(String line, int width) {
         int w = Math.max(1, width);
         List<String> rows = new ArrayList<>();

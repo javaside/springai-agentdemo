@@ -1,5 +1,6 @@
 package com.example.springai.codetui.ui;
 
+import com.example.springai.codetui.ui.ConversationState.OutputLine;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -11,8 +12,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** ConversationState 行内滚动模型的并发/取消过滤/状态机 行为断言（Claude Code 式）。 */
+/** ConversationState 行内滚动模型的并发/取消过滤/状态机/分类 行为断言。 */
 class ConversationStateTest {
+
+    private static List<String> texts(List<OutputLine> lines) {
+        return lines.stream().map(OutputLine::text).toList();
+    }
 
     /** 1. 并发写在建助手行无异常 + 一致读 + 完成后定稿成一行（数量守恒）。 */
     @Test
@@ -41,7 +46,7 @@ class ConversationStateTest {
         Thread reader = new Thread(() -> {
             try {
                 start.await();
-                while (done.getCount() > 0) state.streaming().length();   // 并发只读，不得抛异常
+                while (done.getCount() > 0) state.streaming().length();
             } catch (Throwable t) {
                 failed.set(true);
             }
@@ -54,11 +59,12 @@ class ConversationStateTest {
         assertFalse(failed.get(), "no exception during concurrent read/write");
 
         assertEquals(threads * perThread, state.streaming().length(), "在建行累积所有 token");
-        state.onTurnComplete(turn);                       // 定稿 → 进 pending
+        state.onTurnComplete(turn);
         assertEquals("", state.streaming(), "完成后在建行清空");
-        List<String> drained = state.drainPending();
+        List<OutputLine> drained = state.drainPending();
         assertEquals(1, drained.size(), "定稿成唯一一行");
-        assertEquals(threads * perThread, drained.get(0).length(), "token 数量守恒");
+        assertEquals(threads * perThread, drained.get(0).text().length(), "token 数量守恒");
+        assertEquals(OutputLine.Kind.ASSISTANT, drained.get(0).kind(), "助手正文类型");
     }
 
     /** 2. 取消：在建行定稿进 pending，之后同回合迟到 token 被丢弃。 */
@@ -68,11 +74,11 @@ class ConversationStateTest {
         state.onTurnStarted(1L);
         state.onAssistantToken(1L, "abc");
 
-        state.cancelCurrent();                            // 定稿 "abc" + acceptingTurnId=-1
+        state.cancelCurrent();
         assertEquals("", state.streaming());
-        assertEquals(List.of("abc"), state.drainPending(), "取消把已产出的部分定稿");
+        assertEquals(List.of("abc"), texts(state.drainPending()), "取消把已产出的部分定稿");
 
-        state.onAssistantToken(1L, "DEF");                // 迟到，丢弃
+        state.onAssistantToken(1L, "DEF");
         assertEquals("", state.streaming());
         assertTrue(state.drainPending().isEmpty(), "取消后迟到 token 不产生输出");
     }
@@ -83,13 +89,13 @@ class ConversationStateTest {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
         state.onAssistantToken(1L, "old");
-        state.onTurnComplete(1L);                         // 定稿 old
+        state.onTurnComplete(1L);
         state.onTurnStarted(2L);
-        state.onAssistantToken(1L, "late");               // 旧回合迟到，丢弃
+        state.onAssistantToken(1L, "late");
         state.onAssistantToken(2L, "new");
         state.onTurnComplete(2L);
 
-        List<String> drained = state.drainPending();
+        List<String> drained = texts(state.drainPending());
         assertTrue(drained.contains("old"), "旧回合 old 定稿");
         assertTrue(drained.contains("new"), "新回合 new 定稿");
         assertTrue(drained.stream().noneMatch(l -> l.contains("late")), "旧回合迟到 token 丢弃");
@@ -131,23 +137,23 @@ class ConversationStateTest {
         assertTrue(x.isIdle());
     }
 
-    /** onUserMessage / onToolFinished / onTodoUpdated / onError 都进 pending（滚入 scrollback）。 */
+    /** 各类定稿行进 pending 且带正确类型（供 UI 分色）。 */
     @Test
-    void finalizedLines_goToPending() {
+    void finalizedLines_goToPending_withKinds() {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
         state.onUserMessage(1L, "hello");
         state.onToolStarted(1L, "grep", "foo");
         state.onToolFinished(1L, "grep", "out", true);
-        state.onTodoUpdated(1L, List.of("[ ] a", "[x] b"));
+        state.onTodoUpdated(1L, List.of("a", "b"));
         state.onError(1L, new RuntimeException("bad"));
 
-        List<String> p = state.drainPending();
-        assertTrue(p.stream().anyMatch(l -> l.contains("hello")), "用户行进 pending");
-        assertTrue(p.stream().anyMatch(l -> l.contains("grep") && l.contains("foo")), "工具开始+命令摘要进 pending");
-        assertTrue(p.stream().anyMatch(l -> l.equals("✓ grep")), "工具完成行进 pending");
-        assertTrue(p.stream().anyMatch(l -> l.contains("计划")), "todo 进 pending");
-        assertTrue(p.stream().anyMatch(l -> l.contains("bad")), "错误进 pending");
+        List<OutputLine> p = state.drainPending();
+        assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.USER && l.text().contains("hello")));
+        assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TOOL_START && l.text().contains("grep") && l.text().contains("foo")));
+        assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TOOL_OK && l.text().contains("grep")));
+        assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TODO && l.text().contains("计划")));
+        assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.ERROR && l.text().contains("bad")));
     }
 
     /** 流式整行下沉：凑满整行的部分下沉进 scrollback，只留最后残段。 */
@@ -155,16 +161,13 @@ class ConversationStateTest {
     void takeCompleteStreamingLines_flushesFullRows_keepsPartial() {
         ConversationState state = new ConversationState();
         state.onTurnStarted(1L);
-        state.onAssistantToken(1L, "aaaaa");            // 5 个 ASCII，各宽 1
-        // 宽度 2 → 折成 ["aa","aa","a"]，下沉前两整行、留残段 "a"
-        List<String> flushed = state.takeCompleteStreamingLines(2);
+        state.onAssistantToken(1L, "aaaaa");
+        List<String> flushed = state.takeCompleteStreamingLines(2);   // 宽度 2 → ["aa","aa","a"]
         assertEquals(List.of("aa", "aa"), flushed, "整行下沉 scrollback");
         assertEquals("a", state.streaming(), "残段留在 live 区");
-        // 残段不足一行 → 再取无整行可下沉
         assertTrue(state.takeCompleteStreamingLines(2).isEmpty());
-        // 回合完成 → 残段整体定稿进 pending
         state.onTurnComplete(1L);
-        assertEquals(List.of("a"), state.drainPending());
+        assertEquals(List.of("a"), texts(state.drainPending()));
     }
 
     /** 里程碑1 输入方法仍可用（回归保护）。 */
