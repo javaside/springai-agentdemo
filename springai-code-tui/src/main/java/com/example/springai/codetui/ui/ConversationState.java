@@ -166,10 +166,12 @@ public final class ConversationState implements AgentListener {
 
     // ── 内部 ────────────────────────────────────────────────────────────
     private void flushStreaming() {
-        if (streaming.length() > 0) {
-            pending.add(new OutputLine(streaming.toString(), OutputLine.Kind.ASSISTANT));
-            streaming.setLength(0);
+        if (streaming.length() == 0) return;
+        for (String l : streaming.toString().split("\n", -1)) {   // 残段也按真实换行拆，避免嵌入 \n 的整块
+            pending.add(new OutputLine(l.endsWith("\r") ? l.substring(0, l.length() - 1) : l,
+                    OutputLine.Kind.ASSISTANT));
         }
+        streaming.setLength(0);
     }
 
     private static String summarize(String toolInput) {

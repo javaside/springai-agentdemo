@@ -22,6 +22,8 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import reactor.core.Disposable;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Claude Code 式行内视图（TamboUI {@link InlineTuiRunner}）：定稿行按类型分色 println 进 scrollback，
@@ -45,6 +47,7 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
 
     private final ConversationState state;
     private final SubmitHandler onSubmit;
+    private final MarkdownRenderer md = new MarkdownRenderer();   // AI 正文 markdown + 代码语法高亮
     private Disposable current;
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
@@ -63,13 +66,22 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
     public boolean handle(Event e, InlineTuiRunner runner) {
         if (e instanceof TickEvent) {
             for (OutputLine ol : state.drainPending()) {
-                Style st = styleFor(ol.kind());
-                String text = indentFor(ol.kind()) + ol.text();      // 用户/AI 缩进，工具不缩进
-                if (st == null) runner.println(text);                // 助手正文：默认色
-                else runner.println(Text.styled(text, st));
+                switch (ol.kind()) {
+                    case USER -> {
+                        md.reset();                                  // 新回合：清 markdown 代码围栏状态
+                        runner.println(Text.from(Line.from(Span.raw(INDENT), Span.styled(ol.text(), USER))));
+                    }
+                    case ASSISTANT ->                                // AI 正文：markdown/语法高亮 + 缩进
+                            runner.println(indented(md.renderFinalized(ol.text())));
+                    default -> {                                     // 工具/Todo/错误：单色贴左
+                        Style st = styleFor(ol.kind());
+                        if (st == null) runner.println(ol.text());
+                        else runner.println(Text.styled(ol.text(), st));
+                    }
+                }
             }
-            for (String row : state.takeCompleteStreamingLines()) {
-                runner.println(INDENT + row);                        // 流式完整行（按真实换行切）：默认亮色 + 缩进
+            for (String row : state.takeCompleteStreamingLines()) {  // 流式完整行：markdown/语法高亮 + 缩进
+                runner.println(indented(md.renderFinalized(row)));
             }
             return true;
         }
@@ -97,9 +109,12 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         return false;
     }
 
-    /** 用户/AI 对话内容缩进；工具行/Todo/错误不缩进（结构性信息贴左）。 */
-    private static String indentFor(OutputLine.Kind kind) {
-        return (kind == OutputLine.Kind.USER || kind == OutputLine.Kind.ASSISTANT) ? INDENT : "";
+    /** 给渲染出的 span 列表加左缩进，组成一行 Text。 */
+    private static Text indented(List<Span> spans) {
+        List<Span> all = new ArrayList<>(spans.size() + 1);
+        all.add(Span.raw(INDENT));
+        all.addAll(spans);
+        return Text.from(Line.from(all));
     }
 
     private static Style styleFor(OutputLine.Kind kind) {
@@ -127,10 +142,15 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         int yTop = bottom - 3;
         int yPreview = bottom - 4;
 
-        // 流式残行预览（AI 生成中——默认亮色，是焦点；与正文同样缩进）
+        // 流式残行预览（AI 生成中——markdown/语法高亮 + 缩进；用当前状态但不改变它）
         if (yPreview >= a.y()) {
             String s = state.streaming();
-            put(f, x, yPreview, a.width(), Text.from(s.isEmpty() ? "" : INDENT + fitEnd(s, Math.max(1, w - INDENT.length()))));
+            if (s.isEmpty()) {
+                put(f, x, yPreview, a.width(), Text.from(""));
+            } else {
+                String shown = fitEnd(s, Math.max(1, w - INDENT.length()));
+                put(f, x, yPreview, a.width(), indented(md.renderPreview(shown)));
+            }
         }
         // 圆角输入框
         if (w >= 4) {
