@@ -21,11 +21,21 @@ public final class MarkdownRenderer {
 
     // ---- 样式常量 ----
     private static final Style DIM = Style.create().fg(Color.DARK_GRAY);
-    private static final Style HEADER = Style.create().fg(Color.CYAN).bold();
+    private static final Style HEADER = Style.create().fg(Color.LIGHT_CYAN).bold();
     private static final Style BOLD = Style.create().bold();
     private static final Style ITALIC = Style.create().italic();
-    private static final Style INLINE_CODE = Style.create().fg(Color.GREEN);
-    private static final Style QUOTE = Style.create().fg(Color.DARK_GRAY);
+    private static final Style INLINE_CODE = Style.create().fg(Color.LIGHT_GREEN);
+    private static final Style QUOTE = Style.create().fg(Color.DARK_GRAY).italic();
+    private static final Style GUTTER = Style.create().fg(Color.rgb(120, 150, 200)); // 代码块左边栏
+    private static final String BAR = "▎ ";
+
+    /** 给代码行加左边栏，视觉上成块。 */
+    private static List<Span> withGutter(List<Span> content) {
+        List<Span> out = new ArrayList<>(content.size() + 1);
+        out.add(Span.styled(BAR, GUTTER));
+        out.addAll(content);
+        return out;
+    }
 
     // ---- 内部状态 ----
     private boolean inCodeBlock = false;
@@ -45,22 +55,21 @@ public final class MarkdownRenderer {
             return List.of(Span.raw(""));
         }
         if (isFence(line)) {
-            List<Span> out = List.of(Span.styled(line, DIM));
             if (inCodeBlock) {
                 inCodeBlock = false;
                 codeLang = "";
                 inBlockComment = false;
-            } else {
-                inCodeBlock = true;
-                codeLang = fenceLang(line);
-                inBlockComment = false;
+                return List.of(Span.styled("▎", GUTTER));                    // 代码块结束：延续左栏
             }
-            return out;
+            inCodeBlock = true;
+            codeLang = fenceLang(line);
+            inBlockComment = false;
+            return List.of(Span.styled(BAR, GUTTER), Span.styled(codeLang, DIM)); // 顶部标注语言
         }
         if (inCodeBlock) {
             SyntaxHighlighter.Result r = SyntaxHighlighter.highlight(line, codeLang, inBlockComment);
             inBlockComment = r.stillInBlockComment();
-            return r.spans();
+            return withGutter(r.spans());
         }
         return renderMarkdownLine(line);
     }
@@ -71,13 +80,11 @@ public final class MarkdownRenderer {
             return List.of(Span.raw(""));
         }
         if (isFence(line)) {
-            // 预览里的完整 ``` 行只按 dim 渲染，不切换状态。
-            return List.of(Span.styled(line, DIM));
+            return List.of(Span.styled(BAR, GUTTER));       // 预览完整 ``` 行：只显示左栏，不切换状态
         }
         if (inCodeBlock) {
-            // 用状态副本，不回写 inBlockComment。
             SyntaxHighlighter.Result r = SyntaxHighlighter.highlight(line, codeLang, inBlockComment);
-            return r.spans();
+            return withGutter(r.spans());                   // 不回写 inBlockComment
         }
         return renderMarkdownLine(line);
     }

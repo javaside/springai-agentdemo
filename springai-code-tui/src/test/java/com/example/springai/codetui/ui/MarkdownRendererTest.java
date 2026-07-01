@@ -55,7 +55,7 @@ class MarkdownRendererTest {
         assertEquals("use x here", concat(spans));
         Span code = spanWithText(spans, "x");
         assertTrue(code != null);
-        assertTrue(hasFg(code, Color.GREEN));
+        assertTrue(hasFg(code, Color.LIGHT_GREEN));
     }
 
     @Test
@@ -72,7 +72,7 @@ class MarkdownRendererTest {
         List<Span> spans = new MarkdownRenderer().renderFinalized("**a** and `b`");
         assertEquals("a and b", concat(spans));
         assertTrue(isBold(spanWithText(spans, "a")));
-        assertTrue(hasFg(spanWithText(spans, "b"), Color.GREEN));
+        assertTrue(hasFg(spanWithText(spans, "b"), Color.LIGHT_GREEN));
     }
 
     @Test
@@ -90,7 +90,7 @@ class MarkdownRendererTest {
         Span h = spanWithText(spans, "Title");
         assertTrue(h != null, "header text 'Title' should exist");
         assertTrue(isBold(h));
-        assertTrue(hasFg(h, Color.CYAN));
+        assertTrue(hasFg(h, Color.LIGHT_CYAN));
     }
 
     @Test
@@ -139,22 +139,20 @@ class MarkdownRendererTest {
     void fenceEntersCodeThenHighlightsKeywordsThenExitsToMarkdown() {
         MarkdownRenderer r = new MarkdownRenderer();
 
-        // 进入代码块：``` 行本身 dim 渲染。
+        // 进入代码块：``` 行渲染为左栏 + 语言标签。
         List<Span> fenceOpen = r.renderFinalized("```java");
-        assertEquals("```java", concat(fenceOpen));
-        assertTrue(hasFg(fenceOpen.get(0), Color.DARK_GRAY), "fence line should be dim");
+        assertEquals("▎ java", concat(fenceOpen));
 
-        // 代码块内：class 应被高亮为关键字（MAGENTA）。
+        // 代码块内：左栏 + class 高亮为关键字（MAGENTA）。
         List<Span> code = r.renderFinalized("class X {}");
-        assertEquals("class X {}", concat(code));
+        assertEquals("▎ class X {}", concat(code));
         Span kw = spanWithText(code, "class");
         assertTrue(kw != null, "'class' should be a keyword span inside code block");
         assertTrue(hasFg(kw, Color.MAGENTA));
 
-        // 关闭围栏。
+        // 关闭围栏：延续左栏。
         List<Span> fenceClose = r.renderFinalized("```");
-        assertEquals("```", concat(fenceClose));
-        assertTrue(hasFg(fenceClose.get(0), Color.DARK_GRAY));
+        assertEquals("▎", concat(fenceClose));
 
         // 回到 markdown：**b** 作为粗体渲染，而非代码高亮。
         List<Span> md = r.renderFinalized("**b**");
@@ -166,14 +164,14 @@ class MarkdownRendererTest {
     void blockCommentThreadedAcrossCodeLines() {
         MarkdownRenderer r = new MarkdownRenderer();
         r.renderFinalized("```java");
-        // 打开跨行块注释。
+        // 打开跨行块注释（第 0 span 是左栏，注释在其后）。
         List<Span> l1 = r.renderFinalized("/* start");
-        assertTrue(hasFg(l1.get(0), Color.DARK_GRAY), "open block comment line should be dim/comment");
+        assertTrue(hasFg(l1.get(1), Color.DARK_GRAY), "open block comment line should be dim/comment");
         // 下一行仍在块注释里：整行为注释，keyword 不应被单独高亮。
         List<Span> l2 = r.renderFinalized("int still comment */");
-        assertEquals("int still comment */", concat(l2));
+        assertEquals("▎ int still comment */", concat(l2));
         assertTrue(spanWithText(l2, "int") == null, "'int' inside block comment must not be keyword span");
-        assertTrue(hasFg(l2.get(0), Color.DARK_GRAY));
+        assertTrue(hasFg(l2.get(1), Color.DARK_GRAY));
     }
 
     @Test
@@ -192,9 +190,9 @@ class MarkdownRendererTest {
     @Test
     void previewDoesNotToggleFenceState() {
         MarkdownRenderer r = new MarkdownRenderer();
-        // 预览一条 ``` 行：dim 渲染但不进入代码块。
+        // 预览一条 ``` 行：只显示左栏、不进入代码块。
         List<Span> preview = r.renderPreview("```java");
-        assertTrue(hasFg(preview.get(0), Color.DARK_GRAY));
+        assertEquals("▎ ", concat(preview));
 
         // 由于预览未改变状态，下一条定稿的 markdown 行仍作 markdown 处理。
         List<Span> md = r.renderFinalized("**b**");
@@ -220,7 +218,7 @@ class MarkdownRendererTest {
         MarkdownRenderer r = new MarkdownRenderer();
         List<Span> spans = r.renderPreview("## Hi");
         assertEquals("Hi", concat(spans));
-        assertTrue(hasFg(spanWithText(spans, "Hi"), Color.CYAN));
+        assertTrue(hasFg(spanWithText(spans, "Hi"), Color.LIGHT_CYAN));
     }
 
     @Test
