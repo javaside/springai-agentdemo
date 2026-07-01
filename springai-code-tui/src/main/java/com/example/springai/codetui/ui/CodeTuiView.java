@@ -30,6 +30,7 @@ import java.time.Duration;
 public final class CodeTuiView implements InlineEventHandler, Renderer {
 
     private static final int LIVE_HEIGHT = 5;   // 预览 + 上边框 + 输入 + 下边框 + 状态
+    private static final String INDENT = "  ";  // 对话内容（用户/AI）缩进；工具行不缩进
 
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
     private static final Style DIM     = Style.create().fg(Color.DARK_GRAY);
@@ -63,11 +64,12 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         if (e instanceof TickEvent) {
             for (OutputLine ol : state.drainPending()) {
                 Style st = styleFor(ol.kind());
-                if (st == null) runner.println(ol.text());           // 助手正文：默认色
-                else runner.println(Text.styled(ol.text(), st));
+                String text = indentFor(ol.kind()) + ol.text();      // 用户/AI 缩进，工具不缩进
+                if (st == null) runner.println(text);                // 助手正文：默认色
+                else runner.println(Text.styled(text, st));
             }
             for (String row : state.takeCompleteStreamingLines()) {
-                runner.println(row);                                 // 流式完整行（按真实换行切）：默认亮色
+                runner.println(INDENT + row);                        // 流式完整行（按真实换行切）：默认亮色 + 缩进
             }
             return true;
         }
@@ -95,6 +97,11 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         return false;
     }
 
+    /** 用户/AI 对话内容缩进；工具行/Todo/错误不缩进（结构性信息贴左）。 */
+    private static String indentFor(OutputLine.Kind kind) {
+        return (kind == OutputLine.Kind.USER || kind == OutputLine.Kind.ASSISTANT) ? INDENT : "";
+    }
+
     private static Style styleFor(OutputLine.Kind kind) {
         return switch (kind) {
             case USER -> USER;
@@ -120,9 +127,10 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         int yTop = bottom - 3;
         int yPreview = bottom - 4;
 
-        // 流式残行预览（AI 生成中——默认亮色，是焦点）
+        // 流式残行预览（AI 生成中——默认亮色，是焦点；与正文同样缩进）
         if (yPreview >= a.y()) {
-            put(f, x, yPreview, a.width(), Text.from(fitEnd(state.streaming(), w)));
+            String s = state.streaming();
+            put(f, x, yPreview, a.width(), Text.from(s.isEmpty() ? "" : INDENT + fitEnd(s, Math.max(1, w - INDENT.length()))));
         }
         // 圆角输入框
         if (w >= 4) {
