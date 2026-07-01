@@ -4,7 +4,11 @@
 
 **Goal:** 在 `springai-agentdemo` 下新增模块 `springai-code-tui`——以 Spring AI 2.0 原始 API 为基础的「代码编写智能体」，用 TamboUI 做单栏对话式 TUI，v1 只接入 `spring-ai-agent-utils:0.10.0` 的 5 个核心编码工具。
 
-**Architecture:** `CodingAgent`（核心，零 TUI/状态依赖，持 `ChatClient` + `AtomicLong activeTurnId`）── `AgentListener`（唯一接缝，纯 Java 类型，每方法带 `turnId`）── `CodeTuiView`（TamboUI TuiRunner 薄视图，只读 `ConversationState`）。turnId 生成权在 `CodingAgent`，经 `toolContext` 下传给工具装饰器、经闭包读给 Todo，单向流向 UI。写状态在 Reactor 线程、读状态在 TuiRunner 线程 → `ConversationState` 线程安全。
+**Architecture:** `CodingAgent`（核心，零 TUI/状态依赖，持 `ChatClient` + `AtomicLong activeTurnId`，implements `SubmitHandler`）── `AgentListener`（唯一接缝，纯 Java 类型，每方法带 `turnId`）── `CodeTuiView`（TamboUI TuiRunner 薄视图，只读 `ConversationState`，通过 `SubmitHandler` 提交并持有返回的 `Disposable`）。turnId 生成权在 `CodingAgent`，经 `toolContext` 下传给工具装饰器、经闭包读给 Todo，单向流向 UI。写状态在 Reactor 线程、读状态在 TuiRunner 线程 → `ConversationState` 线程安全。
+
+**v1 单飞约束（关键，回应评审）：一次只允许一个回合在飞。** `activeTurnId` 用 `get()` 读给 Todo 事件，仅在**串行单回合**下正确；若上一回合工具未结束又提交新回合，旧 Todo 事件会被标成新 turnId 污染对话。故 v1 强制单飞：**非 `IDLE` 状态下 Enter 被忽略并在状态栏提示「上一回合进行中，Esc 取消后再输入」**——不做「提交前自动取消上一回合」（留给 v2）。这样任一时刻只有一个 turnId 活跃，`CodeTuiView` 只需持有单个 `Disposable`、Esc 取消当前回合即可，Todo turnId 亦不会串。判据数据源是 `ConversationState` 的状态位（headless 可测）。
+
+**视图不落 transcript（关键，回应评审）：** `CodeTuiView` 的 Enter 只做「`submit(text)` + 清空输入缓冲」，**绝不直接把用户行写进 transcript**；用户行统一由 `AgentListener.onUserMessage` 落库。这样从骨架期（Task 3 用回显 `SubmitHandler` 桩，桩自己落 transcript）到接真 agent（Task 8）视图代码零改动、绝不重复显示。
 
 **Tech Stack:** 纯 Java 21、不依赖 Spring Boot、Spring AI 2.0 原始 API、DeepSeek 模型、TamboUI 0.4.0（`dev.tamboui`）、Project Reactor（随 client-chat 传递带入）、JUnit 5、Maven（`maven-jar-plugin` + `copy-dependencies` 打可运行 jar）。
 
@@ -27,9 +31,10 @@ springai-agentdemo/
         │   │   ├── CodeTuiApplication.java        ← main：安全门 → 建模型/Agent → 启动 TUI
         │   │   ├── agent/
         │   │   │   ├── AgentListener.java         ← 接缝接口（纯 Java 类型，方法带 turnId）
+        │   │   │   ├── SubmitHandler.java         ← 提交接缝：Disposable submit(String)（CodingAgent 实现，View 依赖）
         │   │   │   ├── ToolEventCallback.java     ← ToolCallback 装饰器（从 ToolContext 取 turnId）
         │   │   │   ├── AgentTools.java            ← 工厂：造 5 工具 + 装饰 + 系统提示（含 AgentEnvironment）
-        │   │   │   └── CodingAgent.java           ← 核心：submit/handleChunk/handleError/handleComplete
+        │   │   │   └── CodingAgent.java           ← 核心：submit/handleChunk/handleError/handleComplete，implements SubmitHandler
         │   │   └── ui/
         │   │       ├── ConversationState.java     ← 线程安全共享状态
         │   │       └── CodeTuiView.java           ← TamboUI TuiRunner 视图
@@ -84,30 +89,9 @@ springai-agentdemo/
             </dependency>
 ```
 
-- [ ] **Step 4: 验证父 pom 仍可解析（模块尚不存在，用 `validate` 只校验 pom 本身）**
+- [ ] **Step 4: 同一提交内建模块 pom（避免「根 pom 声明了模块但目录不存在」的破损中间态——评审指出的问题）**
 
-```bash
-mvn -q -N validate
-```
-
-预期：`BUILD SUCCESS`（`-N` 不递归子模块，此时 `springai-code-tui/pom.xml` 还没建）。若报 tamboui-bom 无法下载，先单独验证解析：`mvn -q dependency:get -Dartifact=dev.tamboui:tamboui-bom:0.4.0:pom`。
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add pom.xml && git commit -m "build(code-tui): 父 pom 接入 springai-code-tui 模块与 tamboui-bom"
-```
-
----
-
-## Task 2: 模块 pom + logback + 占位 main（能 build 出 jar）
-
-**Files:**
-- Create: `springai-code-tui/pom.xml`
-- Create: `springai-code-tui/src/main/resources/logback.xml`
-- Create: `springai-code-tui/src/main/java/com/example/springai/codetui/CodeTuiApplication.java`（占位 main，仅打印一行）
-
-- [ ] **Step 1: 建模块 pom**（照搬 `springai-agent-demo` 打包结构；依赖见 spec §4.2）
+> 根 pom 一旦把 `springai-code-tui` 列进 `<modules>`，任何普通聚合构建（`mvn install` 等）都会因模块缺失而失败。因此**必须在同一步/同一提交里就把模块 pom 建好**，聚合构建才始终可用。照搬 `springai-agent-demo` 打包结构；依赖见 spec §4.2。
 
 `springai-code-tui/pom.xml`：
 
@@ -212,7 +196,30 @@ git add pom.xml && git commit -m "build(code-tui): 父 pom 接入 springai-code-
 </project>
 ```
 
-- [ ] **Step 2: logback 写文件**（不污染 TUI；参考 agent-demo 若有则对齐）
+- [ ] **Step 5: 聚合构建可用（模块已存在，验证根+模块 pom 都能解析）**
+
+```bash
+mvn -q -pl springai-code-tui -am validate
+```
+
+预期：`BUILD SUCCESS`。若报 tamboui-bom 无法下载，先单独验证：`mvn -q dependency:get -Dartifact=dev.tamboui:tamboui-bom:0.4.0:pom`。
+
+- [ ] **Step 6: 提交（根 pom + 模块 pom 一并提交，无破损中间态）**
+
+```bash
+git add pom.xml springai-code-tui/pom.xml
+git commit -m "build(code-tui): 父 pom 接入模块 + 模块 pom（tamboui-bom，聚合构建可用）"
+```
+
+---
+
+## Task 2: logback + 占位 main（打包链路跑通）
+
+**Files:**
+- Create: `springai-code-tui/src/main/resources/logback.xml`
+- Create: `springai-code-tui/src/main/java/com/example/springai/codetui/CodeTuiApplication.java`（占位 main，仅打印一行）
+
+- [ ] **Step 1: logback 写文件**（不污染 TUI；参考 agent-demo 若有则对齐）
 
 `springai-code-tui/src/main/resources/logback.xml`：
 
@@ -233,7 +240,7 @@ git add pom.xml && git commit -m "build(code-tui): 父 pom 接入 springai-code-
 </configuration>
 ```
 
-- [ ] **Step 3: 占位 main**（下一 Task 才写真 TUI；先证明打包链路通）
+- [ ] **Step 2: 占位 main**（下一 Task 才写真 TUI；先证明打包链路通）
 
 `.../codetui/CodeTuiApplication.java`：
 
@@ -247,7 +254,7 @@ public class CodeTuiApplication {
 }
 ```
 
-- [ ] **Step 4: build 并确认依赖解析 + reactor-core 传递带入**（spec §4.2 遗留确认项）
+- [ ] **Step 3: build 并确认依赖解析 + reactor-core 传递带入**（spec §4.2 遗留确认项）
 
 ```bash
 mvn -q -pl springai-code-tui -am package
@@ -257,7 +264,7 @@ ls springai-code-tui/target/lib/ | grep -i tamboui
 
 预期：`BUILD SUCCESS`；`reactor-core-*.jar` 存在（证实随 client-chat 带入，流式 reactive 栈就绪）；`tamboui-*.jar` 存在。
 
-- [ ] **Step 5: 跑占位 jar**
+- [ ] **Step 4: 跑占位 jar**
 
 ```bash
 java -jar springai-code-tui/target/springai-code-tui.jar
@@ -265,35 +272,55 @@ java -jar springai-code-tui/target/springai-code-tui.jar
 
 预期输出：`springai-code-tui skeleton OK`
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 5: 提交**
 
 ```bash
-git add springai-code-tui/pom.xml springai-code-tui/src/main/resources/logback.xml springai-code-tui/src/main/java/com/example/springai/codetui/CodeTuiApplication.java
-git commit -m "build(code-tui): 模块 pom + logback + 占位 main，打包链路跑通"
+git add springai-code-tui/src/main/resources/logback.xml springai-code-tui/src/main/java/com/example/springai/codetui/CodeTuiApplication.java
+git commit -m "build(code-tui): logback + 占位 main，打包链路跑通"
 ```
 
 ---
 
-## Task 3（里程碑 1）: TamboUI 骨架——单栏 Hello，输入回显，Ctrl+C 退出
+## Task 3（里程碑 1）: TamboUI 骨架——单栏，输入回显，Esc/Ctrl+C，`SubmitHandler` 接缝定型
 
-> **本 Task 的第一步是核实 TamboUI 的 widget 绘制 API**（spec §13「中」风险；javap 此前只稳钉了循环 API：`TuiRunner.create/run(EventHandler,Renderer)`、`TuiConfig.builder().tickRate(Duration)`、`KeyEvent.isKey(KeyCode.ENTER)/isCtrlC()/isChar(char)`、`Frame.renderWidget(Widget,Rect)/area()/setCursorPosition`、`EventHandler.handle(Event,TuiRunner):boolean`、`Renderer.render(Frame)`）。绘制部件（Paragraph/Block/List）的确切类名/构造方式仅部分核实，**先核实再写渲染代码**。
+> **本会话已用 `javap` 对 `tamboui-*:0.4.0` 钉死下列真实签名，下面代码据此落笔（不是伪代码）：**
+> - `TuiConfig.builder().tickRate(Duration).build()`；`TuiRunner.create(TuiConfig)`（`AutoCloseable`）→ `run(EventHandler, Renderer)`；`runner.quit()`（**不是 `stop()`**）、`runLater(Runnable)`、`runOnRenderThread(Runnable)`。
+> - `EventHandler.handle(Event, TuiRunner):boolean`；`Renderer.render(Frame):void`。
+> - `KeyEvent`（`implements Event`）：`isCtrlC()`、`isConfirm()`(Enter)、`isCancel()`(Esc)、`isDeleteBackward()`(Backspace)、`code():KeyCode`、`character():char`；`KeyCode.CHAR` 表示可打印字符键。
+> - `Frame.area():Rect`、`renderWidget(dev.tamboui.widget.Widget, dev.tamboui.layout.Rect)`、`setCursorPosition(int,int)`。
+> - `Rect(int x,int y,int w,int h)` + `x()/y()/width()/height()`；`Paragraph.from(String):Paragraph`（`Block.bordered()` 边框留作打磨）。
+> - **唯一遗留待确认**（Step 1 一条命令核实）：`Paragraph implements dev.tamboui.widget.Widget`（供 `renderWidget`）。若否，改用 `Paragraph.builder()....build()` 的产物类型。
 
 **Files:**
-- Modify: `.../codetui/CodeTuiApplication.java`（改为真启动 TUI）
-- Create: `.../codetui/ui/CodeTuiView.java`（先只做 Hello + 输入回显，不接 agent）
-- Create: `.../codetui/ui/ConversationState.java`（先最小：消息列表 + 输入缓冲）
+- Create: `.../codetui/agent/SubmitHandler.java`（提交接缝，View 与 Agent 共用）
+- Modify: `.../codetui/CodeTuiApplication.java`（改为真启动 TUI，回显桩）
+- Create: `.../codetui/ui/CodeTuiView.java`（**最终形态**：接 `SubmitHandler`，不落 transcript，含单飞 guard 与 Esc）
+- Create: `.../codetui/ui/ConversationState.java`（最小版：transcript + 输入缓冲 + 状态位；Task 4 补流式/todo/并发测试）
 
-- [ ] **Step 1: ⚠️ javap 核实 widget API**（在 `target/lib` 或本地仓库对 tamboui jar 执行）
+- [ ] **Step 1: ⚠️ 确认 `Paragraph` 是 `Widget`（仅此一条遗留核实）**
 
 ```bash
 JAR=$(ls springai-code-tui/target/lib/tamboui-widgets-*.jar)
-for c in $(jar tf "$JAR" | grep -E 'Paragraph|Block|Text|Line|List' | grep '\.class$' | sed 's#/#.#g;s#\.class$##'); do echo "== $c =="; javap -cp "$JAR" "$c" 2>/dev/null | head -20; done 2>&1 | head -120
-# 同法核实 dev.tamboui.tui.TuiRunner / TuiConfig / Frame / EventHandler / Renderer 与 KeyEvent/KeyCode（在 tamboui-tui / tamboui-core jar）
+javap -cp "$JAR" dev.tamboui.widgets.paragraph.Paragraph 2>/dev/null | head -3
 ```
 
-记录：`Paragraph` 的构造/文本设置方式、`Block`（边框/标题）、`Frame.renderWidget` 接受的 `Widget` 与 `Rect` 类型全名、`Rect` 如何按区域切分（对话区 / 输入行 / 状态栏）。**下面的渲染代码按核实结果落笔**，若 API 名不同则替换（保持结构：三段式布局 + 光标）。
+预期首行含 `implements ... dev.tamboui.widget.Widget`。若不是，把下方 `renderWidget(Paragraph.from(s), rect)` 换成 build 出的 Widget 实例（结构不变）。
 
-- [ ] **Step 2: `ConversationState` 最小版**（本 Task 只用到消息 + 输入缓冲；完整线程安全版在 Task 5 补测补功能）
+- [ ] **Step 2: `SubmitHandler` 接缝**（回应评审②：View 需要拿回 `Disposable`，故不是 `Consumer<String>`）
+
+```java
+package com.example.springai.codetui.agent;
+
+import reactor.core.Disposable;
+
+/** 提交一次对话，返回可取消句柄。CodingAgent 实现它；骨架期用回显桩实现（返回 null）。 */
+@FunctionalInterface
+public interface SubmitHandler {
+    Disposable submit(String text);
+}
+```
+
+- [ ] **Step 3: `ConversationState` 最小版**（含状态位以支撑单飞 guard；完整线程安全/流式/todo 版在 Task 4）
 
 ```java
 package com.example.springai.codetui.ui;
@@ -301,12 +328,13 @@ package com.example.springai.codetui.ui;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 线程安全共享状态（本 Task 仅最小可用；Task 5 补齐流式缓冲/运行态/todo 并加并发测试）。 */
+/** 线程安全共享状态（本 Task 最小可用；Task 4 补流式缓冲/todo/turnId 过滤并加并发测试）。 */
 public final class ConversationState {
     public enum Status { IDLE, THINKING, RUNNING_TOOL }
 
     private final List<String> transcript = new ArrayList<>();
     private final StringBuilder input = new StringBuilder();
+    private volatile Status status = Status.IDLE;
 
     public synchronized void appendLine(String line) { transcript.add(line); }
     public synchronized List<String> transcriptSnapshot() { return List.copyOf(transcript); }
@@ -315,60 +343,108 @@ public final class ConversationState {
     public synchronized void backspace() { if (input.length() > 0) input.deleteCharAt(input.length() - 1); }
     public synchronized String takeInput() { String s = input.toString(); input.setLength(0); return s; }
     public synchronized String currentInput() { return input.toString(); }
+
+    public boolean isIdle() { return status == Status.IDLE; }
+    public Status status() { return status; }
+    /** Esc 取消当前回合：状态回 IDLE（Task 4 会叠加 turnId 过滤）。 */
+    public void cancelCurrent() { this.status = Status.IDLE; }
 }
 ```
 
-- [ ] **Step 3: `CodeTuiView` 骨架**（TuiRunner + tickRate + 三段布局 + 按键；不接 agent，Enter 先把输入回显到对话区）
-
-按 Step 1 核实的真实 API 写。结构固定：
+- [ ] **Step 4: `CodeTuiView` 最终形态**（用本会话已钉死的 API；**View 只提交不落 transcript**；单飞 guard；Esc 取消当前回合）
 
 ```java
 package com.example.springai.codetui.ui;
 
-// import dev.tamboui.tui.*;  // 具体类名以 Step 1 javap 为准
+import com.example.springai.codetui.agent.SubmitHandler;
+import dev.tamboui.layout.Rect;
+import dev.tamboui.terminal.Frame;
+import dev.tamboui.tui.EventHandler;
+import dev.tamboui.tui.Renderer;
+import dev.tamboui.tui.TuiConfig;
+import dev.tamboui.tui.TuiRunner;
+import dev.tamboui.tui.event.Event;
+import dev.tamboui.tui.event.KeyCode;
+import dev.tamboui.tui.event.KeyEvent;
+import dev.tamboui.widgets.paragraph.Paragraph;
+import reactor.core.Disposable;
+
 import java.time.Duration;
-import java.util.function.Consumer;
+import java.util.List;
 
 /**
- * TamboUI 单栏视图：TuiConfig.tickRate 周期重绘；render 画「对话区 / 输入行 / 状态栏」；
- * event 处理 输入字符 / Backspace / Enter / Ctrl+C。本 Task 不接 agent：Enter 时把输入回显。
+ * TamboUI 单栏视图。tickRate 周期重绘；render 画「对话区/输入行/状态栏」；
+ * event 处理 字符/Backspace/Enter/Esc/Ctrl+C。
+ * 关键：Enter 只 submit + 清输入，绝不直接写 transcript（用户行由 onUserMessage 统一落）。
  */
-public final class CodeTuiView {
+public final class CodeTuiView implements EventHandler, Renderer {
     private final ConversationState state;
-    private final Consumer<String> onSubmit;   // Task 6 接 agent.submit；本 Task 传「回显」闭包
+    private final SubmitHandler onSubmit;
+    private Disposable current;   // 单飞：任一时刻至多一个活跃回合
 
-    public CodeTuiView(ConversationState state, Consumer<String> onSubmit) {
+    public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
         this.state = state;
         this.onSubmit = onSubmit;
     }
 
-    public void run() {
-        // TuiConfig config = TuiConfig.builder().tickRate(Duration.ofMillis(33)).build(); // ~30fps
-        // TuiRunner.create(config).run(this::handleEvent, this::render);
-        //   handleEvent(Event, TuiRunner): boolean —— 见下
-        //   render(Frame): void —— 见下
+    public void run() throws Exception {
+        TuiConfig cfg = TuiConfig.builder().tickRate(Duration.ofMillis(33)).build();  // ~30fps
+        try (TuiRunner runner = TuiRunner.create(cfg)) {
+            runner.run(this, this);
+        }
     }
 
-    // boolean handleEvent(Event e, TuiRunner runner):
-    //   若 KeyEvent:
-    //     isCtrlC()          -> runner.stop()/退出；return true
-    //     isKey(ENTER)       -> String text = state.takeInput();
-    //                           if (!text.isBlank()) { state.appendLine("你> " + text); onSubmit.accept(text); }
-    //                           return true
-    //     isKey(BACKSPACE)   -> state.backspace(); return true
-    //     isChar(c)          -> state.typeChar(c); return true
-    //   其它 return false（TickEvent 由 tickRate 触发重绘，不需在此处理）
+    @Override
+    public boolean handle(Event e, TuiRunner runner) {
+        if (!(e instanceof KeyEvent k)) return false;
+        if (k.isCtrlC()) { runner.quit(); return true; }
+        if (k.isCancel()) {                       // Esc：UI 层取消当前回合
+            if (current != null) { current.dispose(); current = null; }
+            state.cancelCurrent();
+            return true;
+        }
+        if (k.isConfirm()) {                      // Enter
+            if (!state.isIdle()) return true;     // 单飞：上一回合进行中，忽略输入（状态栏已提示）
+            String text = state.takeInput();
+            if (!text.isBlank()) current = onSubmit.submit(text);   // 不落 transcript
+            return true;
+        }
+        if (k.isDeleteBackward()) { state.backspace(); return true; }
+        if (k.code() == KeyCode.CHAR) { state.typeChar(k.character()); return true; }
+        return false;                             // 其它（含 TickEvent）交给 tickRate 触发重绘
+    }
 
-    // void render(Frame f):
-    //   Rect area = f.area();
-    //   把 area 竖切三块：transcript 区（占大部分）/ 输入行（1 行，前缀 "> "）/ 状态栏（1 行）
-    //   transcript：state.transcriptSnapshot() 末 N 行填进 Paragraph/Block（带边框），renderWidget 到对话区
-    //   输入行：渲染 "> " + state.currentInput()，f.setCursorPosition 放到输入末尾
-    //   状态栏：静态提示 "Enter 发送 · Ctrl+C 退出"
+    @Override
+    public void render(Frame f) {
+        Rect a = f.area();
+        int h = a.height();
+        Rect body    = new Rect(a.x(), a.y(),        a.width(), Math.max(0, h - 2));
+        Rect inputR  = new Rect(a.x(), a.y() + h - 2, a.width(), 1);
+        Rect statusR = new Rect(a.x(), a.y() + h - 1, a.width(), 1);
+
+        List<String> all = state.transcriptSnapshot();
+        String shown = String.join("\n", tail(all, body.height()));
+        f.renderWidget(Paragraph.from(shown), body);
+
+        String prompt = "> " + state.currentInput();
+        f.renderWidget(Paragraph.from(prompt), inputR);
+
+        String hint = state.isIdle()
+                ? "Enter 发送 · Esc 取消 · Ctrl+C 退出"
+                : "上一回合进行中，Esc 取消后再输入 · Ctrl+C 退出";
+        f.renderWidget(Paragraph.from(hint), statusR);
+
+        f.setCursorPosition(inputR.x() + prompt.length(), inputR.y());  // 宽字符光标偏移暂简化，打磨阶段再校
+    }
+
+    private static List<String> tail(List<String> lines, int n) {
+        if (n <= 0 || lines.size() <= n) return lines;
+        return lines.subList(lines.size() - n, lines.size());
+    }
 }
 ```
 
-- [ ] **Step 4: main 启动 TUI（回显模式，暂不建模型）**
+- [ ] **Step 5: main 启动 TUI（回显桩：桩自己落 transcript，返回 null Disposable）**
 
 ```java
 package com.example.springai.codetui;
@@ -377,29 +453,33 @@ import com.example.springai.codetui.ui.CodeTuiView;
 import com.example.springai.codetui.ui.ConversationState;
 
 public class CodeTuiApplication {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         ConversationState state = new ConversationState();
-        // 本 Task：onSubmit 只回显，证明输入/渲染/退出闭环
-        CodeTuiView view = new CodeTuiView(state, text -> state.appendLine("（回显）AI> " + text));
+        // 骨架桩：SubmitHandler 由桩落 transcript（真 agent 时改由 onUserMessage 落，View 代码不变）
+        CodeTuiView view = new CodeTuiView(state, text -> {
+            state.appendLine("你> " + text);
+            state.appendLine("（回显）AI> " + text);
+            return null;   // 骨架无真回合
+        });
         view.run();
     }
 }
 ```
 
-- [ ] **Step 5: 手动验证**（TUI 无法自动断言；spec §11 明确 TUI 以手动验证为主）
+- [ ] **Step 6: 手动验证**（TUI 无法自动断言；spec §11 明确 TUI 以手动验证为主）
 
 ```bash
 mvn -q -pl springai-code-tui -am package
 java -jar springai-code-tui/target/springai-code-tui.jar
 ```
 
-预期：进入单栏界面；能看到带边框的对话区、底部输入行（光标跟随）、状态栏；打字有回显、Backspace 生效、Enter 后「你> …」与「（回显）AI> …」出现在对话区；`Ctrl+C` 干净退出、终端状态复原；`springai-code-tui.log` 有日志、屏幕无日志刷屏。逐条对不上则回到对应 render/event 分支修，勿继续。
+预期：进入单栏界面（对话区/输入行/状态栏）；打字有回显、Backspace 生效、Enter 后「你> …」「（回显）AI> …」出现在对话区、输入行清空；`Esc` 与 `Ctrl+C` 均不崩（Ctrl+C 干净退出、终端复原）；`springai-code-tui.log` 有日志、屏幕无日志刷屏。逐条对不上则回对应分支修，勿继续。
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 7: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/com/example/springai/codetui/
-git commit -m "feat(code-tui): 里程碑1 TamboUI 单栏骨架（tickRate 重绘/输入回显/Ctrl+C 退出）"
+git commit -m "feat(code-tui): 里程碑1 TamboUI 单栏骨架（真实 API/SubmitHandler 接缝/单飞 guard/Esc/Ctrl+C）"
 ```
 
 ---
@@ -443,8 +523,9 @@ public interface AgentListener {
 1. **并发无异常/一致快照**：起 N 个线程狂写 `onAssistantToken(turn, ...)`，主线程反复 `transcriptSnapshot()`，全程无 `ConcurrentModificationException`，最终 token 数 == 写入数。
 2. **取消过滤**：`onTurnStarted(1)` 后追加若干 token；`cancelCurrent()`（或 `onTurnStarted(2)` 切走）后，再来 `onAssistantToken(1, ...)` 的迟到 token 被丢弃——断言取消后 transcript 不再增长。
 3. **运行态**：`onToolStarted` → 状态 `RUNNING_TOOL`；`onTurnComplete` → `IDLE`。
+4. **单飞判据（回应评审①）**：初始 `isIdle()==true`；`onTurnStarted(1)` 后 `isIdle()==false`（View 据此在 Enter 时忽略新输入）；`onTurnComplete(1)`/`onError(1,..)`/`cancelCurrent()` 任一后 `isIdle()==true` 恢复可提交。这是 v1「一次只允许一个回合在飞」的数据源，配合 `CodeTuiView` 的 Enter guard 与单个 `Disposable`，保证 `activeTurnId.get()` 供 Todo 事件读取时不会串轮。
 
-`ConversationState` 需实现 `AgentListener`（视图读、Agent 写）。补充字段：`volatile long acceptingTurnId`、流式助手行缓冲、`volatile Status`、`List<String> todo`。所有跨线程读写 `synchronized`/`volatile`。迟到过滤：任何带 turnId 的写入前先 `if (turnId != acceptingTurnId) return;`。`onTurnStarted(t)` 里 `acceptingTurnId = t`。UI 层「Esc 取消」调 `cancelCurrent()` → 把 `acceptingTurnId` 置为一个不会再被匹配的哨兵（如 `-1`）并将状态回 `IDLE`。
+`ConversationState`（在 Task 3 已建最小版）本 Task**扩充**为实现 `AgentListener`（视图读、Agent 写），**保留** Task 3 的 `isIdle()/status()/cancelCurrent()/transcript/输入缓冲`。新增字段：`volatile long acceptingTurnId`、流式助手行缓冲、`List<String> todo`。所有跨线程读写 `synchronized`/`volatile`。迟到过滤：任何带 turnId 的写入前先 `if (turnId != acceptingTurnId) return;`。状态机：`onTurnStarted(t)` → `acceptingTurnId=t; status=THINKING`；`onToolStarted` → `RUNNING_TOOL`；`onToolFinished` → `THINKING`；`onTurnComplete`/`onError` → `IDLE`。`cancelCurrent()`（Esc）→ `acceptingTurnId=-1`（不再匹配任何回合）且 `status=IDLE`。
 
 - [ ] **Step 3: 实现 `ConversationState`（implements AgentListener）让测试全绿**
 
@@ -619,19 +700,20 @@ git commit -m "feat(code-tui): AgentTools 工厂（5 工具+装饰+记忆+AgentE
 > spec §12 里程碑 2 硬验收：**流式 + 工具 + 记忆 + 取消**必须实测。此 Task 需真实 DEEPSEEK_API_KEY，属集成 spike，不进 CI（用系统属性/环境变量守卫，缺 key 时跳过）。
 
 **Files:**
-- Create: `.../codetui/agent/CodingAgent.java`
-- Create: `.../test/.../agent/CodingAgentSpikeIT.java`（集成 spike，`@EnabledIfEnvironmentVariable(named="DEEPSEEK_API_KEY", ...)`）
+- Create: `.../codetui/agent/CodingAgent.java`（`implements SubmitHandler`）
+- Create: `.../test/.../agent/CodingAgentSpikeTest.java`（命名用 `*Test` 而非 `*IT`——回应评审⑦：`*IT` 走 failsafe，`mvn test` 默认不跑；用 `*Test` + `@EnabledIfEnvironmentVariable(named="DEEPSEEK_API_KEY", matches=".+")`，则**有 key 自动跑、无 key 自动跳过**，不需 `-Dtest=` 也能纳入 `mvn test`）
 
-- [ ] **Step 1: 实现 `CodingAgent`**（spec §7 submit 伪码）
+- [ ] **Step 1: 实现 `CodingAgent`**（spec §7 submit 伪码；`implements SubmitHandler` 让 View 直接依赖它）
 
 ```java
-public final class CodingAgent {
+public final class CodingAgent implements SubmitHandler {
     private final ChatClient chatClient;
     private final AgentListener listener;
     private final String sessionId;
     private final AtomicLong activeTurnId;   // 与 AgentTools 共享同一实例
 
     /** 返回 Disposable 供 UI 存起来给 Esc 取消。 */
+    @Override
     public Disposable submit(String text) {
         long turnId = activeTurnId.incrementAndGet();
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
@@ -655,7 +737,7 @@ public final class CodingAgent {
 
 > `onChunk` 系列是 `CodingAgent` 内部方法，**不在 `AgentListener` 上**——`ChatClientResponse` 类型不泄漏给 UI（spec §7）。
 
-- [ ] **Step 2: ⚠️ spike 实测确认 4 件事并记录**（spec §12 里程碑 2 清单）——写进 `CodingAgentSpikeIT`：
+- [ ] **Step 2: ⚠️ spike 实测确认 4 件事并记录**（spec §12 里程碑 2 清单）——写进 `CodingAgentSpikeTest`：
   1. **文本抽取**：`chatClientResponse()` 下从 `resp.chatResponse().getResult().getOutput().getText()`（以 javap/调试为准）能取到流式增量。
   2. **工具循环可观察**：让它「读一个临时文件」，断言收到 `onToolStarted/onToolFinished`（经装饰器）。
   3. **多轮记忆**：第 2 轮引用第 1 轮内容，断言模型答复体现记忆（同 sessionId）；观察工具中间消息是否入库（参考 `springai-agent-demo/.../ToolMemoryAdvisorDemo.java` 关于 advisor 顺序的现象），把结论记进测试注释。
@@ -665,7 +747,7 @@ public final class CodingAgent {
 
 ```bash
 export DEEPSEEK_API_KEY=...   # 用户自备
-mvn -q -pl springai-code-tui test -Dtest=CodingAgentSpikeIT
+mvn -q -pl springai-code-tui test -Dtest=CodingAgentSpikeTest
 ```
 
 预期：4 项断言/记录通过。**未通过不得进入里程碑 3**（spec §13）。把关键结论（尤其记忆入库语义、后端能否停）追加到 spec §12 或本计划末尾「Spike 结论」。
@@ -673,7 +755,7 @@ mvn -q -pl springai-code-tui test -Dtest=CodingAgentSpikeIT
 - [ ] **Step 4: 提交**
 
 ```bash
-git add springai-code-tui/src/main/java/com/example/springai/codetui/agent/CodingAgent.java springai-code-tui/src/test/java/com/example/springai/codetui/agent/CodingAgentSpikeIT.java
+git add springai-code-tui/src/main/java/com/example/springai/codetui/agent/CodingAgent.java springai-code-tui/src/test/java/com/example/springai/codetui/agent/CodingAgentSpikeTest.java
 git commit -m "feat(code-tui): CodingAgent 核心 + 流式/工具/记忆/取消 spike（里程碑2 硬验收）"
 ```
 
@@ -681,12 +763,13 @@ git commit -m "feat(code-tui): CodingAgent 核心 + 流式/工具/记忆/取消 
 
 ## Task 8（里程碑 3）: 接 TUI——流式 token 内联 + 工具活动 + Todo + Esc 取消
 
-**Files:**
-- Modify: `.../codetui/ui/CodeTuiView.java`（渲染 transcript 含 token/工具/todo；Esc 调 dispose）
-- Modify: `.../codetui/ui/ConversationState.java`（若需，渲染友好的组织：流式行合并、工具活动行、todo 区）
-- Modify: `.../codetui/CodeTuiApplication.java`（建模型 + CodingAgent + 共享 AtomicLong，wire 到 view）
+> **`CodeTuiView` 在 Task 3 已是最终形态**（`SubmitHandler` 接缝、单飞 guard、Esc 取消/`dispose()`、不落 transcript 都已就位）。本 Task**不改 View 的事件处理**，只做两件事：①把回显桩换成真 `CodingAgent`；②让 `ConversationState` 把 token/工具/todo 组织成可读的 transcript 行。
 
-- [ ] **Step 1: main 组装真链路**（模型 bootstrap 照搬 `AgentDemoApplication`）
+**Files:**
+- Modify: `.../codetui/CodeTuiApplication.java`（建模型 + CodingAgent + 共享 AtomicLong，wire 到 view，替换回显桩）
+- Modify: `.../codetui/ui/ConversationState.java`（`AgentListener` 各回调格式化为 transcript 行：助手流式行随 token 增长、工具活动行 `🛠 name … ✓/✗`、todo 区）
+
+- [ ] **Step 1: main 组装真链路**（模型 bootstrap 照搬 `AgentDemoApplication`；`CodeTuiView` 构造签名与 Task 3 一致，仅第二参从回显桩换成 `agent`）
 
 ```java
 // 读 DEEPSEEK_API_KEY（缺则提示）→ DeepSeekApi/DeepSeekChatModel（deepseek-chat）
@@ -695,12 +778,12 @@ AtomicLong activeTurnId = new AtomicLong();
 Path root = Path.of(System.getProperty("user.dir"));
 String sessionId = "code-tui-session";                  // v1 单会话，固定 id 即可（conversationId 每请求传给 memory advisor）
 ChatClient client = AgentTools.build(model, root, state, activeTurnId, sessionId);
-CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId);
-CodeTuiView view = new CodeTuiView(state, agent);       // view Enter→agent.submit；Esc→dispose
+CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId);  // implements SubmitHandler
+CodeTuiView view = new CodeTuiView(state, agent);       // 与 Task 3 同签名：Enter→agent.submit（返回 Disposable）
 view.run();
 ```
 
-- [ ] **Step 2: `CodeTuiView` 接 agent**：Enter → `Disposable d = agent.submit(text)`（存最近一个）；Esc → `if (d != null) d.dispose(); state.cancelCurrent();`（UI 层取消，spec §6）。render 里：transcript 快照渲染用户行、助手流式行（随 token 增长）、工具活动行（`🛠 name … ✓/✗`）、Todo 区（若非空）。
+- [ ] **Step 2: `ConversationState` 回调格式化**（View 不变；用户行由 `onUserMessage` 落——与骨架桩行为等价，**不会重复显示**）：`onUserMessage`→「你> …」；`onAssistantToken`→追加/续写当前助手行；`onToolStarted/onToolFinished`→工具活动行 `🛠 name … ✓/✗`；`onTodoUpdated`→刷新 todo 区。全部先过 turnId 过滤（Task 4 已实现）。
 
 - [ ] **Step 3: 手动验证**（spec §14 验收 1-4）
 
@@ -767,10 +850,10 @@ git commit -m "feat(code-tui): 里程碑4 启动安全门 + 警示横幅 + READM
 
 ```bash
 mvn -q -pl springai-code-tui -am package
-mvn -q -pl springai-code-tui test    # 单测全绿（spike IT 缺 key 时自动跳过）
+mvn -q -pl springai-code-tui test    # 单测全绿；CodingAgentSpikeTest 因 @EnabledIfEnvironmentVariable 在无 DEEPSEEK_API_KEY 时自动跳过（不是失败）
 ```
 
-预期：`BUILD SUCCESS`；`ConversationStateTest`/`AgentListenerCancelTest`/`ToolEventCallbackTest`/`AgentToolsSecurityTest`/`CodeTuiApplicationGateTest` 全绿。
+预期：`BUILD SUCCESS`；`ConversationStateTest`/`AgentListenerCancelTest`/`ToolEventCallbackTest`/`AgentToolsSecurityTest`/`CodeTuiApplicationGateTest` 全绿；`CodingAgentSpikeTest` 有 key 则跑、无 key 则 skipped。
 
 - [ ] **Step 2: 自检**（占位符扫描 + 类型一致 + spec 覆盖）
   - `grep -rn "TODO\|FIXME\|以 javap 为准\|见 Step" springai-code-tui/src` → 确认所有 ⚠️ 核实点已落实、无残留占位。
@@ -796,6 +879,6 @@ git add -A && git commit -m "chore(code-tui): v1 收尾——全测试绿 + 自�
 
 ## 关键风险提示（执行时留意）
 - **里程碑 2 spike 是闸门**（Task 7）：流式+工具+记忆+取消未实测通过，**不进** Task 8。
-- **不臆测 API**：Task 3/5/6/7 的 ⚠️ 点必须先 `javap` 核实（TamboUI widget 绘制、ToolContext 取值、5 工具签名、ChatClientResponse 文本抽取）。
+- **不臆测 API**：TamboUI 循环/按键/Frame/Rect/Paragraph 签名本会话已 `javap` 钉死（见 Task 3 抬头）；剩余 ⚠️ 点必须先 `javap` 核实——Task 3（`Paragraph implements Widget` 一条）、Task 5（`ToolContext` 取值）、Task 6（5 工具 + `AgentEnvironment` 签名、`ToolCallbacks.from` 位置）、Task 7（`ChatClientResponse` 文本抽取）。
 - **安全是方案 B（诚实降级）**，不是真安全：Shell/Grep/Glob 不受限须在横幅/README/记录性测试三处钉死。
 ```
