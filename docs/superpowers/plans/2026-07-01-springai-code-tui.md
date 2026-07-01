@@ -398,6 +398,7 @@ public final class CodeTuiView implements EventHandler, Renderer {
 
     @Override
     public boolean handle(Event e, TuiRunner runner) {
+        if (e instanceof TickEvent) return true;  // 周期重绘：run 循环仅在 handle 返回 true 时 render（见文末⚠️修正）
         if (!(e instanceof KeyEvent k)) return false;
         if (k.isCtrlC()) { runner.quit(); return true; }
         if (k.isCancel()) {                       // Esc：UI 层取消当前回合
@@ -412,9 +413,18 @@ public final class CodeTuiView implements EventHandler, Renderer {
             return true;
         }
         if (k.isDeleteBackward()) { state.backspace(); return true; }
-        if (k.code() == KeyCode.CHAR) { state.typeChar(k.character()); return true; }
-        return false;                             // 其它（含 TickEvent）交给 tickRate 触发重绘
+        // 可打印输入：用 codePoint 支持 CJK/非 ASCII，不再仅认 KeyCode.CHAR（否则中文被漏掉）
+        int cp = k.codePoint();
+        if (cp > 0 && !Character.isISOControl(cp) && !k.hasCtrl() && !k.hasAlt()) {
+            state.typeString(new String(Character.toChars(cp)));
+            return true;
+        }
+        return false;
     }
+    // ⚠️ 关键修正（里程碑1 实测，推翻原假设）：TuiRunner.run() 循环【仅在 handle 返回 true 时 render】，
+    //    tickRate 只按帧率把 TickEvent 投进事件队列、并不自动重绘。故 handle 首行必须：
+    //        if (e instanceof TickEvent) return true;   // 否则后台线程写状态永不刷出——被动重绘闸门失败
+    //    另：光标列用 CharWidth.of(prompt)（显示宽度、CJK 双宽），非 prompt.length()。
 
     @Override
     public void render(Frame f) {
