@@ -33,6 +33,7 @@ public final class ConversationState implements AgentListener {
 
     private final Deque<OutputLine> pending = new ArrayDeque<>();
     private final StringBuilder streaming = new StringBuilder();
+    private final List<String> todo = new ArrayList<>();          // 当前计划（固定面板显示，不进 scrollback）
     private final StringBuilder input = new StringBuilder();
     private volatile Status status = Status.IDLE;
     private volatile String notice = "";
@@ -101,6 +102,7 @@ public final class ConversationState implements AgentListener {
         acceptingTurnId = turnId;
         status = Status.THINKING;
         streaming.setLength(0);
+        todo.clear();                     // 新回合：清空上一个计划面板
     }
 
     @Override
@@ -140,9 +142,12 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
         if (turnId != acceptingTurnId) return;
-        pending.add(new OutputLine("📋 计划", OutputLine.Kind.TODO));
-        for (String l : todoLines) pending.add(new OutputLine("   • " + l, OutputLine.Kind.TODO));
+        todo.clear();                     // 原地替换：只保留最新计划，不往 scrollback 重复打印
+        todo.addAll(todoLines);
     }
+
+    /** 当前计划快照（供底部固定进度面板显示）。 */
+    public synchronized List<String> todoSnapshot() { return List.copyOf(todo); }
 
     @Override
     public synchronized void onTurnComplete(long turnId) {

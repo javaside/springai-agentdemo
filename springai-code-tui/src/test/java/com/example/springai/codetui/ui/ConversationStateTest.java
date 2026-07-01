@@ -152,8 +152,8 @@ class ConversationStateTest {
         assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.USER && l.text().contains("hello")));
         assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TOOL_START && l.text().contains("grep") && l.text().contains("foo")));
         assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TOOL_OK && l.text().contains("grep")));
-        assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TODO && l.text().contains("计划")));
         assertTrue(p.stream().anyMatch(l -> l.kind() == OutputLine.Kind.ERROR && l.text().contains("bad")));
+        assertEquals(List.of("a", "b"), state.todoSnapshot(), "todo 进固定面板而非 scrollback");
     }
 
     /** 流式按真实换行下沉：遇到 \n 的完整逻辑行下沉 scrollback，只留最后未换行残行。 */

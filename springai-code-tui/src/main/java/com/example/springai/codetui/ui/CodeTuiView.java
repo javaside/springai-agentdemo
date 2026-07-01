@@ -31,7 +31,8 @@ import java.util.List;
  */
 public final class CodeTuiView implements InlineEventHandler, Renderer {
 
-    private static final int LIVE_HEIGHT = 5;   // 预览 + 上边框 + 输入 + 下边框 + 状态
+    private static final int LIVE_HEIGHT = 5;   // 预览 + 上边框 + 输入 + 下边框 + 状态（固定部分）
+    private static final int TODO_CAP = 12;      // 计划面板最多显示几条
     private static final String INDENT = "  ";  // 对话内容（用户/AI）缩进；工具行不缩进
 
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
@@ -44,11 +45,14 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
     private static final Style ERROR   = Style.create().fg(Color.RED).bold();
     private static final Style THINK   = Style.create().fg(Color.YELLOW);
     private static final Style RUNNING = Style.create().fg(Color.CYAN);
+    private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
+    private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 
     private final ConversationState state;
     private final SubmitHandler onSubmit;
     private final MarkdownRenderer md = new MarkdownRenderer();   // AI 正文 markdown + 代码语法高亮
     private Disposable current;
+    private int lastHeight = -1;                                  // 仅当计划面板行数变化时才 setContentHeight
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
         this.state = state;
@@ -83,6 +87,9 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             for (String row : state.takeCompleteStreamingLines()) {  // 流式完整行：markdown/语法高亮 + 缩进
                 runner.println(indented(md.renderFinalized(row)));
             }
+            // 计划面板行数变化时才调 live 高度（低频，安全，不会像逐帧改高那样卡死）
+            int desired = LIVE_HEIGHT + todoBlockHeight(state.todoSnapshot().size());
+            if (desired != lastHeight) { runner.setContentHeight(desired); lastHeight = desired; }
             return true;
         }
         if (!(e instanceof KeyEvent k)) return false;
@@ -107,6 +114,21 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             return true;
         }
         return false;
+    }
+
+    /** 计划面板占多少行：标题(1) + 条目(封顶 TODO_CAP) + 溢出提示(1)。空则 0。 */
+    private static int todoBlockHeight(int n) {
+        if (n <= 0) return 0;
+        return 1 + Math.min(n, TODO_CAP) + (n > TODO_CAP ? 1 : 0);
+    }
+
+    /** 一条计划：按状态标记（✓完成/▶进行中/○待办）分色。 */
+    private static Text todoLine(String s) {
+        Style st;
+        if (s.startsWith("✓")) st = OK;                 // 完成：绿
+        else if (s.startsWith("▶")) st = TODO_RUN;      // 进行中：亮黄加粗
+        else st = DIM;                                  // 待办：暗
+        return Text.styled("  " + s, st);
     }
 
     /** 给渲染出的 span 列表加左缩进，组成一行 Text。 */
@@ -140,7 +162,11 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         int yBottom = bottom - 1;
         int yInput = bottom - 2;
         int yTop = bottom - 3;
-        int yPreview = bottom - 4;
+
+        List<String> todos = state.todoSnapshot();
+        int todoBlock = todoBlockHeight(todos.size());
+        int yTodoTop = yTop - todoBlock;      // 计划面板首行
+        int yPreview = yTodoTop - 1;
 
         // 流式残行预览（AI 生成中——markdown/语法高亮 + 缩进；用当前状态但不改变它）
         if (yPreview >= a.y()) {
@@ -150,6 +176,18 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             } else {
                 String shown = fitEnd(s, Math.max(1, w - INDENT.length()));
                 put(f, x, yPreview, a.width(), indented(md.renderPreview(shown)));
+            }
+        }
+        // 计划进度面板（固定在输入框上方，原地更新，不进 scrollback）
+        if (todoBlock > 0 && yTodoTop >= a.y()) {
+            put(f, x, yTodoTop, a.width(), Text.styled("📋 计划", TODO_TITLE));
+            int shown = Math.min(todos.size(), TODO_CAP);
+            for (int i = 0; i < shown; i++) {
+                put(f, x, yTodoTop + 1 + i, a.width(), todoLine(todos.get(i)));
+            }
+            if (todos.size() > TODO_CAP) {
+                put(f, x, yTodoTop + 1 + shown, a.width(),
+                        Text.styled("  … 还有 " + (todos.size() - TODO_CAP) + " 项", DIM));
             }
         }
         // 圆角输入框

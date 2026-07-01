@@ -128,12 +128,12 @@ public final class AgentTools {
 
     private static String statusMarker(Todos.Status status) {
         if (status == null) {
-            return "[ ]";
+            return "○";
         }
         return switch (status) {
-            case completed -> "[x]";
-            case in_progress -> "[~]";
-            case pending -> "[ ]";
+            case completed -> "✓";     // 完成：打钩
+            case in_progress -> "▶";   // 进行中：可区分状态
+            case pending -> "○";       // 待办
         };
     }
 }

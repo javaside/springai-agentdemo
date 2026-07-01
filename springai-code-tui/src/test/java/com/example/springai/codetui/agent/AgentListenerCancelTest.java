@@ -61,7 +61,7 @@ class AgentListenerCancelTest {
         assertTrue(t2.stream().anyMatch(l -> l.text().equals("answer")), "turn=2 助手行定稿");
         assertTrue(t2.stream().anyMatch(l -> l.kind() == OutputLine.Kind.TOOL_OK && l.text().contains("write")),
                 "turn=2 工具完成");
-        assertTrue(t2.stream().anyMatch(l -> l.text().contains("fresh")), "turn=2 todo");
+        assertEquals(List.of("fresh"), impl.todoSnapshot(), "turn=2 计划进固定面板");
         assertTrue(t2.stream().noneMatch(l -> l.text().contains("MORE") || l.text().contains("stale")),
                 "无 turn=1 迟到内容混入");
     }
