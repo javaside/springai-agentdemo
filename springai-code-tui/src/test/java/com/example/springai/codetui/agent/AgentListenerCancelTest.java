@@ -58,7 +58,7 @@ class AgentListenerCancelTest {
         List<String> t2 = impl.drainPending();
         assertTrue(t2.stream().anyMatch(l -> l.contains("q2")), "turn=2 用户消息");
         assertTrue(t2.contains("answer"), "turn=2 助手行定稿");
-        assertTrue(t2.stream().anyMatch(l -> l.equals("🛠 write ✓")), "turn=2 工具完成");
+        assertTrue(t2.stream().anyMatch(l -> l.equals("✓ write")), "turn=2 工具完成");
         assertTrue(t2.stream().anyMatch(l -> l.contains("fresh")), "turn=2 todo");
         assertTrue(t2.stream().noneMatch(l -> l.contains("MORE") || l.contains("stale")),
                 "无 turn=1 迟到内容混入");

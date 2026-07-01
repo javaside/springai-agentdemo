@@ -144,9 +144,27 @@ class ConversationStateTest {
 
         List<String> p = state.drainPending();
         assertTrue(p.stream().anyMatch(l -> l.contains("hello")), "用户行进 pending");
-        assertTrue(p.stream().anyMatch(l -> l.equals("🛠 grep ✓")), "工具完成行进 pending");
+        assertTrue(p.stream().anyMatch(l -> l.contains("grep") && l.contains("foo")), "工具开始+命令摘要进 pending");
+        assertTrue(p.stream().anyMatch(l -> l.equals("✓ grep")), "工具完成行进 pending");
         assertTrue(p.stream().anyMatch(l -> l.contains("计划")), "todo 进 pending");
         assertTrue(p.stream().anyMatch(l -> l.contains("bad")), "错误进 pending");
+    }
+
+    /** 流式整行下沉：凑满整行的部分下沉进 scrollback，只留最后残段。 */
+    @Test
+    void takeCompleteStreamingLines_flushesFullRows_keepsPartial() {
+        ConversationState state = new ConversationState();
+        state.onTurnStarted(1L);
+        state.onAssistantToken(1L, "aaaaa");            // 5 个 ASCII，各宽 1
+        // 宽度 2 → 折成 ["aa","aa","a"]，下沉前两整行、留残段 "a"
+        List<String> flushed = state.takeCompleteStreamingLines(2);
+        assertEquals(List.of("aa", "aa"), flushed, "整行下沉 scrollback");
+        assertEquals("a", state.streaming(), "残段留在 live 区");
+        // 残段不足一行 → 再取无整行可下沉
+        assertTrue(state.takeCompleteStreamingLines(2).isEmpty());
+        // 回合完成 → 残段整体定稿进 pending
+        state.onTurnComplete(1L);
+        assertEquals(List.of("a"), state.drainPending());
     }
 
     /** 里程碑1 输入方法仍可用（回归保护）。 */
