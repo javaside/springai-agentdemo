@@ -54,6 +54,7 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
     private Disposable current;
     private int lastHeight = -1;                                  // 仅当计划面板行数变化时才 setContentHeight
     private String lastSig = "";                                  // live 区内容签名，用于「有变化才重绘」
+    private int idleTicks = 0;                                    // 空闲计数，用于低频保活重绘
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
         this.state = state;
@@ -94,11 +95,14 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             // 计划面板行数变化时才调 live 高度（低频，安全，不会像逐帧改高那样卡死）
             int desired = LIVE_HEIGHT + todoBlockHeight(state.todoSnapshot().size());
             if (desired != lastHeight) { runner.setContentHeight(desired); lastHeight = desired; }
-            // 仅在 live 区内容真正变化时才重绘——否则 30fps 空刷会让输入框闪动
+            // 有变化就重绘（否则 30fps 空刷会让输入框闪动）；
+            // 空闲无变化时约每秒保活重绘一次，维持 live 区不被上方 println/滚动挤掉后丢失。
             String sig = liveSignature();
             boolean changed = printed || !sig.equals(lastSig);
             lastSig = sig;
-            return changed;
+            if (changed) { idleTicks = 0; return true; }
+            if (++idleTicks >= 30) { idleTicks = 0; return true; }   // ~1s 保活
+            return false;
         }
         if (!(e instanceof KeyEvent k)) return false;
         if (k.isCtrlC()) { runner.quit(); return true; }
