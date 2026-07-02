@@ -15,6 +15,7 @@ import reactor.core.Disposables;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -44,6 +45,7 @@ public final class CodingAgent implements SubmitHandler {
     private final AtomicLong activeTurnId;
     private final SessionService sessionService;
     private final CompactionStrategy manualStrategy;
+    private final AtomicBoolean compactionInFlight = new AtomicBoolean(false);   // 防止并发/重复触发手动压缩
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
@@ -98,10 +100,14 @@ public final class CodingAgent implements SubmitHandler {
 
     /**
      * 手动压缩：在后台线程强制立即压缩本会话。总结 LLM 调用可能耗时数分钟，绝不阻塞调用线程（UI）。
-     * 并发闸门在 {@code CodeTuiView}（仅空闲且非压缩中才调用本方法），此处不再判活跃回合。
+     * 并发闸门在 {@code CodeTuiView}（仅空闲且非压缩中才调用本方法）；此处再用 CAS 兜底一层，
+     * 防止任何调用方漏判导致两次压缩并发、把 UI 的「开始/完成」事件交错。已在压缩中则静默忽略。
      */
     @Override
     public void compact() {
+        if (!compactionInFlight.compareAndSet(false, true)) {
+            return;   // 已有压缩在进行：忽略重复触发（UI 已给出反馈，这里不再叠加）
+        }
         Thread t = new Thread(this::runCompaction, "manual-compact");
         t.setDaemon(true);
         t.start();
@@ -109,14 +115,21 @@ public final class CodingAgent implements SubmitHandler {
 
     /**
      * 同步执行一次手动压缩（供 {@link #compact()} 的后台线程调用；包级可见便于测试直调）。
-     * 用恒真触发器绕过 token 阈值，配合激进的手动策略。started/finished/failed 由
-     * {@link NotifyingCompactionStrategy} 在策略内部发出；这里只兜底「进入策略前」抛出的异常。
+     * 用恒真触发器绕过 token 阈值，配合激进的手动策略。
+     *
+     * <p>在调用 {@code sessionService.compact} <b>之前</b>先自行发一次 {@code onCompactionStarted("manual")}：
+     * 保证即便压缩在「进入策略前」就抛异常（会话不存在 / I/O 失败），UI 也已显示过「正在压缩」，不会出现
+     * 「只有失败行、没有开始提示」的静默错觉。进入策略后 {@link NotifyingCompactionStrategy} 会再发一次
+     * started——{@code ConversationState.onCompactionStarted} 是幂等的（只重置计时/原因），无害。
      */
     void runCompaction() {
         try {
+            listener.onCompactionStarted("manual");
             sessionService.compact(sessionId, req -> true, manualStrategy);
         } catch (RuntimeException e) {
             listener.onCompactionFailed(String.valueOf(e.getMessage()));
+        } finally {
+            compactionInFlight.set(false);   // 释放兜底闸门（无论成功/失败）
         }
     }
 

@@ -14,10 +14,12 @@ import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,10 +39,12 @@ class CodingAgentCompactTest {
         final AtomicReference<String> sessionId = new AtomicReference<>();
         final AtomicReference<CompactionTrigger> trigger = new AtomicReference<>();
         final AtomicReference<CompactionStrategy> strategy = new AtomicReference<>();
+        RuntimeException failBeforeStrategy;   // 非空则模拟「进入策略前」抛错（会话不存在 / I/O）
 
         @Override
         public CompactionResult compact(String id, CompactionTrigger t, CompactionStrategy s) {
             sessionId.set(id); trigger.set(t); strategy.set(s);
+            if (failBeforeStrategy != null) throw failBeforeStrategy;   // 未进策略即失败：decorator 不会发 started
             // 模拟真实流程：判定 trigger 命中后才进策略。这里直接进策略以驱动通知装饰器。
             return s.compact(CompactionRequest.of(DUMMY_SESSION, List.of()));
         }
@@ -72,6 +76,42 @@ class CodingAgentCompactTest {
         assertSame(manual, fake.strategy.get(), "应传入手动策略");
         assertTrue(state.drainPending().stream().anyMatch(l -> l.text().contains("999")),
                 "结果计数应经 listener 落进 pending");
+    }
+
+    @Test
+    void runCompaction_firesStarted_beforeFailed_whenCompactThrowsPreStrategy() {
+        OrderRecordingListener listener = new OrderRecordingListener();
+        FakeSessionService fake = new FakeSessionService();
+        fake.failBeforeStrategy = new RuntimeException("session not found");   // 进策略前就抛
+        // 策略永不应被调用（compact 会先抛），但仍需传一个非 null 策略。
+        CompactionStrategy manual = new NotifyingCompactionStrategy(req -> null, listener, "manual");
+
+        CodingAgent agent = new CodingAgent(
+                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual);
+
+        agent.runCompaction();   // 同步
+
+        // 即便「进入策略前」失败，也必须先发过 started，再发 failed——不能只有失败行、没有开始提示。
+        assertEquals(List.of("started:manual", "failed:session not found"), listener.events,
+                "pre-strategy 失败也应先 started 再 failed");
+    }
+
+    /** 按调用顺序记录压缩三事件的最小 listener（其余接缝方法空实现）。 */
+    private static final class OrderRecordingListener implements AgentListener {
+        final List<String> events = new ArrayList<>();
+        @Override public void onTurnStarted(long turnId) { }
+        @Override public void onUserMessage(long turnId, String text) { }
+        @Override public void onAssistantToken(long turnId, String token) { }
+        @Override public void onToolStarted(long turnId, String toolName, String input) { }
+        @Override public void onToolFinished(long turnId, String toolName, String output, boolean ok) { }
+        @Override public void onTodoUpdated(long turnId, List<String> todoLines) { }
+        @Override public void onTurnComplete(long turnId) { }
+        @Override public void onError(long turnId, Throwable error) { }
+        @Override public void onCompactionStarted(String reason) { events.add("started:" + reason); }
+        @Override public void onCompactionFinished(int eventsRemoved, int tokensSaved) {
+            events.add("finished:" + eventsRemoved + ":" + tokensSaved);
+        }
+        @Override public void onCompactionFailed(String message) { events.add("failed:" + message); }
     }
 
     /** 占位 ChatClient：runCompaction 不触发对话，不会真正用到它。 */
