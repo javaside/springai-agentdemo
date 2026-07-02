@@ -81,6 +81,7 @@ public final class CodeTuiView extends InlineApp {
     private static final Style ERROR      = Style.create().fg(Color.RED).bold();
     private static final Style THINK      = Style.create().fg(Color.YELLOW);
     private static final Style RUNNING    = Style.create().fg(Color.CYAN);
+    private static final Style SHIMMER_HI  = Style.create().fg(Color.BRIGHT_WHITE).bold();   // 状态栏波光高亮
     private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 
@@ -114,6 +115,7 @@ public final class CodeTuiView extends InlineApp {
     private int histIndex;                                           // 回溯指针；== history.size() 表示未回溯（草稿态）
     private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
     private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
+    private long animTick;                                           // 动画帧计数（drain 每 ~33ms 自增），驱动状态栏波光
 
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
@@ -197,6 +199,7 @@ public final class CodeTuiView extends InlineApp {
 
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
     private void drain() {
+        animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
         for (OutputLine ol : state.drainPending()) {
             switch (ol.kind()) {
                 case USER -> {
@@ -726,13 +729,33 @@ public final class CodeTuiView extends InlineApp {
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
             case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel()).style(DIM);
-            case THINKING -> text("● 思考中…" + qs + " · Esc 取消 · Ctrl+C 退出").style(THINK);
+            case THINKING -> shimmerStatus("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK);
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
-                yield text("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…" + qs + " · Esc 取消")
-                        .style(RUNNING);
+                yield shimmerStatus("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
+                        qs + " · Esc 取消", RUNNING);
             }
         };
+    }
+
+    /** 处理中状态行：label 上叠一道随帧移动的高亮「波光」（表示系统在动），suffix 保持暗色静态。 */
+    private Element shimmerStatus(String label, String suffix, Style base) {
+        List<Span> spans = shimmerSpans(label, base);
+        if (!suffix.isEmpty()) spans.add(Span.styled(suffix, DIM));
+        return richText(Text.from(Line.from(spans)));
+    }
+
+    /** 把 label 逐字符上色：距离移动中心 ≤1 的字符用高亮，其余用 base，形成一道左→右扫过的光带。 */
+    private List<Span> shimmerSpans(String label, Style base) {
+        int n = label.length();
+        List<Span> spans = new ArrayList<>(n);
+        if (n == 0) return spans;
+        int period = n + 6;                          // 光带扫完 + 一段间隔再重来（脉冲感）
+        int center = (int) ((animTick / 2) % period); // 每 2 帧(~66ms)前进一格，避免过快闪烁
+        for (int i = 0; i < n; i++) {
+            spans.add(Span.styled(String.valueOf(label.charAt(i)), Math.abs(i - center) <= 1 ? SHIMMER_HI : base));
+        }
+        return spans;
     }
 
     // ── 内部工具 ─────────────────────────────────────────────────────────
