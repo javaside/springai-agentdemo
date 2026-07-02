@@ -53,6 +53,7 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
     private final MarkdownRenderer md = new MarkdownRenderer();   // AI 正文 markdown + 代码语法高亮
     private Disposable current;
     private int lastHeight = -1;                                  // 仅当计划面板行数变化时才 setContentHeight
+    private String lastSig = "";                                  // live 区内容签名，用于「有变化才重绘」
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
         this.state = state;
@@ -69,7 +70,9 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
     @Override
     public boolean handle(Event e, InlineTuiRunner runner) {
         if (e instanceof TickEvent) {
+            boolean printed = false;
             for (OutputLine ol : state.drainPending()) {
+                printed = true;
                 switch (ol.kind()) {
                     case USER -> {
                         md.reset();                                  // 新回合：清 markdown 代码围栏状态
@@ -86,11 +89,16 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             }
             for (String row : state.takeCompleteStreamingLines()) {  // 流式完整行：markdown/语法高亮 + 缩进
                 runner.println(indented(md.renderFinalized(row)));
+                printed = true;
             }
             // 计划面板行数变化时才调 live 高度（低频，安全，不会像逐帧改高那样卡死）
             int desired = LIVE_HEIGHT + todoBlockHeight(state.todoSnapshot().size());
             if (desired != lastHeight) { runner.setContentHeight(desired); lastHeight = desired; }
-            return true;
+            // 仅在 live 区内容真正变化时才重绘——否则 30fps 空刷会让输入框闪动
+            String sig = liveSignature();
+            boolean changed = printed || !sig.equals(lastSig);
+            lastSig = sig;
+            return changed;
         }
         if (!(e instanceof KeyEvent k)) return false;
         if (k.isCtrlC()) { runner.quit(); return true; }
@@ -114,6 +122,13 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             return true;
         }
         return false;
+    }
+
+    /** live 区当前内容签名：任一影响显示的状态变化都会改变它，用于决定是否重绘。 */
+    private String liveSignature() {
+        return state.currentInput() + '' + state.streaming() + ''
+                + state.status() + '' + state.notice() + ''
+                + state.activeTool() + '' + String.join("", state.todoSnapshot());
     }
 
     /** 计划面板占多少行：标题(1) + 条目(封顶 TODO_CAP) + 溢出提示(1)。空则 0。 */
