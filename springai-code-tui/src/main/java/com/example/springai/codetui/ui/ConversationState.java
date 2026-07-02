@@ -142,11 +142,14 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
         if (turnId != acceptingTurnId) return;
-        todo.clear();                     // 原地替换：只保留最新计划，不往 scrollback 重复打印
+        if (todo.equals(todoLines)) return;   // 去重：内容没变不重复打印（解决「一直滚动」）
+        todo.clear();
         todo.addAll(todoLines);
+        pending.add(new OutputLine("📋 计划", OutputLine.Kind.TODO));
+        for (String l : todoLines) pending.add(new OutputLine("   " + l, OutputLine.Kind.TODO));
     }
 
-    /** 当前计划快照（供底部固定进度面板显示）。 */
+    /** 当前计划快照（用于去重比对）。 */
     public synchronized List<String> todoSnapshot() { return List.copyOf(todo); }
 
     @Override
