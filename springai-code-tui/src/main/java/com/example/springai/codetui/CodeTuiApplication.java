@@ -46,6 +46,7 @@ public class CodeTuiApplication {
 
         AgentTools.AgentRuntime runtime = AgentTools.build(model, root, state);
         ChatClient client = runtime.client();
+        // runtime.sessionService()/manualStrategy() 将在下一步（/compact 接入）传入 CodingAgent
         CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId);
         CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
         view.run();

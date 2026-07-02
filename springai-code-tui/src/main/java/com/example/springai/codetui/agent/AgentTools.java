@@ -40,6 +40,11 @@ import java.util.List;
  * 且压缩尊重回合边界、不会拆散某轮的 tool_call 与 tool_result。当前用内存仓库
  * （{@link InMemorySessionRepository}），进程退出即失效。
  *
+ * <p><b>返回 {@link AgentRuntime}</b>：{@link #build} 除了 {@link ChatClient}，还暴露 {@link SessionService}
+ * 与一份更激进的手动压缩策略（保留 20 事件），供上层 {@code /compact} 命令直接触发压缩。
+ * 自动（阈值触发）与手动两条压缩路径的策略都用 {@link NotifyingCompactionStrategy} 包了一层，
+ * 使原本静默的压缩对 UI 可见。
+ *
  * <p><b>为何不挂 conversation_search 工具</b>：0.5.0 的压缩是<b>销毁式</b>的——
  * {@code DefaultSessionService.compactWith} 只把压缩后的集合经 {@code replaceEvents} 覆盖写回，
  * 被压掉的 {@code archivedEvents} 从不落库（JDBC 仓库亦然：整会话 DELETE 后重插压缩集，无归档表）。
