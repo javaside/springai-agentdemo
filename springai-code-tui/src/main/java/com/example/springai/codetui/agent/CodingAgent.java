@@ -4,8 +4,8 @@ import org.springaicommunity.agent.utils.AgentEnvironment;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import reactor.core.Disposable;
@@ -61,7 +61,8 @@ public final class CodingAgent implements SubmitHandler {
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
                     .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, model))
                     .toolContext(Map.of("turnId", turnId))
-                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
+                    // 会话记忆键：SessionMemoryAdvisor 按此解析/自动创建会话（值即 chat_memory_conversation_id）
+                    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
                     .stream().chatClientResponse()
                     .doOnNext(resp -> handleChunk(resp, turnId))
                     .doOnError(err -> handleError(err, turnId))

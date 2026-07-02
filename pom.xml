@@ -39,6 +39,8 @@
         <spring-boot.version>4.0.7</spring-boot.version>
         <!-- 社区项目 spring-ai-agent-utils（提供 SkillsTool 等），针对 Spring AI 2.0 -->
         <spring-ai-agent-utils.version>0.10.0</spring-ai-agent-utils.version>
+        <!-- 社区项目 spring-ai-session：事件溯源会话记忆 + 回合/token 感知压缩，替代滑窗记忆 -->
+        <spring-ai-session.version>0.5.0</spring-ai-session.version>
         <jline.version>3.30.13</jline.version>
         <!-- TamboUI（Java TUI，仿 ratatui）；group dev.tamboui，实测有 tamboui-bom -->
         <tamboui.version>0.4.0</tamboui.version>
@@ -59,6 +61,14 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- spring-ai-session 版本统一管理（org.springaicommunity:spring-ai-session-bom，最新 0.5.0） -->
+            <dependency>
+                <groupId>org.springaicommunity</groupId>
+                <artifactId>spring-ai-session-bom</artifactId>
+                <version>${spring-ai-session.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

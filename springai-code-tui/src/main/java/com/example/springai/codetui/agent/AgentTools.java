@@ -8,10 +8,17 @@ import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springaicommunity.agent.utils.AgentEnvironment;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
+import org.springframework.ai.session.DefaultSessionService;
+import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
+import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
+import org.springframework.ai.session.compaction.TokenCountTrigger;
+import org.springframework.ai.session.tool.SessionEventTools;
 import org.springframework.ai.support.ToolCallbacks;
+import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
+import org.springframework.ai.tokenizer.TokenCountEstimator;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.nio.file.Path;
@@ -21,7 +28,13 @@ import java.util.List;
  * AgentTools —— 组装编码 Agent 用的 {@link ChatClient} 的工厂。
  *
  * <p>把 5 个社区工具（FileSystem/Shell/Grep/Glob/TodoWrite）用 {@link ToolEventCallback} 装饰后
- * 注册进 ChatClient，并配上 {@link MessageChatMemoryAdvisor} 记忆与 {@link AgentEnvironment} 环境系统提示。
+ * 注册进 ChatClient，并配上 {@link SessionMemoryAdvisor} 会话记忆与 {@link AgentEnvironment} 环境系统提示。
+ *
+ * <p><b>会话记忆（spring-ai-session）</b>：取代原先的 {@code MessageChatMemoryAdvisor} 定长滑窗。
+ * 事件溯源存储 + 「回合/token 感知」压缩——超过 token 阈值时用 LLM 滚动摘要把更早历史压成摘要而非直接丢弃，
+ * 且压缩尊重回合边界、不会拆散某轮的 tool_call 与 tool_result。另挂 {@code conversation_search} 工具
+ * （{@link SessionEventTools}），即使被压缩也能按关键字检索逐字原文做二次召回。当前用内存仓库
+ * （{@link InMemorySessionRepository}），进程退出即失效；将来换 JDBC 仓库即可持久化，其余代码不动。
  *
  * <p><b>turnId 走 ThreadLocal</b>：TodoWriteTool 的 todoEventHandler 只收 {@link Todos}、拿不到 turnId，
  * 而 handler 是在工具 call 内<b>同线程同步</b>触发的，所以直接读
@@ -39,6 +52,15 @@ public final class AgentTools {
 
     /** DeepSeek 模型名（V4 现役 v4-flash；旧 deepseek-chat/reasoner 将于 2026-07-24 停用）。运行时可经 /model 覆盖。 */
     private static final String MODEL_NAME = "deepseek-v4-flash";
+
+    /** 触发压缩的累计 token 阈值：超过即对更早历史做摘要压缩。DeepSeek 上下文足够大，留足工作区。可调。 */
+    private static final int COMPACTION_TOKEN_THRESHOLD = 24_000;
+
+    /** 压缩时保持逐字原样的最近事件数；更早的被 LLM 滚动摘要吸收。须 > overlapSize。可调。 */
+    private static final int MAX_EVENTS_TO_KEEP = 40;
+
+    /** 会话记忆的默认用户 id（单会话 TUI，仅作归属占位）。 */
+    private static final String DEFAULT_USER_ID = "code-tui-user";
 
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
@@ -99,16 +121,46 @@ public final class AgentTools {
             decorated[i] = new ToolEventCallback(raw[i], listener);
         }
 
+        // 事件溯源会话记忆：内存仓库 + 「回合/token 感知」压缩，取代原滑窗记忆。
+        SessionService sessionService = DefaultSessionService.builder()
+                .sessionRepository(InMemorySessionRepository.builder().build())
+                .build();
+
+        // 摘要用「裸」ChatClient：同一个 DeepSeek 模型，但不带工具、不带记忆 advisor，
+        // 避免压缩时的摘要调用递归触发记忆 / 工具循环。
+        ChatClient summarizer = ChatClient.builder(model).build();
+
+        // token 估算器（JTokkit，spring-ai-commons 提供）：trigger 与摘要策略都需显式提供，无默认值。
+        TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
+
+        SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
+                .defaultUserId(DEFAULT_USER_ID)
+                .compactionTrigger(TokenCountTrigger.builder()
+                        .threshold(COMPACTION_TOKEN_THRESHOLD)
+                        .tokenCountEstimator(tokenCountEstimator).build())
+                .compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(summarizer)
+                        .maxEventsToKeep(MAX_EVENTS_TO_KEEP)
+                        .tokenCountEstimator(tokenCountEstimator).build())
+                .build();
+
+        // conversation_search 工具：即使历史被压缩，模型仍可按关键字检索逐字原文（二次召回兜底）。
+        // 它靠 SessionMemoryAdvisor 写入的 chat_memory_conversation_id 上下文键解析当前会话，故与 advisor 配套注册。
+        SessionEventTools recallTools = SessionEventTools.builder(sessionService).build();
+
+        // defaultTools 只有 Object... 一个重载、且二次调用会覆盖，故把工具回调与召回工具合并成一次传入。
+        Object[] allTools = new Object[decorated.length + 1];
+        System.arraycopy(decorated, 0, allTools, 0, decorated.length);
+        allTools[decorated.length] = recallTools;
+
         return ChatClient.builder(model)
                 .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                         .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
                         .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
                         .param(AgentEnvironment.AGENT_MODEL_KEY, MODEL_NAME))
-                .defaultTools((Object[]) decorated)
+                .defaultTools(allTools)
                 // 不手动加 ToolCallingAdvisor：2.0 里注册了 .tools/.defaultTools 会自动挂上工具调用循环。
-                // conversationId 由 CodingAgent.submit 每次请求传入，不在这里绑定。
-                .defaultAdvisors(MessageChatMemoryAdvisor.builder(
-                        MessageWindowChatMemory.builder().build()).build())
+                // 会话 id 由 CodingAgent.submit 每次请求经 SESSION_ID_CONTEXT_KEY 传入，不在这里绑定（会话按需自动创建）。
+                .defaultAdvisors(memoryAdvisor)
                 .build();
     }
 

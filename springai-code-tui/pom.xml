@@ -28,6 +28,11 @@
             <artifactId>spring-ai-agent-utils</artifactId>
             <version>${spring-ai-agent-utils.version}</version>
         </dependency>
+        <!-- 事件溯源会话记忆（替代 MessageChatMemoryAdvisor 滑窗）：内存仓库 + 压缩策略，版本走父 BOM -->
+        <dependency>
+            <groupId>org.springaicommunity</groupId>
+            <artifactId>spring-ai-session-management</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>dev.tamboui</groupId>
