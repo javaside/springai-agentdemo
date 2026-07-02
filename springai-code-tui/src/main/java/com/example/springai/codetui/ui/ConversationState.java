@@ -102,8 +102,7 @@ public final class ConversationState implements AgentListener {
         acceptingTurnId = turnId;
         status = Status.THINKING;
         streaming.setLength(0);
-        // 注意：不清空 todo——保留上一份计划面板（新计划来时才替换），
-        // 使 live 区高度只增不减，规避 InlineDisplay 收缩(deleteLines)时的光标漂移导致面板消失。
+        todo.clear();                     // 新回合：清空进度行（固定高度，清空只是让进度行变空，不涉及收缩）
     }
 
     @Override
@@ -143,12 +142,31 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
         if (turnId != acceptingTurnId) return;
-        todo.clear();                     // 原地替换：固定面板显示，不进 scrollback
+        // 新计划 / 任务集变化 → 完整清单进历史（一次）；纯状态推进 → 只更新字段，由固定进度行反映
+        boolean taskSetChanged = !taskTexts(todo).equals(taskTexts(todoLines));
+        todo.clear();
         todo.addAll(todoLines);
+        if (taskSetChanged) {
+            pending.add(new OutputLine("📋 计划", OutputLine.Kind.TODO));
+            for (String l : todoLines) pending.add(new OutputLine("   " + l, OutputLine.Kind.TODO));
+        }
     }
 
-    /** 当前计划快照（供底部固定面板显示）。 */
+    /** 当前计划快照（供固定进度行读取）。 */
     public synchronized List<String> todoSnapshot() { return List.copyOf(todo); }
+
+    /** 去掉状态标记（✓/▶/○ + 空格）得到任务正文，用于判断「任务集是否变化」。 */
+    private static List<String> taskTexts(List<String> lines) {
+        List<String> out = new ArrayList<>(lines.size());
+        for (String l : lines) {
+            if (!l.isEmpty() && "✓▶○".indexOf(l.charAt(0)) >= 0) {
+                out.add(l.length() > 1 && l.charAt(1) == ' ' ? l.substring(2) : l.substring(1));
+            } else {
+                out.add(l);
+            }
+        }
+        return out;
+    }
 
     @Override
     public synchronized void onTurnComplete(long turnId) {

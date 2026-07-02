@@ -31,8 +31,7 @@ import java.util.List;
  */
 public final class CodeTuiView implements InlineEventHandler, Renderer {
 
-    private static final int LIVE_HEIGHT = 5;   // 预览 + 上边框 + 输入 + 下边框 + 状态（固定基座）
-    private static final int TODO_CAP = 10;      // 计划面板最多显示几条（封顶，配合 grow-only 限制高度）
+    private static final int LIVE_HEIGHT = 6;   // 进度行 + 预览 + 上边框 + 输入 + 下边框 + 状态（固定，绝不改）
     private static final String INDENT = "  ";  // 对话内容（用户/AI）缩进；工具行不缩进
 
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
@@ -45,15 +44,13 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
     private static final Style ERROR   = Style.create().fg(Color.RED).bold();
     private static final Style THINK   = Style.create().fg(Color.YELLOW);
     private static final Style RUNNING = Style.create().fg(Color.CYAN);
-    private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
-    private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
+    private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进度行：醒目
 
     private final ConversationState state;
     private final SubmitHandler onSubmit;
     private final MarkdownRenderer md = new MarkdownRenderer();   // AI 正文 markdown + 代码语法高亮
     private Disposable current;
     private String lastSig = "";                                  // live 区内容签名，用于「有变化才重绘」
-    private int liveHeight = LIVE_HEIGHT;                         // 当前 live 高度，grow-only（只增不减，规避收缩漂移）
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
         this.state = state;
@@ -91,18 +88,10 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
                 runner.println(indented(md.renderFinalized(row)));
                 printed = true;
             }
-            // 计划面板：grow-only —— 只增高、绝不收缩（InlineDisplay 收缩用 deleteLines+相对光标，
-            // 多轮后会漂移导致面板消失；只增高则规避该路径）。封顶避免无限增高。
-            int want = LIVE_HEIGHT + todoBlockHeight(state.todoSnapshot().size());
-            boolean grew = false;
-            if (want > liveHeight) {
-                liveHeight = Math.min(want, LIVE_HEIGHT + TODO_CAP + 1);
-                runner.setContentHeight(liveHeight);
-                grew = true;
-            }
-            // 仅在有变化时重绘（否则 30fps 空刷让输入框闪动）；grow 后必重绘让 resizeDisplay 生效。
+            // live 区固定高度、绝不 setContentHeight（库收缩会让面板漂移消失）。
+            // 仅在有变化时重绘（否则 30fps 空刷让输入框闪动）。
             String sig = liveSignature();
-            boolean changed = printed || grew || !sig.equals(lastSig);
+            boolean changed = printed || !sig.equals(lastSig);
             lastSig = sig;
             return changed;
         }
@@ -137,19 +126,27 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
                 + state.activeTool() + '' + String.join("", state.todoSnapshot());
     }
 
-    /** 计划面板占多少行：标题(1) + 条目(封顶 TODO_CAP) + 溢出提示(1)。空则 0。 */
-    private static int todoBlockHeight(int n) {
-        if (n <= 0) return 0;
-        return 1 + Math.min(n, TODO_CAP) + (n > TODO_CAP ? 1 : 0);
+    /** 固定进度行：任务中显示 "▶ 计划 N/M · 当前步骤"，全部完成或无计划 → 空行（自动消失）。 */
+    private Text progressLine() {
+        List<String> t = state.todoSnapshot();
+        if (t.isEmpty()) return Text.from("");
+        int done = 0;
+        String cur = null;
+        for (String l : t) {
+            if (l.startsWith("✓")) done++;
+            else if (cur == null && (l.startsWith("▶") || l.startsWith("○"))) cur = taskText(l);
+        }
+        if (done >= t.size()) return Text.from("");     // 全完成 → 消失
+        String s = "▶ 计划 " + done + "/" + t.size() + (cur != null ? " · " + cur : "");
+        return Text.styled("  " + s, TODO_RUN);
     }
 
-    /** 一条计划：按状态标记（✓完成/▶进行中/○待办）分色。 */
-    private static Text todoLine(String s) {
-        Style st;
-        if (s.startsWith("✓")) st = OK;                 // 完成：绿
-        else if (s.startsWith("▶")) st = TODO_RUN;      // 进行中：亮黄加粗
-        else st = DIM;                                  // 待办：暗
-        return Text.styled("  " + s, st);
+    /** 去掉状态标记（✓/▶/○ + 空格）得到任务正文。 */
+    private static String taskText(String line) {
+        if (!line.isEmpty() && "✓▶○".indexOf(line.charAt(0)) >= 0) {
+            return line.length() > 1 && line.charAt(1) == ' ' ? line.substring(2) : line.substring(1);
+        }
+        return line;
     }
 
     /** 给渲染出的 span 列表加左缩进，组成一行 Text。 */
@@ -184,11 +181,13 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
         int yInput = bottom - 2;
         int yTop = bottom - 3;
 
-        List<String> todos = state.todoSnapshot();
-        int tb = todoBlockHeight(todos.size());
-        int yTodoTop = yTop - tb;             // 计划面板首行（在输入框上方）
-        int yPreview = yTodoTop - 1;
+        int yPreview = bottom - 4;
+        int yProgress = bottom - 5;
 
+        // 固定进度行（输入框上方；任务中显示、完成或无计划时为空行、自动消失）
+        if (yProgress >= a.y()) {
+            put(f, x, yProgress, a.width(), progressLine());
+        }
         // 流式残行预览（AI 生成中——markdown/语法高亮 + 缩进；用当前状态但不改变它）
         if (yPreview >= a.y()) {
             String s = state.streaming();
@@ -197,18 +196,6 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             } else {
                 String shown = fitEnd(s, Math.max(1, w - INDENT.length()));
                 put(f, x, yPreview, a.width(), indented(md.renderPreview(shown)));
-            }
-        }
-        // 计划进度面板（固定在输入框上方，原地更新，不进 scrollback）
-        if (tb > 0 && yTodoTop >= a.y()) {
-            put(f, x, yTodoTop, a.width(), Text.styled("📋 计划", TODO_TITLE));
-            int shown = Math.min(todos.size(), TODO_CAP);
-            for (int i = 0; i < shown; i++) {
-                put(f, x, yTodoTop + 1 + i, a.width(), todoLine(todos.get(i)));
-            }
-            if (todos.size() > TODO_CAP) {
-                put(f, x, yTodoTop + 1 + shown, a.width(),
-                        Text.styled("  … 还有 " + (todos.size() - TODO_CAP) + " 项", DIM));
             }
         }
         // 圆角输入框
