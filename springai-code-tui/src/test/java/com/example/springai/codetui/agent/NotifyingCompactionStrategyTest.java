@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,6 +51,7 @@ class NotifyingCompactionStrategyTest {
         assertEquals("manual", listener.startedReason);
         assertEquals(result.eventsRemoved(), listener.finishedRemoved, "转发 eventsRemoved");
         assertEquals(1234, listener.finishedSaved, "转发 tokensEstimatedSaved");
+        assertNull(listener.failedMessage, "成功路径不应发 failed（与 finished 互斥）");
     }
 
     @Test
@@ -63,5 +65,6 @@ class NotifyingCompactionStrategyTest {
         assertEquals("boom", ex.getMessage(), "异常应重抛");
         assertEquals("auto", listener.startedReason, "失败前应已发 started");
         assertTrue(listener.failedMessage.contains("boom"), "应发 failed 且含原因");
+        assertEquals(-1, listener.finishedRemoved, "失败路径不应发 finished（与 failed 互斥）");
     }
 }
