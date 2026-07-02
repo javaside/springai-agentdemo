@@ -15,7 +15,6 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.TokenCountTrigger;
-import org.springframework.ai.session.tool.SessionEventTools;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
@@ -31,10 +30,16 @@ import java.util.List;
  * 注册进 ChatClient，并配上 {@link SessionMemoryAdvisor} 会话记忆与 {@link AgentEnvironment} 环境系统提示。
  *
  * <p><b>会话记忆（spring-ai-session）</b>：取代原先的 {@code MessageChatMemoryAdvisor} 定长滑窗。
- * 事件溯源存储 + 「回合/token 感知」压缩——超过 token 阈值时用 LLM 滚动摘要把更早历史压成摘要而非直接丢弃，
- * 且压缩尊重回合边界、不会拆散某轮的 tool_call 与 tool_result。另挂 {@code conversation_search} 工具
- * （{@link SessionEventTools}），即使被压缩也能按关键字检索逐字原文做二次召回。当前用内存仓库
- * （{@link InMemorySessionRepository}），进程退出即失效；将来换 JDBC 仓库即可持久化，其余代码不动。
+ * 事件溯源存储 + 「回合/token 感知」压缩——超过 token 阈值时用 LLM 滚动摘要把更早历史压成一条摘要事件，
+ * 且压缩尊重回合边界、不会拆散某轮的 tool_call 与 tool_result。当前用内存仓库
+ * （{@link InMemorySessionRepository}），进程退出即失效。
+ *
+ * <p><b>为何不挂 conversation_search 工具</b>：0.5.0 的压缩是<b>销毁式</b>的——
+ * {@code DefaultSessionService.compactWith} 只把压缩后的集合经 {@code replaceEvents} 覆盖写回，
+ * 被压掉的 {@code archivedEvents} 从不落库（JDBC 仓库亦然：整会话 DELETE 后重插压缩集，无归档表）。
+ * 故 {@code conversation_search} 只能搜到「摘要 + 保留窗口」这批存活事件，而它们本就已被 advisor 注入 prompt，
+ * 工具边际价值极低，遂不注册。要「搜回压缩掉的老原文」需另一种范式（append-only 不压缩 + eventFilter 约束注入 + JDBC 持久化），
+ * 非本类目标。
  *
  * <p><b>turnId 走 ThreadLocal</b>：TodoWriteTool 的 todoEventHandler 只收 {@link Todos}、拿不到 turnId，
  * 而 handler 是在工具 call 内<b>同线程同步</b>触发的，所以直接读
@@ -148,21 +153,12 @@ public final class AgentTools {
                         .tokenCountEstimator(tokenCountEstimator).build())
                 .build();
 
-        // conversation_search 工具：即使历史被压缩，模型仍可按关键字检索逐字原文（二次召回兜底）。
-        // 它靠 SessionMemoryAdvisor 写入的 chat_memory_conversation_id 上下文键解析当前会话，故与 advisor 配套注册。
-        SessionEventTools recallTools = SessionEventTools.builder(sessionService).build();
-
-        // defaultTools 只有 Object... 一个重载、且二次调用会覆盖，故把工具回调与召回工具合并成一次传入。
-        Object[] allTools = new Object[decorated.length + 1];
-        System.arraycopy(decorated, 0, allTools, 0, decorated.length);
-        allTools[decorated.length] = recallTools;
-
         return ChatClient.builder(model)
                 .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                         .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
                         .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
                         .param(AgentEnvironment.AGENT_MODEL_KEY, MODEL_NAME))
-                .defaultTools(allTools)
+                .defaultTools((Object[]) decorated)
                 // 不手动加 ToolCallingAdvisor：2.0 里注册了 .tools/.defaultTools 会自动挂上工具调用循环。
                 // 会话 id 由 CodingAgent.submit 每次请求经 SESSION_ID_CONTEXT_KEY 传入，不在这里绑定（会话按需自动创建）。
                 .defaultAdvisors(memoryAdvisor)
