@@ -1,5 +1,6 @@
 package com.example.springai.codetui.ui;
 
+import com.example.springai.codetui.agent.ModelOption;
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
@@ -69,6 +70,10 @@ public final class CodeTuiView extends InlineApp {
     private static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
     private static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
     private static final Style QUEUED      = Style.create().fg(Color.GRAY).bg(Color.indexed(236)); // 排队消息：暗灰底，待发
+    private static final Style PICK_TITLE  = Style.create().fg(Color.indexed(215)).bold();        // 选择器标题=暖橙
+    private static final Style PICK_SEL    = Style.create().fg(Color.BRIGHT_WHITE).bg(Color.indexed(238)).bold(); // 高亮项=灰底白字
+    private static final Style PICK_ITEM   = Style.create().fg(Color.GRAY);                        // 普通项
+    private static final Style PICK_DESC   = Style.create().fg(Color.DARK_GRAY);                   // 项说明
     private static final Style TOOL       = Style.create().fg(Color.DARK_GRAY);
     private static final Style OK         = Style.create().fg(Color.GREEN);
     private static final Style FAIL       = Style.create().fg(Color.RED);
@@ -99,11 +104,15 @@ public final class CodeTuiView extends InlineApp {
     // 一旦渲染，TextAreaElement 会以自增 id 自注册进焦点链、抢走焦点，导致外层拦不到 Enter。
     private final Element inputKeys = textArea(inputState);
     private final DiffRenderer diff;                                 // edit/write → 带真实行号的 diff 行
+    private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
+    private boolean pickingModel;                                    // /model 选择器是否激活
+    private int pickIndex;                                           // 选择器当前高亮项
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit, Path root) {
         this.state = state;
         this.onSubmit = onSubmit;
+        this.root = root;
         this.diff = new DiffRenderer(root);
     }
 
@@ -123,14 +132,53 @@ public final class CodeTuiView extends InlineApp {
                 scope(!tail.isEmpty(), richText(indented(md.renderPreview(tail))).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
+                scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 inputElement(),
                 statusLine());
     }
 
     @Override
     protected void onStart() {
+        runner().runOnRenderThread(this::printWelcome);   // 启动欢迎横幅（一次性下沉 scrollback）
         // 在渲染线程、两帧之间安全推进 scrollback（println 会移动光标/插行，绝不能在绘制中途调用）。
         runner().scheduleRepeating(() -> runner().runOnRenderThread(this::drain), Duration.ofMillis(33));
+    }
+
+    // ── 欢迎横幅（仿 Claude Code） ───────────────────────────────────────
+    private static final Style WELCOME_BORDER = Style.create().fg(Color.indexed(215));            // 暖橙边框
+    private static final Style WELCOME_TITLE  = Style.create().fg(Color.indexed(215)).bold();     // 暖橙加粗标题
+    private static final Style WELCOME_BODY   = Style.create().fg(Color.GRAY);
+    private static final Style WELCOME_HINT   = Style.create().fg(Color.DARK_GRAY);
+
+    /** 圆角欢迎框：标题 + 简介 + 快捷键 + 工作区路径，下沉到 scrollback 顶部，输入框钉在其下。 */
+    private void printWelcome() {
+        int w = Math.min(Math.max(terminalWidth() - 1, 48), 76);
+        String bar = "─".repeat(Math.max(0, w - 2));
+        runner().println(Text.styled("╭" + bar + "╮", WELCOME_BORDER));
+        welcomeLine(w, "✻ ", "Spring AI Code TUI", WELCOME_TITLE);
+        welcomeLine(w, "  ", "", WELCOME_BODY);
+        welcomeLine(w, "  ", "基于 DeepSeek 的编码智能体 · " + onSubmit.currentModel(), WELCOME_BODY);
+        welcomeLine(w, "  ", "Enter 发送 · \\+Enter 换行 · /model 切换模型 · Esc 取消 · Ctrl+C 退出", WELCOME_HINT);
+        welcomeLine(w, "  ", "", WELCOME_BODY);
+        welcomeLine(w, "  ", "cwd: " + root, WELCOME_HINT);
+        runner().println(Text.styled("╰" + bar + "╯", WELCOME_BORDER));
+        runner().println("");   // 与后续对话留白
+    }
+
+    /** 组一行欢迎框内容：{@code │ + 前缀内容(截断/补白到内宽) + │}。 */
+    private void welcomeLine(int w, String prefix, String body, Style contentStyle) {
+        int inner = Math.max(1, w - 2);
+        String content = " " + prefix + body;                     // 左侧留一空格
+        if (displayWidth(content) > inner) {                      // 过长（如深路径）：按显示宽度截断
+            content = dev.tamboui.text.CharWidth.substringByWidth(content, inner - 1) + "…";
+        }
+        int pad = Math.max(0, inner - displayWidth(content));
+        List<Span> spans = new ArrayList<>();
+        spans.add(Span.styled("│", WELCOME_BORDER));
+        spans.add(Span.styled(content, contentStyle));
+        if (pad > 0) spans.add(Span.raw(" ".repeat(pad)));
+        spans.add(Span.styled("│", WELCOME_BORDER));
+        runner().println(Text.from(Line.from(spans)));
     }
 
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
@@ -157,7 +205,7 @@ public final class CodeTuiView extends InlineApp {
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (state.isIdle()) {
             String next = state.pollQueued();
-            if (next != null) current = onSubmit.submit(next);
+            if (next != null) dispatch(next);
         }
     }
 
@@ -387,6 +435,7 @@ public final class CodeTuiView extends InlineApp {
             quit();
             return EventResult.HANDLED;
         }
+        if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (k.isCancel()) {
             boolean running = !state.isIdle();
             int dropped = state.queuedCount();
@@ -425,12 +474,73 @@ public final class CodeTuiView extends InlineApp {
     private void submitInput() {
         String text = inputState.text();
         if (text == null || text.isBlank()) return;
+        if (text.strip().equals("/model")) {         // 斜杠命令：打开模型选择器（仿 Claude Code）
+            inputState.clear();
+            openModelPicker();
+            return;
+        }
         inputState.clear();
         if (!state.isIdle()) {                       // 忙：排队，不打断当前回合（仿 Claude Code）
             state.enqueue(text);                      // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
             return;
         }
+        dispatch(text);
+    }
+
+    /** 真正发起一个回合：提交给 agent，并在 scrollback 打一行「本回合实际使用的模型」（确定性证据，非模型自述）。 */
+    private void dispatch(String text) {
         current = onSubmit.submit(text);
+        state.pushInfo("⚙ 使用模型 " + onSubmit.currentModel());
+    }
+
+    // ── /model 模型选择器 ───────────────────────────────────────────────
+    /** 打开选择器：高亮定位到当前所选模型。 */
+    private void openModelPicker() {
+        List<ModelOption> models = onSubmit.models();
+        if (models.isEmpty()) { state.setNotice("当前没有可选模型"); return; }
+        pickIndex = 0;
+        String cur = onSubmit.currentModel();
+        for (int i = 0; i < models.size(); i++) {
+            if (models.get(i).id().equals(cur)) { pickIndex = i; break; }
+        }
+        pickingModel = true;
+    }
+
+    /** 选择器按键：↑↓/kj 移动、数字快选、Enter 确认、Esc 取消。始终 HANDLED（屏蔽文本编辑）。 */
+    private EventResult onModelPickerKey(KeyEvent k) {
+        List<ModelOption> models = onSubmit.models();
+        int n = models.size();
+        if (k.isCancel()) { pickingModel = false; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.UP || k.isChar('k'))   { pickIndex = (pickIndex - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) { pickIndex = (pickIndex + 1) % n;     return EventResult.HANDLED; }
+        for (int i = 0; i < n && i < 9; i++) {           // 数字 1..n 快选
+            if (k.isChar((char) ('1' + i))) { pickIndex = i; return EventResult.HANDLED; }
+        }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            ModelOption chosen = models.get(pickIndex);
+            onSubmit.selectModel(chosen.id());
+            pickingModel = false;
+            state.setNotice("已切换模型 · " + chosen.label());
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;                       // 其余按键一律吞掉，不落进输入框
+    }
+
+    /** 选择器面板：标题 + 每个模型一行（❯ 高亮当前、✓ 标记在用、右侧暗色说明）。 */
+    private Element[] modelPickerChildren() {
+        List<ModelOption> models = onSubmit.models();
+        String cur = onSubmit.currentModel();
+        List<Element> els = new ArrayList<>();
+        els.add(text("  选择模型（↑↓ 选择 · Enter 确认 · Esc 取消）").style(PICK_TITLE));
+        for (int i = 0; i < models.size(); i++) {
+            ModelOption m = models.get(i);
+            boolean sel = i == pickIndex;
+            boolean active = m.id().equals(cur);
+            String marker = (sel ? "❯ " : "  ") + (active ? "✓ " : "  ");
+            els.add(text("  " + marker + (i + 1) + ". " + m.label() + "   " + m.desc())
+                    .style(sel ? PICK_SEL : (active ? PICK_ITEM : PICK_DESC)));
+        }
+        return els.toArray(new Element[0]);
     }
 
     // ── 计划面板 / 状态行 ────────────────────────────────────────────────
@@ -464,12 +574,13 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element statusLine() {
+        if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
-            case IDLE -> text("Enter 发送 · Esc 取消 · Ctrl+C 退出").style(DIM);
+            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel()).style(DIM);
             case THINKING -> text("● 思考中…" + qs + " · Esc 取消 · Ctrl+C 退出").style(THINK);
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
@@ -503,6 +614,7 @@ public final class CodeTuiView extends InlineApp {
             case TOOL_FAIL -> FAIL;
             case TODO -> TODO;
             case ERROR -> ERROR;
+            case INFO -> DIM;
         };
     }
 }

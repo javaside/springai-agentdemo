@@ -37,16 +37,13 @@ public final class AgentTools {
     private AgentTools() {
     }
 
-    /** DeepSeek 的知识截止（人工填写的 grounding 文本，非精确 API 值）。 */
-    private static final String MODEL_CUTOFF = "2024-07";
-
-    /** DeepSeek 模型名（2.0 起用字符串，枚举常量已 @Deprecated）。 */
-    private static final String MODEL_NAME = "deepseek-chat";
+    /** DeepSeek 模型名（V4 现役 v4-flash；旧 deepseek-chat/reasoner 将于 2026-07-24 停用）。运行时可经 /model 覆盖。 */
+    private static final String MODEL_NAME = "deepseek-v4-flash";
 
     /**
-     * 系统提示：把自己定位成编码 Agent。内嵌 4 个 {@link AgentEnvironment} 占位符
-     * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL /
-     * AGENT_MODEL_KNOWLEDGE_CUTOFF）。诚实声明只有 FileSystemTools 有强制边界。
+     * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
+     * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
+     * 不注入知识截止——DeepSeek 无精确公开值，编一个只会误导模型自述。诚实声明只有 FileSystemTools 有强制边界。
      */
     private static final String SYSTEM_TEMPLATE = """
             你是一个运行在终端里的中文编码助手（coding agent），帮助用户在当前项目里读写代码、排查问题、完成开发任务。
@@ -72,7 +69,7 @@ public final class AgentTools {
             {GIT_STATUS}
             </git_status>
 
-            当前模型：{AGENT_MODEL}，知识截止：{AGENT_MODEL_KNOWLEDGE_CUTOFF}。
+            当前模型：{AGENT_MODEL}。
             """;
 
     /**
@@ -106,8 +103,7 @@ public final class AgentTools {
                 .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                         .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
                         .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
-                        .param(AgentEnvironment.AGENT_MODEL_KEY, MODEL_NAME)
-                        .param(AgentEnvironment.AGENT_MODEL_KNOWLEDGE_CUTOFF_KEY, MODEL_CUTOFF))
+                        .param(AgentEnvironment.AGENT_MODEL_KEY, MODEL_NAME))
                 .defaultTools((Object[]) decorated)
                 // 不手动加 ToolCallingAdvisor：2.0 里注册了 .tools/.defaultTools 会自动挂上工具调用循环。
                 // conversationId 由 CodingAgent.submit 每次请求传入，不在这里绑定。

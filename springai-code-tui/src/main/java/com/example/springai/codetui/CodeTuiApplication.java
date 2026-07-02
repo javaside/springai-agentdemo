@@ -50,10 +50,12 @@ public class CodeTuiApplication {
                 .baseUrl("https://api.deepseek.com")
                 .build();
 
-        // 模型名用字符串 "deepseek-chat"（枚举常量 DEEPSEEK_CHAT 在 2.0 已 @Deprecated）
+        // 模型名 "deepseek-v4-flash"（V4 现役；旧的 deepseek-chat/deepseek-reasoner 将于 2026-07-24 停用，
+        // 期间被透明路由到 v4-flash）。显式设置，避免依赖会过期的默认名。
         DeepSeekChatModel model = DeepSeekChatModel.builder()
                 .deepSeekApi(deepSeekApi)
                 .options(DeepSeekChatOptions.builder()
+                        .model("deepseek-v4-flash")
                         .build())
                 .build();
 

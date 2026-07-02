@@ -33,7 +33,7 @@ public final class ConversationState implements AgentListener {
      * @param raw      仅 {@code TOOL_START}：工具原始 JSON 入参（供 UI 侧 {@link DiffRenderer} 渲染 diff）；其余为 null
      */
     public record OutputLine(String text, Kind kind, String toolName, String raw) {
-        public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR }
+        public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR, INFO }
 
         /** 普通行（无工具元数据）。 */
         public OutputLine(String text, Kind kind) {
@@ -58,6 +58,9 @@ public final class ConversationState implements AgentListener {
     public synchronized void backspace() { if (input.length() > 0) input.deleteCharAt(input.length() - 1); }
     public synchronized String takeInput() { notice = ""; String s = input.toString(); input.setLength(0); return s; }
     public synchronized String currentInput() { return input.toString(); }
+
+    /** 追加一条信息行（灰色，进 scrollback）。用于「本回合实际使用的模型」等确定性提示。 */
+    public synchronized void pushInfo(String text) { pending.add(new OutputLine(text, OutputLine.Kind.INFO)); }
 
     // ── 消息队列（忙时排队，回合结束自动出队） ───────────────────────────
     public synchronized void enqueue(String msg) { queued.add(msg); }

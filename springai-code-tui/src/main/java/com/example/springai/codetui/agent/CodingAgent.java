@@ -1,5 +1,7 @@
 package com.example.springai.codetui.agent;
 
+import org.springaicommunity.agent.utils.AgentEnvironment;
+import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -9,6 +11,7 @@ import org.springframework.ai.chat.model.Generation;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -28,10 +31,16 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class CodingAgent implements SubmitHandler {
 
+    /** 可选模型（DeepSeek V4 现役）。第一个为默认。 */
+    public static final List<ModelOption> MODELS = List.of(
+            new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
+            new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"));
+
     private final ChatClient chatClient;
     private final AgentListener listener;
     private final String sessionId;
     private final AtomicLong activeTurnId;
+    private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId) {
         this.chatClient = chatClient;
@@ -48,6 +57,9 @@ public final class CodingAgent implements SubmitHandler {
         try {
             return chatClient.prompt()
                     .user(text)
+                    .options(DeepSeekChatOptions.builder().model(model))   // 每次请求按当前所选模型覆盖
+                    // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
+                    .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, model))
                     .toolContext(Map.of("turnId", turnId))
                     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
                     .stream().chatClientResponse()
@@ -60,6 +72,19 @@ public final class CodingAgent implements SubmitHandler {
             // 否则 UI 会永远卡在 THINKING（无终态事件），且异常会逃逸出 View.handle。
             listener.onError(turnId, ex);
             return Disposables.disposed();
+        }
+    }
+
+    @Override
+    public List<ModelOption> models() { return MODELS; }
+
+    @Override
+    public String currentModel() { return model; }
+
+    @Override
+    public void selectModel(String id) {
+        for (ModelOption m : MODELS) {
+            if (m.id().equals(id)) { this.model = id; return; }   // 仅接受已知模型
         }
     }
 
