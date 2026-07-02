@@ -129,7 +129,7 @@ class CodingAgentSpikeTest {
     void streamingTextExtraction() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec);
+        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
         CodingAgent agent = new CodingAgent(client, rec, "spike-session-text", active);
 
         agent.submit("用一句话回答：1+1 等于几？");
@@ -149,7 +149,7 @@ class CodingAgentSpikeTest {
         Path file = tempRoot.resolve("note.txt");
         Files.writeString(file, "香蕉苹果西瓜-SPIKE-42");
 
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec);
+        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
         CodingAgent agent = new CodingAgent(client, rec, "spike-session-tool", active);
 
         agent.submit("读取文件 " + file.getFileName() + " 并原样告诉我它的内容。");
@@ -169,7 +169,7 @@ class CodingAgentSpikeTest {
     void multiTurnMemory() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec);
+        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
         CodingAgent agent = new CodingAgent(client, rec, "spike-session-memory", active);
 
         agent.submit("我叫张三，请记住。");
@@ -189,7 +189,7 @@ class CodingAgentSpikeTest {
     void cancellationStopsUiTokens() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec);
+        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
         CodingAgent agent = new CodingAgent(client, rec, "spike-session-cancel", active);
 
         Disposable d = agent.submit("请写一篇不少于 500 字的短文，介绍杭州西湖的四季景色。");
@@ -214,7 +214,7 @@ class CodingAgentSpikeTest {
     void todoTurnIdBinding() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec);
+        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
         CodingAgent agent = new CodingAgent(client, rec, "spike-session-todo", active);
 
         agent.submit("制定一个包含 3 个步骤的计划来整理这个目录，用 TodoWrite 记录计划。");

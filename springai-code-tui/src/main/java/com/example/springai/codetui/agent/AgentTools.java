@@ -14,6 +14,7 @@ import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
+import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
 import org.springframework.ai.session.compaction.TokenCountTrigger;
 import org.springframework.ai.support.ToolCallbacks;
@@ -74,6 +75,12 @@ public final class AgentTools {
     /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收（压缩为销毁式，见类注释）。须 > overlapSize 且其 token 量远低于阈值。可调。 */
     private static final int MAX_EVENTS_TO_KEEP = 120;
 
+    /** 手动 /compact 的保留窗口：比自动的 120 激进得多，让「按需缩小上下文」真正生效。可调。 */
+    private static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
+
+    /** 手动策略的重叠窗口：须 >=0 且 < MANUAL_MAX_EVENTS_TO_KEEP，给摘要与保留段留一点上下文衔接。 */
+    private static final int MANUAL_OVERLAP_SIZE = 3;
+
     /** 会话记忆的默认用户 id（单会话 TUI，仅作归属占位）。 */
     private static final String DEFAULT_USER_ID = "code-tui-user";
 
@@ -120,7 +127,7 @@ public final class AgentTools {
      *                 <p>注：conversationId（会话记忆）由 {@code CodingAgent.submit} 每次请求传入，
      *                 不在装配期绑定，故此处不需要 sessionId 参数。
      */
-    public static ChatClient build(DeepSeekChatModel model, Path root, AgentListener listener) {
+    public static AgentRuntime build(DeepSeekChatModel model, Path root, AgentListener listener) {
         FileSystemTools fs = FileSystemTools.builder().allowedDirectory(root).build();
         ShellTools sh = ShellTools.builder().build();
         GrepTool grep = GrepTool.builder().workingDirectory(root).build();
@@ -157,27 +164,51 @@ public final class AgentTools {
         // token 估算器（JTokkit，spring-ai-commons 提供）：trigger 与摘要策略都需显式提供，无默认值。
         TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
 
+        // 自动压缩策略（保留 120）→ 包一层通知装饰器（reason="auto"），让阈值触发的压缩对 UI 可见。
+        CompactionStrategy autoStrategy = new NotifyingCompactionStrategy(
+                RecursiveSummarizationCompactionStrategy.builder(auxClient)
+                        .maxEventsToKeep(MAX_EVENTS_TO_KEEP)
+                        .tokenCountEstimator(tokenCountEstimator).build(),
+                listener, "auto");
+
+        // 手动压缩策略（保留 20，更激进）→ 包一层通知装饰器（reason="manual"），供 /compact 直接调用。
+        CompactionStrategy manualStrategy = new NotifyingCompactionStrategy(
+                RecursiveSummarizationCompactionStrategy.builder(auxClient)
+                        .maxEventsToKeep(MANUAL_MAX_EVENTS_TO_KEEP)
+                        .overlapSize(MANUAL_OVERLAP_SIZE)
+                        .tokenCountEstimator(tokenCountEstimator).build(),
+                listener, "manual");
+
         SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
                 .defaultUserId(DEFAULT_USER_ID)
                 .compactionTrigger(TokenCountTrigger.builder()
                         .threshold(COMPACTION_TOKEN_THRESHOLD)
                         .tokenCountEstimator(tokenCountEstimator).build())
-                .compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(auxClient)
-                        .maxEventsToKeep(MAX_EVENTS_TO_KEEP)
-                        .tokenCountEstimator(tokenCountEstimator).build())
+                .compactionStrategy(autoStrategy)
                 .build();
 
-        return ChatClient.builder(model)
+        ChatClient client = ChatClient.builder(model)
                 .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                         .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
                         .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
                         .param(AgentEnvironment.AGENT_MODEL_KEY, MODEL_NAME))
                 .defaultTools((Object[]) decorated)
-                // 不手动加 ToolCallingAdvisor：2.0 里注册了 .tools/.defaultTools 会自动挂上工具调用循环。
-                // 会话 id 由 CodingAgent.submit 每次请求经 SESSION_ID_CONTEXT_KEY 传入，不在这里绑定（会话按需自动创建）。
                 .defaultAdvisors(memoryAdvisor)
                 .build();
+
+        return new AgentRuntime(client, sessionService, manualStrategy);
     }
+
+    /**
+     * build 的产物：装好的 ChatClient + 手动 /compact 所需的会话句柄。
+     *
+     * @param client         注册好工具与会话记忆 advisor 的 ChatClient
+     * @param sessionService 会话服务（手动压缩经它 {@code compact(id, trigger, strategy)}）
+     * @param manualStrategy 激进的手动压缩策略（已包通知装饰器，reason="manual"）
+     */
+    public record AgentRuntime(ChatClient client,
+                               SessionService sessionService,
+                               CompactionStrategy manualStrategy) {}
 
     /** 把 {@link Todos} 转成可显示的行：状态标记 + 内容。 */
     static List<String> toLines(Todos todos) {
