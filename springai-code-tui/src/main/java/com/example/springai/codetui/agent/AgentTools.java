@@ -53,11 +53,16 @@ public final class AgentTools {
     /** DeepSeek 模型名（V4 现役 v4-flash；旧 deepseek-chat/reasoner 将于 2026-07-24 停用）。运行时可经 /model 覆盖。 */
     private static final String MODEL_NAME = "deepseek-v4-flash";
 
-    /** 触发压缩的累计 token 阈值：超过即对更早历史做摘要压缩。DeepSeek 上下文足够大，留足工作区。可调。 */
-    private static final int COMPACTION_TOKEN_THRESHOLD = 24_000;
+    /**
+     * 触发压缩的累计 token 阈值：超过即对更早历史做摘要压缩。
+     * v4-flash 上下文 1M（输出上限 384K），故把压缩当「偶尔兜底」而非常态税——约 40% 窗口才压，
+     * 多数编码会话跑不到；仍距 1M 留 ~600k 给本轮响应 + 工具输出，避免某轮总量破 1M 报错。
+     * 不变量：须明显 > MAX_EVENTS_TO_KEEP 个事件的 token 量，否则压缩压不到阈值以下、原地空转。可调。
+     */
+    private static final int COMPACTION_TOKEN_THRESHOLD = 400_000;
 
-    /** 压缩时保持逐字原样的最近事件数；更早的被 LLM 滚动摘要吸收。须 > overlapSize。可调。 */
-    private static final int MAX_EVENTS_TO_KEEP = 40;
+    /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收、并可经 conversation_search 召回。须 > overlapSize 且其 token 量远低于阈值。可调。 */
+    private static final int MAX_EVENTS_TO_KEEP = 120;
 
     /** 会话记忆的默认用户 id（单会话 TUI，仅作归属占位）。 */
     private static final String DEFAULT_USER_ID = "code-tui-user";
