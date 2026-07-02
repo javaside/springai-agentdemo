@@ -65,14 +65,16 @@ public final class CodeTuiView extends InlineApp {
     private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 
-    // diff 展示（Claude Code 式）：整行底色铺满，行号列灰、加/删号亮
-    private static final Style DIFF_HEADER = Style.create().fg(Color.WHITE).bold();
-    private static final Style DIFF_ADD    = Style.create().fg(Color.BRIGHT_WHITE).bg(Color.rgb(20, 80, 30));   // 绿底=新增
-    private static final Style DIFF_DEL    = Style.create().fg(Color.BRIGHT_WHITE).bg(Color.rgb(90, 25, 25));   // 红底=删除
-    private static final Style DIFF_CTX    = Style.create().fg(Color.GRAY);                                     // 上下文=灰，无底色
-    private static final Style DIFF_NO_ADD = Style.create().fg(Color.LIGHT_GREEN).bg(Color.rgb(20, 80, 30));    // 新增行号
-    private static final Style DIFF_NO_DEL = Style.create().fg(Color.LIGHT_RED).bg(Color.rgb(90, 25, 25));      // 删除行号
-    private static final Style DIFF_NO_CTX = Style.create().fg(Color.DARK_GRAY);                                // 上下文行号
+    // diff 展示（Claude Code 式）：整行底色铺满，行号列灰、加/删号亮。
+    // ⚠ 背景必须用 256 色 indexed()，不能用 rgb()：目标终端（Apple Terminal 等，COLORTERM 为空）
+    //   不支持 truecolor，会直接忽略 48;2;r;g;b 序列 → 底色不显示。indexed 走 48;5;N，稳定可见。
+    private static final Color ADD_BG = Color.indexed(22);   // 深绿底=新增
+    private static final Color DEL_BG = Color.indexed(52);   // 深红底=删除
+    private static final Style DIFF_HEADER = Style.create().fg(Color.BRIGHT_WHITE).bold();
+    private static final Style DIFF_NO_ADD = Style.create().fg(Color.indexed(114)).bg(ADD_BG);   // 新增行号=浅绿
+    private static final Style DIFF_NO_DEL = Style.create().fg(Color.indexed(210)).bg(DEL_BG);   // 删除行号=浅红
+    private static final Style DIFF_NO_CTX = Style.create().fg(Color.DARK_GRAY);                 // 上下文行号=暗灰
+    private static final Style DIFF_TRUNC  = Style.create().fg(Color.DARK_GRAY);
     private static final int GUTTER = 4;   // 行号列宽（右对齐到 4 位，够 9999 行）
 
     private final ConversationState state;
@@ -135,7 +137,7 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
-    /** 工具开始：edit/write 展开成 Claude Code 式 diff 块（读原文件、真实行号、增删底色）；其余工具单行摘要。 */
+    /** 工具开始：edit/write 展开成 Claude Code 式 diff 块（读原文件、真实行号、语法高亮 + 增删底色）；其余工具单行摘要。 */
     private void printlnToolStart(OutputLine ol) {
         List<DiffRenderer.DiffLine> lines =
                 (ol.raw() == null) ? List.of() : diff.render(ol.toolName(), ol.raw());
@@ -144,41 +146,64 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         int width = terminalWidth();
+        String lang = langOf(lines);        // 从 header 的路径推断语言（决定语法高亮规则）
+        boolean inBlock = false;            // 跨行块注释状态，按 body 顺序推进
         for (DiffRenderer.DiffLine dl : lines) {
-            runner().println(diffLine(dl, width));
+            List<Span> hl = null;
+            if (dl.type() != DiffRenderer.Type.HEADER && dl.type() != DiffRenderer.Type.TRUNCATED) {
+                SyntaxHighlighter.Result r = SyntaxHighlighter.highlight(dl.text(), lang, inBlock);
+                inBlock = r.stillInBlockComment();
+                hl = r.spans();
+            }
+            runner().println(diffLine(dl, hl, width));
         }
     }
 
-    /** 把一行 DiffLine 渲染成整行 Text；ADD/DEL 行把底色补齐到终端宽度，形成整行色带。 */
-    private static Text diffLine(DiffRenderer.DiffLine dl, int width) {
+    /** 把一行 DiffLine 渲染成整行 Text；ADD/DEL 行把底色铺满整行（含行号列），上下文行只高亮不上底色。 */
+    private static Text diffLine(DiffRenderer.DiffLine dl, List<Span> hl, int width) {
         return switch (dl.type()) {
             case HEADER -> Text.from(Line.from(Span.raw(INDENT), Span.styled(dl.text(), DIFF_HEADER)));
             case TRUNCATED -> Text.from(Line.from(
-                    Span.raw(INDENT), Span.raw(gutter(null)), Span.raw(" "), Span.styled(dl.text(), DIM)));
-            case CONTEXT -> diffBody(dl.newNo() != null ? dl.newNo() : dl.oldNo(), " ", dl.text(),
-                    DIFF_NO_CTX, DIFF_CTX, width, false);
-            case ADD -> diffBody(dl.newNo(), "+", dl.text(), DIFF_NO_ADD, DIFF_ADD, width, true);
-            case DEL -> diffBody(dl.oldNo(), "-", dl.text(), DIFF_NO_DEL, DIFF_DEL, width, true);
+                    Span.raw(INDENT), Span.styled(gutter(null) + "  " + dl.text(), DIFF_TRUNC)));
+            case CONTEXT -> bodyLine(gutter(dl.newNo() != null ? dl.newNo() : dl.oldNo()), " ",
+                    hl, DIFF_NO_CTX, null, width);
+            case ADD -> bodyLine(gutter(dl.newNo()), "+", hl, DIFF_NO_ADD, ADD_BG, width);
+            case DEL -> bodyLine(gutter(dl.oldNo()), "-", hl, DIFF_NO_DEL, DEL_BG, width);
         };
     }
 
     /**
-     * 组装一行 diff 主体：{@code INDENT + 行号 + 符号 + 内容}。
-     * fillBg=true 时（ADD/DEL）把内容右侧空格补到终端宽度，使底色铺满整行。
+     * 组装一行 diff 主体：{@code 行号 + 符号 + 高亮内容}。
+     * bg 非 null（ADD/DEL）时：左缩进/行号/符号/内容/右侧补白全部叠加底色，形成从左到右铺满整行的色带。
+     * bg 为 null（CONTEXT）时：无底色，仅显示语法高亮。
      */
-    private static Text diffBody(Integer no, String sign, String content,
-                                 Style noStyle, Style bodyStyle, int width, boolean fillBg) {
-        String num = gutter(no);
-        String body = sign + " " + content;
-        if (fillBg) {
-            int used = INDENT.length() + num.length() + displayWidth(body);
-            int pad = Math.max(0, width - used);
-            body = body + " ".repeat(pad);
+    private static Text bodyLine(String num, String sign, List<Span> content,
+                                 Style numStyle, Color bg, int width) {
+        List<Span> spans = new ArrayList<>();
+        // 左缩进：带底色时纳入色带，否则纯留白
+        spans.add(bg == null ? Span.raw(INDENT) : Span.styled(INDENT, Style.create().bg(bg)));
+        spans.add(Span.styled(num, numStyle));
+        spans.add(Span.styled(" " + sign + " ", numStyle));
+        int used = displayWidth(INDENT) + displayWidth(num) + 3;   // 3 = " " + sign + " "
+        for (Span s : content) {
+            spans.add(bg == null ? s : s.bg(bg));                  // 高亮前景上叠加底色
+            used += s.width();
         }
-        return Text.from(Line.from(
-                Span.raw(INDENT),
-                Span.styled(num, noStyle),
-                Span.styled(body, bodyStyle)));
+        if (bg != null) {                                          // 右侧补白到终端宽度，让色带铺满整行
+            int pad = Math.max(0, width - used);
+            if (pad > 0) spans.add(Span.styled(" ".repeat(pad), Style.create().bg(bg)));
+        }
+        return Text.from(Line.from(spans));
+    }
+
+    /** 从 diff 的 header（{@code Update(path)}）提取路径后缀，映射成 SyntaxHighlighter 的语言标识。 */
+    private static String langOf(List<DiffRenderer.DiffLine> lines) {
+        if (lines.isEmpty()) return "";
+        String h = lines.get(0).text();               // 形如 Update(src/.../App.java)
+        int lp = h.indexOf('(');
+        int dot = h.lastIndexOf('.');
+        if (lp < 0 || dot <= lp) return "";
+        return h.substring(dot + 1).replace(")", "").trim();
     }
 
     /** 行号右对齐到 {@link #GUTTER} 列；null（新增/删除的对侧）用空白占位保持列对齐。 */
