@@ -124,6 +124,8 @@ public final class CodeTuiView extends InlineApp {
     // ── 输入 ────────────────────────────────────────────────────────────
     private Element inputElement() {
         return textInput(inputState)
+                // 稳定 id：每帧都重建元素，若用自增自动 id 则焦点无法跨帧保持，光标会一直停在行首。
+                .id("code-tui-input")
                 .rounded()
                 .placeholder("输入消息，Enter 发送")
                 .onSubmit(this::onEnter)
