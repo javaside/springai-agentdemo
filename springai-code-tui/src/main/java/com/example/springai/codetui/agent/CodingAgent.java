@@ -8,6 +8,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.compaction.CompactionStrategy;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 
@@ -40,13 +42,18 @@ public final class CodingAgent implements SubmitHandler {
     private final AgentListener listener;
     private final String sessionId;
     private final AtomicLong activeTurnId;
+    private final SessionService sessionService;
+    private final CompactionStrategy manualStrategy;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
-    public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId) {
+    public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy) {
         this.chatClient = chatClient;
         this.listener = listener;
         this.sessionId = sessionId;
         this.activeTurnId = activeTurnId;
+        this.sessionService = sessionService;
+        this.manualStrategy = manualStrategy;
     }
 
     @Override
@@ -86,6 +93,30 @@ public final class CodingAgent implements SubmitHandler {
     public void selectModel(String id) {
         for (ModelOption m : MODELS) {
             if (m.id().equals(id)) { this.model = id; return; }   // 仅接受已知模型
+        }
+    }
+
+    /**
+     * 手动压缩：在后台线程强制立即压缩本会话。总结 LLM 调用可能耗时数分钟，绝不阻塞调用线程（UI）。
+     * 并发闸门在 {@code CodeTuiView}（仅空闲且非压缩中才调用本方法），此处不再判活跃回合。
+     */
+    @Override
+    public void compact() {
+        Thread t = new Thread(this::runCompaction, "manual-compact");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * 同步执行一次手动压缩（供 {@link #compact()} 的后台线程调用；包级可见便于测试直调）。
+     * 用恒真触发器绕过 token 阈值，配合激进的手动策略。started/finished/failed 由
+     * {@link NotifyingCompactionStrategy} 在策略内部发出；这里只兜底「进入策略前」抛出的异常。
+     */
+    void runCompaction() {
+        try {
+            sessionService.compact(sessionId, req -> true, manualStrategy);
+        } catch (RuntimeException e) {
+            listener.onCompactionFailed(String.valueOf(e.getMessage()));
         }
     }
 

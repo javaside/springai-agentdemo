@@ -129,8 +129,9 @@ class CodingAgentSpikeTest {
     void streamingTextExtraction() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
-        CodingAgent agent = new CodingAgent(client, rec, "spike-session-text", active);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-text", active,
+                rt.sessionService(), rt.manualStrategy());
 
         agent.submit("用一句话回答：1+1 等于几？");
         long turnId = active.get();
@@ -149,8 +150,9 @@ class CodingAgentSpikeTest {
         Path file = tempRoot.resolve("note.txt");
         Files.writeString(file, "香蕉苹果西瓜-SPIKE-42");
 
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
-        CodingAgent agent = new CodingAgent(client, rec, "spike-session-tool", active);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-tool", active,
+                rt.sessionService(), rt.manualStrategy());
 
         agent.submit("读取文件 " + file.getFileName() + " 并原样告诉我它的内容。");
         long turnId = active.get();
@@ -169,8 +171,9 @@ class CodingAgentSpikeTest {
     void multiTurnMemory() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
-        CodingAgent agent = new CodingAgent(client, rec, "spike-session-memory", active);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-memory", active,
+                rt.sessionService(), rt.manualStrategy());
 
         agent.submit("我叫张三，请记住。");
         long turn1 = active.get();
@@ -189,8 +192,9 @@ class CodingAgentSpikeTest {
     void cancellationStopsUiTokens() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
-        CodingAgent agent = new CodingAgent(client, rec, "spike-session-cancel", active);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-cancel", active,
+                rt.sessionService(), rt.manualStrategy());
 
         Disposable d = agent.submit("请写一篇不少于 500 字的短文，介绍杭州西湖的四季景色。");
         long turnId = active.get();
@@ -214,8 +218,9 @@ class CodingAgentSpikeTest {
     void todoTurnIdBinding() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        ChatClient client = AgentTools.build(buildModel(), tempRoot, rec).client();
-        CodingAgent agent = new CodingAgent(client, rec, "spike-session-todo", active);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-todo", active,
+                rt.sessionService(), rt.manualStrategy());
 
         agent.submit("制定一个包含 3 个步骤的计划来整理这个目录，用 TodoWrite 记录计划。");
         long turnId = active.get();
