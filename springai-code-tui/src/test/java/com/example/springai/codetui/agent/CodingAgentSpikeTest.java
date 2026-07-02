@@ -73,6 +73,9 @@ class CodingAgentSpikeTest {
         @Override public void onError(long turnId, Throwable error) {
             errors.add(new Object[]{turnId, error});
         }
+        @Override public void onCompactionStarted(String reason) { }
+        @Override public void onCompactionFinished(int eventsRemoved, int tokensSaved) { }
+        @Override public void onCompactionFailed(String message) { }
 
         int tokens(long turnId) { return tokenCount.getOrDefault(turnId, 0); }
         String text(long turnId) {

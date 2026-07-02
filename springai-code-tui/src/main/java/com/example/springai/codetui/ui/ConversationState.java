@@ -52,6 +52,11 @@ public final class ConversationState implements AgentListener {
     private volatile String activeToolSummary = "";
     private volatile long acceptingTurnId = -1L;
 
+    // ── 会话压缩瞬态状态（供状态行显示；独立于 Status，自动/手动共用） ──
+    private volatile boolean compacting = false;
+    private volatile long compactStartNanos = 0L;
+    private volatile String compactReason = "";
+
     // ── 输入缓冲 ────────────────────────────────────────────────────────
     public synchronized void typeChar(char c) { notice = ""; input.append(c); }
     public synchronized void typeString(String s) { notice = ""; input.append(s); }
@@ -77,6 +82,12 @@ public final class ConversationState implements AgentListener {
     public String activeTool() { return activeTool; }
     public String activeToolSummary() { return activeToolSummary; }
     public long acceptingTurnId() { return acceptingTurnId; }
+
+    // ── 压缩状态读取（渲染线程用） ──
+    public boolean isCompacting() { return compacting; }
+    public String compactReason() { return compactReason; }
+    /** 距压缩开始的经过纳秒（用于状态行计时）。 */
+    public long compactElapsedNanos() { return compacting ? System.nanoTime() - compactStartNanos : 0L; }
 
     /** 渲染线程调用：取走并清空「待 println」的定稿行。 */
     public synchronized List<OutputLine> drainPending() {
@@ -192,6 +203,32 @@ public final class ConversationState implements AgentListener {
         activeTool = "";
         activeToolSummary = "";
         status = Status.IDLE;
+    }
+
+    @Override
+    public synchronized void onCompactionStarted(String reason) {
+        compacting = true;
+        compactStartNanos = System.nanoTime();
+        compactReason = reason == null ? "" : reason;
+    }
+
+    @Override
+    public synchronized void onCompactionFinished(int eventsRemoved, int tokensSaved) {
+        compacting = false;
+        if (eventsRemoved <= 0) {
+            pending.add(new OutputLine("• 无可压缩内容（历史尚短）", OutputLine.Kind.INFO));
+        } else {
+            pending.add(new OutputLine(
+                    "✓ 已压缩会话：移除 " + eventsRemoved + " 个事件，约省 " + tokensSaved + " tokens",
+                    OutputLine.Kind.INFO));
+        }
+    }
+
+    @Override
+    public synchronized void onCompactionFailed(String message) {
+        compacting = false;
+        pending.add(new OutputLine("✗ 压缩失败：" + (message == null ? "unknown" : message),
+                OutputLine.Kind.ERROR));
     }
 
     // ── 内部 ────────────────────────────────────────────────────────────

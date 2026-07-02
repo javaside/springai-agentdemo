@@ -183,4 +183,53 @@ class ConversationStateTest {
         assertEquals("ab", state.takeInput());
         assertEquals("", state.notice());
     }
+
+    @Test
+    void compaction_started_setsFlagAndReason() {
+        ConversationState s = new ConversationState();
+        assertFalse(s.isCompacting(), "初始不在压缩");
+
+        s.onCompactionStarted("manual");
+
+        assertTrue(s.isCompacting(), "started 后应处于压缩中");
+        assertEquals("manual", s.compactReason());
+        assertTrue(s.compactElapsedNanos() >= 0, "经过时间应可读且非负");
+    }
+
+    @Test
+    void compaction_finished_clearsFlagAndPushesSummaryLine() {
+        ConversationState s = new ConversationState();
+        s.onCompactionStarted("auto");
+
+        s.onCompactionFinished(7, 1234);
+
+        assertFalse(s.isCompacting(), "finished 后应退出压缩中");
+        assertTrue(s.drainPending().stream().anyMatch(l -> l.text().contains("7") && l.text().contains("1234")),
+                "完成行应含移除事件数与节省 token");
+    }
+
+    @Test
+    void compaction_finished_zeroRemoved_pushesNothingToCompactLine() {
+        ConversationState s = new ConversationState();
+        s.onCompactionStarted("manual");
+
+        s.onCompactionFinished(0, 0);
+
+        assertFalse(s.isCompacting());
+        assertTrue(s.drainPending().stream().anyMatch(l -> l.text().contains("无可压缩")),
+                "0 移除应提示无可压缩");
+    }
+
+    @Test
+    void compaction_failed_clearsFlagAndPushesErrorLine() {
+        ConversationState s = new ConversationState();
+        s.onCompactionStarted("manual");
+
+        s.onCompactionFailed("boom");
+
+        assertFalse(s.isCompacting(), "failed 后应退出压缩中");
+        assertTrue(s.drainPending().stream().anyMatch(l ->
+                        l.text().contains("boom") && l.kind() == ConversationState.OutputLine.Kind.ERROR),
+                "失败行应含原因且为 ERROR 类型");
+    }
 }
