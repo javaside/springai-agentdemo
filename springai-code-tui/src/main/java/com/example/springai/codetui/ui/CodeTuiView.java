@@ -108,6 +108,15 @@ public final class CodeTuiView extends InlineApp {
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
     private int pickIndex;                                           // 选择器当前高亮项
+    private int slashIndex;                                          // 斜杠命令补全菜单高亮项
+    private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
+
+    /** 斜杠命令（自动补全 + 分发）。 */
+    private record SlashCommand(String name, String desc) {}
+    private static final List<SlashCommand> COMMANDS = List.of(
+            new SlashCommand("/model", "切换 AI 模型"),
+            new SlashCommand("/help",  "显示可用命令与快捷键"),
+            new SlashCommand("/exit",  "退出"));
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit, Path root) {
         this.state = state;
@@ -133,6 +142,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(!todos.isEmpty(), todoChildren(todos)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
+                scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
                 inputElement(),
                 statusLine());
     }
@@ -436,6 +446,10 @@ public final class CodeTuiView extends InlineApp {
             return EventResult.HANDLED;
         }
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
+        if (slashMenuActive()) {                         // 斜杠命令补全菜单：拦截 ↑↓/Tab/Enter/Esc
+            EventResult r = onSlashMenuKey(k);
+            if (r.isHandled()) return r;
+        }
         if (k.isCancel()) {
             boolean running = !state.isIdle();
             int dropped = state.queuedCount();
@@ -460,7 +474,46 @@ public final class CodeTuiView extends InlineApp {
             submitInput();
             return EventResult.HANDLED;   // 普通 Enter → 发送（不让编辑器当作换行）
         }
+        slashDismissed = false;          // 其余键将落到编辑器改动文本 → 让补全菜单随新前缀重新出现
+        slashIndex = 0;
         return EventResult.UNHANDLED;
+    }
+
+    // ── 斜杠命令自动补全（仿 Claude Code） ───────────────────────────────
+    /** 正在输入命令 token：以 / 开头、单行、尚未出现空格（空格后视为在敲参数，不再补全）。 */
+    private boolean typingSlashToken() {
+        String t = inputState.text();
+        return t.startsWith("/") && t.indexOf('\n') < 0 && t.indexOf(' ') < 0;
+    }
+
+    /** 当前前缀匹配到的命令。 */
+    private List<SlashCommand> slashMatches() {
+        if (!typingSlashToken()) return List.of();
+        String t = inputState.text().toLowerCase();
+        List<SlashCommand> out = new ArrayList<>();
+        for (SlashCommand c : COMMANDS) if (c.name().startsWith(t)) out.add(c);
+        return out;
+    }
+
+    private boolean slashMenuActive() { return !slashDismissed && !slashMatches().isEmpty(); }
+
+    private static int clampIndex(int i, int n) { return n <= 0 ? 0 : Math.max(0, Math.min(i, n - 1)); }
+
+    /** 菜单激活时的按键：↑↓/kj 移动、Tab 补全、Enter 运行、Esc 关闭；其余放行给编辑器过滤前缀。 */
+    private EventResult onSlashMenuKey(KeyEvent k) {
+        List<SlashCommand> m = slashMatches();
+        int n = m.size();
+        slashIndex = clampIndex(slashIndex, n);
+        if (k.isCancel()) { slashDismissed = true; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.UP)   { slashIndex = (slashIndex - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN) { slashIndex = (slashIndex + 1) % n;     return EventResult.HANDLED; }
+        if (k.code() == KeyCode.TAB || k.isChar('\t')) { inputState.setText(m.get(slashIndex).name()); return EventResult.HANDLED; }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            inputState.setText(m.get(slashIndex).name());
+            submitInput();                        // 复用分发：/model→选择器，/help→帮助
+            return EventResult.HANDLED;
+        }
+        return EventResult.UNHANDLED;             // 字母/退格 → 交给编辑器改前缀，菜单随之过滤
     }
 
     /** 光标紧跟在一个反斜杠之后（行尾 {@code \} + Enter 用作换行的判定）。 */
@@ -474,9 +527,20 @@ public final class CodeTuiView extends InlineApp {
     private void submitInput() {
         String text = inputState.text();
         if (text == null || text.isBlank()) return;
-        if (text.strip().equals("/model")) {         // 斜杠命令：打开模型选择器（仿 Claude Code）
+        String cmd = text.strip();
+        if (cmd.equals("/model")) {                  // 斜杠命令：打开模型选择器（仿 Claude Code）
             inputState.clear();
             openModelPicker();
+            return;
+        }
+        if (cmd.equals("/help")) {
+            inputState.clear();
+            printHelp();
+            return;
+        }
+        if (cmd.equals("/exit") || cmd.equals("/quit")) {
+            inputState.clear();
+            quit();
             return;
         }
         inputState.clear();
@@ -543,6 +607,28 @@ public final class CodeTuiView extends InlineApp {
         return els.toArray(new Element[0]);
     }
 
+    /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
+    private void printHelp() {
+        state.pushInfo("可用命令：");
+        for (SlashCommand c : COMMANDS) state.pushInfo("  " + c.name() + "   " + c.desc());
+        state.pushInfo("快捷键：Enter 发送 · \\+Enter 换行 · Esc 取消 · Ctrl+C 退出");
+    }
+
+    /** 斜杠命令补全菜单：每个匹配命令一行（❯ 高亮、命令名 + 暗色说明），固定在输入框上方。 */
+    private Element[] slashMenuChildren() {
+        List<SlashCommand> m = slashMatches();
+        int sel = clampIndex(slashIndex, m.size());
+        List<Element> els = new ArrayList<>();
+        for (int i = 0; i < m.size(); i++) {
+            SlashCommand c = m.get(i);
+            boolean s = i == sel;
+            String name = c.name();
+            String pad = " ".repeat(Math.max(1, 10 - displayWidth(name)));   // 命令名对齐
+            els.add(text("  " + (s ? "❯ " : "  ") + name + pad + c.desc()).style(s ? PICK_SEL : PICK_ITEM));
+        }
+        return els.toArray(new Element[0]);
+    }
+
     // ── 计划面板 / 状态行 ────────────────────────────────────────────────
     private Element[] todoChildren(List<String> todos) {
         List<Element> els = new ArrayList<>();
@@ -575,6 +661,7 @@ public final class CodeTuiView extends InlineApp {
 
     private Element statusLine() {
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
+        if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
