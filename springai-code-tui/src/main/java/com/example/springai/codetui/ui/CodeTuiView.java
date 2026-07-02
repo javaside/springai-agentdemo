@@ -450,6 +450,18 @@ public final class CodeTuiView extends InlineApp {
             return EventResult.HANDLED;
         }
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
+        // 正在浏览历史（histIndex<size）时 ↑↓ 始终翻历史——即使翻到的是一条 /命令、补全菜单也弹出来了，
+        // 也不让菜单抢走 ↑↓（否则一遇到 /model 就卡住翻不动）。菜单的 Tab/Enter/Esc 仍照常处理。
+        if (histIndex < history.size()) {
+            if (k.code() == KeyCode.UP && inputState.cursorRow() == 0) {
+                EventResult r = recallPrev();
+                if (r.isHandled()) return r;
+            }
+            if (k.code() == KeyCode.DOWN && inputState.cursorRow() == inputState.lineCount() - 1) {
+                EventResult r = recallNext();
+                if (r.isHandled()) return r;
+            }
+        }
         if (slashMenuActive()) {                         // 斜杠命令补全菜单：拦截 ↑↓/Tab/Enter/Esc
             EventResult r = onSlashMenuKey(k);
             if (r.isHandled()) return r;
