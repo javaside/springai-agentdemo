@@ -66,6 +66,8 @@ public final class CodeTuiView extends InlineApp {
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
     private static final Style DIM        = Style.create().fg(Color.DARK_GRAY);
     private static final Style USER       = Style.create().fg(Color.GRAY);
+    private static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
+    private static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
     private static final Style TOOL       = Style.create().fg(Color.DARK_GRAY);
     private static final Style OK         = Style.create().fg(Color.GREEN);
     private static final Style FAIL       = Style.create().fg(Color.RED);
@@ -134,7 +136,7 @@ public final class CodeTuiView extends InlineApp {
             switch (ol.kind()) {
                 case USER -> {
                     md.reset();   // 新回合：清 markdown 代码围栏状态
-                    runner().println(Text.from(Line.from(Span.raw(INDENT), Span.styled(ol.text(), USER))));
+                    printlnUserBlock(ol.text());   // 灰底白字块，仿 Claude Code
                 }
                 case ASSISTANT ->                                  // AI 正文：markdown/语法高亮 + 缩进
                         runner().println(indented(md.renderFinalized(ol.text())));
@@ -148,6 +150,21 @@ public final class CodeTuiView extends InlineApp {
         }
         for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
             runner().println(indented(md.renderFinalized(row)));
+        }
+    }
+
+    /** 用户消息：灰底白字块，仿 Claude Code。按终端宽度软折行，每行右侧补白使灰底铺满整行。 */
+    private void printlnUserBlock(String text) {
+        int width = terminalWidth();
+        int inner = Math.max(1, width - displayWidth(INDENT));   // 减去左缩进宽度
+        for (String logical : text.split("\n", -1)) {
+            for (String seg : wrapSegments(logical, inner)) {
+                int pad = Math.max(0, inner - displayWidth(seg));
+                runner().println(Text.from(Line.from(
+                        Span.styled(INDENT, USER_BLOCK),
+                        Span.styled(seg, USER_BLOCK),
+                        Span.styled(" ".repeat(pad), USER_BLOCK))));
+            }
         }
     }
 
