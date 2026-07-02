@@ -2,16 +2,27 @@ package com.example.springai.codetui.ui;
 
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
+import dev.tamboui.buffer.Buffer;
+import dev.tamboui.buffer.Cell;
+import dev.tamboui.layout.Rect;
 import dev.tamboui.style.Color;
 import dev.tamboui.style.Style;
+import dev.tamboui.terminal.Frame;
 import dev.tamboui.text.Line;
 import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
 import dev.tamboui.toolkit.app.InlineApp;
 import dev.tamboui.toolkit.element.Element;
+import dev.tamboui.toolkit.element.RenderContext;
+import dev.tamboui.toolkit.element.Size;
 import dev.tamboui.toolkit.event.EventResult;
+import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
-import dev.tamboui.widgets.input.TextInputState;
+import dev.tamboui.tui.event.PasteEvent;
+import dev.tamboui.widgets.block.Block;
+import dev.tamboui.widgets.block.BorderType;
+import dev.tamboui.widgets.block.Borders;
+import dev.tamboui.widgets.input.TextAreaState;
 import reactor.core.Disposable;
 
 import java.nio.file.Path;
@@ -23,7 +34,7 @@ import static dev.tamboui.toolkit.InlineToolkit.scope;
 import static dev.tamboui.toolkit.Toolkit.column;
 import static dev.tamboui.toolkit.Toolkit.richText;
 import static dev.tamboui.toolkit.Toolkit.text;
-import static dev.tamboui.toolkit.Toolkit.textInput;
+import static dev.tamboui.toolkit.Toolkit.textArea;
 
 /**
  * Claude Code 式行内视图，改用官方 <b>Toolkit 声明式 DSL</b>（{@link InlineApp} + {@code InlineToolkitRunner}）。
@@ -39,7 +50,7 @@ import static dev.tamboui.toolkit.Toolkit.textInput;
  * <pre>
  *   [流式预览]        —— AI 生成中的当前残行（未换行段），{@code scope} 空则收起
  *   [📋 计划面板]     —— 完整清单，✓/▶/○ 分色，{@code scope} 无计划则收起
- *   [圆角输入框]      —— 原生 {@code textInput}，自带光标/编辑/中文输入
+ *   [圆角输入框]      —— 原生 {@code textArea}，多行/自动增高，自带光标/编辑/中文输入
  *   [状态行]
  * </pre>
  *
@@ -80,7 +91,10 @@ public final class CodeTuiView extends InlineApp {
     private final ConversationState state;
     private final SubmitHandler onSubmit;
     private final MarkdownRenderer md = new MarkdownRenderer();      // AI 正文 markdown + 代码语法高亮
-    private final TextInputState inputState = new TextInputState();  // 输入源（原生控件托管，含中文/光标/编辑）
+    private final TextAreaState inputState = new TextAreaState();    // 输入源（多行编辑模型）
+    // 仅用于复用 textArea 的完整编辑键处理（退格/方向/Home/End/字符/中文…）。⚠ 从不渲染它——
+    // 一旦渲染，TextAreaElement 会以自增 id 自注册进焦点链、抢走焦点，导致外层拦不到 Enter。
+    private final Element inputKeys = textArea(inputState);
     private final DiffRenderer diff;                                 // edit/write → 带真实行号的 diff 行
     private Disposable current;
 
@@ -90,13 +104,13 @@ public final class CodeTuiView extends InlineApp {
         this.diff = new DiffRenderer(root);
     }
 
-    /** 初始高度：圆角输入框(3) + 状态行(1)；两个 scope 折叠时为 0，运行器再按 preferredSize 增减。 */
+    /** 初始高度：圆角输入框(空态 3=边框2+1 行) + 状态行(1)；输入换行后 textArea 的 preferredSize 随行数增高，运行器逐帧跟随。 */
     @Override
     protected int height() {
         return 4;
     }
 
-    /** 每帧构造 UI（纯读状态，不产生副作用；scrollback 的 println 放在 {@link #drain} 里另行推进）。 */
+    /** 每帧构造 UI。scrollback 的 println 放在 {@link #drain} 里另行推进。 */
     @Override
     protected Element render() {
         List<String> todos = state.todoSnapshot();
@@ -229,25 +243,120 @@ public final class CodeTuiView extends InlineApp {
 
     // ── 输入 ────────────────────────────────────────────────────────────
     private Element inputElement() {
-        return textInput(inputState)
-                // 稳定 id：每帧都重建元素，若用自增自动 id 则焦点无法跨帧保持，光标会一直停在行首。
-                .id("code-tui-input")
-                .rounded()
-                .placeholder("输入消息，Enter 发送")
-                .onSubmit(this::onEnter)
-                .onKeyEvent(this::onInputKey);
+        return new InputBox();
     }
 
-    /** Enter：单飞下忙时忽略；否则取走输入、清空、提交。 */
-    private void onEnter() {
-        if (!state.isIdle()) return;
-        String text = inputState.text();
-        if (text == null || text.isBlank()) return;
-        inputState.clear();
-        current = onSubmit.submit(text);
+    /**
+     * 圆角多行输入框（<b>唯一焦点目标</b>，自绘）。
+     *
+     * <p><b>为何不直接用 {@code textArea} 元素</b>：{@code TextAreaElement.isFocusable()} 恒为 true，
+     * 未显式给 id 时会以自增 id 自注册进焦点链并<em>抢占焦点</em>；而路由器对焦点元素<em>先调内建
+     * handleKeyEvent</em>（把 Enter 当换行插入并返回 HANDLED），我们挂的发送逻辑根本轮不到 → Enter 发不出去。
+     *
+     * <p><b>做法</b>：本元素亲自持有焦点（固定 id + focusable），按键第一手先给 {@link #onInputKey}
+     * 拦下 Enter=发送 / Ctrl+C / Esc；其余编辑键（退格/方向/Home/End/字符/中文…）转交给<em>从不渲染</em>的
+     * {@link #inputKeys}（复用其完整键处理，但因不渲染故不自注册、不抢焦点）。渲染走底层 {@code TextArea}
+     * 控件（不经过会自注册的 element），并补硬件光标供中文 IME 定位。高度 = 行数 + 边框，随行数自动增高。
+     */
+    private final class InputBox implements Element {
+        @Override public boolean isFocusable() { return true; }
+        @Override public String id() { return "code-tui-input"; }
+
+        @Override
+        public EventResult handleKeyEvent(KeyEvent event, boolean focused) {
+            EventResult r = onInputKey(event);             // Ctrl+C / Esc / Enter(发送) 在此拦下
+            if (r.isHandled()) return r;
+            return inputKeys.handleKeyEvent(event, focused);   // 其余编辑键交给（不渲染的）textArea 键处理
+        }
+
+        @Override
+        public EventResult handlePasteEvent(PasteEvent event) {
+            return inputKeys.handlePasteEvent(event);      // 多行粘贴
+        }
+
+        @Override
+        public Size preferredSize(int maxW, int maxH, RenderContext ctx) {
+            int w = maxW > 0 ? maxW : 80;
+            return Size.of(w, visualRowCount(w - 2) + 2); // 自动增高：软折行后的可视行数 + 上下边框
+        }
+
+        @Override
+        public void render(Frame frame, Rect rect, RenderContext ctx) {
+            Buffer buf = frame.buffer();
+            Block block = Block.builder().borders(Borders.ALL).borderType(BorderType.ROUNDED).build();
+            block.render(rect, buf);
+            Rect inner = block.inner(rect);
+            int ix = inner.x(), iy = inner.y(), iw = Math.max(1, inner.width()), ih = inner.height();
+
+            if (inputState.text().isEmpty()) {              // 空态：占位符 + 光标在开头
+                buf.setString(ix, iy, "输入消息，Enter 发送，\\ + Enter 换行", DIM);
+                frame.setCursorPosition(ix, iy);
+                return;
+            }
+
+            int cr = inputState.cursorRow(), cc = inputState.cursorCol();
+            int vis = 0, curRow = 0, curCol = 0;
+            int n = inputState.lineCount();
+            for (int li = 0; li < n; li++) {                // 逐条逻辑行按框宽软折行，画到连续可视行
+                String logical = inputState.getLine(li);
+                List<String> segs = wrapSegments(logical, iw);
+                int base = 0;
+                for (int si = 0; si < segs.size(); si++) {
+                    String seg = segs.get(si);
+                    if (vis < ih) buf.setString(ix, iy + vis, seg, Style.EMPTY);
+                    if (li == cr) {                         // 定位光标所在的可视行/列
+                        int segStart = base, segEnd = base + seg.length();
+                        boolean last = si == segs.size() - 1;
+                        if (cc >= segStart && (cc < segEnd || (last && cc <= segEnd))) {
+                            curRow = vis;
+                            int within = Math.min(cc - segStart, seg.length());
+                            curCol = dev.tamboui.text.CharWidth.of(seg.substring(0, within));
+                        }
+                    }
+                    base += seg.length();
+                    vis++;
+                }
+            }
+            // 反显格 + 硬件光标（中文 IME 定位），夹到可视区内
+            int cx = ix + Math.min(curCol, iw - 1);
+            int cy = iy + Math.min(curRow, Math.max(0, ih - 1));
+            Cell cell = buf.get(cx, cy);
+            buf.set(cx, cy, cell.patchStyle(Style.EMPTY.reversed()));
+            frame.setCursorPosition(cx, cy);
+        }
     }
 
-    /** 输入框未消费的键：Ctrl+C 退出、Esc 取消当前回合（返回 HANDLED 以免 Esc 被路由器用去清焦点）。 */
+    /** 逻辑行按显示宽度（中文 2 列）软折行成若干可视段；空行返回单个空段。 */
+    private static List<String> wrapSegments(String line, int width) {
+        int w = Math.max(1, width);
+        List<String> segs = new ArrayList<>();
+        if (line.isEmpty()) { segs.add(""); return segs; }
+        String rest = line;
+        while (!rest.isEmpty()) {
+            String seg = dev.tamboui.text.CharWidth.substringByWidth(rest, w);
+            if (seg.isEmpty()) seg = rest.substring(0, 1);   // 兜底：框窄到放不下 1 个宽字符时也吃 1 个
+            segs.add(seg);
+            rest = rest.substring(seg.length());
+        }
+        return segs;
+    }
+
+    /** 当前文本在给定内宽下软折行后的总可视行数（≥1）。 */
+    private int visualRowCount(int innerWidth) {
+        int rows = 0, n = inputState.lineCount();
+        for (int i = 0; i < n; i++) rows += wrapSegments(inputState.getLine(i), innerWidth).size();
+        return Math.max(1, rows);
+    }
+
+    /**
+     * 输入框按键（本处理器早于 textArea 内建处理触发，返回 HANDLED 即可拦截）：
+     * <ul>
+     *   <li>Ctrl+C / quit → 退出；</li>
+     *   <li>Esc / cancel → 取消当前回合（返回 HANDLED 以免 Esc 被路由器用去清焦点）；</li>
+     *   <li>Enter（无 Shift/Alt）→ 提交并拦截，textArea 不再插入换行；</li>
+     *   <li>Shift/Alt+Enter → 放行（UNHANDLED），交给 textArea 插入换行（能否区分取决于终端）。</li>
+     * </ul>
+     */
     private EventResult onInputKey(KeyEvent k) {
         if (k.isCtrlC() || k.isQuit()) {
             quit();
@@ -260,7 +369,36 @@ public final class CodeTuiView extends InlineApp {
             state.setNotice(running ? "已取消当前回合" : "");
             return EventResult.HANDLED;
         }
+        boolean isEnter = k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n');
+        if (isEnter) {
+            // Shift/Alt+Enter → 换行（仅当终端能区分修饰键；Apple Terminal 等区分不了，见下反斜杠续行）
+            if (k.hasShift() || k.hasAlt()) return EventResult.UNHANDLED;   // 交给 inputKeys 插入 '\n'
+            // 反斜杠续行（终端无关的可靠换行，同 Claude Code）：行尾 \ + Enter → 删掉 \ 再换行
+            if (cursorAfterBackslash()) {
+                inputState.deleteBackward();
+                inputState.insert('\n');
+                return EventResult.HANDLED;
+            }
+            submitInput();
+            return EventResult.HANDLED;   // 普通 Enter → 发送（不让编辑器当作换行）
+        }
         return EventResult.UNHANDLED;
+    }
+
+    /** 光标紧跟在一个反斜杠之后（行尾 {@code \} + Enter 用作换行的判定）。 */
+    private boolean cursorAfterBackslash() {
+        int cr = inputState.cursorRow(), cc = inputState.cursorCol();
+        String line = cr >= 0 && cr < inputState.lineCount() ? inputState.getLine(cr) : "";
+        return cc > 0 && cc <= line.length() && line.charAt(cc - 1) == '\\';
+    }
+
+    /** 提交：单飞下忙时忽略；否则取走输入、清空、提交。 */
+    private void submitInput() {
+        if (!state.isIdle()) return;
+        String text = inputState.text();
+        if (text == null || text.isBlank()) return;
+        inputState.clear();
+        current = onSubmit.submit(text);
     }
 
     // ── 计划面板 / 状态行 ────────────────────────────────────────────────
