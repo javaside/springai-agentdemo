@@ -148,7 +148,7 @@ class MarkdownRendererTest {
         assertEquals("▎ class X {}", concat(code));
         Span kw = spanWithText(code, "class");
         assertTrue(kw != null, "'class' should be a keyword span inside code block");
-        assertTrue(hasFg(kw, Color.MAGENTA));
+        assertTrue(hasFg(kw, Color.indexed(176)));
 
         // 关闭围栏：延续左栏。
         List<Span> fenceClose = r.renderFinalized("```");
@@ -166,12 +166,12 @@ class MarkdownRendererTest {
         r.renderFinalized("```java");
         // 打开跨行块注释（第 0 span 是左栏，注释在其后）。
         List<Span> l1 = r.renderFinalized("/* start");
-        assertTrue(hasFg(l1.get(1), Color.DARK_GRAY), "open block comment line should be dim/comment");
+        assertTrue(hasFg(l1.get(1), Color.indexed(243)), "open block comment line should be dim/comment");
         // 下一行仍在块注释里：整行为注释，keyword 不应被单独高亮。
         List<Span> l2 = r.renderFinalized("int still comment */");
         assertEquals("▎ int still comment */", concat(l2));
         assertTrue(spanWithText(l2, "int") == null, "'int' inside block comment must not be keyword span");
-        assertTrue(hasFg(l2.get(1), Color.DARK_GRAY));
+        assertTrue(hasFg(l2.get(1), Color.indexed(243)));
     }
 
     @Test
@@ -210,7 +210,7 @@ class MarkdownRendererTest {
         List<Span> code = r.renderFinalized("int y");
         Span kw = spanWithText(code, "int");
         assertTrue(kw != null, "preview must not have advanced block-comment state");
-        assertTrue(hasFg(kw, Color.MAGENTA));
+        assertTrue(hasFg(kw, Color.indexed(176)));
     }
 
     @Test

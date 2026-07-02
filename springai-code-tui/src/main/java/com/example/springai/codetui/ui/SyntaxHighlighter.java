@@ -23,10 +23,15 @@ public final class SyntaxHighlighter {
     }
 
     // ---- token 样式常量 ----
-    private static final Style KEYWORD = Style.create().fg(Color.MAGENTA);
-    private static final Style STRING = Style.create().fg(Color.GREEN);
-    private static final Style NUMBER = Style.create().fg(Color.CYAN);
-    private static final Style COMMENT = Style.create().fg(Color.DARK_GRAY);
+    // 采用 One Dark 风格的 256 色（indexed，不走终端 16 色主题，绿底/深底上都读得清）：
+    //   关键字=紫，类型=金，函数=蓝，字符串=绿，数字=橙，注解=金，注释=灰。
+    private static final Style KEYWORD    = Style.create().fg(Color.indexed(176));  // #d787d7 紫
+    private static final Style TYPE       = Style.create().fg(Color.indexed(180));  // #d7af87 金：大写开头标识符
+    private static final Style FUNCTION   = Style.create().fg(Color.indexed(75));   // #5fafff 蓝：后跟 ( 的标识符
+    private static final Style STRING     = Style.create().fg(Color.indexed(114));  // #87d787 绿
+    private static final Style NUMBER     = Style.create().fg(Color.indexed(173));  // #d7875f 橙
+    private static final Style ANNOTATION = Style.create().fg(Color.indexed(180));  // #d7af87 金：@Xxx
+    private static final Style COMMENT    = Style.create().fg(Color.indexed(243));  // #767676 灰
 
     /**
      * 高亮一行代码。
@@ -93,6 +98,18 @@ public final class SyntaxHighlighter {
                 return new Result(spans, false);
             }
 
+            // 3.5) 注解 @Xxx（Java/TS 装饰器风格）：@ 紧跟标识符起始时，整体作为注解。
+            if (c == '@' && i + 1 < n && isIdentStart(s.charAt(i + 1))) {
+                flushPlain(spans, plain);
+                int end = i + 1;
+                while (end < n && isIdentPart(s.charAt(end))) {
+                    end++;
+                }
+                spans.add(Span.styled(s.substring(i, end), ANNOTATION));
+                i = end;
+                continue;
+            }
+
             // 4) 字符串： " ' `
             if (c == '"' || c == '\'' || c == '`') {
                 flushPlain(spans, plain);
@@ -118,11 +135,12 @@ public final class SyntaxHighlighter {
                     end++;
                 }
                 String word = s.substring(i, end);
-                if (lang.keywords.contains(word)) {
+                Style tok = lang.keywords.contains(word) ? KEYWORD : classifyWord(word, s, end);
+                if (tok != null) {
                     flushPlain(spans, plain);
-                    spans.add(Span.styled(word, KEYWORD));
+                    spans.add(Span.styled(word, tok));
                 } else {
-                    plain.append(word);
+                    plain.append(word);   // 普通标识符（变量/字段）：默认色
                 }
                 i = end;
                 continue;
@@ -138,6 +156,20 @@ public final class SyntaxHighlighter {
             spans.add(Span.raw(s));
         }
         return new Result(spans, block);
+    }
+
+    /**
+     * 非关键字标识符的细分：紧跟 {@code (} 的→函数(蓝)；大写开头的→类型(金)；否则 null（普通标识符，默认色）。
+     * {@code end} 为该标识符在 s 中的结束下标（keyword 判断已在调用处用 lang.keywords 处理）。
+     */
+    private static Style classifyWord(String word, String s, int end) {
+        if (end < s.length() && s.charAt(end) == '(') {
+            return FUNCTION;                               // 紧跟 ( → 函数/方法调用
+        }
+        if (Character.isUpperCase(word.charAt(0))) {
+            return TYPE;                                   // 大写开头 → 类型名（App / String / Test）
+        }
+        return null;
     }
 
     private static void flushPlain(List<Span> spans, StringBuilder plain) {

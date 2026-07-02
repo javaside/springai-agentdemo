@@ -73,18 +73,39 @@ class SyntaxHighlighterTest {
         assertTrue(str != null, "string span '\"hi\"' should exist");
         assertTrue(cmt != null, "comment span starting with // should exist");
 
-        // 样式断言
-        assertTrue(hasFg(kw, Color.MAGENTA), "keyword should be MAGENTA");
-        assertTrue(hasFg(str, Color.GREEN), "string should be GREEN");
-        assertTrue(hasFg(cmt, Color.DARK_GRAY), "comment should be DARK_GRAY");
+        // 样式断言（One Dark 风格 256 色）
+        assertTrue(hasFg(kw, Color.indexed(176)), "keyword=紫(176)");
+        assertTrue(hasFg(str, Color.indexed(114)), "string=绿(114)");
+        assertTrue(hasFg(cmt, Color.indexed(243)), "comment=灰(243)");
     }
 
     @Test
-    void numberIsHighlightedCyan() {
+    void numberIsHighlighted() {
         List<Span> spans = SyntaxHighlighter.highlight("x = 42", "java", false).spans();
         Span num = spanWithText(spans, "42");
         assertTrue(num != null, "number span '42' should exist");
-        assertTrue(hasFg(num, Color.CYAN));
+        assertTrue(hasFg(num, Color.indexed(173)), "number=橙(173)");
+    }
+
+    // ---- One Dark 风格细分：类型 / 函数 / 注解 ----
+
+    @Test
+    void capitalizedIdentifierIsType() {
+        List<Span> spans = SyntaxHighlighter.highlight("App.insertionSort(arr)", "java", false).spans();
+        assertTrue(hasFg(spanWithText(spans, "App"), Color.indexed(180)), "类型名 App=金(180)");
+        // 普通小写变量无色由 identifierGetsNoStyle 覆盖（此处 arr 会并入尾部 plain run，无独立 span）。
+    }
+
+    @Test
+    void identifierBeforeParenIsFunction() {
+        List<Span> spans = SyntaxHighlighter.highlight("App.insertionSort(arr)", "java", false).spans();
+        assertTrue(hasFg(spanWithText(spans, "insertionSort"), Color.indexed(75)), "方法名=蓝(75)");
+    }
+
+    @Test
+    void annotationIsHighlighted() {
+        List<Span> spans = SyntaxHighlighter.highlight("@Test", "java", false).spans();
+        assertTrue(hasFg(spanWithText(spans, "@Test"), Color.indexed(180)), "注解 @Test=金(180)");
     }
 
     @Test
@@ -107,7 +128,7 @@ class SyntaxHighlighterTest {
         assertTrue(standaloneKeyword == null, "'int' inside comment must not be a separate keyword span");
         // 整行是一个注释 span。
         Span cmt = spanStartingWith(spans, "//");
-        assertTrue(hasFg(cmt, Color.DARK_GRAY));
+        assertTrue(hasFg(cmt, Color.indexed(243)));
     }
 
     @Test
@@ -117,7 +138,7 @@ class SyntaxHighlighterTest {
         assertTrue(spanWithText(spans, "int") == null, "keyword inside string must not be separate span");
         assertTrue(spanWithText(spans, "for") == null);
         Span str = spanWithText(spans, "\"int for\"");
-        assertTrue(hasFg(str, Color.GREEN));
+        assertTrue(hasFg(str, Color.indexed(114)));
     }
 
     @Test
@@ -127,7 +148,7 @@ class SyntaxHighlighterTest {
         assertEquals(line, concat(spans));
         Span str = spanWithText(spans, line);
         assertTrue(str != null, "whole string incl. escaped quote should be one span");
-        assertTrue(hasFg(str, Color.GREEN));
+        assertTrue(hasFg(str, Color.indexed(114)));
     }
 
     // ---- block comment across lines ----
@@ -137,7 +158,7 @@ class SyntaxHighlighterTest {
         SyntaxHighlighter.Result r = SyntaxHighlighter.highlight("/* a", "java", false);
         assertTrue(r.stillInBlockComment(), "unterminated /* should keep block comment open");
         assertEquals("/* a", concat(r.spans()));
-        assertTrue(hasFg(r.spans().get(0), Color.DARK_GRAY));
+        assertTrue(hasFg(r.spans().get(0), Color.indexed(243)));
     }
 
     @Test
@@ -149,11 +170,11 @@ class SyntaxHighlighterTest {
         // "b */" 是注释；此后 int 应当作关键字。
         Span cmt = spanStartingWith(r.spans(), "b */");
         assertTrue(cmt != null, "leading 'b */' should be a comment span");
-        assertTrue(hasFg(cmt, Color.DARK_GRAY));
+        assertTrue(hasFg(cmt, Color.indexed(243)));
 
         Span kw = spanWithText(r.spans(), "int");
         assertTrue(kw != null, "'int' after */ should be a keyword span");
-        assertTrue(hasFg(kw, Color.MAGENTA));
+        assertTrue(hasFg(kw, Color.indexed(176)));
     }
 
     @Test
@@ -161,7 +182,7 @@ class SyntaxHighlighterTest {
         SyntaxHighlighter.Result r = SyntaxHighlighter.highlight("still comment", "java", true);
         assertTrue(r.stillInBlockComment());
         assertEquals(1, r.spans().size());
-        assertTrue(hasFg(r.spans().get(0), Color.DARK_GRAY));
+        assertTrue(hasFg(r.spans().get(0), Color.indexed(243)));
     }
 
     // ---- language handling ----
@@ -172,7 +193,7 @@ class SyntaxHighlighterTest {
         assertEquals("x = 1  # note", concat(spans));
         Span cmt = spanStartingWith(spans, "#");
         assertTrue(cmt != null, "python # comment span should exist");
-        assertTrue(hasFg(cmt, Color.DARK_GRAY));
+        assertTrue(hasFg(cmt, Color.indexed(243)));
     }
 
     @Test
@@ -180,7 +201,7 @@ class SyntaxHighlighterTest {
         List<Span> spans = SyntaxHighlighter.highlight("def foo():", "py", false).spans();
         Span kw = spanWithText(spans, "def");
         assertTrue(kw != null);
-        assertTrue(hasFg(kw, Color.MAGENTA));
+        assertTrue(hasFg(kw, Color.indexed(176)));
     }
 
     @Test
@@ -204,7 +225,7 @@ class SyntaxHighlighterTest {
         List<Span> spans = SyntaxHighlighter.highlight("`tpl`", "js", false).spans();
         Span str = spanWithText(spans, "`tpl`");
         assertTrue(str != null);
-        assertTrue(hasFg(str, Color.GREEN));
+        assertTrue(hasFg(str, Color.indexed(114)));
     }
 
     @Test
