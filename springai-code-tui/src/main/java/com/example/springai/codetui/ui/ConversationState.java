@@ -41,9 +41,8 @@ public final class ConversationState implements AgentListener {
         }
     }
 
-    private static final String USER_PREFIX = "你 › ";
-
     private final Deque<OutputLine> pending = new ArrayDeque<>();
+    private final Deque<String> queued = new ArrayDeque<>();       // 忙时排队的用户消息（回合结束后自动出队提交）
     private final StringBuilder streaming = new StringBuilder();
     private final List<String> todo = new ArrayList<>();          // 当前计划（固定面板显示，不进 scrollback）
     private final StringBuilder input = new StringBuilder();
@@ -59,6 +58,13 @@ public final class ConversationState implements AgentListener {
     public synchronized void backspace() { if (input.length() > 0) input.deleteCharAt(input.length() - 1); }
     public synchronized String takeInput() { notice = ""; String s = input.toString(); input.setLength(0); return s; }
     public synchronized String currentInput() { return input.toString(); }
+
+    // ── 消息队列（忙时排队，回合结束自动出队） ───────────────────────────
+    public synchronized void enqueue(String msg) { queued.add(msg); }
+    public synchronized String pollQueued() { return queued.poll(); }
+    public synchronized int queuedCount() { return queued.size(); }
+    public synchronized void clearQueued() { queued.clear(); }
+    public synchronized List<String> queuedSnapshot() { return List.copyOf(queued); }
 
     // ── 单飞 / 状态 ─────────────────────────────────────────────────────
     public boolean isIdle() { return status == Status.IDLE; }
@@ -123,7 +129,7 @@ public final class ConversationState implements AgentListener {
     public synchronized void onUserMessage(long turnId, String text) {
         if (turnId != acceptingTurnId) return;
         pending.add(new OutputLine("", OutputLine.Kind.ASSISTANT));   // 回合间留白，分隔更清晰
-        pending.add(new OutputLine(USER_PREFIX + text, OutputLine.Kind.USER));
+        pending.add(new OutputLine("› " + text, OutputLine.Kind.USER));   // 保留 › 提示符，去掉「你」
     }
 
     @Override

@@ -68,6 +68,7 @@ public final class CodeTuiView extends InlineApp {
     private static final Style USER       = Style.create().fg(Color.GRAY);
     private static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
     private static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
+    private static final Style QUEUED      = Style.create().fg(Color.GRAY).bg(Color.indexed(236)); // 排队消息：暗灰底，待发
     private static final Style TOOL       = Style.create().fg(Color.DARK_GRAY);
     private static final Style OK         = Style.create().fg(Color.GREEN);
     private static final Style FAIL       = Style.create().fg(Color.RED);
@@ -116,10 +117,12 @@ public final class CodeTuiView extends InlineApp {
     @Override
     protected Element render() {
         List<String> todos = state.todoSnapshot();
+        List<String> queued = state.queuedSnapshot();
         String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
         return column(
                 scope(!tail.isEmpty(), richText(indented(md.renderPreview(tail))).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
+                scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 inputElement(),
                 statusLine());
     }
@@ -150,6 +153,11 @@ public final class CodeTuiView extends InlineApp {
         }
         for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
             runner().println(indented(md.renderFinalized(row)));
+        }
+        // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
+        if (state.isIdle()) {
+            String next = state.pollQueued();
+            if (next != null) current = onSubmit.submit(next);
         }
     }
 
@@ -381,9 +389,13 @@ public final class CodeTuiView extends InlineApp {
         }
         if (k.isCancel()) {
             boolean running = !state.isIdle();
+            int dropped = state.queuedCount();
             if (current != null) { current.dispose(); current = null; }
             state.cancelCurrent();
-            state.setNotice(running ? "已取消当前回合" : "");
+            state.clearQueued();                         // 取消时一并清空排队消息
+            state.setNotice(running || dropped > 0
+                    ? "已取消当前回合" + (dropped > 0 ? "，丢弃 " + dropped + " 条排队" : "")
+                    : "");
             return EventResult.HANDLED;
         }
         boolean isEnter = k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n');
@@ -409,12 +421,15 @@ public final class CodeTuiView extends InlineApp {
         return cc > 0 && cc <= line.length() && line.charAt(cc - 1) == '\\';
     }
 
-    /** 提交：单飞下忙时忽略；否则取走输入、清空、提交。 */
+    /** 提交：忙时把消息入队（回合结束由 {@link #drain} 自动出队提交），空闲时立即提交。均清空输入框。 */
     private void submitInput() {
-        if (!state.isIdle()) return;
         String text = inputState.text();
         if (text == null || text.isBlank()) return;
         inputState.clear();
+        if (!state.isIdle()) {                       // 忙：排队，不打断当前回合（仿 Claude Code）
+            state.enqueue(text);                      // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
+            return;
+        }
         current = onSubmit.submit(text);
     }
 
@@ -430,6 +445,18 @@ public final class CodeTuiView extends InlineApp {
         return els.toArray(new Element[0]);
     }
 
+    /** 排队消息面板：固定在输入框上方，每条一行（暗灰底、› 前缀、超宽截断），仿 Claude Code。 */
+    private Element[] queuedChildren(List<String> queued) {
+        List<Element> els = new ArrayList<>();
+        int inner = Math.max(8, terminalWidth() - displayWidth(INDENT) - 2);   // 减缩进与 "› "
+        for (String q : queued) {
+            String oneLine = q.replaceAll("\\s+", " ").trim();
+            if (displayWidth(oneLine) > inner) oneLine = dev.tamboui.text.CharWidth.substringByWidth(oneLine, inner - 1) + "…";
+            els.add(text(INDENT + "› " + oneLine).style(QUEUED));
+        }
+        return els.toArray(new Element[0]);
+    }
+
     /** 一条计划：✓完成=绿 / ▶进行中=亮黄加粗 / ○待办=暗。 */
     private static Element todoRow(String s) {
         Style st = s.startsWith("✓") ? OK : s.startsWith("▶") ? TODO_RUN : DIM;
@@ -437,14 +464,16 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element statusLine() {
+        int q = state.queuedCount();
+        String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
             case IDLE -> text("Enter 发送 · Esc 取消 · Ctrl+C 退出").style(DIM);
-            case THINKING -> text("● 思考中… · Esc 取消 · Ctrl+C 退出").style(THINK);
+            case THINKING -> text("● 思考中…" + qs + " · Esc 取消 · Ctrl+C 退出").style(THINK);
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
-                yield text("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "… · Esc 取消")
+                yield text("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…" + qs + " · Esc 取消")
                         .style(RUNNING);
             }
         };
