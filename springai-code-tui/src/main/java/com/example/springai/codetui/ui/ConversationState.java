@@ -89,6 +89,9 @@ public final class ConversationState implements AgentListener {
     /** 距压缩开始的经过纳秒（用于状态行计时）。 */
     public long compactElapsedNanos() { return compacting ? System.nanoTime() - compactStartNanos : 0L; }
 
+    /** 「忙」= 有活跃回合或正在压缩：此时不应发起新回合（排队）、也不应触发手动压缩。 */
+    public boolean isBusy() { return !isIdle() || compacting; }
+
     /** 渲染线程调用：取走并清空「待 println」的定稿行。 */
     public synchronized List<OutputLine> drainPending() {
         if (pending.isEmpty()) return List.of();

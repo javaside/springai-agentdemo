@@ -242,4 +242,20 @@ class ConversationStateTest {
         s.onCompactionFinished(1, 1);
         assertEquals(0L, s.compactElapsedNanos(), "压缩结束后经过时间应回到 0");
     }
+
+    @Test
+    void isBusy_trueWhenTurnActive_orCompacting_elseFalse() {
+        ConversationState s = new ConversationState();
+        assertFalse(s.isBusy(), "初始空闲、未压缩：不忙");
+
+        s.onTurnStarted(1L);
+        assertTrue(s.isBusy(), "回合进行中：忙");
+        s.onTurnComplete(1L);
+        assertFalse(s.isBusy(), "回合结束：不忙");
+
+        s.onCompactionStarted("manual");
+        assertTrue(s.isBusy(), "压缩中：忙（即便无活跃回合）");
+        s.onCompactionFinished(1, 1);
+        assertFalse(s.isBusy(), "压缩结束：不忙");
+    }
 }

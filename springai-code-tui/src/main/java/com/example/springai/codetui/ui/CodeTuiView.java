@@ -221,7 +221,7 @@ public final class CodeTuiView extends InlineApp {
             runner().println(indented(md.renderFinalized(row)));
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
-        if (state.isIdle() && !state.isCompacting()) {   // 压缩中不出队，避免与手动压缩并发触发版本冲突
+        if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
             String next = state.pollQueued();
             if (next != null) dispatch(next);
         }
@@ -593,11 +593,14 @@ public final class CodeTuiView extends InlineApp {
         }
         if (cmd.equals("/compact")) {
             inputState.clear();
-            if (!state.isIdle() || state.isCompacting()) {
-                state.setNotice("忙碌中，无法压缩");   // 有回合或已在压缩：拒绝并提示
-            } else {
-                onSubmit.compact();
+            if (state.isCompacting()) {
+                return;   // 已在压缩：动画条已表明状态，不再叠加 notice（否则会在压缩结束后残留一帧）
             }
+            if (!state.isIdle()) {
+                state.setNotice("忙碌中，无法压缩");   // 回合进行中：拒绝并提示
+                return;
+            }
+            onSubmit.compact();
             return;
         }
         if (cmd.equals("/help")) {
@@ -611,7 +614,7 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         inputState.clear();
-        if (!state.isIdle() || state.isCompacting()) {   // 忙或压缩中：排队，不打断/不并发
+        if (state.isBusy()) {                        // 忙或压缩中：排队，不打断/不并发
             state.enqueue(text);                      // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
             return;
         }
