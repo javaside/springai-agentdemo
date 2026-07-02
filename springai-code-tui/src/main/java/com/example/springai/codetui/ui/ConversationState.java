@@ -207,14 +207,15 @@ public final class ConversationState implements AgentListener {
 
     @Override
     public synchronized void onCompactionStarted(String reason) {
-        compacting = true;
         compactStartNanos = System.nanoTime();
         compactReason = reason == null ? "" : reason;
+        compacting = true;   // 最后写：作为安全发布标志，读者见到 true 即保证看到上面两个字段的新值
     }
 
     @Override
     public synchronized void onCompactionFinished(int eventsRemoved, int tokensSaved) {
         compacting = false;
+        compactReason = "";
         if (eventsRemoved <= 0) {
             pending.add(new OutputLine("• 无可压缩内容（历史尚短）", OutputLine.Kind.INFO));
         } else {
@@ -227,6 +228,7 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onCompactionFailed(String message) {
         compacting = false;
+        compactReason = "";
         pending.add(new OutputLine("✗ 压缩失败：" + (message == null ? "unknown" : message),
                 OutputLine.Kind.ERROR));
     }

@@ -232,4 +232,14 @@ class ConversationStateTest {
                         l.text().contains("boom") && l.kind() == ConversationState.OutputLine.Kind.ERROR),
                 "失败行应含原因且为 ERROR 类型");
     }
+
+    @Test
+    void compactElapsedNanos_isZero_whenNotCompacting() {
+        ConversationState s = new ConversationState();
+        assertEquals(0L, s.compactElapsedNanos(), "未压缩时经过时间应为 0");
+
+        s.onCompactionStarted("manual");
+        s.onCompactionFinished(1, 1);
+        assertEquals(0L, s.compactElapsedNanos(), "压缩结束后经过时间应回到 0");
+    }
 }
