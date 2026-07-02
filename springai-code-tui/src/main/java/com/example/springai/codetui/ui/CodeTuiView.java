@@ -2,18 +2,30 @@ package com.example.springai.codetui.ui;
 
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
+import dev.tamboui.buffer.Buffer;
+import dev.tamboui.buffer.Cell;
+import dev.tamboui.layout.Rect;
 import dev.tamboui.style.Color;
 import dev.tamboui.style.Style;
+import dev.tamboui.terminal.Frame;
 import dev.tamboui.text.Line;
 import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
 import dev.tamboui.toolkit.app.InlineApp;
 import dev.tamboui.toolkit.element.Element;
+import dev.tamboui.toolkit.element.RenderContext;
+import dev.tamboui.toolkit.element.Size;
 import dev.tamboui.toolkit.event.EventResult;
+import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
-import dev.tamboui.widgets.input.TextInputState;
+import dev.tamboui.tui.event.PasteEvent;
+import dev.tamboui.widgets.block.Block;
+import dev.tamboui.widgets.block.BorderType;
+import dev.tamboui.widgets.block.Borders;
+import dev.tamboui.widgets.input.TextAreaState;
 import reactor.core.Disposable;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,7 +34,7 @@ import static dev.tamboui.toolkit.InlineToolkit.scope;
 import static dev.tamboui.toolkit.Toolkit.column;
 import static dev.tamboui.toolkit.Toolkit.richText;
 import static dev.tamboui.toolkit.Toolkit.text;
-import static dev.tamboui.toolkit.Toolkit.textInput;
+import static dev.tamboui.toolkit.Toolkit.textArea;
 
 /**
  * Claude Code 式行内视图，改用官方 <b>Toolkit 声明式 DSL</b>（{@link InlineApp} + {@code InlineToolkitRunner}）。
@@ -38,7 +50,7 @@ import static dev.tamboui.toolkit.Toolkit.textInput;
  * <pre>
  *   [流式预览]        —— AI 生成中的当前残行（未换行段），{@code scope} 空则收起
  *   [📋 计划面板]     —— 完整清单，✓/▶/○ 分色，{@code scope} 无计划则收起
- *   [圆角输入框]      —— 原生 {@code textInput}，自带光标/编辑/中文输入
+ *   [圆角输入框]      —— 原生 {@code textArea}，多行/自动增高，自带光标/编辑/中文输入
  *   [状态行]
  * </pre>
  *
@@ -64,24 +76,41 @@ public final class CodeTuiView extends InlineApp {
     private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 
+    // diff 展示（Claude Code 式）：整行底色铺满，行号列灰、加/删号亮。
+    // ⚠ 背景必须用 256 色 indexed()，不能用 rgb()：目标终端（Apple Terminal 等，COLORTERM 为空）
+    //   不支持 truecolor，会直接忽略 48;2;r;g;b 序列 → 底色不显示。indexed 走 48;5;N，稳定可见。
+    private static final Color ADD_BG = Color.indexed(22);   // 深绿底=新增
+    private static final Color DEL_BG = Color.indexed(52);   // 深红底=删除
+    private static final Style DIFF_HEADER = Style.create().fg(Color.BRIGHT_WHITE).bold();
+    private static final Style DIFF_NO_ADD = Style.create().fg(Color.indexed(114)).bg(ADD_BG);   // 新增行号=浅绿
+    private static final Style DIFF_NO_DEL = Style.create().fg(Color.indexed(210)).bg(DEL_BG);   // 删除行号=浅红
+    private static final Style DIFF_NO_CTX = Style.create().fg(Color.DARK_GRAY);                 // 上下文行号=暗灰
+    private static final Style DIFF_TRUNC  = Style.create().fg(Color.DARK_GRAY);
+    private static final int GUTTER = 4;   // 行号列宽（右对齐到 4 位，够 9999 行）
+
     private final ConversationState state;
     private final SubmitHandler onSubmit;
     private final MarkdownRenderer md = new MarkdownRenderer();      // AI 正文 markdown + 代码语法高亮
-    private final TextInputState inputState = new TextInputState();  // 输入源（原生控件托管，含中文/光标/编辑）
+    private final TextAreaState inputState = new TextAreaState();    // 输入源（多行编辑模型）
+    // 仅用于复用 textArea 的完整编辑键处理（退格/方向/Home/End/字符/中文…）。⚠ 从不渲染它——
+    // 一旦渲染，TextAreaElement 会以自增 id 自注册进焦点链、抢走焦点，导致外层拦不到 Enter。
+    private final Element inputKeys = textArea(inputState);
+    private final DiffRenderer diff;                                 // edit/write → 带真实行号的 diff 行
     private Disposable current;
 
-    public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
+    public CodeTuiView(ConversationState state, SubmitHandler onSubmit, Path root) {
         this.state = state;
         this.onSubmit = onSubmit;
+        this.diff = new DiffRenderer(root);
     }
 
-    /** 初始高度：圆角输入框(3) + 状态行(1)；两个 scope 折叠时为 0，运行器再按 preferredSize 增减。 */
+    /** 初始高度：圆角输入框(空态 3=边框2+1 行) + 状态行(1)；输入换行后 textArea 的 preferredSize 随行数增高，运行器逐帧跟随。 */
     @Override
     protected int height() {
         return 4;
     }
 
-    /** 每帧构造 UI（纯读状态，不产生副作用；scrollback 的 println 放在 {@link #drain} 里另行推进）。 */
+    /** 每帧构造 UI。scrollback 的 println 放在 {@link #drain} 里另行推进。 */
     @Override
     protected Element render() {
         List<String> todos = state.todoSnapshot();
@@ -109,6 +138,7 @@ public final class CodeTuiView extends InlineApp {
                 }
                 case ASSISTANT ->                                  // AI 正文：markdown/语法高亮 + 缩进
                         runner().println(indented(md.renderFinalized(ol.text())));
+                case TOOL_START -> printlnToolStart(ol);           // edit/write：展开成 diff 块；其余单行摘要
                 default -> {                                       // 工具/Todo/错误：单色贴左
                     Style st = styleFor(ol.kind());
                     if (st == null) runner().println(ol.text());
@@ -121,27 +151,212 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
+    /** 工具开始：edit/write 展开成 Claude Code 式 diff 块（读原文件、真实行号、语法高亮 + 增删底色）；其余工具单行摘要。 */
+    private void printlnToolStart(OutputLine ol) {
+        List<DiffRenderer.DiffLine> lines =
+                (ol.raw() == null) ? List.of() : diff.render(ol.toolName(), ol.raw());
+        if (lines.isEmpty()) {                                      // 非文件写入 / 无法解析：回退单行摘要
+            runner().println(Text.styled(ol.text(), TOOL));
+            return;
+        }
+        int width = terminalWidth();
+        String lang = langOf(lines);        // 从 header 的路径推断语言（决定语法高亮规则）
+        boolean inBlock = false;            // 跨行块注释状态，按 body 顺序推进
+        for (DiffRenderer.DiffLine dl : lines) {
+            List<Span> hl = null;
+            if (dl.type() != DiffRenderer.Type.HEADER && dl.type() != DiffRenderer.Type.TRUNCATED) {
+                SyntaxHighlighter.Result r = SyntaxHighlighter.highlight(dl.text(), lang, inBlock);
+                inBlock = r.stillInBlockComment();
+                hl = r.spans();
+            }
+            runner().println(diffLine(dl, hl, width));
+        }
+    }
+
+    /** 把一行 DiffLine 渲染成整行 Text；ADD/DEL 行把底色铺满整行（含行号列），上下文行只高亮不上底色。 */
+    private static Text diffLine(DiffRenderer.DiffLine dl, List<Span> hl, int width) {
+        return switch (dl.type()) {
+            case HEADER -> Text.from(Line.from(Span.raw(INDENT), Span.styled(dl.text(), DIFF_HEADER)));
+            case TRUNCATED -> Text.from(Line.from(
+                    Span.raw(INDENT), Span.styled(gutter(null) + "  " + dl.text(), DIFF_TRUNC)));
+            case CONTEXT -> bodyLine(gutter(dl.newNo() != null ? dl.newNo() : dl.oldNo()), " ",
+                    hl, DIFF_NO_CTX, null, width);
+            case ADD -> bodyLine(gutter(dl.newNo()), "+", hl, DIFF_NO_ADD, ADD_BG, width);
+            case DEL -> bodyLine(gutter(dl.oldNo()), "-", hl, DIFF_NO_DEL, DEL_BG, width);
+        };
+    }
+
+    /**
+     * 组装一行 diff 主体：{@code 行号 + 符号 + 高亮内容}。
+     * bg 非 null（ADD/DEL）时：左缩进/行号/符号/内容/右侧补白全部叠加底色，形成从左到右铺满整行的色带。
+     * bg 为 null（CONTEXT）时：无底色，仅显示语法高亮。
+     */
+    private static Text bodyLine(String num, String sign, List<Span> content,
+                                 Style numStyle, Color bg, int width) {
+        List<Span> spans = new ArrayList<>();
+        // 左缩进：带底色时纳入色带，否则纯留白
+        spans.add(bg == null ? Span.raw(INDENT) : Span.styled(INDENT, Style.create().bg(bg)));
+        spans.add(Span.styled(num, numStyle));
+        spans.add(Span.styled(" " + sign + " ", numStyle));
+        int used = displayWidth(INDENT) + displayWidth(num) + 3;   // 3 = " " + sign + " "
+        for (Span s : content) {
+            spans.add(bg == null ? s : s.bg(bg));                  // 高亮前景上叠加底色
+            used += s.width();
+        }
+        if (bg != null) {                                          // 右侧补白到终端宽度，让色带铺满整行
+            int pad = Math.max(0, width - used);
+            if (pad > 0) spans.add(Span.styled(" ".repeat(pad), Style.create().bg(bg)));
+        }
+        return Text.from(Line.from(spans));
+    }
+
+    /** 从 diff 的 header（{@code Update(path)}）提取路径后缀，映射成 SyntaxHighlighter 的语言标识。 */
+    private static String langOf(List<DiffRenderer.DiffLine> lines) {
+        if (lines.isEmpty()) return "";
+        String h = lines.get(0).text();               // 形如 Update(src/.../App.java)
+        int lp = h.indexOf('(');
+        int dot = h.lastIndexOf('.');
+        if (lp < 0 || dot <= lp) return "";
+        return h.substring(dot + 1).replace(")", "").trim();
+    }
+
+    /** 行号右对齐到 {@link #GUTTER} 列；null（新增/删除的对侧）用空白占位保持列对齐。 */
+    private static String gutter(Integer no) {
+        String s = (no == null) ? "" : String.valueOf(no);
+        return " ".repeat(Math.max(0, GUTTER - s.length())) + s;
+    }
+
+    /** 终端列数；拿不到时退化为 80。 */
+    private int terminalWidth() {
+        try {
+            int w = runner().tuiRunner().width();
+            return w > 0 ? w : 80;
+        } catch (Exception e) {
+            return 80;
+        }
+    }
+
+    /** 内容的显示宽度（中文占 2 列），用于底色补齐计算。 */
+    private static int displayWidth(String s) {
+        return dev.tamboui.text.CharWidth.of(s);
+    }
+
     // ── 输入 ────────────────────────────────────────────────────────────
     private Element inputElement() {
-        return textInput(inputState)
-                // 稳定 id：每帧都重建元素，若用自增自动 id 则焦点无法跨帧保持，光标会一直停在行首。
-                .id("code-tui-input")
-                .rounded()
-                .placeholder("输入消息，Enter 发送")
-                .onSubmit(this::onEnter)
-                .onKeyEvent(this::onInputKey);
+        return new InputBox();
     }
 
-    /** Enter：单飞下忙时忽略；否则取走输入、清空、提交。 */
-    private void onEnter() {
-        if (!state.isIdle()) return;
-        String text = inputState.text();
-        if (text == null || text.isBlank()) return;
-        inputState.clear();
-        current = onSubmit.submit(text);
+    /**
+     * 圆角多行输入框（<b>唯一焦点目标</b>，自绘）。
+     *
+     * <p><b>为何不直接用 {@code textArea} 元素</b>：{@code TextAreaElement.isFocusable()} 恒为 true，
+     * 未显式给 id 时会以自增 id 自注册进焦点链并<em>抢占焦点</em>；而路由器对焦点元素<em>先调内建
+     * handleKeyEvent</em>（把 Enter 当换行插入并返回 HANDLED），我们挂的发送逻辑根本轮不到 → Enter 发不出去。
+     *
+     * <p><b>做法</b>：本元素亲自持有焦点（固定 id + focusable），按键第一手先给 {@link #onInputKey}
+     * 拦下 Enter=发送 / Ctrl+C / Esc；其余编辑键（退格/方向/Home/End/字符/中文…）转交给<em>从不渲染</em>的
+     * {@link #inputKeys}（复用其完整键处理，但因不渲染故不自注册、不抢焦点）。渲染走底层 {@code TextArea}
+     * 控件（不经过会自注册的 element），并补硬件光标供中文 IME 定位。高度 = 行数 + 边框，随行数自动增高。
+     */
+    private final class InputBox implements Element {
+        @Override public boolean isFocusable() { return true; }
+        @Override public String id() { return "code-tui-input"; }
+
+        @Override
+        public EventResult handleKeyEvent(KeyEvent event, boolean focused) {
+            EventResult r = onInputKey(event);             // Ctrl+C / Esc / Enter(发送) 在此拦下
+            if (r.isHandled()) return r;
+            return inputKeys.handleKeyEvent(event, focused);   // 其余编辑键交给（不渲染的）textArea 键处理
+        }
+
+        @Override
+        public EventResult handlePasteEvent(PasteEvent event) {
+            return inputKeys.handlePasteEvent(event);      // 多行粘贴
+        }
+
+        @Override
+        public Size preferredSize(int maxW, int maxH, RenderContext ctx) {
+            int w = maxW > 0 ? maxW : 80;
+            return Size.of(w, visualRowCount(w - 2) + 2); // 自动增高：软折行后的可视行数 + 上下边框
+        }
+
+        @Override
+        public void render(Frame frame, Rect rect, RenderContext ctx) {
+            Buffer buf = frame.buffer();
+            Block block = Block.builder().borders(Borders.ALL).borderType(BorderType.ROUNDED).build();
+            block.render(rect, buf);
+            Rect inner = block.inner(rect);
+            int ix = inner.x(), iy = inner.y(), iw = Math.max(1, inner.width()), ih = inner.height();
+
+            if (inputState.text().isEmpty()) {              // 空态：占位符 + 光标在开头
+                buf.setString(ix, iy, "输入消息，Enter 发送，\\ + Enter 换行", DIM);
+                frame.setCursorPosition(ix, iy);
+                return;
+            }
+
+            int cr = inputState.cursorRow(), cc = inputState.cursorCol();
+            int vis = 0, curRow = 0, curCol = 0;
+            int n = inputState.lineCount();
+            for (int li = 0; li < n; li++) {                // 逐条逻辑行按框宽软折行，画到连续可视行
+                String logical = inputState.getLine(li);
+                List<String> segs = wrapSegments(logical, iw);
+                int base = 0;
+                for (int si = 0; si < segs.size(); si++) {
+                    String seg = segs.get(si);
+                    if (vis < ih) buf.setString(ix, iy + vis, seg, Style.EMPTY);
+                    if (li == cr) {                         // 定位光标所在的可视行/列
+                        int segStart = base, segEnd = base + seg.length();
+                        boolean last = si == segs.size() - 1;
+                        if (cc >= segStart && (cc < segEnd || (last && cc <= segEnd))) {
+                            curRow = vis;
+                            int within = Math.min(cc - segStart, seg.length());
+                            curCol = dev.tamboui.text.CharWidth.of(seg.substring(0, within));
+                        }
+                    }
+                    base += seg.length();
+                    vis++;
+                }
+            }
+            // 反显格 + 硬件光标（中文 IME 定位），夹到可视区内
+            int cx = ix + Math.min(curCol, iw - 1);
+            int cy = iy + Math.min(curRow, Math.max(0, ih - 1));
+            Cell cell = buf.get(cx, cy);
+            buf.set(cx, cy, cell.patchStyle(Style.EMPTY.reversed()));
+            frame.setCursorPosition(cx, cy);
+        }
     }
 
-    /** 输入框未消费的键：Ctrl+C 退出、Esc 取消当前回合（返回 HANDLED 以免 Esc 被路由器用去清焦点）。 */
+    /** 逻辑行按显示宽度（中文 2 列）软折行成若干可视段；空行返回单个空段。 */
+    private static List<String> wrapSegments(String line, int width) {
+        int w = Math.max(1, width);
+        List<String> segs = new ArrayList<>();
+        if (line.isEmpty()) { segs.add(""); return segs; }
+        String rest = line;
+        while (!rest.isEmpty()) {
+            String seg = dev.tamboui.text.CharWidth.substringByWidth(rest, w);
+            if (seg.isEmpty()) seg = rest.substring(0, 1);   // 兜底：框窄到放不下 1 个宽字符时也吃 1 个
+            segs.add(seg);
+            rest = rest.substring(seg.length());
+        }
+        return segs;
+    }
+
+    /** 当前文本在给定内宽下软折行后的总可视行数（≥1）。 */
+    private int visualRowCount(int innerWidth) {
+        int rows = 0, n = inputState.lineCount();
+        for (int i = 0; i < n; i++) rows += wrapSegments(inputState.getLine(i), innerWidth).size();
+        return Math.max(1, rows);
+    }
+
+    /**
+     * 输入框按键（本处理器早于 textArea 内建处理触发，返回 HANDLED 即可拦截）：
+     * <ul>
+     *   <li>Ctrl+C / quit → 退出；</li>
+     *   <li>Esc / cancel → 取消当前回合（返回 HANDLED 以免 Esc 被路由器用去清焦点）；</li>
+     *   <li>Enter（无 Shift/Alt）→ 提交并拦截，textArea 不再插入换行；</li>
+     *   <li>Shift/Alt+Enter → 放行（UNHANDLED），交给 textArea 插入换行（能否区分取决于终端）。</li>
+     * </ul>
+     */
     private EventResult onInputKey(KeyEvent k) {
         if (k.isCtrlC() || k.isQuit()) {
             quit();
@@ -154,7 +369,36 @@ public final class CodeTuiView extends InlineApp {
             state.setNotice(running ? "已取消当前回合" : "");
             return EventResult.HANDLED;
         }
+        boolean isEnter = k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n');
+        if (isEnter) {
+            // Shift/Alt+Enter → 换行（仅当终端能区分修饰键；Apple Terminal 等区分不了，见下反斜杠续行）
+            if (k.hasShift() || k.hasAlt()) return EventResult.UNHANDLED;   // 交给 inputKeys 插入 '\n'
+            // 反斜杠续行（终端无关的可靠换行，同 Claude Code）：行尾 \ + Enter → 删掉 \ 再换行
+            if (cursorAfterBackslash()) {
+                inputState.deleteBackward();
+                inputState.insert('\n');
+                return EventResult.HANDLED;
+            }
+            submitInput();
+            return EventResult.HANDLED;   // 普通 Enter → 发送（不让编辑器当作换行）
+        }
         return EventResult.UNHANDLED;
+    }
+
+    /** 光标紧跟在一个反斜杠之后（行尾 {@code \} + Enter 用作换行的判定）。 */
+    private boolean cursorAfterBackslash() {
+        int cr = inputState.cursorRow(), cc = inputState.cursorCol();
+        String line = cr >= 0 && cr < inputState.lineCount() ? inputState.getLine(cr) : "";
+        return cc > 0 && cc <= line.length() && line.charAt(cc - 1) == '\\';
+    }
+
+    /** 提交：单飞下忙时忽略；否则取走输入、清空、提交。 */
+    private void submitInput() {
+        if (!state.isIdle()) return;
+        String text = inputState.text();
+        if (text == null || text.isBlank()) return;
+        inputState.clear();
+        current = onSubmit.submit(text);
     }
 
     // ── 计划面板 / 状态行 ────────────────────────────────────────────────

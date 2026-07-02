@@ -63,7 +63,7 @@ public class CodeTuiApplication {
 
         ChatClient client = AgentTools.build(model, root, state);
         CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId);
-        CodeTuiView view = new CodeTuiView(state, agent);         // 与骨架同签名，第二参从回显桩换成真 agent
+        CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
         view.run();
     }
 

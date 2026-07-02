@@ -24,9 +24,21 @@ import java.util.List;
 public final class ConversationState implements AgentListener {
     public enum Status { IDLE, THINKING, RUNNING_TOOL }
 
-    /** 一条定稿输出行 + 其语义类型（UI 据此上色）。 */
-    public record OutputLine(String text, Kind kind) {
+    /**
+     * 一条定稿输出行 + 其语义类型（UI 据此上色）。
+     *
+     * @param text     供无差别显示/断言的文本
+     * @param kind     语义类型
+     * @param toolName 仅 {@code TOOL_START}：工具名（供 UI 判断是否渲染 diff）；其余为 null
+     * @param raw      仅 {@code TOOL_START}：工具原始 JSON 入参（供 UI 侧 {@link DiffRenderer} 渲染 diff）；其余为 null
+     */
+    public record OutputLine(String text, Kind kind, String toolName, String raw) {
         public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR }
+
+        /** 普通行（无工具元数据）。 */
+        public OutputLine(String text, Kind kind) {
+            this(text, kind, null, null);
+        }
     }
 
     private static final String USER_PREFIX = "你 › ";
@@ -128,7 +140,9 @@ public final class ConversationState implements AgentListener {
         activeTool = toolName;
         activeToolSummary = summarize(toolInput);
         String line = "⏺ " + toolName + (activeToolSummary.isEmpty() ? "" : "  " + activeToolSummary);
-        pending.add(new OutputLine(line, OutputLine.Kind.TOOL_START));
+        // 文件写入工具（edit/write）额外携带原始 JSON 入参：渲染线程据此读原文件、生成带真实行号的 diff。
+        String raw = DiffRenderer.isFileWrite(toolName) ? toolInput : null;
+        pending.add(new OutputLine(line, OutputLine.Kind.TOOL_START, toolName, raw));
     }
 
     @Override
