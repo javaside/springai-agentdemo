@@ -17,11 +17,13 @@ import java.util.function.Function;
  * 仍是旧内容，所以我们能读原文件、把 {@code old_string} 定位到真实起始行号，并对 old/new 逐行做 LCS
  * diff，保留未改动的上下文行——效果与 Claude Code 一致。文件读不到时优雅降级为「无真实行号的相对块」。
  *
- * <p>工具入参字段名（已核实自 FileSystemTools 的 {@code @ToolParam}）：
+ * <p>工具入参字段名（已核实自 FileSystemTools 的 {@code MethodParameters}，注意驼峰/下划线混用）：
  * <ul>
- *   <li>{@code edit}  → {@code {file_path, old_string, new_string, replace_all}}</li>
- *   <li>{@code write} → {@code {file_path, content}}</li>
+ *   <li>工具名 {@code Edit} / {@code Write}（首字母大写，来自 {@code @Tool(name=...)}；匹配时大小写不敏感）</li>
+ *   <li>{@code Edit}  → {@code {filePath, old_string, new_string, replace_all}}</li>
+ *   <li>{@code Write} → {@code {filePath, content}}</li>
  * </ul>
+ * 字段查找按<b>多别名</b>容错（同时接受驼峰与下划线），避免上游改名或版本差异导致 diff 失效。
  */
 public final class DiffRenderer {
 
@@ -69,10 +71,13 @@ public final class DiffRenderer {
         this.reader = reader;
     }
 
-    /** 该工具名是否是我们能渲染 diff 的文件写入工具。 */
+    /** 该工具名是否是我们能渲染 diff 的文件写入工具（大小写不敏感：Edit/Write 与 edit/write 皆可）。 */
     public static boolean isFileWrite(String toolName) {
-        return "edit".equals(toolName) || "write".equals(toolName);
+        return isEdit(toolName) || isWrite(toolName);
     }
+
+    private static boolean isEdit(String toolName) { return "edit".equalsIgnoreCase(toolName); }
+    private static boolean isWrite(String toolName) { return "write".equalsIgnoreCase(toolName); }
 
     /**
      * 渲染。无法解析（非 JSON、缺字段、非目标工具）时返回空列表——调用方据此回退到普通工具行。
@@ -80,10 +85,10 @@ public final class DiffRenderer {
     public List<DiffLine> render(String toolName, String json) {
         try {
             JsonNode n = MAPPER.readTree(json);
-            if ("edit".equals(toolName)) {
+            if (isEdit(toolName)) {
                 return renderEdit(n);
             }
-            if ("write".equals(toolName)) {
+            if (isWrite(toolName)) {
                 return renderWrite(n);
             }
         } catch (Exception ignore) {
@@ -94,9 +99,9 @@ public final class DiffRenderer {
 
     // ── edit：old_string → new_string，就地替换 ──────────────────────────
     private List<DiffLine> renderEdit(JsonNode n) {
-        String pathStr = text(n, "file_path");
-        String oldStr = text(n, "old_string");
-        String newStr = text(n, "new_string");
+        String pathStr = text(n, "filePath", "file_path", "path");
+        String oldStr = text(n, "old_string", "oldString");
+        String newStr = text(n, "new_string", "newString");
         if (pathStr == null || oldStr == null || newStr == null) {
             return List.of();
         }
@@ -133,7 +138,7 @@ public final class DiffRenderer {
 
     // ── write：整文件写入 ───────────────────────────────────────────────
     private List<DiffLine> renderWrite(JsonNode n) {
-        String pathStr = text(n, "file_path");
+        String pathStr = text(n, "filePath", "file_path", "path");
         String content = text(n, "content");
         if (pathStr == null || content == null) {
             return List.of();
@@ -260,8 +265,14 @@ public final class DiffRenderer {
         }
     }
 
-    private static String text(JsonNode n, String field) {
-        JsonNode v = n.get(field);
-        return (v == null || v.isNull()) ? null : v.asString();
+    /** 按多个候选字段名依次查找（容错驼峰/下划线/版本差异）；均不存在返回 null。 */
+    private static String text(JsonNode n, String... fields) {
+        for (String field : fields) {
+            JsonNode v = n.get(field);
+            if (v != null && !v.isNull()) {
+                return v.asString();
+            }
+        }
+        return null;
     }
 }

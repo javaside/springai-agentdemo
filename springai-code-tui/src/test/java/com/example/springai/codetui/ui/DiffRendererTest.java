@@ -39,9 +39,9 @@ class DiffRendererTest {
         DiffRenderer r = withFiles(Map.of(f.toString(), file));
 
         String json = """
-                {"file_path":"%s","old_string":"old","new_string":"new1\\nnew2"}
+                {"filePath":"%s","old_string":"old","new_string":"new1\\nnew2"}
                 """.formatted(f);
-        List<DiffLine> ls = r.render("edit", json);
+        List<DiffLine> ls = r.render("Edit", json);   // 真实工具名首字母大写
 
         assertEquals(Type.HEADER, at(ls, 0).type());
         assertEquals("Update(A.java)", at(ls, 0).text(), "标题相对 root");
@@ -69,8 +69,8 @@ class DiffRendererTest {
         Path f = ROOT.resolve("Ghost.java");
         DiffRenderer r = withFiles(Map.of());   // 空：reader 返回 null
 
-        String json = "{\"file_path\":\"" + f + "\",\"old_string\":\"a\",\"new_string\":\"b\"}";
-        List<DiffLine> ls = r.render("edit", json);
+        String json = "{\"filePath\":\"" + f + "\",\"old_string\":\"a\",\"new_string\":\"b\"}";
+        List<DiffLine> ls = r.render("Edit", json);
 
         assertEquals(Type.HEADER, at(ls, 0).type());
         assertEquals(0, count(ls, Type.CONTEXT), "读不到文件则无上下文");
@@ -86,9 +86,9 @@ class DiffRendererTest {
         DiffRenderer r = withFiles(Map.of(f.toString(), file));
 
         // old="keep\ndrop\ntail" → new="keep\nadd\ntail"：keep/tail 共享
-        String json = "{\"file_path\":\"" + f + "\",\"old_string\":\"keep\\ndrop\\ntail\","
+        String json = "{\"filePath\":\"" + f + "\",\"old_string\":\"keep\\ndrop\\ntail\","
                 + "\"new_string\":\"keep\\nadd\\ntail\"}";
-        List<DiffLine> ls = r.render("edit", json);
+        List<DiffLine> ls = r.render("Edit", json);
 
         DiffLine del = ls.stream().filter(l -> l.type() == Type.DEL).findFirst().orElseThrow();
         assertEquals("drop", del.text());
@@ -105,8 +105,8 @@ class DiffRendererTest {
         Path f = ROOT.resolve("New.txt");
         DiffRenderer r = withFiles(Map.of());
 
-        String json = "{\"file_path\":\"" + f + "\",\"content\":\"a\\nb\\nc\"}";
-        List<DiffLine> ls = r.render("write", json);
+        String json = "{\"filePath\":\"" + f + "\",\"content\":\"a\\nb\\nc\"}";
+        List<DiffLine> ls = r.render("Write", json);
 
         assertEquals("Write(New.txt)", at(ls, 0).text());
         assertEquals(3, count(ls, Type.ADD));
@@ -121,8 +121,8 @@ class DiffRendererTest {
         Path f = ROOT.resolve("Exist.txt");
         DiffRenderer r = withFiles(Map.of(f.toString(), List.of("x", "y")));
 
-        String json = "{\"file_path\":\"" + f + "\",\"content\":\"x\\nz\"}";   // y→z
-        List<DiffLine> ls = r.render("write", json);
+        String json = "{\"filePath\":\"" + f + "\",\"content\":\"x\\nz\"}";   // y→z
+        List<DiffLine> ls = r.render("Write", json);
 
         assertTrue(count(ls, Type.DEL) >= 1, "覆盖已有文件应体现删除");
         assertTrue(count(ls, Type.ADD) >= 1, "覆盖已有文件应体现新增");
@@ -133,18 +133,31 @@ class DiffRendererTest {
     @Test
     void nonFileWrite_orBadJson_returnsEmpty() {
         DiffRenderer r = withFiles(Map.of());
-        assertTrue(r.render("grep", "{\"pattern\":\"x\"}").isEmpty(), "非 edit/write 返回空");
-        assertTrue(r.render("edit", "not json").isEmpty(), "坏 JSON 返回空");
-        assertTrue(r.render("edit", "{\"file_path\":\"/p\"}").isEmpty(), "缺字段返回空");
+        assertTrue(r.render("Grep", "{\"pattern\":\"x\"}").isEmpty(), "非 Edit/Write 返回空");
+        assertTrue(r.render("Edit", "not json").isEmpty(), "坏 JSON 返回空");
+        assertTrue(r.render("Edit", "{\"filePath\":\"/p\"}").isEmpty(), "缺字段返回空");
     }
 
-    /** isFileWrite 判定。 */
+    /** isFileWrite 判定：工具名大小写不敏感（真实为 Edit/Write）。 */
     @Test
-    void isFileWrite_recognizesEditWrite() {
-        assertTrue(DiffRenderer.isFileWrite("edit"));
+    void isFileWrite_recognizesEditWrite_caseInsensitive() {
+        assertTrue(DiffRenderer.isFileWrite("Edit"), "真实工具名首字母大写");
+        assertTrue(DiffRenderer.isFileWrite("Write"));
+        assertTrue(DiffRenderer.isFileWrite("edit"), "小写也认（容错）");
         assertTrue(DiffRenderer.isFileWrite("write"));
-        assertFalse(DiffRenderer.isFileWrite("read"));
-        assertFalse(DiffRenderer.isFileWrite("grep"));
+        assertFalse(DiffRenderer.isFileWrite("Read"));
+        assertFalse(DiffRenderer.isFileWrite("Grep"));
+    }
+
+    /** 字段名容错：下划线 file_path 也能解析（老版本 / 其它命名）。 */
+    @Test
+    void fieldAlias_underscoreFilePath_alsoWorks() {
+        Path f = ROOT.resolve("Alias.txt");
+        DiffRenderer r = withFiles(Map.of());
+        String json = "{\"file_path\":\"" + f + "\",\"content\":\"hi\"}";
+        List<DiffLine> ls = r.render("Write", json);
+        assertEquals("Write(Alias.txt)", at(ls, 0).text(), "file_path 别名可用");
+        assertEquals(1, count(ls, Type.ADD));
     }
 
     /** 主体超长时截断并补一行 TRUNCATED。 */
@@ -155,9 +168,9 @@ class DiffRendererTest {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < 200; i++) sb.append("line").append(i).append("\\n");
         sb.setLength(sb.length() - 2);   // 去掉末尾 \n
-        String json = "{\"file_path\":\"" + f + "\",\"content\":\"" + sb + "\"}";
+        String json = "{\"filePath\":\"" + f + "\",\"content\":\"" + sb + "\"}";
 
-        List<DiffLine> ls = r.render("write", json);
+        List<DiffLine> ls = r.render("Write", json);
         assertEquals(1, count(ls, Type.TRUNCATED), "超长应补一行截断概括");
         assertEquals(Type.TRUNCATED, ls.get(ls.size() - 1).type(), "截断行在末尾");
     }
