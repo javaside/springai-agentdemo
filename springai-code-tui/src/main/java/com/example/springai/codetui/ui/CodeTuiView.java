@@ -113,6 +113,7 @@ public final class CodeTuiView extends InlineApp {
     private final List<String> history = new ArrayList<>();          // 已提交消息历史（↑↓ 回溯）
     private int histIndex;                                           // 回溯指针；== history.size() 表示未回溯（草稿态）
     private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
+    private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
 
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
@@ -592,10 +593,14 @@ public final class CodeTuiView extends InlineApp {
         dispatch(text);
     }
 
-    /** 真正发起一个回合：提交给 agent，并在 scrollback 打一行「本回合实际使用的模型」（确定性证据，非模型自述）。 */
+    /** 真正发起一个回合：提交给 agent。仅当模型与上次不同时才打一行「⚙ 使用模型 X」（首个回合也会打）。 */
     private void dispatch(String text) {
         current = onSubmit.submit(text);
-        state.pushInfo("⚙ 使用模型 " + onSubmit.currentModel());
+        String m = onSubmit.currentModel();
+        if (!m.equals(lastShownModel)) {
+            state.pushInfo("⚙ 使用模型 " + m);
+            lastShownModel = m;
+        }
     }
 
     // ── /model 模型选择器 ───────────────────────────────────────────────
