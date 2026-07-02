@@ -142,15 +142,44 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
         if (turnId != acceptingTurnId) return;
-        if (todo.equals(todoLines)) return;   // 去重：内容没变不重复打印（解决「一直滚动」）
+        if (todo.equals(todoLines)) return;                 // 完全没变：不打印
+        boolean progressOnly = !todo.isEmpty() && taskTexts(todo).equals(taskTexts(todoLines));
         todo.clear();
         todo.addAll(todoLines);
-        pending.add(new OutputLine("📋 计划", OutputLine.Kind.TODO));
-        for (String l : todoLines) pending.add(new OutputLine("   " + l, OutputLine.Kind.TODO));
+        if (progressOnly) {
+            // 任务集没变、只是状态推进 → 只打一行紧凑进度，避免整份清单重复刷屏
+            int done = 0;
+            String running = null;
+            for (String l : todoLines) {
+                if (l.startsWith("✓")) done++;
+                else if (l.startsWith("▶") && running == null) running = taskText(l);
+            }
+            String line = "📋 进度 " + done + "/" + todoLines.size()
+                    + (running != null ? " · ▶ " + running : "");
+            pending.add(new OutputLine(line, OutputLine.Kind.TODO));
+        } else {
+            // 新计划 / 任务集变化 → 打印完整清单
+            pending.add(new OutputLine("📋 计划", OutputLine.Kind.TODO));
+            for (String l : todoLines) pending.add(new OutputLine("   " + l, OutputLine.Kind.TODO));
+        }
     }
 
     /** 当前计划快照（用于去重比对）。 */
     public synchronized List<String> todoSnapshot() { return List.copyOf(todo); }
+
+    /** 去掉状态标记（✓/▶/○ + 空格），得到任务正文，用于判断「任务集是否变化」。 */
+    private static List<String> taskTexts(List<String> lines) {
+        List<String> out = new ArrayList<>(lines.size());
+        for (String l : lines) out.add(taskText(l));
+        return out;
+    }
+
+    private static String taskText(String line) {
+        if (!line.isEmpty() && "✓▶○".indexOf(line.charAt(0)) >= 0) {
+            return line.length() > 1 && line.charAt(1) == ' ' ? line.substring(2) : line.substring(1);
+        }
+        return line;
+    }
 
     @Override
     public synchronized void onTurnComplete(long turnId) {
