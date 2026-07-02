@@ -14,6 +14,7 @@ import dev.tamboui.tui.event.KeyEvent;
 import dev.tamboui.widgets.input.TextInputState;
 import reactor.core.Disposable;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -64,15 +65,27 @@ public final class CodeTuiView extends InlineApp {
     private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 
+    // diff 展示（Claude Code 式）：整行底色铺满，行号列灰、加/删号亮
+    private static final Style DIFF_HEADER = Style.create().fg(Color.WHITE).bold();
+    private static final Style DIFF_ADD    = Style.create().fg(Color.BRIGHT_WHITE).bg(Color.rgb(20, 80, 30));   // 绿底=新增
+    private static final Style DIFF_DEL    = Style.create().fg(Color.BRIGHT_WHITE).bg(Color.rgb(90, 25, 25));   // 红底=删除
+    private static final Style DIFF_CTX    = Style.create().fg(Color.GRAY);                                     // 上下文=灰，无底色
+    private static final Style DIFF_NO_ADD = Style.create().fg(Color.LIGHT_GREEN).bg(Color.rgb(20, 80, 30));    // 新增行号
+    private static final Style DIFF_NO_DEL = Style.create().fg(Color.LIGHT_RED).bg(Color.rgb(90, 25, 25));      // 删除行号
+    private static final Style DIFF_NO_CTX = Style.create().fg(Color.DARK_GRAY);                                // 上下文行号
+    private static final int GUTTER = 4;   // 行号列宽（右对齐到 4 位，够 9999 行）
+
     private final ConversationState state;
     private final SubmitHandler onSubmit;
     private final MarkdownRenderer md = new MarkdownRenderer();      // AI 正文 markdown + 代码语法高亮
     private final TextInputState inputState = new TextInputState();  // 输入源（原生控件托管，含中文/光标/编辑）
+    private final DiffRenderer diff;                                 // edit/write → 带真实行号的 diff 行
     private Disposable current;
 
-    public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
+    public CodeTuiView(ConversationState state, SubmitHandler onSubmit, Path root) {
         this.state = state;
         this.onSubmit = onSubmit;
+        this.diff = new DiffRenderer(root);
     }
 
     /** 初始高度：圆角输入框(3) + 状态行(1)；两个 scope 折叠时为 0，运行器再按 preferredSize 增减。 */
@@ -109,6 +122,7 @@ public final class CodeTuiView extends InlineApp {
                 }
                 case ASSISTANT ->                                  // AI 正文：markdown/语法高亮 + 缩进
                         runner().println(indented(md.renderFinalized(ol.text())));
+                case TOOL_START -> printlnToolStart(ol);           // edit/write：展开成 diff 块；其余单行摘要
                 default -> {                                       // 工具/Todo/错误：单色贴左
                     Style st = styleFor(ol.kind());
                     if (st == null) runner().println(ol.text());
@@ -119,6 +133,73 @@ public final class CodeTuiView extends InlineApp {
         for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
             runner().println(indented(md.renderFinalized(row)));
         }
+    }
+
+    /** 工具开始：edit/write 展开成 Claude Code 式 diff 块（读原文件、真实行号、增删底色）；其余工具单行摘要。 */
+    private void printlnToolStart(OutputLine ol) {
+        List<DiffRenderer.DiffLine> lines =
+                (ol.raw() == null) ? List.of() : diff.render(ol.toolName(), ol.raw());
+        if (lines.isEmpty()) {                                      // 非文件写入 / 无法解析：回退单行摘要
+            runner().println(Text.styled(ol.text(), TOOL));
+            return;
+        }
+        int width = terminalWidth();
+        for (DiffRenderer.DiffLine dl : lines) {
+            runner().println(diffLine(dl, width));
+        }
+    }
+
+    /** 把一行 DiffLine 渲染成整行 Text；ADD/DEL 行把底色补齐到终端宽度，形成整行色带。 */
+    private static Text diffLine(DiffRenderer.DiffLine dl, int width) {
+        return switch (dl.type()) {
+            case HEADER -> Text.from(Line.from(Span.raw(INDENT), Span.styled(dl.text(), DIFF_HEADER)));
+            case TRUNCATED -> Text.from(Line.from(
+                    Span.raw(INDENT), Span.raw(gutter(null)), Span.raw(" "), Span.styled(dl.text(), DIM)));
+            case CONTEXT -> diffBody(dl.newNo() != null ? dl.newNo() : dl.oldNo(), " ", dl.text(),
+                    DIFF_NO_CTX, DIFF_CTX, width, false);
+            case ADD -> diffBody(dl.newNo(), "+", dl.text(), DIFF_NO_ADD, DIFF_ADD, width, true);
+            case DEL -> diffBody(dl.oldNo(), "-", dl.text(), DIFF_NO_DEL, DIFF_DEL, width, true);
+        };
+    }
+
+    /**
+     * 组装一行 diff 主体：{@code INDENT + 行号 + 符号 + 内容}。
+     * fillBg=true 时（ADD/DEL）把内容右侧空格补到终端宽度，使底色铺满整行。
+     */
+    private static Text diffBody(Integer no, String sign, String content,
+                                 Style noStyle, Style bodyStyle, int width, boolean fillBg) {
+        String num = gutter(no);
+        String body = sign + " " + content;
+        if (fillBg) {
+            int used = INDENT.length() + num.length() + displayWidth(body);
+            int pad = Math.max(0, width - used);
+            body = body + " ".repeat(pad);
+        }
+        return Text.from(Line.from(
+                Span.raw(INDENT),
+                Span.styled(num, noStyle),
+                Span.styled(body, bodyStyle)));
+    }
+
+    /** 行号右对齐到 {@link #GUTTER} 列；null（新增/删除的对侧）用空白占位保持列对齐。 */
+    private static String gutter(Integer no) {
+        String s = (no == null) ? "" : String.valueOf(no);
+        return " ".repeat(Math.max(0, GUTTER - s.length())) + s;
+    }
+
+    /** 终端列数；拿不到时退化为 80。 */
+    private int terminalWidth() {
+        try {
+            int w = runner().tuiRunner().width();
+            return w > 0 ? w : 80;
+        } catch (Exception e) {
+            return 80;
+        }
+    }
+
+    /** 内容的显示宽度（中文占 2 列），用于底色补齐计算。 */
+    private static int displayWidth(String s) {
+        return dev.tamboui.text.CharWidth.of(s);
     }
 
     // ── 输入 ────────────────────────────────────────────────────────────
