@@ -27,6 +27,8 @@
         <module>springai-core-demo</module>
         <module>springai-agent-demo</module>
         <module>springai-boot-demo</module>
+        <module>springai-jline-demo</module>
+        <module>springai-code-tui</module>
     </modules>
 
     <properties>
@@ -38,6 +40,8 @@
         <!-- 社区项目 spring-ai-agent-utils（提供 SkillsTool 等），针对 Spring AI 2.0 -->
         <spring-ai-agent-utils.version>0.10.0</spring-ai-agent-utils.version>
         <jline.version>3.30.13</jline.version>
+        <!-- TamboUI（Java TUI，仿 ratatui）；group dev.tamboui，实测有 tamboui-bom -->
+        <tamboui.version>0.4.0</tamboui.version>
     </properties>
 
     <dependencyManagement>
@@ -55,6 +59,14 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- TamboUI 版本统一管理（实测：dev.tamboui:tamboui-bom 存在，版本 0.2.0/0.3.0/0.4.0） -->
+            <dependency>
+                <groupId>dev.tamboui</groupId>
+                <artifactId>tamboui-bom</artifactId>
+                <version>${tamboui.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

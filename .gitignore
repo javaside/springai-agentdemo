@@ -4,3 +4,6 @@ target/
 *.iml
 .DS_Store
 .vscode/
+# code-tui 运行时日志（logback 写到 ${user.dir}）
+springai-code-tui.log
+*.log

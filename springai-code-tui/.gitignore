@@ -1,0 +1,17 @@
+# Maven 构建产物
+target/
+
+# 编译产物
+*.class
+
+# 运行时日志（logback 写入 logs/）
+logs/
+*.log
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
