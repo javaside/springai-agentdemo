@@ -110,6 +110,9 @@ public final class CodeTuiView extends InlineApp {
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
+    private final List<String> history = new ArrayList<>();          // 已提交消息历史（↑↓ 回溯）
+    private int histIndex;                                           // 回溯指针；== history.size() 表示未回溯（草稿态）
+    private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
 
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
@@ -474,9 +477,46 @@ public final class CodeTuiView extends InlineApp {
             submitInput();
             return EventResult.HANDLED;   // 普通 Enter → 发送（不让编辑器当作换行）
         }
+        // ↑ 在首行 → 回溯更早的历史；↓ 在末行 → 回溯更晚（越过最新恢复草稿）。非边界行则放行给编辑器移动光标。
+        if (k.code() == KeyCode.UP && inputState.cursorRow() == 0) {
+            EventResult r = recallPrev();
+            if (r.isHandled()) return r;
+        }
+        if (k.code() == KeyCode.DOWN && inputState.cursorRow() == inputState.lineCount() - 1) {
+            EventResult r = recallNext();
+            if (r.isHandled()) return r;
+        }
         slashDismissed = false;          // 其余键将落到编辑器改动文本 → 让补全菜单随新前缀重新出现
         slashIndex = 0;
+        histIndex = history.size();       // 非 ↑↓ 的按键（含左右移动/编辑）退出回溯态
         return EventResult.UNHANDLED;
+    }
+
+    /** ↑：回溯到更早的一条历史。历史为空则不拦截（UNHANDLED）。 */
+    private EventResult recallPrev() {
+        if (history.isEmpty()) return EventResult.UNHANDLED;
+        if (histIndex >= history.size()) histDraft = inputState.text();   // 首次回溯：存草稿
+        if (histIndex > 0) {
+            histIndex--;
+            inputState.setText(history.get(histIndex));
+            inputState.moveCursorToEnd();
+        }
+        return EventResult.HANDLED;       // 已到最早也吞掉，避免光标乱跳
+    }
+
+    /** ↓：回溯到更晚的一条历史；越过最新则恢复草稿。未在回溯态则不拦截。 */
+    private EventResult recallNext() {
+        if (histIndex >= history.size()) return EventResult.UNHANDLED;    // 未回溯：放行
+        histIndex++;
+        inputState.setText(histIndex >= history.size() ? histDraft : history.get(histIndex));
+        inputState.moveCursorToEnd();
+        return EventResult.HANDLED;
+    }
+
+    /** 记录一条已提交消息（跳过与上一条重复的），并复位回溯指针。 */
+    private void addHistory(String text) {
+        if (history.isEmpty() || !history.get(history.size() - 1).equals(text)) history.add(text);
+        histIndex = history.size();
     }
 
     // ── 斜杠命令自动补全（仿 Claude Code） ───────────────────────────────
@@ -527,6 +567,7 @@ public final class CodeTuiView extends InlineApp {
     private void submitInput() {
         String text = inputState.text();
         if (text == null || text.isBlank()) return;
+        addHistory(text);                            // 记入历史（含斜杠命令），供 ↑↓ 回溯
         String cmd = text.strip();
         if (cmd.equals("/model")) {                  // 斜杠命令：打开模型选择器（仿 Claude Code）
             inputState.clear();
