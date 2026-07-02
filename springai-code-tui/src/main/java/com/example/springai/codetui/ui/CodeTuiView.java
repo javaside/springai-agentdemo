@@ -2,162 +2,204 @@ package com.example.springai.codetui.ui;
 
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
-import dev.tamboui.layout.Rect;
 import dev.tamboui.style.Color;
-import dev.tamboui.style.Overflow;
 import dev.tamboui.style.Style;
-import dev.tamboui.terminal.Frame;
-import dev.tamboui.text.CharWidth;
 import dev.tamboui.text.Line;
 import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
-import dev.tamboui.tui.InlineEventHandler;
-import dev.tamboui.tui.InlineTuiConfig;
-import dev.tamboui.tui.InlineTuiRunner;
-import dev.tamboui.tui.Renderer;
-import dev.tamboui.tui.event.Event;
+import dev.tamboui.toolkit.app.InlineApp;
+import dev.tamboui.toolkit.element.Element;
+import dev.tamboui.toolkit.event.EventResult;
 import dev.tamboui.tui.event.KeyEvent;
-import dev.tamboui.tui.event.TickEvent;
-import dev.tamboui.widgets.paragraph.Paragraph;
+import dev.tamboui.widgets.input.TextInputState;
 import reactor.core.Disposable;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Claude Code 式行内视图（TamboUI {@link InlineTuiRunner}）：定稿行按类型分色 println 进 scrollback，
- * 底部固定 5 行 live 区（流式预览 + 圆角输入框 + 状态行）。live 区高度固定不变，避免行内视口记账错乱。
- */
-public final class CodeTuiView implements InlineEventHandler, Renderer {
+import static dev.tamboui.toolkit.InlineToolkit.scope;
+import static dev.tamboui.toolkit.Toolkit.column;
+import static dev.tamboui.toolkit.Toolkit.richText;
+import static dev.tamboui.toolkit.Toolkit.text;
+import static dev.tamboui.toolkit.Toolkit.textInput;
 
-    private static final int LIVE_HEIGHT = 5;   // 预览 + 上边框 + 输入 + 下边框 + 状态（固定基座）
-    private static final int TODO_CAP = 10;      // 计划面板最多显示几条（封顶，配合 grow-only 限制高度）
-    private static final String INDENT = "  ";  // 对话内容（用户/AI）缩进；工具行不缩进
+/**
+ * Claude Code 式行内视图，改用官方 <b>Toolkit 声明式 DSL</b>（{@link InlineApp} + {@code InlineToolkitRunner}）。
+ *
+ * <p><b>为什么是它</b>：把「固定在输入框上方、原地更新、用完即收起」的计划面板做对，关键在于
+ * <em>每帧都按 {@code preferredSize} 调用 {@code setContentHeight}（可增可减）并且每个 tick 都重绘</em>。
+ * Toolkit 的运行器正是这么做的：{@code InlineScopeElement} 隐藏时 {@code preferredSize=0}，
+ * 于是 {@code column} 收缩 → 视口高度收缩 → 腾出的行被回收；而「每 tick 必重绘」让底层
+ * {@code InlineDisplay} 的相对光标记账始终与终端实际一致，从根上规避了此前手写渲染里「跳帧 + 收缩
+ * (deleteLines)」导致的光标漂移、面板消失。
+ *
+ * <p><b>布局（自底向上钉在终端底部，其上是 println 出来的 scrollback）</b>：
+ * <pre>
+ *   [流式预览]        —— AI 生成中的当前残行（未换行段），{@code scope} 空则收起
+ *   [📋 计划面板]     —— 完整清单，✓/▶/○ 分色，{@code scope} 无计划则收起
+ *   [圆角输入框]      —— 原生 {@code textInput}，自带光标/编辑/中文输入
+ *   [状态行]
+ * </pre>
+ *
+ * <p><b>定稿行下沉</b>：{@code pending} 与流式完整行在渲染线程（经
+ * {@code scheduleRepeating → runOnRenderThread}，在两帧之间、非绘制中途执行）用 {@code println}
+ * 推进 scrollback，markdown/语法高亮沿用 {@link MarkdownRenderer}。
+ */
+public final class CodeTuiView extends InlineApp {
+
+    private static final int TODO_CAP = 10;      // 计划面板最多显示几条
+    private static final String INDENT = "  ";  // 对话内容缩进；工具/计划行自带前缀
 
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
-    private static final Style DIM     = Style.create().fg(Color.DARK_GRAY);
-    private static final Style USER    = Style.create().fg(Color.GRAY);     // 用户输入：灰色，次要
-    private static final Style TOOL    = Style.create().fg(Color.DARK_GRAY);
-    private static final Style OK      = Style.create().fg(Color.GREEN);
-    private static final Style FAIL    = Style.create().fg(Color.RED);
-    private static final Style TODO    = Style.create().fg(Color.YELLOW);
-    private static final Style ERROR   = Style.create().fg(Color.RED).bold();
-    private static final Style THINK   = Style.create().fg(Color.YELLOW);
-    private static final Style RUNNING = Style.create().fg(Color.CYAN);
+    private static final Style DIM        = Style.create().fg(Color.DARK_GRAY);
+    private static final Style USER       = Style.create().fg(Color.GRAY);
+    private static final Style TOOL       = Style.create().fg(Color.DARK_GRAY);
+    private static final Style OK         = Style.create().fg(Color.GREEN);
+    private static final Style FAIL       = Style.create().fg(Color.RED);
+    private static final Style TODO       = Style.create().fg(Color.YELLOW);
+    private static final Style ERROR      = Style.create().fg(Color.RED).bold();
+    private static final Style THINK      = Style.create().fg(Color.YELLOW);
+    private static final Style RUNNING    = Style.create().fg(Color.CYAN);
     private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 
     private final ConversationState state;
     private final SubmitHandler onSubmit;
-    private final MarkdownRenderer md = new MarkdownRenderer();   // AI 正文 markdown + 代码语法高亮
+    private final MarkdownRenderer md = new MarkdownRenderer();      // AI 正文 markdown + 代码语法高亮
+    private final TextInputState inputState = new TextInputState();  // 输入源（原生控件托管，含中文/光标/编辑）
     private Disposable current;
-    private String lastSig = "";                                  // live 区内容签名，用于「有变化才重绘」
-    private int liveHeight = LIVE_HEIGHT;                         // 当前 live 高度，grow-only（只增不减，规避收缩漂移）
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit) {
         this.state = state;
         this.onSubmit = onSubmit;
     }
 
-    public void run() throws Exception {
-        InlineTuiConfig cfg = InlineTuiConfig.builder(LIVE_HEIGHT).tickRate(Duration.ofMillis(33)).build();
-        try (InlineTuiRunner runner = InlineTuiRunner.create(cfg)) {
-            runner.run(this, this);
-        }
+    /** 初始高度：圆角输入框(3) + 状态行(1)；两个 scope 折叠时为 0，运行器再按 preferredSize 增减。 */
+    @Override
+    protected int height() {
+        return 4;
+    }
+
+    /** 每帧构造 UI（纯读状态，不产生副作用；scrollback 的 println 放在 {@link #drain} 里另行推进）。 */
+    @Override
+    protected Element render() {
+        List<String> todos = state.todoSnapshot();
+        String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
+        return column(
+                scope(!tail.isEmpty(), richText(indented(md.renderPreview(tail))).ellipsisStart()),
+                scope(!todos.isEmpty(), todoChildren(todos)),
+                inputElement(),
+                statusLine());
     }
 
     @Override
-    public boolean handle(Event e, InlineTuiRunner runner) {
-        if (e instanceof TickEvent) {
-            boolean printed = false;
-            for (OutputLine ol : state.drainPending()) {
-                printed = true;
-                switch (ol.kind()) {
-                    case USER -> {
-                        md.reset();                                  // 新回合：清 markdown 代码围栏状态
-                        runner.println(Text.from(Line.from(Span.raw(INDENT), Span.styled(ol.text(), USER))));
-                    }
-                    case ASSISTANT ->                                // AI 正文：markdown/语法高亮 + 缩进
-                            runner.println(indented(md.renderFinalized(ol.text())));
-                    default -> {                                     // 工具/Todo/错误：单色贴左
-                        Style st = styleFor(ol.kind());
-                        if (st == null) runner.println(ol.text());
-                        else runner.println(Text.styled(ol.text(), st));
-                    }
+    protected void onStart() {
+        // 在渲染线程、两帧之间安全推进 scrollback（println 会移动光标/插行，绝不能在绘制中途调用）。
+        runner().scheduleRepeating(() -> runner().runOnRenderThread(this::drain), Duration.ofMillis(33));
+    }
+
+    // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
+    private void drain() {
+        for (OutputLine ol : state.drainPending()) {
+            switch (ol.kind()) {
+                case USER -> {
+                    md.reset();   // 新回合：清 markdown 代码围栏状态
+                    runner().println(Text.from(Line.from(Span.raw(INDENT), Span.styled(ol.text(), USER))));
+                }
+                case ASSISTANT ->                                  // AI 正文：markdown/语法高亮 + 缩进
+                        runner().println(indented(md.renderFinalized(ol.text())));
+                default -> {                                       // 工具/Todo/错误：单色贴左
+                    Style st = styleFor(ol.kind());
+                    if (st == null) runner().println(ol.text());
+                    else runner().println(Text.styled(ol.text(), st));
                 }
             }
-            for (String row : state.takeCompleteStreamingLines()) {  // 流式完整行：markdown/语法高亮 + 缩进
-                runner.println(indented(md.renderFinalized(row)));
-                printed = true;
-            }
-            // 计划面板：grow-only —— 只增高、绝不收缩（InlineDisplay 收缩用 deleteLines+相对光标，
-            // 多轮后会漂移导致面板消失；只增高则规避该路径）。封顶避免无限增高。
-            int want = LIVE_HEIGHT + todoBlockHeight(state.todoSnapshot().size());
-            boolean grew = false;
-            if (want > liveHeight) {
-                liveHeight = Math.min(want, LIVE_HEIGHT + TODO_CAP + 1);
-                runner.setContentHeight(liveHeight);
-                grew = true;
-            }
-            // 仅在有变化时重绘（否则 30fps 空刷让输入框闪动）；grow 后必重绘让 resizeDisplay 生效。
-            String sig = liveSignature();
-            boolean changed = printed || grew || !sig.equals(lastSig);
-            lastSig = sig;
-            return changed;
         }
-        if (!(e instanceof KeyEvent k)) return false;
-        if (k.isCtrlC()) { runner.quit(); return true; }
+        for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
+            runner().println(indented(md.renderFinalized(row)));
+        }
+    }
+
+    // ── 输入 ────────────────────────────────────────────────────────────
+    private Element inputElement() {
+        return textInput(inputState)
+                .rounded()
+                .placeholder("输入消息，Enter 发送")
+                .onSubmit(this::onEnter)
+                .onKeyEvent(this::onInputKey);
+    }
+
+    /** Enter：单飞下忙时忽略；否则取走输入、清空、提交。 */
+    private void onEnter() {
+        if (!state.isIdle()) return;
+        String text = inputState.text();
+        if (text == null || text.isBlank()) return;
+        inputState.clear();
+        current = onSubmit.submit(text);
+    }
+
+    /** 输入框未消费的键：Ctrl+C 退出、Esc 取消当前回合（返回 HANDLED 以免 Esc 被路由器用去清焦点）。 */
+    private EventResult onInputKey(KeyEvent k) {
+        if (k.isCtrlC() || k.isQuit()) {
+            quit();
+            return EventResult.HANDLED;
+        }
         if (k.isCancel()) {
             boolean running = !state.isIdle();
             if (current != null) { current.dispose(); current = null; }
             state.cancelCurrent();
             state.setNotice(running ? "已取消当前回合" : "");
-            return true;
+            return EventResult.HANDLED;
         }
-        if (k.isConfirm()) {
-            if (!state.isIdle()) return true;
-            String text = state.takeInput();
-            if (!text.isBlank()) current = onSubmit.submit(text);
-            return true;
+        return EventResult.UNHANDLED;
+    }
+
+    // ── 计划面板 / 状态行 ────────────────────────────────────────────────
+    private Element[] todoChildren(List<String> todos) {
+        List<Element> els = new ArrayList<>();
+        els.add(text("📋 计划").style(TODO_TITLE));
+        int shown = Math.min(todos.size(), TODO_CAP);
+        for (int i = 0; i < shown; i++) els.add(todoRow(todos.get(i)));
+        if (todos.size() > TODO_CAP) {
+            els.add(text("  … 还有 " + (todos.size() - TODO_CAP) + " 项").style(DIM));
         }
-        if (k.isDeleteBackward()) { state.backspace(); return true; }
-        int cp = k.codePoint();
-        if (cp > 0 && !Character.isISOControl(cp) && !k.hasCtrl() && !k.hasAlt()) {
-            state.typeString(new String(Character.toChars(cp)));
-            return true;
-        }
-        return false;
+        return els.toArray(new Element[0]);
     }
 
-    /** live 区当前内容签名：任一影响显示的状态变化都会改变它，用于决定是否重绘。 */
-    private String liveSignature() {
-        return state.currentInput() + '' + state.streaming() + ''
-                + state.status() + '' + state.notice() + ''
-                + state.activeTool() + '' + String.join("", state.todoSnapshot());
+    /** 一条计划：✓完成=绿 / ▶进行中=亮黄加粗 / ○待办=暗。 */
+    private static Element todoRow(String s) {
+        Style st = s.startsWith("✓") ? OK : s.startsWith("▶") ? TODO_RUN : DIM;
+        return text("  " + s).style(st);
     }
 
-    /** 计划面板占多少行：标题(1) + 条目(封顶 TODO_CAP) + 溢出提示(1)。空则 0。 */
-    private static int todoBlockHeight(int n) {
-        if (n <= 0) return 0;
-        return 1 + Math.min(n, TODO_CAP) + (n > TODO_CAP ? 1 : 0);
+    private Element statusLine() {
+        String notice = state.notice();
+        if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
+        return switch (state.status()) {
+            case IDLE -> text("Enter 发送 · Esc 取消 · Ctrl+C 退出").style(DIM);
+            case THINKING -> text("● 思考中… · Esc 取消 · Ctrl+C 退出").style(THINK);
+            case RUNNING_TOOL -> {
+                String s = state.activeToolSummary();
+                yield text("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "… · Esc 取消")
+                        .style(RUNNING);
+            }
+        };
     }
 
-    /** 一条计划：按状态标记（✓完成/▶进行中/○待办）分色。 */
-    private static Text todoLine(String s) {
-        Style st;
-        if (s.startsWith("✓")) st = OK;                 // 完成：绿
-        else if (s.startsWith("▶")) st = TODO_RUN;      // 进行中：亮黄加粗
-        else st = DIM;                                  // 待办：暗
-        return Text.styled("  " + s, st);
-    }
-
+    // ── 内部工具 ─────────────────────────────────────────────────────────
     /** 给渲染出的 span 列表加左缩进，组成一行 Text。 */
     private static Text indented(List<Span> spans) {
         List<Span> all = new ArrayList<>(spans.size() + 1);
         all.add(Span.raw(INDENT));
         all.addAll(spans);
         return Text.from(Line.from(all));
+    }
+
+    /** 取最后一个真实换行之后的残段（流式预览用；complete 行由 drain 下沉 scrollback）。 */
+    private static String lastLine(String s) {
+        int i = s.lastIndexOf('\n');
+        return i < 0 ? s : s.substring(i + 1);
     }
 
     private static Style styleFor(OutputLine.Kind kind) {
@@ -170,105 +212,5 @@ public final class CodeTuiView implements InlineEventHandler, Renderer {
             case TODO -> TODO;
             case ERROR -> ERROR;
         };
-    }
-
-    @Override
-    public void render(Frame f) {
-        Rect a = f.area();
-        int w = Math.max(1, a.width());
-        int x = a.x();
-        int bottom = a.y() + a.height() - 1;
-
-        int yStatus = bottom;
-        int yBottom = bottom - 1;
-        int yInput = bottom - 2;
-        int yTop = bottom - 3;
-
-        List<String> todos = state.todoSnapshot();
-        int tb = todoBlockHeight(todos.size());
-        int yTodoTop = yTop - tb;             // 计划面板首行（在输入框上方）
-        int yPreview = yTodoTop - 1;
-
-        // 流式残行预览（AI 生成中——markdown/语法高亮 + 缩进；用当前状态但不改变它）
-        if (yPreview >= a.y()) {
-            String s = state.streaming();
-            if (s.isEmpty()) {
-                put(f, x, yPreview, a.width(), Text.from(""));
-            } else {
-                String shown = fitEnd(s, Math.max(1, w - INDENT.length()));
-                put(f, x, yPreview, a.width(), indented(md.renderPreview(shown)));
-            }
-        }
-        // 计划进度面板（固定在输入框上方，原地更新，不进 scrollback）
-        if (tb > 0 && yTodoTop >= a.y()) {
-            put(f, x, yTodoTop, a.width(), Text.styled("📋 计划", TODO_TITLE));
-            int shown = Math.min(todos.size(), TODO_CAP);
-            for (int i = 0; i < shown; i++) {
-                put(f, x, yTodoTop + 1 + i, a.width(), todoLine(todos.get(i)));
-            }
-            if (todos.size() > TODO_CAP) {
-                put(f, x, yTodoTop + 1 + shown, a.width(),
-                        Text.styled("  … 还有 " + (todos.size() - TODO_CAP) + " 项", DIM));
-            }
-        }
-        // 圆角输入框
-        if (w >= 4) {
-            put(f, x, yTop, a.width(), Text.styled("╭" + "─".repeat(w - 2) + "╮", DIM));
-            put(f, x, yInput, a.width(), inputBoxLine(w));
-            put(f, x, yBottom, a.width(), Text.styled("╰" + "─".repeat(w - 2) + "╯", DIM));
-        } else {
-            put(f, x, yInput, a.width(), Text.from("› " + state.currentInput()));
-        }
-        // 状态行
-        put(f, x, yStatus, a.width(), statusText());
-
-        // 光标：│ + 空格 + "› " + 输入
-        int cursorCol = x + 2 + CharWidth.of("› ") + CharWidth.of(currentShownInput(w));
-        f.setCursorPosition(cursorCol, yInput);
-    }
-
-    /** 输入行：│ ‹prompt› ...pad... │，边框暗色、提示符青色、输入默认色。 */
-    private Text inputBoxLine(int w) {
-        int inner = Math.max(0, w - 4);              // "│ " + inner + " │"
-        String shownInput = currentShownInput(w);
-        int used = CharWidth.of("› ") + CharWidth.of(shownInput);
-        int pad = Math.max(0, inner - used);
-        return Text.from(Line.from(
-                Span.styled("│ ", DIM),
-                Span.raw("› "),
-                Span.raw(shownInput),
-                Span.raw(" ".repeat(pad)),
-                Span.styled(" │", DIM)));
-    }
-
-    /** 输入过长时显示尾部（光标端），使正在输入处始终可见。 */
-    private String currentShownInput(int w) {
-        int avail = Math.max(0, (w - 4) - CharWidth.of("› "));
-        String t = state.currentInput();
-        return CharWidth.of(t) <= avail ? t : CharWidth.substringByWidthFromEnd(t, avail);
-    }
-
-    private Text statusText() {
-        String notice = state.notice();
-        if (!notice.isEmpty()) return Text.styled(notice + " · Ctrl+C 退出", THINK);
-        return switch (state.status()) {
-            case IDLE -> Text.styled("Enter 发送 · Esc 取消 · Ctrl+C 退出", DIM);
-            case THINKING -> Text.styled("● 思考中… · Esc 取消 · Ctrl+C 退出", THINK);
-            case RUNNING_TOOL -> {
-                String s = state.activeToolSummary();
-                yield Text.styled("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "… · Esc 取消",
-                        RUNNING);
-            }
-        };
-    }
-
-    private static void put(Frame f, int x, int y, int w, Text t) {
-        f.renderWidget(Paragraph.builder().text(t).overflow(Overflow.CLIP).build(), new Rect(x, y, w, 1));
-    }
-
-    /** 显示尾部（最新生成的部分），供流式预览用。 */
-    private static String fitEnd(String s, int w) {
-        if (s.isEmpty() || CharWidth.of(s) <= w) return s;
-        return CharWidth.substringByWidthFromEnd(s, w);
     }
 }
