@@ -4,6 +4,7 @@ import org.springaicommunity.agent.tools.FileSystemTools;
 import org.springaicommunity.agent.tools.GlobTool;
 import org.springaicommunity.agent.tools.GrepTool;
 import org.springaicommunity.agent.tools.ShellTools;
+import org.springaicommunity.agent.tools.SmartWebFetchTool;
 import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springaicommunity.agent.utils.AgentEnvironment;
@@ -26,8 +27,12 @@ import java.util.List;
 /**
  * AgentTools —— 组装编码 Agent 用的 {@link ChatClient} 的工厂。
  *
- * <p>把 5 个社区工具（FileSystem/Shell/Grep/Glob/TodoWrite）用 {@link ToolEventCallback} 装饰后
+ * <p>把 6 个社区工具（FileSystem/Shell/Grep/Glob/TodoWrite/SmartWebFetch）用 {@link ToolEventCallback} 装饰后
  * 注册进 ChatClient，并配上 {@link SessionMemoryAdvisor} 会话记忆与 {@link AgentEnvironment} 环境系统提示。
+ *
+ * <p><b>网页获取（SmartWebFetch）</b>：{@link SmartWebFetchTool} 抓取网页→转 Markdown→用一个「裸」ChatClient
+ * 按 prompt 做 AI 抽取（带 15 分钟缓存 / 重试）。这里关掉 domainSafetyCheck——它会去请求 {@code claude.ai}
+ * 的域名信息 API，在本环境多半不可达、只会徒增延迟；本地编码 Agent 用不着这层校验。
  *
  * <p><b>会话记忆（spring-ai-session）</b>：取代原先的 {@code MessageChatMemoryAdvisor} 定长滑窗。
  * 事件溯源存储 + 「回合/token 感知」压缩——超过 token 阈值时用 LLM 滚动摘要把更早历史压成一条摘要事件，
@@ -66,7 +71,7 @@ public final class AgentTools {
      */
     private static final int COMPACTION_TOKEN_THRESHOLD = 400_000;
 
-    /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收、并可经 conversation_search 召回。须 > overlapSize 且其 token 量远低于阈值。可调。 */
+    /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收（压缩为销毁式，见类注释）。须 > overlapSize 且其 token 量远低于阈值。可调。 */
     private static final int MAX_EVENTS_TO_KEEP = 120;
 
     /** 会话记忆的默认用户 id（单会话 TUI，仅作归属占位）。 */
@@ -85,6 +90,8 @@ public final class AgentTools {
             - 当任务包含 3 个或更多明确步骤、或用户要求你组织任务时，先调用 TodoWrite 把工作拆成结构化清单再执行；
               同一时间只允许一个任务处于 in_progress，开始前标 in_progress、完成后立刻标 completed。
             - 修改文件后，用 Shell 运行构建 / 测试 / 检查命令来验证改动确实生效，再给出结论。
+            - 需要项目之外的信息（外部文档、库用法、报错含义等）时，用 webFetch 传入网址和你要抽取的问题来获取；
+              它只读网页、不能登录或执行 JS。别凭记忆臆断外部事实。
             - 回答简洁，聚焦用户的目标本身。
 
             关于工作边界（请务必遵守）：
@@ -124,8 +131,19 @@ public final class AgentTools {
                         listener.onTodoUpdated(ToolEventCallback.currentTurnId(), toLines(todos)))
                 .build();
 
+        // 「裸」ChatClient（同模型、无工具、无记忆 advisor）：一份复用给两处内部 LLM 调用——
+        // ① SmartWebFetch 的网页内容 AI 抽取；② 会话历史的滚动摘要。都不能带工具/记忆，否则会递归触发工具或记忆循环。
+        ChatClient auxClient = ChatClient.builder(model).build();
+
+        // 网页获取工具：抓取→转 Markdown→按 prompt AI 抽取。关掉 domainSafetyCheck（见类注释）。
+        SmartWebFetchTool webFetch = SmartWebFetchTool.builder(auxClient)
+                .domainSafetyCheck(false)
+                .maxContentLength(150_000)   // v4-flash 上下文 1M，抽取前允许更长原文
+                .maxRetries(3)
+                .build();
+
         // org.springframework.ai.support.ToolCallbacks（spring-ai-model）
-        ToolCallback[] raw = ToolCallbacks.from(fs, sh, grep, glob, todo);
+        ToolCallback[] raw = ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch);
         ToolCallback[] decorated = new ToolCallback[raw.length];
         for (int i = 0; i < raw.length; i++) {
             decorated[i] = new ToolEventCallback(raw[i], listener);
@@ -136,10 +154,6 @@ public final class AgentTools {
                 .sessionRepository(InMemorySessionRepository.builder().build())
                 .build();
 
-        // 摘要用「裸」ChatClient：同一个 DeepSeek 模型，但不带工具、不带记忆 advisor，
-        // 避免压缩时的摘要调用递归触发记忆 / 工具循环。
-        ChatClient summarizer = ChatClient.builder(model).build();
-
         // token 估算器（JTokkit，spring-ai-commons 提供）：trigger 与摘要策略都需显式提供，无默认值。
         TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
 
@@ -148,7 +162,7 @@ public final class AgentTools {
                 .compactionTrigger(TokenCountTrigger.builder()
                         .threshold(COMPACTION_TOKEN_THRESHOLD)
                         .tokenCountEstimator(tokenCountEstimator).build())
-                .compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(summarizer)
+                .compactionStrategy(RecursiveSummarizationCompactionStrategy.builder(auxClient)
                         .maxEventsToKeep(MAX_EVENTS_TO_KEEP)
                         .tokenCountEstimator(tokenCountEstimator).build())
                 .build();
