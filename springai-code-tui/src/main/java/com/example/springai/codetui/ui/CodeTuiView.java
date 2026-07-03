@@ -1,6 +1,5 @@
 package com.example.springai.codetui.ui;
 
-import com.example.springai.codetui.agent.ContextStats;
 import com.example.springai.codetui.agent.ModelOption;
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
@@ -72,6 +71,7 @@ public final class CodeTuiView extends InlineApp {
     private final Element inputKeys = textArea(inputState);
     private final StatusBar statusBar = new StatusBar();             // 状态行动画内容（波光/压缩条）渲染
     private final ScrollbackPrinter printer;                        // scrollback 打印（欢迎/用户块/工具 diff/助手正文）
+    private final ContextUsage ctxUsage;                             // 上下文用量追踪/报告（/context 报告 + 状态栏后缀）
     private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
@@ -83,7 +83,6 @@ public final class CodeTuiView extends InlineApp {
     private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
     private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
     private long animTick;                                           // 动画帧计数（drain 每 ~33ms 自增），驱动状态栏波光
-    private volatile ContextStats ctxStats = ContextStats.empty();   // 状态栏上下文用量快照：drain 里节流刷新，render 只读缓存（重算要遍历全部消息 + 估算 token，绝不每帧做）
 
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
@@ -103,6 +102,7 @@ public final class CodeTuiView extends InlineApp {
             @Override public void println(String s) { runner().println(s); }
         };
         this.printer = new ScrollbackPrinter(sink, root, this::terminalWidth, CodeTuiView::wrapSegments);
+        this.ctxUsage = new ContextUsage(onSubmit::contextStats, state::pushInfo);
     }
 
     /** 初始高度：圆角输入框(空态 3=边框2+1 行) + 状态行(1)；输入换行后 textArea 的 preferredSize 随行数增高，运行器逐帧跟随。 */
@@ -137,7 +137,7 @@ public final class CodeTuiView extends InlineApp {
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
     private void drain() {
         animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
-        if (animTick % 30 == 0) refreshCtxStats();             // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
+        if (animTick % 30 == 0) ctxUsage.refresh();            // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
         for (OutputLine ol : state.drainPending()) {
             switch (ol.kind()) {
                 case USER       -> printer.userBlock(ol.text());   // 灰底白字块，仿 Claude Code
@@ -447,7 +447,7 @@ public final class CodeTuiView extends InlineApp {
         }
         if (cmd.equals("/context")) {          // 只读快照：任何时刻都可查（含回合进行中），不打断
             inputState.clear();
-            printContext();
+            ctxUsage.report();
             return;
         }
         if (cmd.equals("/help")) {
@@ -528,62 +528,6 @@ public final class CodeTuiView extends InlineApp {
         return els.toArray(new Element[0]);
     }
 
-    /**
-     * /context：把当前会话上下文用量（事件数分桶 + 估算 token + 距自动压缩阈值）打进 scrollback（灰色信息行）。
-     * 只读快照，任何时刻都可查；尚无对话时各项为 0，明确提示「尚无对话历史」。
-     */
-    private void printContext() {
-        ContextStats s = onSubmit.contextStats();
-        if (s == null) s = ContextStats.empty();
-        state.pushInfo("📊 上下文用量");
-        if (s.events() == 0) {
-            state.pushInfo("  （尚无对话历史）");
-            return;
-        }
-        state.pushInfo(String.format("  事件数：%,d 条（用户 %,d · 助手 %,d · 工具 %,d%s）",
-                s.events(), s.userEvents(), s.assistantEvents(), s.toolEvents(),
-                s.otherEvents() > 0 ? " · 其他 " + s.otherEvents() : ""));
-        if (s.contextWindow() > 0) {
-            state.pushInfo(String.format("  估算 token：%,d / %,d（占窗口 %s）",
-                    s.estimatedTokens(), s.contextWindow(), pct(s.estimatedTokens(), s.contextWindow())));
-        } else {
-            state.pushInfo(String.format("  估算 token：%,d", s.estimatedTokens()));
-        }
-        if (s.tokenThreshold() > 0) {
-            state.pushInfo(String.format("  自动压缩：达 %,d token 触发（当前 %s）· 保留最近 %,d 条",
-                    s.tokenThreshold(), pct(s.estimatedTokens(), s.tokenThreshold()), s.autoKeepEvents()));
-        }
-        if (s.manualKeepEvents() > 0) {
-            state.pushInfo(String.format("  手动 /compact：立即压缩，保留最近 %,d 条（更激进）", s.manualKeepEvents()));
-        }
-    }
-
-    /** 占比（part/whole）取整成百分号字符串；whole<=0 视为 0%。 */
-    private static String pct(long part, long whole) {
-        if (whole <= 0) return "0%";
-        return Math.round(part * 100.0 / whole) + "%";
-    }
-
-    /**
-     * 重算状态栏用的上下文用量快照（{@link #drain} 里节流调用，绝不每帧）。用量是辅助信息：
-     * 估算失败绝不能拖垮主 UI，异常时静默保留旧值。
-     */
-    private void refreshCtxStats() {
-        try {
-            ContextStats s = onSubmit.contextStats();
-            if (s != null) ctxStats = s;
-        } catch (RuntimeException ignore) {
-            // 尽力而为：保留上一次快照，不影响状态栏其余内容
-        }
-    }
-
-    /** 状态栏上下文用量后缀（如 {@code " · 上下文 3%"}，占 1M 窗口比例）；尚无对话/窗口未知时返回空串。 */
-    private String ctxSuffix() {
-        ContextStats s = ctxStats;
-        if (s == null || s.events() == 0 || s.contextWindow() <= 0) return "";
-        return " · 上下文 " + pct(s.estimatedTokens(), s.contextWindow());
-    }
-
     /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
     private void printHelp() {
         state.pushInfo("可用命令：");
@@ -649,7 +593,7 @@ public final class CodeTuiView extends InlineApp {
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
-            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel() + ctxSuffix()).style(HINT);
+            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel() + ctxUsage.suffix()).style(HINT);
             case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK, animTick));
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
