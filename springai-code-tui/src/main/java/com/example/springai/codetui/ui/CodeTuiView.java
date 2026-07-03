@@ -80,7 +80,7 @@ public final class CodeTuiView extends InlineApp {
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
     private boolean pickingSkill;                                    // /skill 选择器是否激活
-    private String pendingSkill;                                     // 已挂载、待下一条消息生效的技能名（可空）
+    private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
@@ -96,8 +96,10 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/model",   "切换 AI 模型"),
             new SlashCommand("/compact", "压缩会话历史（手动）"),
             new SlashCommand("/context", "查看上下文用量（事件数 / token）"),
+            // /skill 必须排在 /skills 之前：二者中 /skill 是 /skills 的前缀，补全菜单默认高亮首个匹配；
+            // 若 /skills 在前，输入 "/skill" 回车会误选到 /skills（只读清单）而进不了选择器。
+            new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
-            new SlashCommand("/skill",   "指定技能（下条消息生效）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
 
@@ -132,6 +134,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
                 scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
+                scope(pendingSkill != null, skillTag()),            // 已挂载技能标签：固定在输入框正上方，发送时随消息带走
                 inputElement(),
                 statusLine());
     }
@@ -345,8 +348,8 @@ public final class CodeTuiView extends InlineApp {
             if (r.isHandled()) return r;
         }
         if (k.isCancel() && pendingSkill != null && state.isIdle()) {
-            pendingSkill = null;
-            state.setNotice("已取消技能挂载");
+            pendingSkill = null;                     // Esc 移除输入框上方的技能标签（空闲态；忙碌态 Esc 仍走取消回合）
+            state.setNotice("已移除技能");
             return EventResult.HANDLED;
         }
         if (k.isCancel()) {
@@ -492,7 +495,7 @@ public final class CodeTuiView extends InlineApp {
             printSkills();
             return;
         }
-        if (cmd.equals("/skill")) {                  // 打开技能选择器（挂载后下条消息生效）
+        if (cmd.equals("/skill")) {                  // 打开技能选择器（选中后显示为输入框上方标签，发送时加载）
             inputState.clear();
             openSkillPicker();
             return;
@@ -598,9 +601,8 @@ public final class CodeTuiView extends InlineApp {
         }
         if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
             SkillInfo chosen = list.get(pickIndex);
-            pendingSkill = chosen.name();
+            pendingSkill = chosen.name();   // 选中即在输入框上方显示技能标签（skillTag）作为反馈，不再单独打 notice
             pickingSkill = false;
-            state.setNotice("已挂载 " + chosen.name() + " · 下条消息生效");
             return EventResult.HANDLED;
         }
         return EventResult.HANDLED;
@@ -619,6 +621,11 @@ public final class CodeTuiView extends InlineApp {
                     .style(sel ? PICK_SEL : PICK_DESC));
         }
         return els.toArray(new Element[0]);
+    }
+
+    /** 已挂载技能标签：固定在输入框正上方。发送时随本条消息带走并自动清除；Esc 也可移除。 */
+    private Element skillTag() {
+        return text("  🎯 " + pendingSkill + "   （发送时自动加载 · Esc 移除）").style(PICK_TITLE);
     }
 
     /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
@@ -696,11 +703,7 @@ public final class CodeTuiView extends InlineApp {
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
         if (state.isCompacting()) return richText(statusBar.compacting(state.compactElapsedNanos(), animTick));   // 压缩指示器优先于普通思考/工具状态
-        // 挂载提示放在 notice 之前：空闲态挂着技能时，持续显示「已挂载… · Esc 取消挂载」，让「Esc 可取消挂载」这个可供性稳定可见
-        // （否则挂载时设的一次性 notice 会长期盖住它）。忙碌时 isIdle()=false 走不到这里，改由 notice 给一次性确认反馈。
-        if (pendingSkill != null && state.isIdle()) {
-            return text("已挂载技能 " + pendingSkill + " · 下条消息生效 · Esc 取消挂载").style(THINK);
-        }
+        // 已挂载技能不再占状态栏——改由输入框正上方的技能标签（skillTag）常驻显示，见 render()。
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
