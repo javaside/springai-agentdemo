@@ -7,7 +7,6 @@ import com.example.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
 import dev.tamboui.layout.Rect;
-import dev.tamboui.style.Color;
 import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
 import dev.tamboui.text.Line;
@@ -58,24 +57,22 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  * </pre>
  *
  * <p><b>定稿行下沉</b>：{@code pending} 与流式完整行在渲染线程（经
- * {@code scheduleRepeating → runOnRenderThread}，在两帧之间、非绘制中途执行）用 {@code println}
- * 推进 scrollback，markdown/语法高亮沿用 {@link MarkdownRenderer}。
+ * {@code scheduleRepeating → runOnRenderThread}，在两帧之间、非绘制中途执行）经 {@code drain} 交给
+ * {@link ScrollbackPrinter} 用 {@code println} 推进 scrollback（欢迎横幅 / 用户块 / 工具 diff / markdown 正文均在其中）。
  */
 public final class CodeTuiView extends InlineApp {
 
     private static final int TODO_CAP = 10;      // 计划面板最多显示几条
     private static final String INDENT = "  ";  // 对话内容缩进；工具/计划行自带前缀
-    private static final int GUTTER = 4;   // 行号列宽（右对齐到 4 位，够 9999 行）
     // 配色 / 样式集中在 {@link Theme}，本类经 import static Theme.* 引入（DIM/HINT/PICK_SEL/… 写法不变）。
 
     private final ConversationState state;
     private final SubmitHandler onSubmit;
-    private final MarkdownRenderer md = new MarkdownRenderer();      // AI 正文 markdown + 代码语法高亮
     private final TextAreaState inputState = new TextAreaState();    // 输入源（多行编辑模型）
     // 仅用于复用 textArea 的完整编辑键处理（退格/方向/Home/End/字符/中文…）。⚠ 从不渲染它——
     // 一旦渲染，TextAreaElement 会以自增 id 自注册进焦点链、抢走焦点，导致外层拦不到 Enter。
     private final Element inputKeys = textArea(inputState);
-    private final DiffRenderer diff;                                 // edit/write → 带真实行号的 diff 行
+    private final ScrollbackPrinter printer;                        // scrollback 打印（欢迎/用户块/工具 diff/助手正文）
     private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
@@ -102,7 +99,11 @@ public final class CodeTuiView extends InlineApp {
         this.state = state;
         this.onSubmit = onSubmit;
         this.root = root;
-        this.diff = new DiffRenderer(root);
+        ScrollbackPrinter.Sink sink = new ScrollbackPrinter.Sink() {
+            @Override public void println(Text t)   { runner().println(t); }
+            @Override public void println(String s) { runner().println(s); }
+        };
+        this.printer = new ScrollbackPrinter(sink, root, this::terminalWidth, CodeTuiView::wrapSegments);
     }
 
     /** 初始高度：圆角输入框(空态 3=边框2+1 行) + 状态行(1)；输入换行后 textArea 的 preferredSize 随行数增高，运行器逐帧跟随。 */
@@ -118,7 +119,7 @@ public final class CodeTuiView extends InlineApp {
         List<String> queued = state.queuedSnapshot();
         String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
         return column(
-                scope(!tail.isEmpty(), richText(indented(md.renderPreview(tail))).ellipsisStart()),
+                scope(!tail.isEmpty(), richText(printer.preview(tail)).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
@@ -129,41 +130,9 @@ public final class CodeTuiView extends InlineApp {
 
     @Override
     protected void onStart() {
-        runner().runOnRenderThread(this::printWelcome);   // 启动欢迎横幅（一次性下沉 scrollback）
+        runner().runOnRenderThread(() -> printer.welcome(onSubmit.currentModel()));   // 启动欢迎横幅（一次性下沉 scrollback）
         // 在渲染线程、两帧之间安全推进 scrollback（println 会移动光标/插行，绝不能在绘制中途调用）。
         runner().scheduleRepeating(() -> runner().runOnRenderThread(this::drain), Duration.ofMillis(33));
-    }
-
-    // ── 欢迎横幅（仿 Claude Code），配色见 Theme.WELCOME_* ──────────────────
-    /** 圆角欢迎框：标题 + 简介 + 快捷键 + 工作区路径，下沉到 scrollback 顶部，输入框钉在其下。 */
-    private void printWelcome() {
-        int w = Math.min(Math.max(terminalWidth() - 1, 48), 76);
-        String bar = "─".repeat(Math.max(0, w - 2));
-        runner().println(Text.styled("╭" + bar + "╮", WELCOME_BORDER));
-        welcomeLine(w, "✻ ", "Spring AI Code TUI", WELCOME_TITLE);
-        welcomeLine(w, "  ", "", WELCOME_BODY);
-        welcomeLine(w, "  ", "基于 DeepSeek 的编码智能体 · " + onSubmit.currentModel(), WELCOME_BODY);
-        welcomeLine(w, "  ", "Enter 发送 · \\+Enter 换行 · /model 切换模型 · Esc 取消 · Ctrl+C 退出", WELCOME_HINT);
-        welcomeLine(w, "  ", "", WELCOME_BODY);
-        welcomeLine(w, "  ", "cwd: " + root, WELCOME_HINT);
-        runner().println(Text.styled("╰" + bar + "╯", WELCOME_BORDER));
-        runner().println("");   // 与后续对话留白
-    }
-
-    /** 组一行欢迎框内容：{@code │ + 前缀内容(截断/补白到内宽) + │}。 */
-    private void welcomeLine(int w, String prefix, String body, Style contentStyle) {
-        int inner = Math.max(1, w - 2);
-        String content = " " + prefix + body;                     // 左侧留一空格
-        if (displayWidth(content) > inner) {                      // 过长（如深路径）：按显示宽度截断
-            content = dev.tamboui.text.CharWidth.substringByWidth(content, inner - 1) + "…";
-        }
-        int pad = Math.max(0, inner - displayWidth(content));
-        List<Span> spans = new ArrayList<>();
-        spans.add(Span.styled("│", WELCOME_BORDER));
-        spans.add(Span.styled(content, contentStyle));
-        if (pad > 0) spans.add(Span.raw(" ".repeat(pad)));
-        spans.add(Span.styled("│", WELCOME_BORDER));
-        runner().println(Text.from(Line.from(spans)));
     }
 
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
@@ -172,118 +141,20 @@ public final class CodeTuiView extends InlineApp {
         if (animTick % 30 == 0) refreshCtxStats();             // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
         for (OutputLine ol : state.drainPending()) {
             switch (ol.kind()) {
-                case USER -> {
-                    md.reset();   // 新回合：清 markdown 代码围栏状态
-                    printlnUserBlock(ol.text());   // 灰底白字块，仿 Claude Code
-                }
-                case ASSISTANT ->                                  // AI 正文：markdown/语法高亮 + 缩进
-                        runner().println(indented(md.renderFinalized(ol.text())));
-                case TOOL_START -> printlnToolStart(ol);           // edit/write：展开成 diff 块；其余单行摘要
-                default -> {                                       // 工具/Todo/错误：单色贴左
-                    Style st = styleFor(ol.kind());
-                    if (st == null) runner().println(ol.text());
-                    else runner().println(Text.styled(ol.text(), st));
-                }
+                case USER       -> printer.userBlock(ol.text());   // 灰底白字块，仿 Claude Code
+                case ASSISTANT  -> printer.assistant(ol.text());   // AI 正文：markdown/语法高亮 + 缩进
+                case TOOL_START -> printer.toolStart(ol);          // edit/write：展开成 diff 块；其余单行摘要
+                default         -> printer.line(ol);               // 工具/Todo/错误：单色贴左
             }
         }
         for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
-            runner().println(indented(md.renderFinalized(row)));
+            printer.streamingLine(row);
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
             String next = state.pollQueued();
             if (next != null) dispatch(next);
         }
-    }
-
-    /** 用户消息：灰底白字块，仿 Claude Code。按终端宽度软折行，每行右侧补白使灰底铺满整行。 */
-    private void printlnUserBlock(String text) {
-        int width = terminalWidth();
-        int inner = Math.max(1, width - displayWidth(INDENT));   // 减去左缩进宽度
-        for (String logical : text.split("\n", -1)) {
-            for (String seg : wrapSegments(logical, inner)) {
-                int pad = Math.max(0, inner - displayWidth(seg));
-                runner().println(Text.from(Line.from(
-                        Span.styled(INDENT, USER_BLOCK),
-                        Span.styled(seg, USER_BLOCK),
-                        Span.styled(" ".repeat(pad), USER_BLOCK))));
-            }
-        }
-    }
-
-    /** 工具开始：edit/write 展开成 Claude Code 式 diff 块（读原文件、真实行号、语法高亮 + 增删底色）；其余工具单行摘要。 */
-    private void printlnToolStart(OutputLine ol) {
-        List<DiffRenderer.DiffLine> lines =
-                (ol.raw() == null) ? List.of() : diff.render(ol.toolName(), ol.raw());
-        if (lines.isEmpty()) {                                      // 非文件写入 / 无法解析：回退单行摘要
-            runner().println(Text.styled(ol.text(), TOOL));
-            return;
-        }
-        int width = terminalWidth();
-        String lang = langOf(lines);        // 从 header 的路径推断语言（决定语法高亮规则）
-        boolean inBlock = false;            // 跨行块注释状态，按 body 顺序推进
-        for (DiffRenderer.DiffLine dl : lines) {
-            List<Span> hl = null;
-            if (dl.type() != DiffRenderer.Type.HEADER && dl.type() != DiffRenderer.Type.TRUNCATED) {
-                SyntaxHighlighter.Result r = SyntaxHighlighter.highlight(dl.text(), lang, inBlock);
-                inBlock = r.stillInBlockComment();
-                hl = r.spans();
-            }
-            runner().println(diffLine(dl, hl, width));
-        }
-    }
-
-    /** 把一行 DiffLine 渲染成整行 Text；ADD/DEL 行把底色铺满整行（含行号列），上下文行只高亮不上底色。 */
-    private static Text diffLine(DiffRenderer.DiffLine dl, List<Span> hl, int width) {
-        return switch (dl.type()) {
-            case HEADER -> Text.from(Line.from(Span.raw(INDENT), Span.styled(dl.text(), DIFF_HEADER)));
-            case TRUNCATED -> Text.from(Line.from(
-                    Span.raw(INDENT), Span.styled(gutter(null) + "  " + dl.text(), DIFF_TRUNC)));
-            case CONTEXT -> bodyLine(gutter(dl.newNo() != null ? dl.newNo() : dl.oldNo()), " ",
-                    hl, DIFF_NO_CTX, null, width);
-            case ADD -> bodyLine(gutter(dl.newNo()), "+", hl, DIFF_NO_ADD, ADD_BG, width);
-            case DEL -> bodyLine(gutter(dl.oldNo()), "-", hl, DIFF_NO_DEL, DEL_BG, width);
-        };
-    }
-
-    /**
-     * 组装一行 diff 主体：{@code 行号 + 符号 + 高亮内容}。
-     * bg 非 null（ADD/DEL）时：左缩进/行号/符号/内容/右侧补白全部叠加底色，形成从左到右铺满整行的色带。
-     * bg 为 null（CONTEXT）时：无底色，仅显示语法高亮。
-     */
-    private static Text bodyLine(String num, String sign, List<Span> content,
-                                 Style numStyle, Color bg, int width) {
-        List<Span> spans = new ArrayList<>();
-        // 左缩进：带底色时纳入色带，否则纯留白
-        spans.add(bg == null ? Span.raw(INDENT) : Span.styled(INDENT, Style.create().bg(bg)));
-        spans.add(Span.styled(num, numStyle));
-        spans.add(Span.styled(" " + sign + " ", numStyle));
-        int used = displayWidth(INDENT) + displayWidth(num) + 3;   // 3 = " " + sign + " "
-        for (Span s : content) {
-            spans.add(bg == null ? s : s.bg(bg));                  // 高亮前景上叠加底色
-            used += s.width();
-        }
-        if (bg != null) {                                          // 右侧补白到终端宽度，让色带铺满整行
-            int pad = Math.max(0, width - used);
-            if (pad > 0) spans.add(Span.styled(" ".repeat(pad), Style.create().bg(bg)));
-        }
-        return Text.from(Line.from(spans));
-    }
-
-    /** 从 diff 的 header（{@code Update(path)}）提取路径后缀，映射成 SyntaxHighlighter 的语言标识。 */
-    private static String langOf(List<DiffRenderer.DiffLine> lines) {
-        if (lines.isEmpty()) return "";
-        String h = lines.get(0).text();               // 形如 Update(src/.../App.java)
-        int lp = h.indexOf('(');
-        int dot = h.lastIndexOf('.');
-        if (lp < 0 || dot <= lp) return "";
-        return h.substring(dot + 1).replace(")", "").trim();
-    }
-
-    /** 行号右对齐到 {@link #GUTTER} 列；null（新增/删除的对侧）用空白占位保持列对齐。 */
-    private static String gutter(Integer no) {
-        String s = (no == null) ? "" : String.valueOf(no);
-        return " ".repeat(Math.max(0, GUTTER - s.length())) + s;
     }
 
     /** 终端列数；拿不到时退化为 80。 */
@@ -834,14 +705,6 @@ public final class CodeTuiView extends InlineApp {
     }
 
     // ── 内部工具 ─────────────────────────────────────────────────────────
-    /** 给渲染出的 span 列表加左缩进，组成一行 Text。 */
-    private static Text indented(List<Span> spans) {
-        List<Span> all = new ArrayList<>(spans.size() + 1);
-        all.add(Span.raw(INDENT));
-        all.addAll(spans);
-        return Text.from(Line.from(all));
-    }
-
     /** 取最后一个真实换行之后的残段（流式预览用；complete 行由 drain 下沉 scrollback）。 */
     private static String lastLine(String s) {
         int i = s.lastIndexOf('\n');
