@@ -12,6 +12,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -183,8 +184,10 @@ public final class AgentTools {
         }
 
         // 事件溯源会话记忆：内存仓库 + 「回合/token 感知」压缩，取代原滑窗记忆。
+        // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 回滚半截历史（DefaultSessionService 不暴露该能力）。
+        SessionRepository sessionRepository = InMemorySessionRepository.builder().build();
         SessionService sessionService = DefaultSessionService.builder()
-                .sessionRepository(InMemorySessionRepository.builder().build())
+                .sessionRepository(sessionRepository)
                 .build();
 
         // token 估算器（JTokkit，spring-ai-commons 提供）：trigger 与摘要策略都需显式提供，无默认值。
@@ -222,7 +225,7 @@ public final class AgentTools {
                 .defaultAdvisors(memoryAdvisor)
                 .build();
 
-        return new AgentRuntime(client, sessionService, manualStrategy, tokenCountEstimator,
+        return new AgentRuntime(client, sessionService, sessionRepository, manualStrategy, tokenCountEstimator,
                 skills.skills(), decoratedSkillTool);
     }
 
@@ -231,6 +234,7 @@ public final class AgentTools {
      *
      * @param client              注册好工具与会话记忆 advisor 的 ChatClient
      * @param sessionService      会话服务（手动压缩经它 {@code compact(id, trigger, strategy)}；/context 经它读事件）
+     * @param sessionRepository   会话事件仓库（取消回合时 {@code CodingAgent} 用它 {@code replaceEvents} 回滚半截历史）
      * @param manualStrategy      激进的手动压缩策略（未包装装饰器，见类注释）
      * @param tokenCountEstimator token 估算器（与压缩共用，供 {@code /context} 估算会话 token）
      * @param skills              去重后的可用技能清单（供 {@code /skills} 展示；无技能时为空列表）
@@ -238,6 +242,7 @@ public final class AgentTools {
      */
     public record AgentRuntime(ChatClient client,
                                SessionService sessionService,
+                               SessionRepository sessionRepository,
                                CompactionStrategy manualStrategy,
                                TokenCountEstimator tokenCountEstimator,
                                List<SkillInfo> skills,

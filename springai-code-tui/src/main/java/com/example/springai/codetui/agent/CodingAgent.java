@@ -11,6 +11,7 @@ import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -60,6 +61,7 @@ public final class CodingAgent implements SubmitHandler {
     private final AtomicBoolean compactionInFlight = new AtomicBoolean(false);   // 防止并发/重复触发手动压缩
     private final List<SkillInfo> skills;   // 可用技能清单（/skills 展示）；装配期确定、运行期只读
     private final ToolCallback skillTool;   // 被 ToolEventCallback 装饰的 Skill 工具（可空）；手动 /skill 发送前调用它
+    private final SessionRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel）
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -80,6 +82,14 @@ public final class CodingAgent implements SubmitHandler {
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills, ToolCallback skillTool) {
+        this(chatClient, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, null);
+    }
+
+    public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills, ToolCallback skillTool,
+                       SessionRepository sessionRepository) {
         this.chatClient = chatClient;
         this.listener = listener;
         this.sessionId = sessionId;
@@ -89,6 +99,7 @@ public final class CodingAgent implements SubmitHandler {
         this.tokenCountEstimator = tokenCountEstimator;
         this.skills = List.copyOf(skills);
         this.skillTool = skillTool;
+        this.sessionRepository = sessionRepository;
     }
 
     @Override
@@ -102,6 +113,10 @@ public final class CodingAgent implements SubmitHandler {
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
         listener.onUserMessage(turnId, text);  // UI 展示用户原文（注入只影响发给模型的文本）
         String effectiveText = injectSkill(text, skillName, turnId);
+        // 回合前会话快照：取消（Esc → dispose）时用它回滚，删除本回合写入的半截历史。
+        // 否则工具回合被中途取消会在会话里留下「带 tool_calls 但无 tool 结果」的悬空 assistant 消息，
+        // 下一次请求把这段坏历史发给 DeepSeek 会 400（insufficient tool messages following tool_calls）。
+        List<SessionEvent> mark = snapshotSession();
         try {
             return chatClient.prompt()
                     .user(effectiveText)
@@ -115,6 +130,8 @@ public final class CodingAgent implements SubmitHandler {
                     .doOnNext(resp -> handleChunk(resp, turnId))
                     .doOnError(err -> handleError(err, turnId))
                     .doOnComplete(() -> handleComplete(turnId))
+                    // 仅在「被取消」时触发（正常 complete/error 不触发）：把会话回滚到回合前，清掉半截历史。
+                    .doOnCancel(() -> rollbackTo(mark))
                     .subscribe();
         } catch (RuntimeException ex) {
             // 同步组装/订阅异常不走 doOnError：手动复位状态（onError → IDLE），
@@ -147,6 +164,22 @@ public final class CodingAgent implements SubmitHandler {
             return MAPPER.writeValueAsString(Map.of("command", skillName));
         } catch (JacksonException e) {
             throw new IllegalStateException("序列化 Skill 命令入参失败：" + skillName, e);
+        }
+    }
+
+    /** 回合前会话事件快照（复制一份，回合内的写入不会改动它）。sessionService 缺失（测试桩）时返回空。 */
+    List<SessionEvent> snapshotSession() {
+        return sessionService == null ? List.of() : List.copyOf(sessionService.getEvents(sessionId));
+    }
+
+    /**
+     * 把会话回滚到 {@code mark} 快照（取消回合时调用）：用 {@link SessionRepository#replaceEvents} 覆盖写回，
+     * 删除本回合写入的半截历史（尤其是悬空的 {@code assistant(tool_calls)}）。
+     * 仓库缺失（测试桩）时静默跳过。
+     */
+    void rollbackTo(List<SessionEvent> mark) {
+        if (sessionRepository != null) {
+            sessionRepository.replaceEvents(sessionId, mark);
         }
     }
 
