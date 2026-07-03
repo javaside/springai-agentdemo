@@ -176,8 +176,8 @@ public final class CodeTuiView extends InlineApp {
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
-            String next = state.pollQueued();
-            if (next != null) dispatch(next);
+            ConversationState.Queued next = state.pollQueued();
+            if (next != null) dispatch(next.text());
         }
     }
 
@@ -494,7 +494,7 @@ public final class CodeTuiView extends InlineApp {
         }
         inputState.clear();
         if (state.isBusy()) {                        // 忙或压缩中：排队，不打断/不并发
-            state.enqueue(text);                      // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
+            state.enqueue(text, null);                // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
             return;
         }
         dispatch(text);

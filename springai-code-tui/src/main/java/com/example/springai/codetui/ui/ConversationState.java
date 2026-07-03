@@ -42,7 +42,11 @@ public final class ConversationState implements AgentListener {
     }
 
     private final Deque<OutputLine> pending = new ArrayDeque<>();
-    private final Deque<String> queued = new ArrayDeque<>();       // 忙时排队的用户消息（回合结束后自动出队提交）
+
+    /** 排队的用户消息 + 其挂载技能（可空）。挂载随消息入队，出队时一并带出。 */
+    public record Queued(String text, String skill) {}
+
+    private final Deque<Queued> queued = new ArrayDeque<>();       // 忙时排队的用户消息（回合结束后自动出队提交）
     private final StringBuilder streaming = new StringBuilder();
     private final List<String> todo = new ArrayList<>();          // 当前计划（固定面板显示，不进 scrollback）
     private final StringBuilder input = new StringBuilder();
@@ -68,11 +72,11 @@ public final class ConversationState implements AgentListener {
     public synchronized void pushInfo(String text) { pending.add(new OutputLine(text, OutputLine.Kind.INFO)); }
 
     // ── 消息队列（忙时排队，回合结束自动出队） ───────────────────────────
-    public synchronized void enqueue(String msg) { queued.add(msg); }
-    public synchronized String pollQueued() { return queued.poll(); }
+    public synchronized void enqueue(String msg, String skill) { queued.add(new Queued(msg, skill)); }
+    public synchronized Queued pollQueued() { return queued.poll(); }
     public synchronized int queuedCount() { return queued.size(); }
     public synchronized void clearQueued() { queued.clear(); }
-    public synchronized List<String> queuedSnapshot() { return List.copyOf(queued); }
+    public synchronized List<String> queuedSnapshot() { return queued.stream().map(Queued::text).toList(); }
 
     // ── 单飞 / 状态 ─────────────────────────────────────────────────────
     public boolean isIdle() { return status == Status.IDLE; }
