@@ -779,7 +779,8 @@ public final class CodeTuiView extends InlineApp {
     private Element compactingStatus() {
         long sec = state.compactElapsedNanos() / 1_000_000_000L;
         String elapsed = sec >= 60 ? (sec / 60) + "m " + (sec % 60) + "s" : sec + "s";
-        String label = "⟳ 正在压缩会话历史… (" + elapsed + ")  ";
+        // v1 压缩不可中断（底层库调用不可取消），明确告知用户 Esc 不会打断本次压缩。
+        String label = "⟳ 正在压缩会话历史… (" + elapsed + ") · 不可中断  ";
 
         int width = 24;                                   // 进度条格数
         int period = width * 2;                           // 往返一轮
