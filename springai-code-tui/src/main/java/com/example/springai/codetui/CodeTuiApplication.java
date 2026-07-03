@@ -44,8 +44,10 @@ public class CodeTuiApplication {
         AtomicLong activeTurnId = new AtomicLong();               // 交给 CodingAgent 生成 id
         String sessionId = "code-tui-session";                    // v1 单会话固定 id
 
-        ChatClient client = AgentTools.build(model, root, state);
-        CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId);
+        AgentTools.AgentRuntime runtime = AgentTools.build(model, root, state);
+        ChatClient client = runtime.client();
+        CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId,
+                runtime.sessionService(), runtime.manualStrategy());
         CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
         view.run();
     }

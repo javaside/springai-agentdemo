@@ -17,4 +17,7 @@ public interface SubmitHandler {
 
     /** 切换到指定模型 id（对后续回合生效）。 */
     default void selectModel(String id) { }
+
+    /** 手动压缩会话历史（/compact）。默认空实现，便于回显桩/测试桩省略。 */
+    default void compact() { }
 }

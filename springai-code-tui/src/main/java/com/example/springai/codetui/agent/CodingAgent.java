@@ -8,11 +8,15 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.compaction.CompactionResult;
+import org.springframework.ai.session.compaction.CompactionStrategy;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -40,13 +44,19 @@ public final class CodingAgent implements SubmitHandler {
     private final AgentListener listener;
     private final String sessionId;
     private final AtomicLong activeTurnId;
+    private final SessionService sessionService;
+    private final CompactionStrategy manualStrategy;
+    private final AtomicBoolean compactionInFlight = new AtomicBoolean(false);   // 防止并发/重复触发手动压缩
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
-    public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId) {
+    public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy) {
         this.chatClient = chatClient;
         this.listener = listener;
         this.sessionId = sessionId;
         this.activeTurnId = activeTurnId;
+        this.sessionService = sessionService;
+        this.manualStrategy = manualStrategy;
     }
 
     @Override
@@ -86,6 +96,51 @@ public final class CodingAgent implements SubmitHandler {
     public void selectModel(String id) {
         for (ModelOption m : MODELS) {
             if (m.id().equals(id)) { this.model = id; return; }   // 仅接受已知模型
+        }
+    }
+
+    /**
+     * 手动压缩：在后台线程强制立即压缩本会话。总结 LLM 调用可能耗时数分钟，绝不阻塞调用线程（UI）。
+     * 并发闸门在 {@code CodeTuiView}（仅空闲且非压缩中才调用本方法）；此处再用 CAS 兜底一层，
+     * 防止任何调用方漏判导致两次压缩并发、把 UI 的「开始/完成」事件交错。已在压缩中则静默忽略。
+     */
+    @Override
+    public void compact() {
+        if (!compactionInFlight.compareAndSet(false, true)) {
+            return;   // 已有压缩在进行：忽略重复触发（UI 已给出反馈，这里不再叠加）
+        }
+        Thread t = new Thread(this::runCompaction, "manual-compact");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * 同步执行一次手动压缩（供 {@link #compact()} 的后台线程调用；包级可见便于测试直调）。
+     * 用恒真触发器绕过 token 阈值，配合激进的手动策略。
+     *
+     * <p><b>本方法独占手动路径的三个生命周期事件</b>（started/finished/failed）：它<b>直接</b>调用
+     * {@code sessionService.compact} 并拿到返回的 {@link CompactionResult} 自行上报，因此
+     * {@code manualStrategy} 是<b>未包装</b>的裸策略（见 {@code AgentTools}）——若再套
+     * {@link NotifyingCompactionStrategy}，同一次失败会被「装饰器 + 本方法」重复上报。装饰器只服务于
+     * 自动路径（advisor 内部调用、拿不到返回值）。
+     *
+     * <p>先发 started 再调用：保证即便压缩在进入策略前就抛异常（会话不存在 / I/O），UI 也已显示过「正在压缩」，
+     * 不会出现「只有失败行、没有开始提示」的静默错觉。{@code catch} 覆盖到 {@link Error}：即便 LLM 摘要抛出
+     * {@code Error}，也先发 failed 把 {@code compacting} 清掉（否则 UI 永久卡在「压缩中」、{@code isBusy()}
+     * 恒真、后续回合与 /compact 全被堵死），再把 {@code Error} 向上抛出、不吞。
+     */
+    void runCompaction() {
+        try {
+            listener.onCompactionStarted("manual");
+            CompactionResult result = sessionService.compact(sessionId, req -> true, manualStrategy);
+            listener.onCompactionFinished(result.eventsRemoved(), result.tokensEstimatedSaved());
+        } catch (RuntimeException e) {
+            listener.onCompactionFailed(String.valueOf(e.getMessage()));
+        } catch (Error e) {
+            listener.onCompactionFailed(String.valueOf(e.getMessage()));   // 先清状态，避免永久卡「压缩中」
+            throw e;                                                        // Error 不吞：清完状态仍向上抛
+        } finally {
+            compactionInFlight.set(false);   // 释放兜底闸门（无论成功/失败）
         }
     }
 

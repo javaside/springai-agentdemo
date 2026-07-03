@@ -183,4 +183,79 @@ class ConversationStateTest {
         assertEquals("ab", state.takeInput());
         assertEquals("", state.notice());
     }
+
+    @Test
+    void compaction_started_setsFlagAndReason() {
+        ConversationState s = new ConversationState();
+        assertFalse(s.isCompacting(), "初始不在压缩");
+
+        s.onCompactionStarted("manual");
+
+        assertTrue(s.isCompacting(), "started 后应处于压缩中");
+        assertEquals("manual", s.compactReason());
+        assertTrue(s.compactElapsedNanos() >= 0, "经过时间应可读且非负");
+    }
+
+    @Test
+    void compaction_finished_clearsFlagAndPushesSummaryLine() {
+        ConversationState s = new ConversationState();
+        s.onCompactionStarted("auto");
+
+        s.onCompactionFinished(7, 1234);
+
+        assertFalse(s.isCompacting(), "finished 后应退出压缩中");
+        assertTrue(s.drainPending().stream().anyMatch(l -> l.text().contains("7") && l.text().contains("1234")),
+                "完成行应含移除事件数与节省 token");
+    }
+
+    @Test
+    void compaction_finished_zeroRemoved_pushesNothingToCompactLine() {
+        ConversationState s = new ConversationState();
+        s.onCompactionStarted("manual");
+
+        s.onCompactionFinished(0, 0);
+
+        assertFalse(s.isCompacting());
+        assertTrue(s.drainPending().stream().anyMatch(l -> l.text().contains("无可压缩")),
+                "0 移除应提示无可压缩");
+    }
+
+    @Test
+    void compaction_failed_clearsFlagAndPushesErrorLine() {
+        ConversationState s = new ConversationState();
+        s.onCompactionStarted("manual");
+
+        s.onCompactionFailed("boom");
+
+        assertFalse(s.isCompacting(), "failed 后应退出压缩中");
+        assertTrue(s.drainPending().stream().anyMatch(l ->
+                        l.text().contains("boom") && l.kind() == ConversationState.OutputLine.Kind.ERROR),
+                "失败行应含原因且为 ERROR 类型");
+    }
+
+    @Test
+    void compactElapsedNanos_isZero_whenNotCompacting() {
+        ConversationState s = new ConversationState();
+        assertEquals(0L, s.compactElapsedNanos(), "未压缩时经过时间应为 0");
+
+        s.onCompactionStarted("manual");
+        s.onCompactionFinished(1, 1);
+        assertEquals(0L, s.compactElapsedNanos(), "压缩结束后经过时间应回到 0");
+    }
+
+    @Test
+    void isBusy_trueWhenTurnActive_orCompacting_elseFalse() {
+        ConversationState s = new ConversationState();
+        assertFalse(s.isBusy(), "初始空闲、未压缩：不忙");
+
+        s.onTurnStarted(1L);
+        assertTrue(s.isBusy(), "回合进行中：忙");
+        s.onTurnComplete(1L);
+        assertFalse(s.isBusy(), "回合结束：不忙");
+
+        s.onCompactionStarted("manual");
+        assertTrue(s.isBusy(), "压缩中：忙（即便无活跃回合）");
+        s.onCompactionFinished(1, 1);
+        assertFalse(s.isBusy(), "压缩结束：不忙");
+    }
 }

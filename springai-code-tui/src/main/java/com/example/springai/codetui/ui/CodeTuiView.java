@@ -66,6 +66,8 @@ public final class CodeTuiView extends InlineApp {
 
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
     private static final Style DIM        = Style.create().fg(Color.DARK_GRAY);
+    // 占位符/空态提示（输入框空态、状态栏空闲行）：用灰白而非近黑的 DARK_GRAY，暗色终端下更清晰可读
+    private static final Style HINT       = Style.create().fg(Color.indexed(250));
     private static final Style USER       = Style.create().fg(Color.GRAY);
     private static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
     private static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
@@ -120,9 +122,10 @@ public final class CodeTuiView extends InlineApp {
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
     private static final List<SlashCommand> COMMANDS = List.of(
-            new SlashCommand("/model", "切换 AI 模型"),
-            new SlashCommand("/help",  "显示可用命令与快捷键"),
-            new SlashCommand("/exit",  "退出"));
+            new SlashCommand("/model",   "切换 AI 模型"),
+            new SlashCommand("/compact", "压缩会话历史（手动）"),
+            new SlashCommand("/help",    "显示可用命令与快捷键"),
+            new SlashCommand("/exit",    "退出"));
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit, Path root) {
         this.state = state;
@@ -220,7 +223,7 @@ public final class CodeTuiView extends InlineApp {
             runner().println(indented(md.renderFinalized(row)));
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
-        if (state.isIdle()) {
+        if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
             String next = state.pollQueued();
             if (next != null) dispatch(next);
         }
@@ -379,7 +382,7 @@ public final class CodeTuiView extends InlineApp {
             int ix = inner.x(), iy = inner.y(), iw = Math.max(1, inner.width()), ih = inner.height();
 
             if (inputState.text().isEmpty()) {              // 空态：占位符 + 光标在开头
-                buf.setString(ix, iy, "输入消息，Enter 发送，\\ + Enter 换行", DIM);
+                buf.setString(ix, iy, "输入消息，Enter 发送，\\ + Enter 换行", HINT);
                 frame.setCursorPosition(ix, iy);
                 return;
             }
@@ -590,6 +593,18 @@ public final class CodeTuiView extends InlineApp {
             openModelPicker();
             return;
         }
+        if (cmd.equals("/compact")) {
+            inputState.clear();
+            if (state.isCompacting()) {
+                return;   // 已在压缩：动画条已表明状态，不再叠加 notice（否则会在压缩结束后残留一帧）
+            }
+            if (!state.isIdle()) {
+                state.setNotice("忙碌中，无法压缩");   // 回合进行中：拒绝并提示
+                return;
+            }
+            onSubmit.compact();
+            return;
+        }
         if (cmd.equals("/help")) {
             inputState.clear();
             printHelp();
@@ -601,7 +616,7 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         inputState.clear();
-        if (!state.isIdle()) {                       // 忙：排队，不打断当前回合（仿 Claude Code）
+        if (state.isBusy()) {                        // 忙或压缩中：排队，不打断/不并发
             state.enqueue(text);                      // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
             return;
         }
@@ -723,12 +738,13 @@ public final class CodeTuiView extends InlineApp {
     private Element statusLine() {
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
+        if (state.isCompacting()) return compactingStatus();   // 压缩指示器优先于普通思考/工具状态
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
-            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel()).style(DIM);
+            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel()).style(HINT);
             case THINKING -> shimmerStatus("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK);
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
@@ -756,6 +772,30 @@ public final class CodeTuiView extends InlineApp {
             spans.add(Span.styled(String.valueOf(label.charAt(i)), Math.abs(i - center) <= 1 ? SHIMMER_HI : base));
         }
         return spans;
+    }
+
+    /**
+     * 压缩状态行：「⟳ 正在压缩会话历史…（计时）」+ 一段左右往返的<b>不确定型</b>动画条。
+     * 库不暴露压缩进度，故只做真实经过时间 + 往返光块（不伪造百分比）。动画由 drain 的 animTick 驱动。
+     */
+    private Element compactingStatus() {
+        long sec = state.compactElapsedNanos() / 1_000_000_000L;
+        String elapsed = sec >= 60 ? (sec / 60) + "m " + (sec % 60) + "s" : sec + "s";
+        // v1 压缩不可中断（底层库调用不可取消），明确告知用户 Esc 不会打断本次压缩。
+        String label = "⟳ 正在压缩会话历史… (" + elapsed + ") · 不可中断  ";
+
+        int width = 24;                                   // 进度条格数
+        int period = width * 2;                           // 往返一轮
+        int pos = (int) ((animTick / 2) % period);        // 每 2 帧前进一格
+        int center = pos < width ? pos : period - pos;    // 三角波：来回移动
+
+        List<Span> spans = new ArrayList<>(width + 1);
+        spans.add(Span.styled(label, THINK));
+        for (int i = 0; i < width; i++) {
+            boolean lit = Math.abs(i - center) <= 1;
+            spans.add(Span.styled(lit ? "▰" : "▱", lit ? SHIMMER_HI : THINK));
+        }
+        return richText(Text.from(Line.from(spans)));
     }
 
     // ── 内部工具 ─────────────────────────────────────────────────────────
