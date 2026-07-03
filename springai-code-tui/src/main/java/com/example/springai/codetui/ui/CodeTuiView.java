@@ -1,6 +1,7 @@
 package com.example.springai.codetui.ui;
 
 import com.example.springai.codetui.agent.ModelOption;
+import com.example.springai.codetui.agent.SkillInfo;
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
@@ -90,6 +91,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/model",   "切换 AI 模型"),
             new SlashCommand("/compact", "压缩会话历史（手动）"),
             new SlashCommand("/context", "查看上下文用量（事件数 / token）"),
+            new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
 
@@ -450,6 +452,11 @@ public final class CodeTuiView extends InlineApp {
             ctxUsage.report();
             return;
         }
+        if (cmd.equals("/skills")) {           // 只读清单：任何时刻都可查，不打断
+            inputState.clear();
+            printSkills();
+            return;
+        }
         if (cmd.equals("/help")) {
             inputState.clear();
             printHelp();
@@ -533,6 +540,20 @@ public final class CodeTuiView extends InlineApp {
         state.pushInfo("可用命令：");
         for (SlashCommand c : COMMANDS) state.pushInfo("  " + c.name() + "   " + c.desc());
         state.pushInfo("快捷键：Enter 发送 · \\+Enter 换行 · Esc 取消 · Ctrl+C 退出");
+    }
+
+    /** /skills：把可用技能清单（名字 · 来源层 · 描述）打进 scrollback（灰色信息行）。 */
+    private void printSkills() {
+        List<SkillInfo> list = onSubmit.skills();
+        if (list.isEmpty()) {
+            state.pushInfo("当前没有可用技能。可在 .codetui/skills/<名字>/SKILL.md 添加后重启生效。");
+            return;
+        }
+        state.pushInfo("可用技能（模型会按需自动调用）：");
+        for (SkillInfo s : list) {
+            state.pushInfo("  • " + s.name() + "  [" + s.source() + "]");
+            state.pushInfo("      " + s.description());
+        }
     }
 
     /**

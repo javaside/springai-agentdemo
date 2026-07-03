@@ -52,11 +52,20 @@ public final class CodingAgent implements SubmitHandler {
     private final CompactionStrategy manualStrategy;
     private final TokenCountEstimator tokenCountEstimator;   // 与压缩共用，供 /context 估算会话 token
     private final AtomicBoolean compactionInFlight = new AtomicBoolean(false);   // 防止并发/重复触发手动压缩
+    private final List<SkillInfo> skills;   // 可用技能清单（/skills 展示）；装配期确定、运行期只读
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
+    /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator) {
+        this(chatClient, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, List.of());
+    }
+
+    public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills) {
         this.chatClient = chatClient;
         this.listener = listener;
         this.sessionId = sessionId;
@@ -64,6 +73,7 @@ public final class CodingAgent implements SubmitHandler {
         this.sessionService = sessionService;
         this.manualStrategy = manualStrategy;
         this.tokenCountEstimator = tokenCountEstimator;
+        this.skills = List.copyOf(skills);
     }
 
     @Override
@@ -92,6 +102,9 @@ public final class CodingAgent implements SubmitHandler {
             return Disposables.disposed();
         }
     }
+
+    @Override
+    public List<SkillInfo> skills() { return skills; }
 
     @Override
     public List<ModelOption> models() { return MODELS; }
