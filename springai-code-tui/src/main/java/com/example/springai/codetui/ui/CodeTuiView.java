@@ -15,6 +15,9 @@ import dev.tamboui.toolkit.element.Element;
 import dev.tamboui.toolkit.element.RenderContext;
 import dev.tamboui.toolkit.element.Size;
 import dev.tamboui.toolkit.event.EventResult;
+import dev.tamboui.tui.InlineTuiConfig;
+import dev.tamboui.tui.bindings.Actions;
+import dev.tamboui.tui.bindings.KeyTrigger;
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
 import dev.tamboui.tui.event.PasteEvent;
@@ -127,6 +130,26 @@ public final class CodeTuiView extends InlineApp {
                 scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
                 inputElement(),
                 statusLine());
+    }
+
+    /**
+     * 覆盖默认键位绑定：把 {@code quit} 只绑到 <b>Ctrl+C</b>。
+     *
+     * <p><b>为何必须改</b>：TamboUI 的默认（{@code standard.properties}）把
+     * {@code quit = q, Q, Ctrl+c}——即裸按 {@code q}/{@code Q} 就退出。但本应用的输入框是<b>唯一焦点</b>，
+     * 每个按键先过 {@link #onInputKey}，其顶部 {@code isQuit()} 会把输入/粘贴文本里的 {@code q}/{@code Q}
+     * 当成退出键，导致「往输入框里打或粘贴含 q 的文本（如某些技能名）就整个退出」。
+     * 输入框需要能输入任意字符，故退出只保留 Ctrl+C（与 Claude Code 一致）。{@link #onInputKey} 里也已
+     * 不再依赖 {@code isQuit()}，双保险。
+     */
+    @Override
+    protected InlineTuiConfig configure(int height) {
+        InlineTuiConfig base = super.configure(height);
+        return base.toBuilder()
+                .bindings(base.bindings().toBuilder()
+                        .rebind(KeyTrigger.ctrl('c'), Actions.QUIT)   // 整组替换：只剩 Ctrl+C，去掉 q/Q
+                        .build())
+                .build();
     }
 
     @Override
@@ -293,7 +316,9 @@ public final class CodeTuiView extends InlineApp {
      * </ul>
      */
     private EventResult onInputKey(KeyEvent k) {
-        if (k.isCtrlC() || k.isQuit()) {
+        // 只认 Ctrl+C 退出。绝不用 isQuit()——默认绑定里 quit 含裸 q/Q，会把输入/粘贴到输入框的
+        // 含 q 文本误判为退出（本类是唯一焦点，每个按键都先过这里）。绑定已在 configure() 收敛，此处再兜一层。
+        if (k.isCtrlC()) {
             quit();
             return EventResult.HANDLED;
         }
