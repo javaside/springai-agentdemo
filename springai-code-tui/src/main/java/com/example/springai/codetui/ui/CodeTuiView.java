@@ -9,8 +9,6 @@ import dev.tamboui.buffer.Cell;
 import dev.tamboui.layout.Rect;
 import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
-import dev.tamboui.text.Line;
-import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
 import dev.tamboui.toolkit.app.InlineApp;
 import dev.tamboui.toolkit.element.Element;
@@ -72,6 +70,7 @@ public final class CodeTuiView extends InlineApp {
     // 仅用于复用 textArea 的完整编辑键处理（退格/方向/Home/End/字符/中文…）。⚠ 从不渲染它——
     // 一旦渲染，TextAreaElement 会以自增 id 自注册进焦点链、抢走焦点，导致外层拦不到 Enter。
     private final Element inputKeys = textArea(inputState);
+    private final StatusBar statusBar = new StatusBar();             // 状态行动画内容（波光/压缩条）渲染
     private final ScrollbackPrinter printer;                        // scrollback 打印（欢迎/用户块/工具 diff/助手正文）
     private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
@@ -644,64 +643,20 @@ public final class CodeTuiView extends InlineApp {
     private Element statusLine() {
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
-        if (state.isCompacting()) return compactingStatus();   // 压缩指示器优先于普通思考/工具状态
+        if (state.isCompacting()) return richText(statusBar.compacting(state.compactElapsedNanos(), animTick));   // 压缩指示器优先于普通思考/工具状态
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
             case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel() + ctxSuffix()).style(HINT);
-            case THINKING -> shimmerStatus("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK);
+            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK, animTick));
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
-                yield shimmerStatus("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
-                        qs + " · Esc 取消", RUNNING);
+                yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
+                        qs + " · Esc 取消", RUNNING, animTick));
             }
         };
-    }
-
-    /** 处理中状态行：label 上叠一道随帧移动的高亮「波光」（表示系统在动），suffix 保持暗色静态。 */
-    private Element shimmerStatus(String label, String suffix, Style base) {
-        List<Span> spans = shimmerSpans(label, base);
-        if (!suffix.isEmpty()) spans.add(Span.styled(suffix, DIM));
-        return richText(Text.from(Line.from(spans)));
-    }
-
-    /** 把 label 逐字符上色：距离移动中心 ≤1 的字符用高亮，其余用 base，形成一道左→右扫过的光带。 */
-    private List<Span> shimmerSpans(String label, Style base) {
-        int n = label.length();
-        List<Span> spans = new ArrayList<>(n);
-        if (n == 0) return spans;
-        int period = n + 6;                          // 光带扫完 + 一段间隔再重来（脉冲感）
-        int center = (int) ((animTick / 2) % period); // 每 2 帧(~66ms)前进一格，避免过快闪烁
-        for (int i = 0; i < n; i++) {
-            spans.add(Span.styled(String.valueOf(label.charAt(i)), Math.abs(i - center) <= 1 ? SHIMMER_HI : base));
-        }
-        return spans;
-    }
-
-    /**
-     * 压缩状态行：「⟳ 正在压缩会话历史…（计时）」+ 一段左右往返的<b>不确定型</b>动画条。
-     * 库不暴露压缩进度，故只做真实经过时间 + 往返光块（不伪造百分比）。动画由 drain 的 animTick 驱动。
-     */
-    private Element compactingStatus() {
-        long sec = state.compactElapsedNanos() / 1_000_000_000L;
-        String elapsed = sec >= 60 ? (sec / 60) + "m " + (sec % 60) + "s" : sec + "s";
-        // v1 压缩不可中断（底层库调用不可取消），明确告知用户 Esc 不会打断本次压缩。
-        String label = "⟳ 正在压缩会话历史… (" + elapsed + ") · 不可中断  ";
-
-        int width = 24;                                   // 进度条格数
-        int period = width * 2;                           // 往返一轮
-        int pos = (int) ((animTick / 2) % period);        // 每 2 帧前进一格
-        int center = pos < width ? pos : period - pos;    // 三角波：来回移动
-
-        List<Span> spans = new ArrayList<>(width + 1);
-        spans.add(Span.styled(label, THINK));
-        for (int i = 0; i < width; i++) {
-            boolean lit = Math.abs(i - center) <= 1;
-            spans.add(Span.styled(lit ? "▰" : "▱", lit ? SHIMMER_HI : THINK));
-        }
-        return richText(Text.from(Line.from(spans)));
     }
 
     // ── 内部工具 ─────────────────────────────────────────────────────────
