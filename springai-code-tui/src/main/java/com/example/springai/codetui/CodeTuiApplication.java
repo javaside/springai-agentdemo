@@ -48,7 +48,7 @@ public class CodeTuiApplication {
         ChatClient client = runtime.client();
         CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId,
                 runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
-                runtime.skills());
+                runtime.skills(), runtime.skillTool());
         CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
         view.run();
     }

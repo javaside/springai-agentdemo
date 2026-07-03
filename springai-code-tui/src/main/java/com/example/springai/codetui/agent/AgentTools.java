@@ -174,8 +174,12 @@ public final class AgentTools {
             all.add(skills.tool());
         }
         ToolCallback[] decorated = new ToolCallback[all.size()];
+        ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
         for (int i = 0; i < all.size(); i++) {
             decorated[i] = new ToolEventCallback(all.get(i), listener);
+            if (all.get(i) == skills.tool()) {
+                decoratedSkillTool = decorated[i];   // 记住 Skill 工具装饰后的实例（无技能时保持 null）
+            }
         }
 
         // 事件溯源会话记忆：内存仓库 + 「回合/token 感知」压缩，取代原滑窗记忆。
@@ -218,7 +222,8 @@ public final class AgentTools {
                 .defaultAdvisors(memoryAdvisor)
                 .build();
 
-        return new AgentRuntime(client, sessionService, manualStrategy, tokenCountEstimator, skills.skills());
+        return new AgentRuntime(client, sessionService, manualStrategy, tokenCountEstimator,
+                skills.skills(), decoratedSkillTool);
     }
 
     /**
@@ -229,12 +234,14 @@ public final class AgentTools {
      * @param manualStrategy      激进的手动压缩策略（未包装装饰器，见类注释）
      * @param tokenCountEstimator token 估算器（与压缩共用，供 {@code /context} 估算会话 token）
      * @param skills              去重后的可用技能清单（供 {@code /skills} 展示；无技能时为空列表）
+     * @param skillTool           被 ToolEventCallback 装饰的 Skill 工具（供手动 /skill 复用）；无技能时为 null
      */
     public record AgentRuntime(ChatClient client,
                                SessionService sessionService,
                                CompactionStrategy manualStrategy,
                                TokenCountEstimator tokenCountEstimator,
-                               List<SkillInfo> skills) {}
+                               List<SkillInfo> skills,
+                               ToolCallback skillTool) {}
 
     /** 把 {@link Todos} 转成可显示的行：状态标记 + 内容。 */
     static List<String> toLines(Todos todos) {

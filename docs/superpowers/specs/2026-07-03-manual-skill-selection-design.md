@@ -2,7 +2,7 @@
 
 日期：2026-07-03
 模块：`springai-code-tui`
-状态：设计草案，待用户评审
+状态：**v1 已实现并通过测试**（新增 CodingAgentSkillInjectTest / ConversationStateQueueTest；121 项全绿。生产已在 CodeTuiApplication 装配 skillTool；/skill 选择器待手动冒烟）
 前置：[技能能力接入设计](2026-07-03-skills-support-design.md)（v1：模型自主调用 + `/skills` 只读清单）
 对应前置文档的 §9.2 未来工作「`/skill <name>` 手动强制注入」。
 

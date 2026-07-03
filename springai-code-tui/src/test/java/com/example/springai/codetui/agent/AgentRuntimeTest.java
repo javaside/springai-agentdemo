@@ -7,9 +7,12 @@ import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.deepseek.api.DeepSeekApi;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /** AgentTools.build 只做装配、不发网络请求：用假 key 也能造出完整 AgentRuntime。 */
 class AgentRuntimeTest {
@@ -28,5 +31,38 @@ class AgentRuntimeTest {
         assertNotNull(rt.sessionService(), "SessionService 必须暴露（供手动 /compact）");
         assertNotNull(rt.manualStrategy(), "手动压缩策略必须暴露");
         assertNotNull(rt.tokenCountEstimator(), "token 估算器必须暴露（供 /context 估算）");
+    }
+
+    @Test
+    void build_exposesDecoratedSkillTool_whenSkillsPresent(@TempDir Path root) throws Exception {
+        // 造一个项目级技能，确保 SkillCatalog 至少加载到一个技能
+        Path dir = root.resolve(".codetui/skills/demo-skill");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("SKILL.md"), """
+                ---
+                name: demo-skill
+                description: 演示技能。
+                ---
+
+                # 正文
+                """);
+
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyModel(), root, new ConversationState());
+
+        assertNotNull(rt.skillTool(), "有技能时应暴露被装饰的 Skill 工具");
+        assertEquals("Skill", rt.skillTool().getToolDefinition().name(), "工具名应为 Skill");
+    }
+
+    @Test
+    void build_skillToolNull_whenNoSkills(@TempDir Path root, @TempDir Path fakeHome) {
+        String prevHome = System.getProperty("user.home");
+        System.setProperty("user.home", fakeHome.toString());   // 隔离真实 ~/.codetui/skills，避免本机有用户级技能时误判
+        try {
+            AgentTools.AgentRuntime rt = AgentTools.build(dummyModel(), root, new ConversationState());
+            assertNull(rt.skillTool(), "无技能时 skillTool 应为 null");
+        } finally {
+            if (prevHome == null) System.clearProperty("user.home");
+            else System.setProperty("user.home", prevHome);
+        }
     }
 }

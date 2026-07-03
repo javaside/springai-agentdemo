@@ -79,6 +79,8 @@ public final class CodeTuiView extends InlineApp {
     private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
+    private boolean pickingSkill;                                    // /skill 选择器是否激活
+    private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
@@ -94,6 +96,9 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/model",   "切换 AI 模型"),
             new SlashCommand("/compact", "压缩会话历史（手动）"),
             new SlashCommand("/context", "查看上下文用量（事件数 / token）"),
+            // /skill 必须排在 /skills 之前：二者中 /skill 是 /skills 的前缀，补全菜单默认高亮首个匹配；
+            // 若 /skills 在前，输入 "/skill" 回车会误选到 /skills（只读清单）而进不了选择器。
+            new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
@@ -127,7 +132,9 @@ public final class CodeTuiView extends InlineApp {
                 scope(!todos.isEmpty(), todoChildren(todos)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
+                scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
                 scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
+                scope(pendingSkill != null, skillTag()),            // 已挂载技能标签：固定在输入框正上方，发送时随消息带走
                 inputElement(),
                 statusLine());
     }
@@ -176,8 +183,8 @@ public final class CodeTuiView extends InlineApp {
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
-            String next = state.pollQueued();
-            if (next != null) dispatch(next);
+            ConversationState.Queued next = state.pollQueued();
+            if (next != null) dispatch(next.text(), next.skill());
         }
     }
 
@@ -323,6 +330,7 @@ public final class CodeTuiView extends InlineApp {
             return EventResult.HANDLED;
         }
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
+        if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
         // 正在浏览历史（histIndex<size）时 ↑↓ 始终翻历史——即使翻到的是一条 /命令、补全菜单也弹出来了，
         // 也不让菜单抢走 ↑↓（否则一遇到 /model 就卡住翻不动）。菜单的 Tab/Enter/Esc 仍照常处理。
         if (histIndex < history.size()) {
@@ -338,6 +346,11 @@ public final class CodeTuiView extends InlineApp {
         if (slashMenuActive()) {                         // 斜杠命令补全菜单：拦截 ↑↓/Tab/Enter/Esc
             EventResult r = onSlashMenuKey(k);
             if (r.isHandled()) return r;
+        }
+        if (k.isCancel() && pendingSkill != null && state.isIdle()) {
+            pendingSkill = null;                     // Esc 移除输入框上方的技能标签（空闲态；忙碌态 Esc 仍走取消回合）
+            state.setNotice("已移除技能");
+            return EventResult.HANDLED;
         }
         if (k.isCancel()) {
             boolean running = !state.isIdle();
@@ -482,6 +495,11 @@ public final class CodeTuiView extends InlineApp {
             printSkills();
             return;
         }
+        if (cmd.equals("/skill")) {                  // 打开技能选择器（选中后显示为输入框上方标签，发送时加载）
+            inputState.clear();
+            openSkillPicker();
+            return;
+        }
         if (cmd.equals("/help")) {
             inputState.clear();
             printHelp();
@@ -493,16 +511,18 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         inputState.clear();
-        if (state.isBusy()) {                        // 忙或压缩中：排队，不打断/不并发
-            state.enqueue(text);                      // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
+        String skill = pendingSkill;                 // 一次性：本条消息取走挂载
+        pendingSkill = null;
+        if (state.isBusy()) {                        // 忙或压缩中：排队，挂载随消息入队
+            state.enqueue(text, skill);              // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
             return;
         }
-        dispatch(text);
+        dispatch(text, skill);
     }
 
-    /** 真正发起一个回合：提交给 agent。仅当模型与上次不同时才打一行「⚙ 使用模型 X」（首个回合也会打）。 */
-    private void dispatch(String text) {
-        current = onSubmit.submit(text);
+    /** 真正发起一个回合：提交给 agent（skill 可空——挂载技能则发送前注入正文）。仅当模型与上次不同时才打一行「⚙ 使用模型 X」（首个回合也会打）。 */
+    private void dispatch(String text, String skill) {
+        current = onSubmit.submit(text, skill);
         String m = onSubmit.currentModel();
         if (!m.equals(lastShownModel)) {
             state.pushInfo("⚙ 使用模型 " + m);
@@ -558,6 +578,54 @@ public final class CodeTuiView extends InlineApp {
                     .style(sel ? PICK_SEL : (active ? PICK_ITEM : PICK_DESC)));
         }
         return els.toArray(new Element[0]);
+    }
+
+    // ── /skill 技能选择器 ───────────────────────────────────────────────
+    /** 打开技能选择器；无技能则提示不弹。默认高亮第一项。 */
+    private void openSkillPicker() {
+        List<SkillInfo> list = onSubmit.skills();
+        if (list.isEmpty()) { state.setNotice("当前没有可用技能"); return; }
+        pickIndex = 0;   // 挂载是一次性的，不像 /model 那样回定位到「当前项」
+        pickingSkill = true;
+    }
+
+    /** 技能选择器按键：↑↓/kj 移动、数字快选、Enter 挂载、Esc 取消。始终 HANDLED。 */
+    private EventResult onSkillPickerKey(KeyEvent k) {
+        List<SkillInfo> list = onSubmit.skills();
+        int n = list.size();
+        if (k.isCancel()) { pickingSkill = false; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.UP || k.isChar('k'))   { pickIndex = (pickIndex - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) { pickIndex = (pickIndex + 1) % n;     return EventResult.HANDLED; }
+        for (int i = 0; i < n && i < 9; i++) {
+            if (k.isChar((char) ('1' + i))) { pickIndex = i; return EventResult.HANDLED; }
+        }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            SkillInfo chosen = list.get(pickIndex);
+            pendingSkill = chosen.name();   // 选中即在输入框上方显示技能标签（skillTag）作为反馈，不再单独打 notice
+            pickingSkill = false;
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;
+    }
+
+    /** 技能选择器面板：标题 + 每个技能一行（❯ 高亮、名字 + 来源层 + 暗色描述）。 */
+    private Element[] skillPickerChildren() {
+        List<SkillInfo> list = onSubmit.skills();
+        List<Element> els = new ArrayList<>();
+        els.add(text("  选择技能（↑↓ 选择 · Enter 挂载 · Esc 取消）").style(PICK_TITLE));
+        for (int i = 0; i < list.size(); i++) {
+            SkillInfo s = list.get(i);
+            boolean sel = i == pickIndex;
+            String marker = sel ? "❯ " : "  ";
+            els.add(text("  " + marker + (i + 1) + ". " + s.name() + "  [" + s.source() + "]   " + s.description())
+                    .style(sel ? PICK_SEL : PICK_DESC));
+        }
+        return els.toArray(new Element[0]);
+    }
+
+    /** 已挂载技能标签：固定在输入框正上方。发送时随本条消息带走并自动清除；Esc 也可移除。 */
+    private Element skillTag() {
+        return text("  🎯 " + pendingSkill + "   （发送时自动加载 · Esc 移除）").style(PICK_TITLE);
     }
 
     /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
@@ -632,8 +700,10 @@ public final class CodeTuiView extends InlineApp {
 
     private Element statusLine() {
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
+        if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
         if (state.isCompacting()) return richText(statusBar.compacting(state.compactElapsedNanos(), animTick));   // 压缩指示器优先于普通思考/工具状态
+        // 已挂载技能不再占状态栏——改由输入框正上方的技能标签（skillTag）常驻显示，见 render()。
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
