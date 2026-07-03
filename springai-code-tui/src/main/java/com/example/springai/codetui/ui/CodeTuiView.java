@@ -392,8 +392,11 @@ public final class CodeTuiView extends InlineApp {
             Rect inner = block.inner(rect);
             int ix = inner.x(), iy = inner.y(), iw = Math.max(1, inner.width()), ih = inner.height();
 
-            if (inputState.text().isEmpty()) {              // 空态：占位符 + 光标在开头
-                buf.setString(ix, iy, "输入消息，Enter 发送，\\ + Enter 换行", HINT);
+            if (inputState.text().isEmpty()) {              // 空态：反显块光标 + 占位符（右移让开）
+                // 只 setCursorPosition 时，硬件光标常被行内 runner 隐藏/难察觉 → 给人「没光标、没聚焦」的错觉。
+                // 与有字时一致地画一个反显块作可见光标（放在文本起点 ix），占位符从 ix+2 起，别盖住光标。
+                buf.set(ix, iy, buf.get(ix, iy).patchStyle(Style.EMPTY.reversed()));
+                buf.setString(ix + 2, iy, "输入消息，Enter 发送，\\ + Enter 换行", HINT);
                 frame.setCursorPosition(ix, iy);
                 return;
             }
