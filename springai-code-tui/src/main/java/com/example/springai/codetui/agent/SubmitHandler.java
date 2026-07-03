@@ -8,6 +8,12 @@ import java.util.List;
 public interface SubmitHandler {
     Disposable submit(String text);
 
+    /**
+     * 带指定技能提交：发送前先调用该技能工具、把正文注入到 text 前。
+     * skillName 为 null 时等价 {@link #submit(String)}。默认实现委托无技能提交，便于桩省略。
+     */
+    default Disposable submit(String text, String skillName) { return submit(text); }
+
     // ── 模型选择（/model 选择器用；默认空实现，便于回显桩/测试桩省略） ──
     /** 可选模型列表。 */
     default List<ModelOption> models() { return List.of(); }
