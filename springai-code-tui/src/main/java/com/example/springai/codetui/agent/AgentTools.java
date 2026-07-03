@@ -23,6 +23,8 @@ import org.springframework.ai.tokenizer.TokenCountEstimator;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -108,6 +110,8 @@ public final class AgentTools {
             - 修改文件后，用 Shell 运行构建 / 测试 / 检查命令来验证改动确实生效，再给出结论。
             - 需要项目之外的信息（外部文档、库用法、报错含义等）时，用 webFetch 传入网址和你要抽取的问题来获取；
               它只读网页、不能登录或执行 JS。别凭记忆臆断外部事实。
+            - 当任务匹配某个「可用技能」的描述时（如撰写规范提交信息、遵循某领域规范），先调用 Skill 工具并传入技能名，
+              读取其完整指令后再据此产出结果；没有匹配的技能时正常作答，不要臆造技能名。
             - 回答简洁，聚焦用户的目标本身。
 
             关于工作边界（请务必遵守）：
@@ -158,11 +162,20 @@ public final class AgentTools {
                 .maxRetries(3)
                 .build();
 
-        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）
-        ToolCallback[] raw = ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch);
-        ToolCallback[] decorated = new ToolCallback[raw.length];
-        for (int i = 0; i < raw.length; i++) {
-            decorated[i] = new ToolEventCallback(raw[i], listener);
+        // 技能（Skill）：解析两层技能来源（用户 ~/.codetui/skills + 项目 <root>/.codetui/skills），
+        // 去重后构建名为 "Skill" 的工具。无任何技能时 tool()==null——不注册，避免空 <available_skills> 污染上下文。
+        SkillCatalog.Loaded skills = SkillCatalog.load(root);
+
+        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：6 个 @Tool 对象转 ToolCallback。
+        // Skill 工具本身已是 ToolCallback（非 @Tool 对象），单独追加进列表；随后统一用 ToolEventCallback 装饰，
+        // 使「技能被调用」也在 TUI 显示为一行工具活动。
+        List<ToolCallback> all = new ArrayList<>(Arrays.asList(ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch)));
+        if (skills.tool() != null) {
+            all.add(skills.tool());
+        }
+        ToolCallback[] decorated = new ToolCallback[all.size()];
+        for (int i = 0; i < all.size(); i++) {
+            decorated[i] = new ToolEventCallback(all.get(i), listener);
         }
 
         // 事件溯源会话记忆：内存仓库 + 「回合/token 感知」压缩，取代原滑窗记忆。
@@ -205,7 +218,7 @@ public final class AgentTools {
                 .defaultAdvisors(memoryAdvisor)
                 .build();
 
-        return new AgentRuntime(client, sessionService, manualStrategy, tokenCountEstimator);
+        return new AgentRuntime(client, sessionService, manualStrategy, tokenCountEstimator, skills.skills());
     }
 
     /**
@@ -215,11 +228,13 @@ public final class AgentTools {
      * @param sessionService      会话服务（手动压缩经它 {@code compact(id, trigger, strategy)}；/context 经它读事件）
      * @param manualStrategy      激进的手动压缩策略（未包装装饰器，见类注释）
      * @param tokenCountEstimator token 估算器（与压缩共用，供 {@code /context} 估算会话 token）
+     * @param skills              去重后的可用技能清单（供 {@code /skills} 展示；无技能时为空列表）
      */
     public record AgentRuntime(ChatClient client,
                                SessionService sessionService,
                                CompactionStrategy manualStrategy,
-                               TokenCountEstimator tokenCountEstimator) {}
+                               TokenCountEstimator tokenCountEstimator,
+                               List<SkillInfo> skills) {}
 
     /** 把 {@link Todos} 转成可显示的行：状态标记 + 内容。 */
     static List<String> toLines(Todos todos) {

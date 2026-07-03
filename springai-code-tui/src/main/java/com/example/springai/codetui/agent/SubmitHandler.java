@@ -23,4 +23,7 @@ public interface SubmitHandler {
 
     /** 当前会话上下文用量快照（/context）。默认空快照，便于回显桩/测试桩省略。 */
     default ContextStats contextStats() { return ContextStats.empty(); }
+
+    /** 当前可用技能清单（/skills 展示）。默认空，便于回显桩/测试桩省略。 */
+    default List<SkillInfo> skills() { return List.of(); }
 }
