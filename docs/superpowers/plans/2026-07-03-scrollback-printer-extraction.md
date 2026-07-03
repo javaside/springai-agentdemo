@@ -351,7 +351,7 @@ Expected: EXIT 0。若报「找不到符号 xxx」，多半是漏删/漏改某�
 - [ ] **Step 9: 跑离线套件（回归网）**
 
 Run: `mvn -o -q -pl springai-code-tui -am test -Dtest='!CodingAgentSpikeTest'`
-Expected: `Tests run: 89, Failures: 0`（`CodingAgentSpikeTest` 需 live key，排除）。
+Expected: `Tests run: 83, Failures: 0`（`CodingAgentSpikeTest` 的 5 个用例需 live key，排除；83 = 全量 88 − 5 spike）。
 
 ---
 
@@ -445,7 +445,7 @@ class ScrollbackPrinterTest {
 
 Run: `mvn -o -q -pl springai-code-tui -am test -Dtest='ScrollbackPrinterTest'`（先单跑）
 再: `mvn -o -q -pl springai-code-tui -am test -Dtest='!CodingAgentSpikeTest'`
-Expected: 全绿（89 + 4 个新增用例）。
+Expected: 全绿（83 + 4 个新增用例 = `Tests run: 87`）。
 
 > 若 `Text.rawContent()` 的实际返回与断言不符（如把 span 间不插空格 → 内容拼接方式不同），按实际调整 `contains`
 > 断言的期望子串即可——这是接口细节核对，不是设计问题。
