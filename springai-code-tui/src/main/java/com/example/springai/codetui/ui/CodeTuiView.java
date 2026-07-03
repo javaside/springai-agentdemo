@@ -517,9 +517,7 @@ public final class CodeTuiView extends InlineApp {
         dispatch(text, skill);
     }
 
-    /** 真正发起一个回合：提交给 agent。仅当模型与上次不同时才打一行「⚙ 使用模型 X」（首个回合也会打）。 */
-    private void dispatch(String text) { dispatch(text, null); }
-
+    /** 真正发起一个回合：提交给 agent（skill 可空——挂载技能则发送前注入正文）。仅当模型与上次不同时才打一行「⚙ 使用模型 X」（首个回合也会打）。 */
     private void dispatch(String text, String skill) {
         current = onSubmit.submit(text, skill);
         String m = onSubmit.currentModel();
@@ -584,7 +582,7 @@ public final class CodeTuiView extends InlineApp {
     private void openSkillPicker() {
         List<SkillInfo> list = onSubmit.skills();
         if (list.isEmpty()) { state.setNotice("当前没有可用技能"); return; }
-        pickIndex = 0;
+        pickIndex = 0;   // 挂载是一次性的，不像 /model 那样回定位到「当前项」
         pickingSkill = true;
     }
 
