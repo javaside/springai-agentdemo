@@ -66,6 +66,8 @@ public final class CodeTuiView extends InlineApp {
 
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
     private static final Style DIM        = Style.create().fg(Color.DARK_GRAY);
+    // 占位符/空态提示（输入框空态、状态栏空闲行）：用灰白而非近黑的 DARK_GRAY，暗色终端下更清晰可读
+    private static final Style HINT       = Style.create().fg(Color.indexed(250));
     private static final Style USER       = Style.create().fg(Color.GRAY);
     private static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
     private static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
@@ -380,7 +382,7 @@ public final class CodeTuiView extends InlineApp {
             int ix = inner.x(), iy = inner.y(), iw = Math.max(1, inner.width()), ih = inner.height();
 
             if (inputState.text().isEmpty()) {              // 空态：占位符 + 光标在开头
-                buf.setString(ix, iy, "输入消息，Enter 发送，\\ + Enter 换行", DIM);
+                buf.setString(ix, iy, "输入消息，Enter 发送，\\ + Enter 换行", HINT);
                 frame.setCursorPosition(ix, iy);
                 return;
             }
@@ -742,7 +744,7 @@ public final class CodeTuiView extends InlineApp {
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
-            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel()).style(DIM);
+            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel()).style(HINT);
             case THINKING -> shimmerStatus("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK);
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
