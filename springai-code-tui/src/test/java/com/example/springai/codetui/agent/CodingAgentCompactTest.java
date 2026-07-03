@@ -1,6 +1,5 @@
 package com.example.springai.codetui.agent;
 
-import com.example.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
@@ -58,15 +57,14 @@ class CodingAgentCompactTest {
     }
 
     @Test
-    void runCompaction_callsCompact_withForcingTrigger_andManualStrategy() {
-        ConversationState state = new ConversationState();
+    void runCompaction_forcesCompaction_andReportsFinishedExactlyOnce() {
+        OrderRecordingListener listener = new OrderRecordingListener();
         CompactionResult result = new CompactionResult(List.of(), List.of(DUMMY_EVENT), 999);
         FakeSessionService fake = new FakeSessionService();
-        // 手动策略：包通知装饰器，驱动 state 的 started/finished（复用真实装饰器）。
-        CompactionStrategy manual = new NotifyingCompactionStrategy(req -> result, state, "manual");
+        CompactionStrategy manual = req -> result;   // 裸策略：runCompaction 从返回值自行上报，不叠加装饰器
 
         CodingAgent agent = new CodingAgent(
-                dummyChatClient(), state, "sess-1", new AtomicLong(), fake, manual);
+                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual);
 
         agent.runCompaction();   // 同步
 
@@ -74,8 +72,24 @@ class CodingAgentCompactTest {
         assertTrue(fake.trigger.get().shouldCompact(CompactionRequest.of(DUMMY_SESSION, List.of())),
                 "手动触发器必须恒为 true（强制压缩）");
         assertSame(manual, fake.strategy.get(), "应传入手动策略");
-        assertTrue(state.drainPending().stream().anyMatch(l -> l.text().contains("999")),
-                "结果计数应经 listener 落进 pending");
+        assertEquals(List.of("started:manual", "finished:1:999"), listener.events,
+                "成功路径应恰好 started 一次、finished 一次（计数来自返回的 CompactionResult）");
+    }
+
+    @Test
+    void runCompaction_reportsFailedExactlyOnce_whenStrategyItselfThrows() {
+        OrderRecordingListener listener = new OrderRecordingListener();
+        FakeSessionService fake = new FakeSessionService();
+        // 策略「内部」失败（模拟摘要 LLM 调用抛错）：手动策略未包装装饰器，故只应被 runCompaction 上报一次。
+        CompactionStrategy manual = req -> { throw new RuntimeException("llm boom"); };
+
+        CodingAgent agent = new CodingAgent(
+                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual);
+
+        agent.runCompaction();   // 同步
+
+        assertEquals(List.of("started:manual", "failed:llm boom"), listener.events,
+                "策略内部失败应恰好上报一次 failed（不因装饰器与 runCompaction 叠加而重复）");
     }
 
     @Test

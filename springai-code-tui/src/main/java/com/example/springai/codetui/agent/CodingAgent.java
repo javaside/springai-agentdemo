@@ -9,6 +9,7 @@ import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
@@ -117,17 +118,27 @@ public final class CodingAgent implements SubmitHandler {
      * 同步执行一次手动压缩（供 {@link #compact()} 的后台线程调用；包级可见便于测试直调）。
      * 用恒真触发器绕过 token 阈值，配合激进的手动策略。
      *
-     * <p>在调用 {@code sessionService.compact} <b>之前</b>先自行发一次 {@code onCompactionStarted("manual")}：
-     * 保证即便压缩在「进入策略前」就抛异常（会话不存在 / I/O 失败），UI 也已显示过「正在压缩」，不会出现
-     * 「只有失败行、没有开始提示」的静默错觉。进入策略后 {@link NotifyingCompactionStrategy} 会再发一次
-     * started——{@code ConversationState.onCompactionStarted} 是幂等的（只重置计时/原因），无害。
+     * <p><b>本方法独占手动路径的三个生命周期事件</b>（started/finished/failed）：它<b>直接</b>调用
+     * {@code sessionService.compact} 并拿到返回的 {@link CompactionResult} 自行上报，因此
+     * {@code manualStrategy} 是<b>未包装</b>的裸策略（见 {@code AgentTools}）——若再套
+     * {@link NotifyingCompactionStrategy}，同一次失败会被「装饰器 + 本方法」重复上报。装饰器只服务于
+     * 自动路径（advisor 内部调用、拿不到返回值）。
+     *
+     * <p>先发 started 再调用：保证即便压缩在进入策略前就抛异常（会话不存在 / I/O），UI 也已显示过「正在压缩」，
+     * 不会出现「只有失败行、没有开始提示」的静默错觉。{@code catch} 覆盖到 {@link Error}：即便 LLM 摘要抛出
+     * {@code Error}，也先发 failed 把 {@code compacting} 清掉（否则 UI 永久卡在「压缩中」、{@code isBusy()}
+     * 恒真、后续回合与 /compact 全被堵死），再把 {@code Error} 向上抛出、不吞。
      */
     void runCompaction() {
         try {
             listener.onCompactionStarted("manual");
-            sessionService.compact(sessionId, req -> true, manualStrategy);
+            CompactionResult result = sessionService.compact(sessionId, req -> true, manualStrategy);
+            listener.onCompactionFinished(result.eventsRemoved(), result.tokensEstimatedSaved());
         } catch (RuntimeException e) {
             listener.onCompactionFailed(String.valueOf(e.getMessage()));
+        } catch (Error e) {
+            listener.onCompactionFailed(String.valueOf(e.getMessage()));   // 先清状态，避免永久卡「压缩中」
+            throw e;                                                        // Error 不吞：清完状态仍向上抛
         } finally {
             compactionInFlight.set(false);   // 释放兜底闸门（无论成功/失败）
         }

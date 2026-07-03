@@ -42,8 +42,9 @@ import java.util.List;
  *
  * <p><b>返回 {@link AgentRuntime}</b>：{@link #build} 除了 {@link ChatClient}，还暴露 {@link SessionService}
  * 与一份更激进的手动压缩策略（保留 20 事件），供上层 {@code /compact} 命令直接触发压缩。
- * 自动（阈值触发）与手动两条压缩路径的策略都用 {@link NotifyingCompactionStrategy} 包了一层，
- * 使原本静默的压缩对 UI 可见。
+ * <b>自动</b>（阈值触发）路径的策略用 {@link NotifyingCompactionStrategy} 包一层，使原本静默的压缩对 UI 可见；
+ * <b>手动</b>路径的策略<b>不</b>包装——它由 {@code CodingAgent.runCompaction} 直接调用并自行上报事件，
+ * 若再包装会重复上报同一次压缩。
  *
  * <p><b>为何不挂 conversation_search 工具</b>：0.5.0 的压缩是<b>销毁式</b>的——
  * {@code DefaultSessionService.compactWith} 只把压缩后的集合经 {@code replaceEvents} 覆盖写回，
@@ -170,19 +171,19 @@ public final class AgentTools {
         TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
 
         // 自动压缩策略（保留 120）→ 包一层通知装饰器（reason="auto"），让阈值触发的压缩对 UI 可见。
+        // 自动路径由 advisor 内部调用、拿不到返回值，必须靠装饰器上报 started/finished/failed。
         CompactionStrategy autoStrategy = new NotifyingCompactionStrategy(
                 RecursiveSummarizationCompactionStrategy.builder(auxClient)
                         .maxEventsToKeep(MAX_EVENTS_TO_KEEP)
                         .tokenCountEstimator(tokenCountEstimator).build(),
                 listener, "auto");
 
-        // 手动压缩策略（保留 20，更激进）→ 包一层通知装饰器（reason="manual"），供 /compact 直接调用。
-        CompactionStrategy manualStrategy = new NotifyingCompactionStrategy(
-                RecursiveSummarizationCompactionStrategy.builder(auxClient)
-                        .maxEventsToKeep(MANUAL_MAX_EVENTS_TO_KEEP)
-                        .overlapSize(MANUAL_OVERLAP_SIZE)
-                        .tokenCountEstimator(tokenCountEstimator).build(),
-                listener, "manual");
+        // 手动压缩策略（保留 20，更激进）：<b>不</b>包装装饰器——手动路径由 {@code CodingAgent.runCompaction}
+        // 直接调用 sessionService.compact 并拿到返回值自行上报生命周期事件；若再包装会导致失败被重复上报。
+        CompactionStrategy manualStrategy = RecursiveSummarizationCompactionStrategy.builder(auxClient)
+                .maxEventsToKeep(MANUAL_MAX_EVENTS_TO_KEEP)
+                .overlapSize(MANUAL_OVERLAP_SIZE)
+                .tokenCountEstimator(tokenCountEstimator).build();
 
         SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
                 .defaultUserId(DEFAULT_USER_ID)
