@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.example.springai.codetui.ui.Theme.*;   // 配色 / 样式（DIM/HINT/PICK_SEL/… + styleFor），定义见 Theme
 import static dev.tamboui.toolkit.InlineToolkit.scope;
 import static dev.tamboui.toolkit.Toolkit.column;
 import static dev.tamboui.toolkit.Toolkit.richText;
@@ -64,48 +65,8 @@ public final class CodeTuiView extends InlineApp {
 
     private static final int TODO_CAP = 10;      // 计划面板最多显示几条
     private static final String INDENT = "  ";  // 对话内容缩进；工具/计划行自带前缀
-
-    // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
-    private static final Style DIM        = Style.create().fg(Color.DARK_GRAY);
-    // 占位符/空态提示（输入框空态、状态栏空闲行）：用灰白而非近黑的 DARK_GRAY，暗色终端下更清晰可读
-    private static final Style HINT       = Style.create().fg(Color.indexed(250));
-    // 下沉到 scrollback 的信息行（/context 统计、/help、⚙ 模型、压缩结果等）：同样避开近黑的 DIM，
-    // 用可读的灰白（略深于 HINT，作为「内容而非提示」的层次）。DIM 仍留给固定区的次要元素（待办○、状态后缀）。
-    private static final Style INFO_LINE  = Style.create().fg(Color.indexed(248));
-    private static final Style USER       = Style.create().fg(Color.GRAY);
-    private static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
-    private static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
-    private static final Style QUEUED      = Style.create().fg(Color.GRAY).bg(Color.indexed(236)); // 排队消息：暗灰底，待发
-    private static final Style PICK_TITLE  = Style.create().fg(Color.indexed(215)).bold();        // 选择器标题=暖橙
-    // 高亮项：<b>纯前景</b>高亮，<b>不用灰底</b>。行内菜单里带底色的高亮条在本 TUI 的 InlineDisplay 下会
-    // 「后半段串到下一项」——它发 ANSI 时裁掉行尾空白，补白/清除都失效，底色无法对齐/清净（已用 pty + pyte
-    // 实机复现确认）。用<b>暖橙 215（主题强调色，同 ❯/标题/边框）加粗</b>做高亮：与相邻灰色项是<b>色相</b>差异，
-    // 比「亮白 vs 灰」的纯明度差更醒目；纯前景故无底色残留。
-    private static final Style PICK_SEL    = Style.create().fg(Color.indexed(215)).bold();          // 高亮项=暖橙加粗（无底色）
-    private static final Style PICK_ITEM   = Style.create().fg(Color.GRAY);                        // 普通项
-    private static final Style PICK_DESC   = Style.create().fg(Color.DARK_GRAY);                   // 项说明
-    private static final Style TOOL       = Style.create().fg(Color.LIGHT_YELLOW);   // 工具调用行：淡黄，暗色终端可读（原 DARK_GRAY 近黑看不清）
-    private static final Style OK         = Style.create().fg(Color.GREEN);
-    private static final Style FAIL       = Style.create().fg(Color.RED);
-    private static final Style TODO       = Style.create().fg(Color.YELLOW);
-    private static final Style ERROR      = Style.create().fg(Color.RED).bold();
-    private static final Style THINK      = Style.create().fg(Color.YELLOW);
-    private static final Style RUNNING    = Style.create().fg(Color.CYAN);
-    private static final Style SHIMMER_HI  = Style.create().fg(Color.BRIGHT_WHITE).bold();   // 状态栏波光高亮
-    private static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
-    private static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
-
-    // diff 展示（Claude Code 式）：整行底色铺满，行号列灰、加/删号亮。
-    // ⚠ 背景必须用 256 色 indexed()，不能用 rgb()：目标终端（Apple Terminal 等，COLORTERM 为空）
-    //   不支持 truecolor，会直接忽略 48;2;r;g;b 序列 → 底色不显示。indexed 走 48;5;N，稳定可见。
-    private static final Color ADD_BG = Color.indexed(22);   // 深绿底=新增
-    private static final Color DEL_BG = Color.indexed(52);   // 深红底=删除
-    private static final Style DIFF_HEADER = Style.create().fg(Color.BRIGHT_WHITE).bold();
-    private static final Style DIFF_NO_ADD = Style.create().fg(Color.indexed(114)).bg(ADD_BG);   // 新增行号=浅绿
-    private static final Style DIFF_NO_DEL = Style.create().fg(Color.indexed(210)).bg(DEL_BG);   // 删除行号=浅红
-    private static final Style DIFF_NO_CTX = Style.create().fg(Color.DARK_GRAY);                 // 上下文行号=暗灰
-    private static final Style DIFF_TRUNC  = Style.create().fg(Color.DARK_GRAY);
     private static final int GUTTER = 4;   // 行号列宽（右对齐到 4 位，够 9999 行）
+    // 配色 / 样式集中在 {@link Theme}，本类经 import static Theme.* 引入（DIM/HINT/PICK_SEL/… 写法不变）。
 
     private final ConversationState state;
     private final SubmitHandler onSubmit;
@@ -173,12 +134,7 @@ public final class CodeTuiView extends InlineApp {
         runner().scheduleRepeating(() -> runner().runOnRenderThread(this::drain), Duration.ofMillis(33));
     }
 
-    // ── 欢迎横幅（仿 Claude Code） ───────────────────────────────────────
-    private static final Style WELCOME_BORDER = Style.create().fg(Color.indexed(215));            // 暖橙边框
-    private static final Style WELCOME_TITLE  = Style.create().fg(Color.indexed(215)).bold();     // 暖橙加粗标题
-    private static final Style WELCOME_BODY   = Style.create().fg(Color.GRAY);
-    private static final Style WELCOME_HINT   = Style.create().fg(Color.DARK_GRAY);
-
+    // ── 欢迎横幅（仿 Claude Code），配色见 Theme.WELCOME_* ──────────────────
     /** 圆角欢迎框：标题 + 简介 + 快捷键 + 工作区路径，下沉到 scrollback 顶部，输入框钉在其下。 */
     private void printWelcome() {
         int w = Math.min(Math.max(terminalWidth() - 1, 48), 76);
@@ -767,8 +723,8 @@ public final class CodeTuiView extends InlineApp {
 
     /**
      * 斜杠命令补全菜单：每个匹配命令一行（❯ 高亮、命令名 + 暗色说明），固定在输入框上方。
-     * 高亮走<b>纯前景</b>（{@link #PICK_SEL} 亮白加粗，无底色）——本 TUI 的 InlineDisplay 下带底色的高亮条
-     * 会「后半段串到下一项」（已用 pty 实机复现，见 {@link #PICK_SEL} 注释），故不用底色条。
+     * 高亮走<b>纯前景</b>（{@link Theme#PICK_SEL} 暖橙加粗，无底色）——本 TUI 的 InlineDisplay 下带底色的高亮条
+     * 会「后半段串到下一项」（已用 pty 实机复现，见 {@link Theme#PICK_SEL} 注释），故不用底色条。
      */
     private Element[] slashMenuChildren() {
         List<SlashCommand> m = slashMatches();
@@ -890,18 +846,5 @@ public final class CodeTuiView extends InlineApp {
     private static String lastLine(String s) {
         int i = s.lastIndexOf('\n');
         return i < 0 ? s : s.substring(i + 1);
-    }
-
-    private static Style styleFor(OutputLine.Kind kind) {
-        return switch (kind) {
-            case USER -> USER;
-            case ASSISTANT -> null;          // 默认色，正文最易读
-            case TOOL_START -> TOOL;
-            case TOOL_OK -> OK;
-            case TOOL_FAIL -> FAIL;
-            case TODO -> TODO;
-            case ERROR -> ERROR;
-            case INFO -> INFO_LINE;   // 灰白，暗色终端可读（原 DIM=DARK_GRAY 近黑看不清）
-        };
     }
 }
