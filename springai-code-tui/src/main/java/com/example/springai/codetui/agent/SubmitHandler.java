@@ -20,4 +20,7 @@ public interface SubmitHandler {
 
     /** 手动压缩会话历史（/compact）。默认空实现，便于回显桩/测试桩省略。 */
     default void compact() { }
+
+    /** 当前会话上下文用量快照（/context）。默认空快照，便于回显桩/测试桩省略。 */
+    default ContextStats contextStats() { return ContextStats.empty(); }
 }

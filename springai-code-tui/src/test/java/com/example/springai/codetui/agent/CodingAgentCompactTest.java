@@ -64,7 +64,7 @@ class CodingAgentCompactTest {
         CompactionStrategy manual = req -> result;   // 裸策略：runCompaction 从返回值自行上报，不叠加装饰器
 
         CodingAgent agent = new CodingAgent(
-                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual);
+                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual, null);
 
         agent.runCompaction();   // 同步
 
@@ -84,7 +84,7 @@ class CodingAgentCompactTest {
         CompactionStrategy manual = req -> { throw new RuntimeException("llm boom"); };
 
         CodingAgent agent = new CodingAgent(
-                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual);
+                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual, null);
 
         agent.runCompaction();   // 同步
 
@@ -101,7 +101,7 @@ class CodingAgentCompactTest {
         CompactionStrategy manual = new NotifyingCompactionStrategy(req -> null, listener, "manual");
 
         CodingAgent agent = new CodingAgent(
-                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual);
+                dummyChatClient(), listener, "sess-1", new AtomicLong(), fake, manual, null);
 
         agent.runCompaction();   // 同步
 

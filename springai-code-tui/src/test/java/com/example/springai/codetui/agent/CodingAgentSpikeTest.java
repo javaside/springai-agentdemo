@@ -131,7 +131,7 @@ class CodingAgentSpikeTest {
         AtomicLong active = new AtomicLong();
         AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-text", active,
-                rt.sessionService(), rt.manualStrategy());
+                rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
         agent.submit("用一句话回答：1+1 等于几？");
         long turnId = active.get();
@@ -152,7 +152,7 @@ class CodingAgentSpikeTest {
 
         AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-tool", active,
-                rt.sessionService(), rt.manualStrategy());
+                rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
         agent.submit("读取文件 " + file.getFileName() + " 并原样告诉我它的内容。");
         long turnId = active.get();
@@ -173,7 +173,7 @@ class CodingAgentSpikeTest {
         AtomicLong active = new AtomicLong();
         AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-memory", active,
-                rt.sessionService(), rt.manualStrategy());
+                rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
         agent.submit("我叫张三，请记住。");
         long turn1 = active.get();
@@ -194,7 +194,7 @@ class CodingAgentSpikeTest {
         AtomicLong active = new AtomicLong();
         AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-cancel", active,
-                rt.sessionService(), rt.manualStrategy());
+                rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
         Disposable d = agent.submit("请写一篇不少于 500 字的短文，介绍杭州西湖的四季景色。");
         long turnId = active.get();
@@ -220,7 +220,7 @@ class CodingAgentSpikeTest {
         AtomicLong active = new AtomicLong();
         AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-todo", active,
-                rt.sessionService(), rt.manualStrategy());
+                rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
         agent.submit("制定一个包含 3 个步骤的计划来整理这个目录，用 TodoWrite 记录计划。");
         long turnId = active.get();

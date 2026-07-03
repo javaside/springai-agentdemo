@@ -36,7 +36,7 @@ class CodingAgentSubmitErrorTest {
     void syncAssemblyException_isReportedAndStateReset_notLeaked() {
         ConversationState state = new ConversationState();   // implements AgentListener
         CodingAgent agent = new CodingAgent(throwingOnPrompt("assembly-boom"), state, "s", new AtomicLong(),
-                null, null);   // 本测试不触发 /compact，压缩句柄用不到
+                null, null, null);   // 本测试不触发 /compact，压缩句柄用不到
 
         Disposable d = assertDoesNotThrow(() -> agent.submit("hi"),
                 "同步装配异常不应逃逸出 submit");

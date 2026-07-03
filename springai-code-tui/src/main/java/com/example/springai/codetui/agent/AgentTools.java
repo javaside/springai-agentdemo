@@ -76,13 +76,16 @@ public final class AgentTools {
      * 多数编码会话跑不到；仍距 1M 留 ~600k 给本轮响应 + 工具输出，避免某轮总量破 1M 报错。
      * 不变量：须明显 > MAX_EVENTS_TO_KEEP 个事件的 token 量，否则压缩压不到阈值以下、原地空转。可调。
      */
-    private static final int COMPACTION_TOKEN_THRESHOLD = 400_000;
+    static final int COMPACTION_TOKEN_THRESHOLD = 400_000;
+
+    /** 当前模型（v4-flash）上下文窗口 token 数；仅用于 {@code /context} 展示「已用 / 窗口」占比，非硬约束。 */
+    static final long CONTEXT_WINDOW_TOKENS = 1_000_000L;
 
     /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收（压缩为销毁式，见类注释）。须 > overlapSize 且其 token 量远低于阈值。可调。 */
-    private static final int MAX_EVENTS_TO_KEEP = 120;
+    static final int MAX_EVENTS_TO_KEEP = 120;
 
     /** 手动 /compact 的保留窗口：比自动的 120 激进得多，让「按需缩小上下文」真正生效。可调。 */
-    private static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
+    static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
 
     /** 手动策略的重叠窗口：须 >=0 且 < MANUAL_MAX_EVENTS_TO_KEEP，给摘要与保留段留一点上下文衔接。 */
     private static final int MANUAL_OVERLAP_SIZE = 3;
@@ -202,19 +205,21 @@ public final class AgentTools {
                 .defaultAdvisors(memoryAdvisor)
                 .build();
 
-        return new AgentRuntime(client, sessionService, manualStrategy);
+        return new AgentRuntime(client, sessionService, manualStrategy, tokenCountEstimator);
     }
 
     /**
      * build 的产物：装好的 ChatClient + 手动 /compact 所需的会话句柄。
      *
-     * @param client         注册好工具与会话记忆 advisor 的 ChatClient
-     * @param sessionService 会话服务（手动压缩经它 {@code compact(id, trigger, strategy)}）
-     * @param manualStrategy 激进的手动压缩策略（已包通知装饰器，reason="manual"）
+     * @param client              注册好工具与会话记忆 advisor 的 ChatClient
+     * @param sessionService      会话服务（手动压缩经它 {@code compact(id, trigger, strategy)}；/context 经它读事件）
+     * @param manualStrategy      激进的手动压缩策略（未包装装饰器，见类注释）
+     * @param tokenCountEstimator token 估算器（与压缩共用，供 {@code /context} 估算会话 token）
      */
     public record AgentRuntime(ChatClient client,
                                SessionService sessionService,
-                               CompactionStrategy manualStrategy) {}
+                               CompactionStrategy manualStrategy,
+                               TokenCountEstimator tokenCountEstimator) {}
 
     /** 把 {@link Todos} 转成可显示的行：状态标记 + 内容。 */
     static List<String> toLines(Todos todos) {

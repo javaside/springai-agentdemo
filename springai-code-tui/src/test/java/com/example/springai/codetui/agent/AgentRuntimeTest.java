@@ -27,5 +27,6 @@ class AgentRuntimeTest {
         assertNotNull(rt.client(), "ChatClient 必须装配出来");
         assertNotNull(rt.sessionService(), "SessionService 必须暴露（供手动 /compact）");
         assertNotNull(rt.manualStrategy(), "手动压缩策略必须暴露");
+        assertNotNull(rt.tokenCountEstimator(), "token 估算器必须暴露（供 /context 估算）");
     }
 }

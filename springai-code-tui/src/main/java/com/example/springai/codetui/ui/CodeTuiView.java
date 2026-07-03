@@ -1,5 +1,6 @@
 package com.example.springai.codetui.ui;
 
+import com.example.springai.codetui.agent.ContextStats;
 import com.example.springai.codetui.agent.ModelOption;
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
@@ -68,15 +69,22 @@ public final class CodeTuiView extends InlineApp {
     private static final Style DIM        = Style.create().fg(Color.DARK_GRAY);
     // 占位符/空态提示（输入框空态、状态栏空闲行）：用灰白而非近黑的 DARK_GRAY，暗色终端下更清晰可读
     private static final Style HINT       = Style.create().fg(Color.indexed(250));
+    // 下沉到 scrollback 的信息行（/context 统计、/help、⚙ 模型、压缩结果等）：同样避开近黑的 DIM，
+    // 用可读的灰白（略深于 HINT，作为「内容而非提示」的层次）。DIM 仍留给固定区的次要元素（待办○、状态后缀）。
+    private static final Style INFO_LINE  = Style.create().fg(Color.indexed(248));
     private static final Style USER       = Style.create().fg(Color.GRAY);
     private static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
     private static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
     private static final Style QUEUED      = Style.create().fg(Color.GRAY).bg(Color.indexed(236)); // 排队消息：暗灰底，待发
     private static final Style PICK_TITLE  = Style.create().fg(Color.indexed(215)).bold();        // 选择器标题=暖橙
-    private static final Style PICK_SEL    = Style.create().fg(Color.BRIGHT_WHITE).bg(Color.indexed(238)).bold(); // 高亮项=灰底白字
+    // 高亮项：<b>纯前景</b>高亮，<b>不用灰底</b>。行内菜单里带底色的高亮条在本 TUI 的 InlineDisplay 下会
+    // 「后半段串到下一项」——它发 ANSI 时裁掉行尾空白，补白/清除都失效，底色无法对齐/清净（已用 pty + pyte
+    // 实机复现确认）。用<b>暖橙 215（主题强调色，同 ❯/标题/边框）加粗</b>做高亮：与相邻灰色项是<b>色相</b>差异，
+    // 比「亮白 vs 灰」的纯明度差更醒目；纯前景故无底色残留。
+    private static final Style PICK_SEL    = Style.create().fg(Color.indexed(215)).bold();          // 高亮项=暖橙加粗（无底色）
     private static final Style PICK_ITEM   = Style.create().fg(Color.GRAY);                        // 普通项
     private static final Style PICK_DESC   = Style.create().fg(Color.DARK_GRAY);                   // 项说明
-    private static final Style TOOL       = Style.create().fg(Color.DARK_GRAY);
+    private static final Style TOOL       = Style.create().fg(Color.LIGHT_YELLOW);   // 工具调用行：淡黄，暗色终端可读（原 DARK_GRAY 近黑看不清）
     private static final Style OK         = Style.create().fg(Color.GREEN);
     private static final Style FAIL       = Style.create().fg(Color.RED);
     private static final Style TODO       = Style.create().fg(Color.YELLOW);
@@ -118,12 +126,14 @@ public final class CodeTuiView extends InlineApp {
     private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
     private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
     private long animTick;                                           // 动画帧计数（drain 每 ~33ms 自增），驱动状态栏波光
+    private volatile ContextStats ctxStats = ContextStats.empty();   // 状态栏上下文用量快照：drain 里节流刷新，render 只读缓存（重算要遍历全部消息 + 估算 token，绝不每帧做）
 
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
     private static final List<SlashCommand> COMMANDS = List.of(
             new SlashCommand("/model",   "切换 AI 模型"),
             new SlashCommand("/compact", "压缩会话历史（手动）"),
+            new SlashCommand("/context", "查看上下文用量（事件数 / token）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
 
@@ -203,6 +213,7 @@ public final class CodeTuiView extends InlineApp {
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
     private void drain() {
         animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
+        if (animTick % 30 == 0) refreshCtxStats();             // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
         for (OutputLine ol : state.drainPending()) {
             switch (ol.kind()) {
                 case USER -> {
@@ -605,6 +616,11 @@ public final class CodeTuiView extends InlineApp {
             onSubmit.compact();
             return;
         }
+        if (cmd.equals("/context")) {          // 只读快照：任何时刻都可查（含回合进行中），不打断
+            inputState.clear();
+            printContext();
+            return;
+        }
         if (cmd.equals("/help")) {
             inputState.clear();
             printHelp();
@@ -683,6 +699,62 @@ public final class CodeTuiView extends InlineApp {
         return els.toArray(new Element[0]);
     }
 
+    /**
+     * /context：把当前会话上下文用量（事件数分桶 + 估算 token + 距自动压缩阈值）打进 scrollback（灰色信息行）。
+     * 只读快照，任何时刻都可查；尚无对话时各项为 0，明确提示「尚无对话历史」。
+     */
+    private void printContext() {
+        ContextStats s = onSubmit.contextStats();
+        if (s == null) s = ContextStats.empty();
+        state.pushInfo("📊 上下文用量");
+        if (s.events() == 0) {
+            state.pushInfo("  （尚无对话历史）");
+            return;
+        }
+        state.pushInfo(String.format("  事件数：%,d 条（用户 %,d · 助手 %,d · 工具 %,d%s）",
+                s.events(), s.userEvents(), s.assistantEvents(), s.toolEvents(),
+                s.otherEvents() > 0 ? " · 其他 " + s.otherEvents() : ""));
+        if (s.contextWindow() > 0) {
+            state.pushInfo(String.format("  估算 token：%,d / %,d（占窗口 %s）",
+                    s.estimatedTokens(), s.contextWindow(), pct(s.estimatedTokens(), s.contextWindow())));
+        } else {
+            state.pushInfo(String.format("  估算 token：%,d", s.estimatedTokens()));
+        }
+        if (s.tokenThreshold() > 0) {
+            state.pushInfo(String.format("  自动压缩：达 %,d token 触发（当前 %s）· 保留最近 %,d 条",
+                    s.tokenThreshold(), pct(s.estimatedTokens(), s.tokenThreshold()), s.autoKeepEvents()));
+        }
+        if (s.manualKeepEvents() > 0) {
+            state.pushInfo(String.format("  手动 /compact：立即压缩，保留最近 %,d 条（更激进）", s.manualKeepEvents()));
+        }
+    }
+
+    /** 占比（part/whole）取整成百分号字符串；whole<=0 视为 0%。 */
+    private static String pct(long part, long whole) {
+        if (whole <= 0) return "0%";
+        return Math.round(part * 100.0 / whole) + "%";
+    }
+
+    /**
+     * 重算状态栏用的上下文用量快照（{@link #drain} 里节流调用，绝不每帧）。用量是辅助信息：
+     * 估算失败绝不能拖垮主 UI，异常时静默保留旧值。
+     */
+    private void refreshCtxStats() {
+        try {
+            ContextStats s = onSubmit.contextStats();
+            if (s != null) ctxStats = s;
+        } catch (RuntimeException ignore) {
+            // 尽力而为：保留上一次快照，不影响状态栏其余内容
+        }
+    }
+
+    /** 状态栏上下文用量后缀（如 {@code " · 上下文 3%"}，占 1M 窗口比例）；尚无对话/窗口未知时返回空串。 */
+    private String ctxSuffix() {
+        ContextStats s = ctxStats;
+        if (s == null || s.events() == 0 || s.contextWindow() <= 0) return "";
+        return " · 上下文 " + pct(s.estimatedTokens(), s.contextWindow());
+    }
+
     /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
     private void printHelp() {
         state.pushInfo("可用命令：");
@@ -690,17 +762,21 @@ public final class CodeTuiView extends InlineApp {
         state.pushInfo("快捷键：Enter 发送 · \\+Enter 换行 · Esc 取消 · Ctrl+C 退出");
     }
 
-    /** 斜杠命令补全菜单：每个匹配命令一行（❯ 高亮、命令名 + 暗色说明），固定在输入框上方。 */
+    /**
+     * 斜杠命令补全菜单：每个匹配命令一行（❯ 高亮、命令名 + 暗色说明），固定在输入框上方。
+     * 高亮走<b>纯前景</b>（{@link #PICK_SEL} 亮白加粗，无底色）——本 TUI 的 InlineDisplay 下带底色的高亮条
+     * 会「后半段串到下一项」（已用 pty 实机复现，见 {@link #PICK_SEL} 注释），故不用底色条。
+     */
     private Element[] slashMenuChildren() {
         List<SlashCommand> m = slashMatches();
         int sel = clampIndex(slashIndex, m.size());
         List<Element> els = new ArrayList<>();
         for (int i = 0; i < m.size(); i++) {
             SlashCommand c = m.get(i);
-            boolean s = i == sel;
             String name = c.name();
             String pad = " ".repeat(Math.max(1, 10 - displayWidth(name)));   // 命令名对齐
-            els.add(text("  " + (s ? "❯ " : "  ") + name + pad + c.desc()).style(s ? PICK_SEL : PICK_ITEM));
+            els.add(text("  " + (i == sel ? "❯ " : "  ") + name + pad + c.desc())
+                    .style(i == sel ? PICK_SEL : PICK_ITEM));
         }
         return els.toArray(new Element[0]);
     }
@@ -744,7 +820,7 @@ public final class CodeTuiView extends InlineApp {
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         return switch (state.status()) {
-            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel()).style(HINT);
+            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel() + ctxSuffix()).style(HINT);
             case THINKING -> shimmerStatus("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK);
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
@@ -822,7 +898,7 @@ public final class CodeTuiView extends InlineApp {
             case TOOL_FAIL -> FAIL;
             case TODO -> TODO;
             case ERROR -> ERROR;
-            case INFO -> DIM;
+            case INFO -> INFO_LINE;   // 灰白，暗色终端可读（原 DIM=DARK_GRAY 近黑看不清）
         };
     }
 }

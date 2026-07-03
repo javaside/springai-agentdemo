@@ -5,12 +5,16 @@ import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
+import org.springframework.ai.tokenizer.TokenCountEstimator;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 
@@ -46,17 +50,20 @@ public final class CodingAgent implements SubmitHandler {
     private final AtomicLong activeTurnId;
     private final SessionService sessionService;
     private final CompactionStrategy manualStrategy;
+    private final TokenCountEstimator tokenCountEstimator;   // 与压缩共用，供 /context 估算会话 token
     private final AtomicBoolean compactionInFlight = new AtomicBoolean(false);   // 防止并发/重复触发手动压缩
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
-                       SessionService sessionService, CompactionStrategy manualStrategy) {
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator) {
         this.chatClient = chatClient;
         this.listener = listener;
         this.sessionId = sessionId;
         this.activeTurnId = activeTurnId;
         this.sessionService = sessionService;
         this.manualStrategy = manualStrategy;
+        this.tokenCountEstimator = tokenCountEstimator;
     }
 
     @Override
@@ -142,6 +149,46 @@ public final class CodingAgent implements SubmitHandler {
         } finally {
             compactionInFlight.set(false);   // 释放兜底闸门（无论成功/失败）
         }
+    }
+
+    /**
+     * 现算一份会话上下文用量快照（供 {@code /context} 命令展示）。
+     *
+     * <p>读一遍当前会话的事件（数条数、按消息类型分桶）与消息（拼接文本 → JTokkit 估算 token）。
+     * 只读、不加锁：若恰有回合在写事件，拿到的是尽力而为的一致视图，对「看个大概用量」足够。
+     * 会话尚无事件（未开始对话）时 {@code getEvents} 返回空列表，自然得到全 0 的快照。
+     *
+     * <p>token 估算走与压缩同一个 {@link TokenCountEstimator}。{@code Message} 只是 {@code Content}（有 getText），
+     * 并非 {@code MediaContent}，故不能直接喂 {@code estimate(Iterable)}——改为拼接各消息文本后 {@code estimate(String)}，
+     * 与「累计文本 token」的直觉一致。阈值/窗口/保留窗口等策略数取自 {@link AgentTools}（同包常量），保证与实际装配一致。
+     */
+    @Override
+    public ContextStats contextStats() {
+        List<SessionEvent> events = sessionService.getEvents(sessionId);
+        int user = 0, assistant = 0, tool = 0, other = 0;
+        for (SessionEvent e : events) {
+            MessageType type = e.getMessageType();
+            if (type == MessageType.USER) {
+                user++;
+            } else if (type == MessageType.ASSISTANT) {
+                assistant++;
+            } else if (type == MessageType.TOOL) {
+                tool++;
+            } else {
+                other++;   // 系统 / 摘要等
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Message m : sessionService.getMessages(sessionId)) {
+            String text = m.getText();
+            if (text != null && !text.isEmpty()) {
+                sb.append(text).append('\n');
+            }
+        }
+        long tokens = sb.length() == 0 ? 0L : tokenCountEstimator.estimate(sb.toString());
+        return new ContextStats(events.size(), user, assistant, tool, other, tokens,
+                AgentTools.COMPACTION_TOKEN_THRESHOLD, AgentTools.CONTEXT_WINDOW_TOKENS,
+                AgentTools.MAX_EVENTS_TO_KEEP, AgentTools.MANUAL_MAX_EVENTS_TO_KEEP);
     }
 
     /** 从一个流式块里抽取文本增量并发给 listener。全链路 null-guard：工具调用块常常没有输出/文本。 */
