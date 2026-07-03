@@ -15,3 +15,13 @@ logs/
 
 # macOS
 .DS_Store
+
+# Maven flatten / shade 产物
+dependency-reduced-pom.xml
+.flattened-pom.xml
+
+# 编辑器 / 系统备份
+*~
+*.bak
+*.orig
+*.swp
