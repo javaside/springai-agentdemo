@@ -17,6 +17,8 @@ import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
 import java.util.Map;
@@ -53,6 +55,7 @@ public final class CodingAgent implements SubmitHandler {
     private final TokenCountEstimator tokenCountEstimator;   // 与压缩共用，供 /context 估算会话 token
     private final AtomicBoolean compactionInFlight = new AtomicBoolean(false);   // 防止并发/重复触发手动压缩
     private final List<SkillInfo> skills;   // 可用技能清单（/skills 展示）；装配期确定、运行期只读
+    private final ToolCallback skillTool;   // 被 ToolEventCallback 装饰的 Skill 工具（可空）；手动 /skill 发送前调用它
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -66,6 +69,13 @@ public final class CodingAgent implements SubmitHandler {
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills) {
+        this(chatClient, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, null);
+    }
+
+    public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills, ToolCallback skillTool) {
         this.chatClient = chatClient;
         this.listener = listener;
         this.sessionId = sessionId;
@@ -74,16 +84,23 @@ public final class CodingAgent implements SubmitHandler {
         this.manualStrategy = manualStrategy;
         this.tokenCountEstimator = tokenCountEstimator;
         this.skills = List.copyOf(skills);
+        this.skillTool = skillTool;
     }
 
     @Override
     public Disposable submit(String text) {
+        return submit(text, null);
+    }
+
+    @Override
+    public Disposable submit(String text, String skillName) {
         long turnId = activeTurnId.incrementAndGet();
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
-        listener.onUserMessage(turnId, text);
+        listener.onUserMessage(turnId, text);  // UI 展示用户原文（注入只影响发给模型的文本）
+        String effectiveText = injectSkill(text, skillName, turnId);
         try {
             return chatClient.prompt()
-                    .user(text)
+                    .user(effectiveText)
                     .options(DeepSeekChatOptions.builder().model(model))   // 每次请求按当前所选模型覆盖
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
                     .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, model))
@@ -101,6 +118,29 @@ public final class CodingAgent implements SubmitHandler {
             listener.onError(turnId, ex);
             return Disposables.disposed();
         }
+    }
+
+    /**
+     * 手动 /skill：发送前真正调用（被装饰的）Skill 工具——触发工具事件（UI 可见）并拿正文注入到 text 前。
+     * skillName/skillTool 任一为空则原样返回（不注入）；工具调用失败也降级为不注入（事件已由装饰器上报）。
+     */
+    private String injectSkill(String text, String skillName, long turnId) {
+        if (skillName == null || skillTool == null) {
+            return text;
+        }
+        try {
+            ToolContext ctx = new ToolContext(Map.of("turnId", turnId));
+            String body = skillTool.call(toJsonCommand(skillName), ctx);
+            return "<skill_instruction>\n" + body + "\n</skill_instruction>\n\n" + text;
+        } catch (RuntimeException ex) {
+            return text;   // 注入失败不阻断本轮：按原文发送（工具失败事件已由 ToolEventCallback 上报）
+        }
+    }
+
+    /** 构造 SkillsInput 的 JSON 入参 {"command":"<name>"}；技能名来自选择器选中，仍最小转义防引号/反斜杠。 */
+    private static String toJsonCommand(String skillName) {
+        String escaped = skillName.replace("\\", "\\\\").replace("\"", "\\\"");
+        return "{\"command\":\"" + escaped + "\"}";
     }
 
     @Override
