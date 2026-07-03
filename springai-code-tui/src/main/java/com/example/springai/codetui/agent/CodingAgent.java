@@ -19,6 +19,8 @@ import reactor.core.Disposable;
 import reactor.core.Disposables;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -45,6 +47,8 @@ public final class CodingAgent implements SubmitHandler {
     public static final List<ModelOption> MODELS = List.of(
             new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
             new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"));
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final ChatClient chatClient;
     private final AgentListener listener;
@@ -137,10 +141,13 @@ public final class CodingAgent implements SubmitHandler {
         }
     }
 
-    /** 构造 SkillsInput 的 JSON 入参 {"command":"<name>"}；技能名来自选择器选中，仍最小转义防引号/反斜杠。 */
+    /** 构造 SkillsInput 的 JSON 入参 {"command":"<name>"}。用 Jackson（与 DiffRenderer 一致），避免手写转义/硬编码线格式。 */
     private static String toJsonCommand(String skillName) {
-        String escaped = skillName.replace("\\", "\\\\").replace("\"", "\\\"");
-        return "{\"command\":\"" + escaped + "\"}";
+        try {
+            return MAPPER.writeValueAsString(Map.of("command", skillName));
+        } catch (JacksonException e) {
+            throw new IllegalStateException("序列化 Skill 命令入参失败：" + skillName, e);
+        }
     }
 
     @Override
