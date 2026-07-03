@@ -696,13 +696,15 @@ public final class CodeTuiView extends InlineApp {
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
         if (state.isCompacting()) return richText(statusBar.compacting(state.compactElapsedNanos(), animTick));   // 压缩指示器优先于普通思考/工具状态
+        // 挂载提示放在 notice 之前：空闲态挂着技能时，持续显示「已挂载… · Esc 取消挂载」，让「Esc 可取消挂载」这个可供性稳定可见
+        // （否则挂载时设的一次性 notice 会长期盖住它）。忙碌时 isIdle()=false 走不到这里，改由 notice 给一次性确认反馈。
+        if (pendingSkill != null && state.isIdle()) {
+            return text("已挂载技能 " + pendingSkill + " · 下条消息生效 · Esc 取消挂载").style(THINK);
+        }
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
-        if (pendingSkill != null && state.isIdle()) {
-            return text("已挂载技能 " + pendingSkill + " · 下条消息生效 · Esc 取消挂载").style(THINK);
-        }
         return switch (state.status()) {
             case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel() + ctxUsage.suffix()).style(HINT);
             case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK, animTick));
