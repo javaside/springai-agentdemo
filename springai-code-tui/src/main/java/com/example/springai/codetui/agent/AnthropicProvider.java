@@ -1,10 +1,8 @@
 package com.example.springai.codetui.agent;
 
-import com.anthropic.client.AnthropicClient;
 import com.anthropic.models.messages.Model;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
-import org.springframework.ai.anthropic.AnthropicSetup;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 
@@ -15,8 +13,8 @@ import java.util.List;
  *
  * <p>注意：Anthropic 的 {@code model()} 收 typed 枚举 {@link Model}，用静态 {@code Model.of(String)}；
  * 且 {@code max_tokens} 为必填，故默认 options 与每请求 options 都显式带 {@link #MAX_TOKENS}。
- * client 用 Spring AI 自带的 {@code AnthropicSetup.setupSyncClient(...)} 装配，避免额外的
- * {@code anthropic-java-client-okhttp} 依赖（该 artifact 不在本模块 classpath 内）。
+ * client 由 {@link AnthropicChatModel} 内部通过 {@code SpringAiAnthropicHttpClient} 自动构建，
+ * 只需在 options 设置 apiKey 即可，无需手动装配 AnthropicClient。
  */
 public final class AnthropicProvider implements LlmProvider {
 
@@ -45,13 +43,9 @@ public final class AnthropicProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
-            // 用 Spring AI 自带的 SpringAiAnthropicHttpClient 工厂建 client（在本模块 classpath 内，
-            // 无需额外的 anthropic-java-client-okhttp 依赖），仅装配、不发网络请求。
-            // 参数序：(baseUrl, apiKey, timeout, maxRetries, proxy, headers)，null 走默认/环境变量。
-            AnthropicClient client = AnthropicSetup.setupSyncClient(null, apiKey, null, null, null, null);
             m = AnthropicChatModel.builder()
-                    .anthropicClient(client)
                     .options(AnthropicChatOptions.builder()
+                            .apiKey(apiKey)
                             .model(Model.of(DEFAULT_MODEL))
                             .maxTokens(MAX_TOKENS)
                             .build())

@@ -34,6 +34,7 @@ class LlmProviderTest {
         assertEquals("anthropic", p.id());
         assertTrue(p.available());
         assertEquals("claude-sonnet-4-5", p.defaultModel());
+        assertTrue(p.chatModel() != null);
         org.springframework.ai.anthropic.AnthropicChatOptions opts =
                 (org.springframework.ai.anthropic.AnthropicChatOptions) p.options("claude-opus-4-5");
         assertEquals("claude-opus-4-5", opts.getModel());
