@@ -27,4 +27,23 @@ class LlmProviderTest {
         assertFalse(p.available());
         assertThrows(IllegalStateException.class, p::chatModel);
     }
+
+    @Test
+    void anthropic_withKey_availableAndOptionsCarryModelAndMaxTokens() {
+        AnthropicProvider p = new AnthropicProvider("fake-key");
+        assertEquals("anthropic", p.id());
+        assertTrue(p.available());
+        assertEquals("claude-sonnet-4-5", p.defaultModel());
+        org.springframework.ai.anthropic.AnthropicChatOptions opts =
+                (org.springframework.ai.anthropic.AnthropicChatOptions) p.options("claude-opus-4-5");
+        assertEquals("claude-opus-4-5", opts.getModel());
+        assertEquals(8192, opts.getMaxTokens());
+    }
+
+    @Test
+    void anthropic_withoutKey_isUnavailable() {
+        AnthropicProvider p = new AnthropicProvider(null);
+        assertFalse(p.available());
+        assertThrows(IllegalStateException.class, p::chatModel);
+    }
 }
