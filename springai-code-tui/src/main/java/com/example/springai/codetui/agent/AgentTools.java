@@ -191,6 +191,22 @@ public final class AgentTools {
             }
         }
 
+        // 子 agent（Task 工具）：SubagentRunner 复用「已装饰、带边界」的工具列表 decorated；
+        // Task 工具本身也用 ToolEventCallback 装饰，故委派本身在主流显示为一行。
+        java.util.List<ToolCallback> decoratedList = java.util.List.of(decorated);
+        SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener);
+        java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
+        ToolCallback taskTool = SubagentTool.create(subagentSpecs,
+                (spec, prompt, desc, turnIgnored) ->
+                        // 真实 parentTurnId 从 ThreadLocal 取（Task 工具被 ToolEventCallback 装饰，call 时已压入）
+                        subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()));
+        ToolCallback decoratedTaskTool = new ToolEventCallback(taskTool, listener);
+
+        // 主 agent 工具集 = 原装饰工具 + Task 工具
+        Object[] toolsWithTask = new Object[decorated.length + 1];
+        System.arraycopy(decorated, 0, toolsWithTask, 0, decorated.length);
+        toolsWithTask[decorated.length] = decoratedTaskTool;
+
         // 事件溯源会话记忆：内存仓库 + 「回合/token 感知」压缩，取代原滑窗记忆。
         // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 回滚半截历史（DefaultSessionService 不暴露该能力）。
         SessionRepository sessionRepository = InMemorySessionRepository.builder().build();
@@ -238,7 +254,7 @@ public final class AgentTools {
                             // 每个 client 烘焙自家默认模型，保证 defaultSystem 自洽；
                             // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
                             .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel()))
-                    .defaultTools((Object[]) decorated)
+                    .defaultTools(toolsWithTask)
                     .defaultAdvisors(memoryAdvisor)
                     .build();
             clients.put(provider.id(), c);

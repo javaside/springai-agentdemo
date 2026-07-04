@@ -67,4 +67,15 @@ class AgentRuntimeTest {
             else System.setProperty("user.home", prevHome);
         }
     }
+
+    @Test
+    void taskToolAssembles() {
+        var specs = SubagentLoader.loadBuiltins();
+        org.junit.jupiter.api.Assertions.assertEquals(4, specs.size());
+        var task = SubagentTool.create(specs, (s, p, d, t) -> "x");
+        org.junit.jupiter.api.Assertions.assertEquals("Task", task.getToolDefinition().name());
+        // 描述里列出了四个 agent
+        String desc = task.getToolDefinition().description();
+        org.junit.jupiter.api.Assertions.assertTrue(desc.contains("explore"));
+    }
 }
