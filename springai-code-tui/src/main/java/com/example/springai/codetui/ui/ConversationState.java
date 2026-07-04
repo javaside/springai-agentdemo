@@ -34,7 +34,8 @@ public final class ConversationState implements AgentListener {
      * @param raw      仅 {@code TOOL_START}：工具原始 JSON 入参（供 UI 侧 {@link DiffRenderer} 渲染 diff）；其余为 null
      */
     public record OutputLine(String text, Kind kind, String toolName, String raw) {
-        public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR, INFO }
+        public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR, INFO,
+                           SUBAGENT_START, SUBAGENT_TOOL, SUBAGENT_END }
 
         /** 普通行（无工具元数据）。 */
         public OutputLine(String text, Kind kind) {
@@ -193,12 +194,35 @@ public final class ConversationState implements AgentListener {
 
     @Override
     public synchronized void onSubagentStarted(long turnId, String taskId, String agentName, String description) {
-        // Task 9 将补全子 agent 嵌套渲染；此处先空实现以满足接缝。
+        if (turnId != acceptingTurnId) return;           // 迟到过滤，与其它事件一致
+        flushStreaming();                                // 把在建助手残行定稿，子 agent 块另起
+        String d = (description == null || description.isBlank()) ? "" : " " + description.strip();
+        pending.add(new OutputLine("▸ Task(" + agentName + ")" + d, OutputLine.Kind.SUBAGENT_START));
     }
 
     @Override
     public synchronized void onSubagentFinished(long turnId, String taskId, String finalText) {
-        // Task 9 将补全子 agent 嵌套渲染；此处先空实现以满足接缝。
+        if (turnId != acceptingTurnId) return;
+        pending.add(new OutputLine("  ⎿ " + firstLine(finalText), OutputLine.Kind.SUBAGENT_END));
+    }
+
+    /** 子 agent 内部工具（taskId 非空）：缩进一级挂在当前 Task 块下；taskId 为空则走主流工具路径。 */
+    @Override
+    public synchronized void onToolStarted(long turnId, String taskId, String toolName, String input) {
+        if (taskId == null) { onToolStarted(turnId, toolName, input); return; }
+        if (turnId != acceptingTurnId) return;
+        String s = summarize(input);
+        pending.add(new OutputLine("    ⎿ " + toolName + (s.isEmpty() ? "" : " " + s),
+                OutputLine.Kind.SUBAGENT_TOOL));
+    }
+
+    /** 子 agent 内部工具结束：taskId 非空时不再单独出行（起始行已够，减少噪音）；taskId 为空走主流。 */
+    @Override
+    public synchronized void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
+        if (taskId == null) { onToolFinished(turnId, toolName, output, ok); return; }
+        // 子 agent 内部工具：仅在失败时补一行更深缩进的告警，成功时静默（起始行已展示活动）。
+        if (turnId != acceptingTurnId || ok) return;
+        pending.add(new OutputLine("      ✗ " + toolName, OutputLine.Kind.SUBAGENT_TOOL));
     }
 
     @Override
@@ -285,5 +309,13 @@ public final class ConversationState implements AgentListener {
         if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);
         if (CharWidth.of(oneLine) <= 80) return oneLine;
         return CharWidth.substringByWidth(oneLine, 79) + "…";
+    }
+
+    /** 取首行 + 超长按显示宽度截断（子 agent 结论行用）。 */
+    private static String firstLine(String s) {
+        if (s == null || s.isEmpty()) return "";
+        String one = s.lines().findFirst().orElse("").strip();
+        if (CharWidth.of(one) <= 80) return one;
+        return CharWidth.substringByWidth(one, 79) + "…";
     }
 }

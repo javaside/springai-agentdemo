@@ -76,6 +76,9 @@ final class Theme {
             case TODO -> TODO;
             case ERROR -> ERROR;
             case INFO -> INFO_LINE;   // 灰白，暗色终端可读（原 DIM=DARK_GRAY 近黑看不清）
+            case SUBAGENT_START -> RUNNING;   // ▸ Task(...) 起始：青色，醒目区分委派
+            case SUBAGENT_TOOL -> TOOL;       // 内部工具行：与主流工具同为淡黄
+            case SUBAGENT_END -> INFO_LINE;   // 结论行：灰白
         };
     }
 }

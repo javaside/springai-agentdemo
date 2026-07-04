@@ -69,4 +69,17 @@ class ScrollbackPrinterTest {
         assertEquals(1, sink.lines.size());
         assertTrue(sink.lines.get(0).contains("上下文用量"));
     }
+
+    @Test
+    void line_subagentKinds_printTextContent() {
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = printerOver(sink);
+        p.line(new OutputLine("▸ Task(explore) 分析认证模块", OutputLine.Kind.SUBAGENT_START));
+        p.line(new OutputLine("    ⎿ Grep \"authenticate\"", OutputLine.Kind.SUBAGENT_TOOL));
+        p.line(new OutputLine("  ⎿ 认证走 JWT", OutputLine.Kind.SUBAGENT_END));
+        assertEquals(3, sink.lines.size());
+        assertTrue(sink.lines.get(0).contains("Task(explore)"));
+        assertTrue(sink.lines.get(1).contains("⎿ Grep"));
+        assertTrue(sink.lines.get(2).contains("认证走 JWT"));
+    }
 }

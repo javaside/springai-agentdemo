@@ -244,6 +244,33 @@ class ConversationStateTest {
     }
 
     @Test
+    void subagentEvents_produceNestedOutputLines() {
+        ConversationState st = new ConversationState();
+        st.onTurnStarted(1L);
+        st.onSubagentStarted(1L, "task_1", "explore", "分析认证模块");
+        st.onToolStarted(1L, "task_1", "Grep", "{\"pattern\":\"auth\"}");   // 4-arg (taskId) overload
+        st.onSubagentFinished(1L, "task_1", "认证走 JWT\n（更多细节）");
+        List<ConversationState.OutputLine> out = st.drainPending();
+        // 找到三类子 agent 行
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_START
+                && o.text().contains("Task(explore)")));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_TOOL
+                && o.text().contains("Grep")));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_END
+                && o.text().contains("认证走 JWT") && !o.text().contains("更多细节")));  // 只取首行
+    }
+
+    @Test
+    void mainFlowTool_withNullTaskId_usesNormalPath() {
+        ConversationState st = new ConversationState();
+        st.onTurnStarted(1L);
+        st.onToolStarted(1L, null, "Bash", "{\"cmd\":\"ls\"}");   // taskId=null → 委托主流
+        List<ConversationState.OutputLine> out = st.drainPending();
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.TOOL_START
+                && o.text().contains("Bash")));
+    }
+
+    @Test
     void isBusy_trueWhenTurnActive_orCompacting_elseFalse() {
         ConversationState s = new ConversationState();
         assertFalse(s.isBusy(), "初始空闲、未压缩：不忙");
