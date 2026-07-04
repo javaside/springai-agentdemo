@@ -205,9 +205,10 @@ public final class CodeTuiView extends InlineApp {
                 askFreeText = false; askInput.clear();   // 与其它复位点一致，防上一问询的自由文本残留
             } else {
                 // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
-                // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消，从 state 摘除避免反复重入。
+                // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消整回合。
+                // 必须与 Esc 走同一 cancelTurnFor：只 responder.cancel、不 dispose 回滚，会残留悬空 tool_calls → 下条 400。
                 state.clearPendingAsk();
-                pa.responder().cancel();
+                cancelTurnFor(pa, "问询格式无效，已取消当前回合");
             }
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
@@ -763,11 +764,21 @@ public final class CodeTuiView extends InlineApp {
     private void cancelAsk() {
         AskRequest req = activeAsk;
         clearAskState();
+        cancelTurnFor(req, "已取消当前回合");
+    }
+
+    /**
+     * 取消一个由问询发起的回合：先唤醒阻塞的工具线程（responder.cancel），再 dispose + cancelCurrent
+     * 让 {@code doOnCancel} 回滚会话——否则半截的 {@code assistant(tool_calls)} 会残留、下条消息 400。
+     * Esc 取消与「畸形问询降级取消」共用此路径，保证二者都走同一套已验证的回滚（见记忆
+     * cancel-tool-turn-leaves-dangling-toolcalls）。
+     */
+    private void cancelTurnFor(AskRequest req, String notice) {
         req.responder().cancel();
         if (current != null) { current.dispose(); current = null; }
         state.cancelCurrent();
         state.clearQueued();
-        state.setNotice("已取消当前回合");
+        state.setNotice(notice);
     }
 
     /** 清作答态并从 state 摘除 pendingAsk（避免 drain 再次进入）。 */

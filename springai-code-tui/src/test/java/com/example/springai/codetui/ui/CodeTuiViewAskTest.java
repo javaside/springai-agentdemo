@@ -101,6 +101,8 @@ class CodeTuiViewAskTest {
         v.tickForTest();                                   // 侦测到畸形问询
         assertTrue(cancelled.get(), "空选项问询应被自动取消");
         assertNull(s.pendingAsk(), "畸形问询应从 state 摘除，避免反复重入");
+        // 必须走完整回合取消（与 Esc 同路径）：清空排队 + notice，使 doOnCancel 回滚会话、不残留 tool_calls。
+        assertEquals("问询格式无效，已取消当前回合", s.notice(), "畸形降级应给出取消提示（证明走了 cancelTurnFor）");
         // 进模态后若误入，下面这次 ↑ 会除零抛异常；不抛即证明未入模态。
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));
     }
