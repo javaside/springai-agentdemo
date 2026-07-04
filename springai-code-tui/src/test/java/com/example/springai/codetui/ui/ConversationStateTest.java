@@ -10,6 +10,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** ConversationState 行内滚动模型的并发/取消过滤/状态机/分类 行为断言。 */
@@ -286,70 +288,76 @@ class ConversationStateTest {
         assertFalse(s.isBusy(), "压缩结束：不忙");
     }
 
-    // ── 子任务面板（本回合汇总，独立于 scrollback） ──
+    // ── 两层 todo 分流：任务面板（控制器计划，taskId==null）vs todo 面板（当前子 agent，taskId!=null） ──
 
     @Test
-    void subtaskPanel_started_addsRunningEntry() {
+    void taskPanel_controllerTodo_goesToTaskPanel() {
+        // 控制器计划（taskId==null）进任务面板：开发计划进度
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
-        s.onSubagentStarted(1L, "t1", "explore", "分析认证模块");
-        List<ConversationState.SubtaskView> snap = s.subtaskSnapshot();
-        assertEquals(1, snap.size());
-        assertEquals("explore", snap.get(0).agentName());
-        assertEquals("分析认证模块", snap.get(0).description());
-        assertEquals(ConversationState.SubtaskStatus.RUNNING, snap.get(0).status());
+        s.onTodoUpdated(1L, null, List.of("▶ 任务1", "○ 任务2", "○ 任务3"));
+        assertEquals(List.of("▶ 任务1", "○ 任务2", "○ 任务3"), s.todoSnapshot(), "控制器计划进任务面板");
+        assertNull(s.subAgentTodoSnapshot(), "无在跑子 agent：todo 面板收起");
     }
 
     @Test
-    void subtaskPanel_finishedOk_marksDone() {
+    void subAgentTodo_goesToTodoPanel_notTaskPanel() {
+        // 子 agent 内部 todo（taskId!=null）进 todo 面板，且不覆盖任务面板
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
-        s.onSubagentStarted(1L, "t1", "explore", "d");
-        s.onToolStarted(1L, "t1", "Grep", "{}");
-        s.onSubagentFinished(1L, "t1", "结论文本", true);
-        assertEquals(ConversationState.SubtaskStatus.DONE, s.subtaskSnapshot().get(0).status());
-        assertEquals("", s.subtaskSnapshot().get(0).currentTool(), "完成后清空当前工具");
+        s.onTodoUpdated(1L, null, List.of("▶ 任务1", "○ 任务2"));      // 控制器计划
+        s.onSubagentStarted(1L, "t1", "implementer", "实现任务1");
+        s.onTodoUpdated(1L, "t1", List.of("✓ 写测试", "▶ 实现"));      // 子 agent 内部 todo
+        assertEquals(List.of("▶ 任务1", "○ 任务2"), s.todoSnapshot(), "子 agent todo 不得覆盖任务面板");
+        ConversationState.SubAgentTodo sub = s.subAgentTodoSnapshot();
+        assertNotNull(sub, "有在跑子 agent 且有 todo：todo 面板显示");
+        assertEquals("implementer", sub.agentName());
+        assertEquals(List.of("✓ 写测试", "▶ 实现"), sub.lines());
     }
 
     @Test
-    void subtaskPanel_finishedFail_marksFailed() {
+    void subAgentTodo_clearedWhenSubagentFinishes() {
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
-        s.onSubagentStarted(1L, "t1", "explore", "d");
-        s.onSubagentFinished(1L, "t1", "子 agent 执行失败：boom", false);
-        assertEquals(ConversationState.SubtaskStatus.FAILED, s.subtaskSnapshot().get(0).status());
+        s.onSubagentStarted(1L, "t1", "implementer", "d");
+        s.onTodoUpdated(1L, "t1", List.of("▶ 实现"));
+        assertNotNull(s.subAgentTodoSnapshot(), "运行中有 todo 面板");
+        s.onSubagentFinished(1L, "t1", "done", true);
+        assertNull(s.subAgentTodoSnapshot(), "子 agent 结束：todo 面板收起");
     }
 
     @Test
-    void subtaskPanel_toolStart_updatesCurrentTool() {
+    void subAgentTodo_switchesToNextSubagent() {
+        // 下一个子 agent 开始：todo 面板切到它、清空上一个的 todo
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
-        s.onSubagentStarted(1L, "t1", "explore", "d");
-        s.onToolStarted(1L, "t1", "Grep", "{\"pattern\":\"auth\"}");
-        assertEquals("Grep", s.subtaskSnapshot().get(0).currentTool());
+        s.onSubagentStarted(1L, "t1", "implementer", "d1");
+        s.onTodoUpdated(1L, "t1", List.of("✓ 全部完成"));
+        s.onSubagentFinished(1L, "t1", "done", true);
+        s.onSubagentStarted(1L, "t2", "reviewer", "d2");
+        assertNull(s.subAgentTodoSnapshot(), "新子 agent 尚未产生 todo：面板暂收起");
+        s.onTodoUpdated(1L, "t2", List.of("▶ 审查"));
+        ConversationState.SubAgentTodo sub = s.subAgentTodoSnapshot();
+        assertNotNull(sub);
+        assertEquals("reviewer", sub.agentName(), "切到下一个子 agent");
+        assertEquals(List.of("▶ 审查"), sub.lines(), "不带上一个子 agent 的 todo");
     }
 
     @Test
-    void subtaskPanel_turnStart_clears() {
+    void taskPanel_turnStart_clearsBothPanels() {
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
-        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onTodoUpdated(1L, null, List.of("▶ 任务1"));
+        s.onSubagentStarted(1L, "t1", "implementer", "d");
+        s.onTodoUpdated(1L, "t1", List.of("▶ 实现"));
         s.onTurnStarted(2L);
-        assertTrue(s.subtaskSnapshot().isEmpty(), "新回合应清空子任务面板");
+        assertTrue(s.todoSnapshot().isEmpty(), "新回合清空任务面板");
+        assertNull(s.subAgentTodoSnapshot(), "新回合清空 todo 面板");
     }
 
     @Test
-    void subtaskPanel_unknownTaskId_noCrashNoEntry() {
-        ConversationState s = new ConversationState();
-        s.onTurnStarted(1L);
-        s.onToolStarted(1L, "ghost", "Grep", "{}");         // 无对应子任务
-        s.onSubagentFinished(1L, "ghost", "x", true);       // 无对应子任务
-        assertTrue(s.subtaskSnapshot().isEmpty(), "未知 taskId 不产生面板条、不抛异常");
-    }
-
-    @Test
-    void subtaskPanel_coexistsWithScrollbackLines() {
-        // 回归：面板不取代 scrollback 内联详情行（共存形态）
+    void subagentEvents_stillCoexistWithScrollbackLines() {
+        // 回归：面板机制变了，但 scrollback 内联详情行不受影响（共存形态）
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
         s.onSubagentStarted(1L, "t1", "explore", "分析认证");

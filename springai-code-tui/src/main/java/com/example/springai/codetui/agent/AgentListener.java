@@ -35,6 +35,15 @@ public interface AgentListener {
         onToolFinished(turnId, toolName, output, ok);
     }
     void onTodoUpdated(long turnId, List<String> todoLines);   // Todos 转成可显示的行
+
+    /**
+     * 带 taskId 的 Todo 事件：taskId==null 是控制器（主 agent）的计划 todo（开发计划进度，进任务面板）；
+     * taskId!=null 是子 agent 内部 todo（当前子 agent 的进度，进 todo 面板）。
+     * 默认委托无 taskId 版本，只有需按层分流的实现（ConversationState）覆写本方法。
+     */
+    default void onTodoUpdated(long turnId, String taskId, List<String> todoLines) {
+        onTodoUpdated(turnId, todoLines);
+    }
     void onTurnComplete(long turnId);
     void onError(long turnId, Throwable error);
 

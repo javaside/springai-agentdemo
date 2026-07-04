@@ -146,9 +146,11 @@ public final class AgentTools {
         GrepTool grep = GrepTool.builder().workingDirectory(root).build();
         GlobTool glob = GlobTool.builder().workingDirectory(root).build();
         TodoWriteTool todo = TodoWriteTool.builder()
-                // turnId 走 ThreadLocal（handler 在工具 call 内同步触发），不读实时 activeTurnId
+                // turnId/taskId 均走 ThreadLocal（handler 在工具 call 内同步触发），不读实时 activeTurnId。
+                // taskId 区分层级：null=控制器计划 todo（任务面板）；非空=子 agent 内部 todo（todo 面板）。
                 .todoEventHandler(todos ->
-                        listener.onTodoUpdated(ToolEventCallback.currentTurnId(), toLines(todos)))
+                        listener.onTodoUpdated(ToolEventCallback.currentTurnId(),
+                                ToolEventCallback.currentTaskId(), toLines(todos)))
                 .build();
 
         // 「裸」ChatClient（同模型、无工具、无记忆 advisor）：一份复用给两处内部 LLM 调用——
