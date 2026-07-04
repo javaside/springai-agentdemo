@@ -52,6 +52,8 @@ public final class CodingAgent implements SubmitHandler {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final ChatClient chatClient;
+    private final ProviderRegistry registry;                       // 可空：多 provider 路径；null 走旧单-client 路径
+    private final java.util.Map<String, ChatClient> clientsByProvider;   // 可空：按 provider id 取 ChatClient
     private final AgentListener listener;
     private final String sessionId;
     private final AtomicLong activeTurnId;
@@ -91,6 +93,31 @@ public final class CodingAgent implements SubmitHandler {
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills, ToolCallback skillTool,
                        SessionRepository sessionRepository) {
         this.chatClient = chatClient;
+        this.registry = null;
+        this.clientsByProvider = null;
+        this.listener = listener;
+        this.sessionId = sessionId;
+        this.activeTurnId = activeTurnId;
+        this.sessionService = sessionService;
+        this.manualStrategy = manualStrategy;
+        this.tokenCountEstimator = tokenCountEstimator;
+        this.skills = List.copyOf(skills);
+        this.skillTool = skillTool;
+        this.sessionRepository = sessionRepository;
+    }
+
+    /**
+     * 多 provider 生产构造：registry 决定激活 provider 与模型，clientsByProvider 提供各家 ChatClient。
+     * submit 按激活 provider 选 ChatClient + 用该家 options 覆盖模型；/model 走 registry 跨家。
+     */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository) {
+        this.chatClient = null;
+        this.registry = registry;
+        this.clientsByProvider = clientsByProvider;
         this.listener = listener;
         this.sessionId = sessionId;
         this.activeTurnId = activeTurnId;
@@ -117,12 +144,19 @@ public final class CodingAgent implements SubmitHandler {
         // 否则工具回合被中途取消会在会话里留下「带 tool_calls 但无 tool 结果」的悬空 assistant 消息，
         // 下一次请求把这段坏历史发给 DeepSeek 会 400（insufficient tool messages following tool_calls）。
         List<SessionEvent> mark = snapshotSession();
+        ChatClient client = (registry != null)
+                ? clientsByProvider.get(registry.active().id())
+                : chatClient;
+        org.springframework.ai.chat.prompt.ChatOptions perRequestOptions = (registry != null)
+                ? registry.activeChatOptions()
+                : DeepSeekChatOptions.builder().model(model).build();
+        String modelGrounding = currentModel();
         try {
-            return chatClient.prompt()
+            return client.prompt()
                     .user(effectiveText)
-                    .options(DeepSeekChatOptions.builder().model(model))   // 每次请求按当前所选模型覆盖
+                    .options(perRequestOptions.mutate())   // 每次请求按当前所选模型覆盖（mutate 回 native builder，保留 maxTokens 等）
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
-                    .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, model))
+                    .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, modelGrounding))
                     .toolContext(Map.of("turnId", turnId))
                     // 会话记忆键：SessionMemoryAdvisor 按此解析/自动创建会话（值即 chat_memory_conversation_id）
                     .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
@@ -187,13 +221,21 @@ public final class CodingAgent implements SubmitHandler {
     public List<SkillInfo> skills() { return skills; }
 
     @Override
-    public List<ModelOption> models() { return MODELS; }
+    public List<ModelOption> models() {
+        return registry != null ? registry.allModels() : MODELS;
+    }
 
     @Override
-    public String currentModel() { return model; }
+    public String currentModel() {
+        return registry != null ? registry.activeModelId() : model;
+    }
 
     @Override
     public void selectModel(String id) {
+        if (registry != null) {
+            registry.select(id);
+            return;
+        }
         for (ModelOption m : MODELS) {
             if (m.id().equals(id)) { this.model = id; return; }   // 仅接受已知模型
         }
