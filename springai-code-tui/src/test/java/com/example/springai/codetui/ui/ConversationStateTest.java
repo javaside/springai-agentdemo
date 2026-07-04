@@ -305,8 +305,10 @@ class ConversationStateTest {
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
         s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onToolStarted(1L, "t1", "Grep", "{}");
         s.onSubagentFinished(1L, "t1", "结论文本", true);
         assertEquals(ConversationState.SubtaskStatus.DONE, s.subtaskSnapshot().get(0).status());
+        assertEquals("", s.subtaskSnapshot().get(0).currentTool(), "完成后清空当前工具");
     }
 
     @Test

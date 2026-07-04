@@ -275,7 +275,7 @@ public final class ConversationState implements AgentListener {
     public synchronized List<SubtaskView> subtaskSnapshot() {
         List<SubtaskView> out = new ArrayList<>(subtasks.size());
         for (Subtask s : subtasks) out.add(new SubtaskView(s.agentName, s.description, s.status, s.currentTool));
-        return out;
+        return List.copyOf(out);   // 不可变外壳，与 todoSnapshot 契约一致
     }
 
     /** 按 taskId 定位子任务；找不到（迟到/已清）返回 null，调用方静默忽略。 */
