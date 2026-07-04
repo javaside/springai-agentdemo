@@ -10,12 +10,13 @@
 
 子 agent 沿用 Claude Code 的心智模型：主 agent 可以把「探索代码库 / 设计实现方案 / 跑命令 / 多步研究」这类子任务，委派给带独立上下文、独立系统提示、受限工具集的专职子 agent，避免污染主对话上下文。
 
-复用 `spring-ai-agent-utils` 0.10.0 的 Subagent Framework（SPI + TaskTool），但**不使用**它的 `ClaudeSubagentType` 便捷构建器，也**不使用**它内置的 4 个英文 Claude 子 agent。
+复用 `spring-ai-agent-utils` 0.10.0 的 Subagent Framework（SPI + TaskTool），**直接使用它内置的 4 个 Claude 子 agent**（general-purpose / Explore / Plan / Bash，保持英文、自认 Claude Code），但**不使用** `ClaudeSubagentType` 便捷构建器——它对工具的处理有硬伤（见 §2.3）。内置 4 个 .md 里需要修的落差（`model:default`、工具名对齐）**全部在自写 executor 里代码化解决**，不改 .md 本身。
 
 ### 第一版范围（本 spec）
 
 - 多 provider 抽象 + `/model` 跨 provider 切换。
 - 子 agent 前台**串行**执行，内部工具活动**内联嵌套可见**（仿 Claude Code）。
+- **直接用内置 4 个 Claude 子 agent**（英文原样），落差在 executor 里改。
 - **不做** `run_in_background`（后台并发）——executor 遇到该参数降级为前台串行执行。并发与 `/tasks` 详情面板列为明确的第二版。
 
 ## 2. 关键调研结论（决定设计的事实）
@@ -32,7 +33,7 @@
 
 5. **同一响应内多个工具调用是串行执行**：`DefaultToolCallingManager.executeToolCall` 用 `for` 循环顺序跑（同线程）。→ **前台即使模型一次请求多个 `Task()`，也是串行，同时只有一个子 agent 活动，无并发渲染难题。并发只来自 `run_in_background`（第一版不做）。**
 
-6. **内置 4 个子 agent 的自动注册触发条件**：`TaskTool.build()` 里只要任一注册的 `SubagentType.kind()` == `"CLAUDE"`，就无条件塞入 4 个 classpath 内置 Claude 子 agent（`TaskTool` 第 233–242 行）。→ **我们的 executor 用自己的 KIND（`"LOCAL"`）即可规避被强塞。**
+6. **内置 4 个子 agent 的自动注册触发条件**：`TaskTool.build()` 里只要任一注册的 `SubagentType.kind()` == `"CLAUDE"`，就无条件塞入 4 个 classpath 内置 Claude 子 agent（`TaskTool` 第 233–242 行，从 classpath `agent/*_SUBAGENT.md` 加载）。→ **我们的 executor 报 `getKind()=="CLAUDE"`，正好免费拿到这 4 个内置 agent，一个 .md 都不用自己写。** resolver 复用框架 `ClaudeSubagentResolver`，definition 复用 `ClaudeSubagentDefinition`。
 
 ## 3. 架构
 
@@ -50,7 +51,7 @@
 │    · 一个 provider 中立 executor，消费「激活 provider 的 ChatClient.Builder  │
 │      + options + 带 root 边界 & 带 ToolEventCallback 的工具」               │
 │    · 前台串行 .stream() 跑子 agent → 用嵌套 taskId 把工具活动上报 TUI       │
-│    · KIND = "LOCAL"，规避内置 4 个 Claude agent 强塞                        │
+│    · getKind()=="CLAUDE" → 复用框架 resolver + 免费拿 4 个内置 agent        │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,45 +93,58 @@ interface LlmProvider {
 
 #### `ChatClientSubagentExecutor implements SubagentExecutor`（自写，核心）
 
-- `getKind()` → `"LOCAL"`（自定义 KIND，规避内置强塞）。
+- `getKind()` → **`ClaudeSubagentDefinition.KIND`（即 `"CLAUDE"`）**。报这个 kind 有两个作用：① 让 `TaskTool.build()` 自动注册 4 个内置 Claude 子 agent（免写 .md）；② 让 definition 走框架的 `ClaudeSubagentResolver` + `ClaudeSubagentDefinition`（frontmatter 解析现成可用）。**注意：我们只借用框架的 resolver/definition/KIND，执行逻辑完全由本类接管，不经过 `ClaudeSubagentExecutor`。**
 - 构造依赖：`ProviderRegistry`（取激活 provider 建 ChatClient.Builder + options）、**我们自己的、带 root 边界 + 带 ToolEventCallback 的工具列表**、`AgentListener`、skills 目录。
 - `execute(TaskCall, SubagentDefinition)`：
   1. 分配一个 `taskId`，向 listener 发 `onSubagentStarted(parentTurnId, taskId, agentName, description)`。
   2. 用激活 provider 的 builder 建子 agent 专用 ChatClient：注入过滤后的工具（按 definition 的 `tools`/`disallowedTools` 过滤我们的工具列表），system = 子 agent 的 prompt（+ 预加载 skills），挂 `ToolCallAdvisor`。**不挂** SessionMemory advisor（子 agent 上下文独立）。
-  3. model 解析：definition 的 `model` 为空/`default` → 用激活 provider 默认模型；`provider:model` → 路由到指定 provider（若该家不可用则回退激活 provider）。
-  4. `.stream()` 执行；子 agent 内部工具经**同一套 `ToolEventCallback`**、但带 `taskId` 上报 → TUI 内联嵌套显示。
-  5. 完成后 `onSubagentFinished(parentTurnId, taskId, 最终文本)`，返回最终文本给框架（作为 Task 工具的返回值回灌主 agent）。
+  3. **工具名对齐（内置 .md 的落差之一）**：内置 .md 的 `tools` 字段用的是 Claude Code 工具名（`Read`/`WebFetch`/`WebSearch`/`Bash`/`TaskCreate`…），与我们真实注册名（`read`/`webFetch`/`bash`/`Skill`…，实现时以 `getToolDefinition().name()` 核定）**不一致**。executor 用一张**别名映射表**把 .md 声明的名字翻译成我们的真实名字再做过滤；映射不到的（如 `WebSearch`/`TaskCreate`——我们没有）直接忽略。这样既用了内置 .md，又不会因名字对不上把工具全过滤没。
+  4. **model 解析（落差之二）**：definition 的 `model` 为空/`default` → 用激活 provider 默认模型（内置 Plan/Bash 的 `model: default` 正好在此被吸收，不会把字面量 `"default"` 塞给 API）；`provider:model` → 路由到指定 provider（若该家不可用则回退激活 provider）。
+  5. `.stream()` 执行；子 agent 内部工具经**同一套 `ToolEventCallback`**、但带 `taskId` 上报 → TUI 内联嵌套显示。
+  6. 完成后 `onSubagentFinished(parentTurnId, taskId, 最终文本)`，返回最终文本给框架（作为 Task 工具的返回值回灌主 agent）。
 - **`run_in_background`（第一版）**：忽略该参数，一律前台串行执行（不接 TaskRepository）。
 
-#### `LocalSubagentType` / resolver
+#### resolver / definition
 
-复用框架的 markdown 解析能力：resolver 用 `ClaudeSubagentResolver` 的加载逻辑读 `.md`（frontmatter → `ClaudeSubagentDefinition`），但 `canResolve` 认我们的 KIND `"LOCAL"`。若 `ClaudeSubagentResolver`/`ClaudeSubagentDefinition` 的 KIND 校验过紧无法直接复用，则薄封装一个 `LocalSubagentResolver` 内部委托其解析、对外报 `"LOCAL"`。（实现时二选一，取决于源码可复用度。）
+直接复用框架的 `ClaudeSubagentResolver`（`canResolve` 认 `"CLAUDE"`）+ `ClaudeSubagentDefinition`。无需自写 resolver。
 
 #### `TaskTool` 装配
 
 ```java
+SubagentType claudeType = new SubagentType(
+        new ClaudeSubagentResolver(),        // 复用框架 resolver
+        new ChatClientSubagentExecutor(...)  // 自写 executor，getKind()=="CLAUDE"
+);
+
 ToolCallback taskTool = TaskTool.builder()
-    .subagentTypes(new SubagentType(localResolver, localExecutor))  // kind=LOCAL，不触发内置强塞
-    .subagentReferences(localAgentRefs)   // 我们的 .md（classpath 内置 + 项目 .codetui/agents）
+    .subagentTypes(claudeType)   // kind==CLAUDE ⇒ 自动注册 general-purpose/Explore/Plan/Bash
+    // 可选：项目层自定义 .md（<root>/.codetui/agents/*.md），无则不加
+    // .subagentReferences(ClaudeSubagentReferences.fromRootDirectory(projectAgentsDir))
     .build();
 ```
 
 `taskTool` 作为一个普通 `ToolCallback` 加入主 agent 工具集，同样用 `ToolEventCallback` 装饰（这样「Task 这次委派」本身在主流也显示为一行）。
 
-### 4.4 子 agent 定义（重写内置四个为 provider 中立中文版）
+### 4.4 子 agent 定义：直接用内置四个
 
-放 classpath：`springai-code-tui/src/main/resources/agents/*.md`。分层发现（仿 skills）：内置层 + 项目层 `<root>/.codetui/agents/*.md`（用户可覆盖/新增）。
+**不自写 .md。** 直接用框架 classpath 里的 4 个内置 Claude 子 agent（`agent/*_SUBAGENT.md`，由 §4.3 的 kind==CLAUDE 自动注册）：
 
-四个（参考内置职责，去掉 "Claude Code" 人设、中文、model 留空跟随激活 provider、`tools` 字段对齐我们真实工具名）：
+| name | 只读? | 职责（内置原样） | 内置 .md 的 `tools` 落差 |
+|------|-------|------------------|--------------------------|
+| `general-purpose` | 可写 | 复杂研究 + 多步执行；全工具（`Tools: *`） | 无 tools 字段 → 继承全部（我们的工具列表） |
+| `Explore` | 只读 | 快速探索代码库，找文件/搜代码/答疑，支持 quick/medium/thorough | 无 tools 字段，靠 prompt 强约束只读 |
+| `Plan` | 只读 | 软件架构师，出实现方案 | `tools: Bash,Glob,Grep,Read,WebFetch,WebSearch,AskUserQuestion,TaskCreate...` → 经**别名映射**翻译，映射不到的忽略 |
+| `Bash` | 可写(仅命令) | 命令执行专家，git/构建/测试，含 git 安全约束 | `tools: Bash`、`model: default` → 别名映射 + default 归一化 |
 
-| name | 只读? | 职责 | tools（对齐我们注册名，实现时核定） |
-|------|-------|------|-----------------------------------|
-| `探索` | 只读 | 快速定位文件、搜代码、回答「代码库怎么运作」。调用方可指定 quick/medium/thorough 详尽度 | Grep / Glob / read（FileSystem 只读用法）、只读 Shell |
-| `规划` | 只读 | 设计实现方案：探索现状→列改动文件→分步骤→权衡取舍→列风险。只出方案不改码 | Grep / Glob / read / webFetch |
-| `执行` | 可写 | 通用多步研究+执行：可读写文件、跑命令，完成后给详细书面结论 | 全部工具 |
-| `命令` | 可写(仅命令) | 命令执行专家：git / 构建 / 测试 / 包管理。遵守 git 安全（不强推 main、不擅自破坏性命令） | 仅 Shell |
+**接受的取舍**（用户已确认）：子 agent 保持英文人设、自认 "Claude Code"、作答可能用英文，与主 agent 的中文风格不完全统一。换来零 .md 维护成本 + 与 Claude Code 生态一致的定义格式。
 
-**只读保证**：`tools`/`disallowedTools` 过滤 + prompt 明确禁止写操作。已知边界（沿用主 agent 的诚实声明）：只有 FileSystemTools 有强制目录边界；Shell/Grep/Glob 技术上不受强制约束，靠 prompt 自律。只读 agent 的 prompt 显式列出「禁止 mkdir/touch/rm/写重定向/git add/commit」等。
+**两处落差在 executor 里代码化解决，不改 .md**：
+1. **工具名对齐** —— 别名映射表（§4.3 步骤 3）。
+2. **`model: default`** —— 归一化为激活 provider 默认模型（§4.3 步骤 4）。
+
+**只读保证**：内置 Explore/Plan 的 prompt 本身已含强只读约束（"CRITICAL: READ-ONLY MODE"、"do NOT modify any files"）。叠加已知边界（沿用主 agent 诚实声明）：只有 FileSystemTools 有强制目录边界；Shell/Grep/Glob 技术上不受强制约束，靠 prompt 自律。
+
+**未来自定义**：若日后想加项目专属子 agent，放 `<root>/.codetui/agents/*.md`，用 `ClaudeSubagentReferences.fromRootDirectory` 追加即可（第一版不做，缝已留好）。
 
 ## 5. 事件模型（`AgentListener` 扩展）
 
@@ -151,7 +165,7 @@ void onSubagentFinished(long turnId, String taskId, String finalText);
 前台串行，同时只有一个子 agent 活动，渲染为内联嵌套（缩进）：
 
 ```
-▸ Task(探索) 分析认证模块          ← onSubagentStarted
+▸ Task(Explore) 分析认证模块         ← onSubagentStarted
     ⎿ Grep "authenticate"  3 matches   ← 子 agent 内部工具，taskId 非空 → 缩进
     ⎿ read AuthService.java
     ⎿ Glob **/*Security*.java
@@ -179,8 +193,8 @@ API key 经配置/环境变量注入；缺 key 的 provider `available()==false`
 ## 9. 测试策略
 
 - `LlmProvider` / `ProviderRegistry`：单测 available 过滤、activate、allModels 聚合。
-- `ChatClientSubagentExecutor`：用桩 ChatClient 验证——KIND=LOCAL、工具按 tools/disallowedTools 过滤、model 空/default→默认模型、`provider:model` 路由与回退、子 agent 工具事件带 taskId 上报、run_in_background 被降级为前台。
-- 装配：验证 TaskTool 未强塞内置 4 个 Claude agent（注册名只含我们的中文四个 + 项目层）。
+- `ChatClientSubagentExecutor`：用桩 ChatClient 验证——`getKind()=="CLAUDE"`、工具名别名映射 + 按 tools/disallowedTools 过滤（映射不到的忽略、不误伤）、model 空/`default`→默认模型、`provider:model` 路由与回退、子 agent 工具事件带 taskId 上报、run_in_background 被降级为前台。
+- 装配：验证 TaskTool 自动注册了 4 个内置 Claude agent（general-purpose/Explore/Plan/Bash 可解析可执行），且走的是我们的 executor 而非框架 `ClaudeSubagentExecutor`。
 - 事件/渲染：render 冒烟单测覆盖 onSubagentStarted/Finished + 带 taskId 工具事件的缩进；**pty+pyte 实机冒烟**（设窗口大小 + TERM=xterm-256color）验证嵌套显示不串色。
 - **排除** 网络易抖的 `CodingAgentSpikeTest`。
 
@@ -196,7 +210,6 @@ API key 经配置/环境变量注入；缺 key 的 provider `available()==false`
 
 1. `LlmProvider` + 三实现 + `ProviderRegistry`（先不接 UI，纯装配）。
 2. 主 agent 层改造：`AgentTools.build` 收 provider、`CodingAgent.submit` 用 provider.options；`/model` 跨家切换。
-3. 四个中文 `.md` 子 agent（classpath + 项目层发现）。
-4. `ChatClientSubagentExecutor` + `LocalSubagentType` + TaskTool 装配。
-5. `AgentListener` 扩展 + `ToolEventCallback` 带 taskId + `CodeTuiView` 嵌套渲染。
-6. 测试 + pty 冒烟 + 重新 package。
+3. `ChatClientSubagentExecutor`（getKind==CLAUDE、别名映射、model 归一化、provider 路由）+ 复用 `ClaudeSubagentResolver` + TaskTool 装配（自动拿 4 个内置 agent）。
+4. `AgentListener` 扩展 + `ToolEventCallback` 带 taskId + `CodeTuiView` 嵌套渲染。
+5. 测试 + pty 冒烟 + 重新 package。
