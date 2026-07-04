@@ -24,6 +24,11 @@ import org.springaicommunity.agent.tools.AskUserQuestionTool.Question.Option;
  *
  * <p><b>答案完整性</b>：UI 顺序问询、答完全部问题才 answer，故返回 map 覆盖所有问题文本，
  * {@code AskUserQuestionTool} 的 answersValidation 不会触发 InvalidUserAnswerException。
+ *
+ * <p><b>活性依赖（本类不自保）</b>：{@code take()} 无超时，工具线程的解除阻塞完全依赖两条外部逃生口——
+ * ① UI 侧总会 answer 或 cancel（作答面板保证）；② 回合被 dispose 时框架中断本线程（interrupt → 抛
+ * {@link QuestionCancelledException}）。二者缺失则线程永久 park。这是刻意为之：问询语义上就是「等到用户回应」。
+ * 队列容量 1 + 非阻塞 {@code offer} 使「首个信号胜出」，重复/交叉的 answer/cancel 均被安全丢弃，不会卡死或抛异常。
  */
 public final class UserQuestionBridge implements AskUserQuestionTool.QuestionHandler {
 
@@ -37,7 +42,6 @@ public final class UserQuestionBridge implements AskUserQuestionTool.QuestionHan
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public Map<String, String> handle(List<Question> questions) {
         long turnId = ToolEventCallback.currentTurnId();
         List<QuestionSpec> specs = translate(questions);
@@ -57,7 +61,9 @@ public final class UserQuestionBridge implements AskUserQuestionTool.QuestionHan
         if (result == CANCEL) {
             throw new QuestionCancelledException();
         }
-        return (Map<String, String>) result;
+        @SuppressWarnings("unchecked")
+        Map<String, String> answers = (Map<String, String>) result;   // 非 CANCEL 即 answer 投递的 map
+        return answers;
     }
 
     /** Spring AI 的 Question/Option → 纯 Java QuestionSpec/OptionSpec（剥离 Spring AI 类型，接缝纪律）。 */
