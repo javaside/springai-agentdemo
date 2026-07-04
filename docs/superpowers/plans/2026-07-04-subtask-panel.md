@@ -2,9 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把本回合发起的所有子任务汇总成一个钉在输入框上方的固定面板，实时显示计数与运行中/完成/失败状态。
+> ## ⚠️ 状态：已实现，v2 定型（bcc7329）——与下方任务步骤有偏差
+>
+> 下方 Task 1–5 是**初版（v1）施工记录**（标题「⟐ 子任务」单面板）。实际实现经用户澄清后**定型为 v2 双面板**，最终代码见 bcc7329，权威描述见 [设计文档 v2](../specs/2026-07-04-subtask-panel-design.md)。**读实现请以代码 + 设计文档 v2 为准，下方步骤仅供追溯。**
+>
+> **v1→v2 主要偏差：**
+> 1. **本体论定型**：todo = 一个 agent 自己的清单；task = 一个带状态的子 agent 作业。
+> 2. **📋 计划面板**（原 v1 无此定位）= **主 agent 的 todo**（`onTodoUpdated` 且 `taskId==null`）——即本回合开发计划。
+> 3. **⟐ 任务面板**（v1 叫「⟐ 子任务」，已改名「⟐ 任务」）= **子 agent 状态列表**（每个子 agent 一行，▶/✓/✗ + 当前工具）。
+> 4. **子 agent 内部 todo（`taskId != null`）一律丢弃**，不上任何面板。
+> 5. **新增 bug 修复（v1 计划未含）**：`AgentTools.todoEventHandler` 补传 `ToolEventCallback.currentTaskId()`——修复前只传 `currentTurnId()`，致主 agent 计划 todo 与子 agent 内部 todo 落进同一列表互相覆盖。
+> 6. **新增 default 重载**：`AgentListener.onTodoUpdated(long, String, List)`（带 taskId，默认委派回旧 2 参）。
+> 7. `subtaskChildren` 取**末尾** `SUBTASK_CAP` 条窗口（串行下运行行恒为最后一条，保证可见）。
 
-**Architecture:** 纯 UI 层新增，复用现有 `todo` 计划面板范式（原地替换、live 区渲染、不进 scrollback、回合起清空）。`ConversationState` 新增子任务状态列表并在既有 `onSubagentStarted/onToolStarted(taskId)/onSubagentFinished` 回调里维护它（**保留**现有 scrollback push，共存）；`SubagentRunner` 给 `onSubagentFinished` 补 `boolean ok` 维度作为"失败"状态数据源；`CodeTuiView` 加一个 `subtaskChildren` 面板并 `scope()` 到 render 树。
+**Goal（v2）：** 把本回合信息拆成两个钉在输入框上方的固定面板：**📋 计划**（主 agent 的 todo，即开发计划步骤/进度）+ **⟐ 任务**（每个派出的子 agent 一行，实时显示 ▶运行/✓完成/✗失败 + 当前子工具）。
+
+**Architecture（v2）：** 纯 UI 层新增，复用 live 区渲染范式（原地替换、不进 scrollback、回合起清空）。`ConversationState` 维护两条独立数据——`todo`（主 agent 计划）与 `subtasks`（子 agent 状态）；`onTodoUpdated` 按 `taskId` 路由（null=控制器计划进 todo 面板，非空=子 agent 内部 todo **丢弃**）；子任务状态在 `onSubagentStarted/onToolStarted(taskId)/onSubagentFinished(ok)` 回调里维护（**保留**现有 scrollback push，共存）。`AgentTools.todoEventHandler` 补传 `currentTaskId()`（bug 修复）；`SubagentRunner` 给 `onSubagentFinished` 补 `boolean ok` 维度；`CodeTuiView` 加 `todoChildren`（📋 计划）与 `subtaskChildren`（⟐ 任务）两面板并 `scope()` 到 render 树。
 
 **Tech Stack:** Java 21、Spring AI（spring-ai-model **2.0.0**）、TamboUI（`dev.tamboui.*` 内联 TUI Toolkit）、JUnit 5、Maven（`./mvnw`）。
 
