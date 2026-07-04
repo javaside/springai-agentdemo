@@ -196,8 +196,9 @@ public final class ConversationState implements AgentListener {
     public synchronized void onSubagentStarted(long turnId, String taskId, String agentName, String description) {
         if (turnId != acceptingTurnId) return;           // 迟到过滤，与其它事件一致
         flushStreaming();                                // 把在建助手残行定稿，子 agent 块另起
-        String d = (description == null || description.isBlank()) ? "" : " " + description.strip();
-        pending.add(new OutputLine("▸ Task(" + agentName + ")" + d, OutputLine.Kind.SUBAGENT_START));
+        String d = summarize(description);               // 折叠空白/换行，守住「一 OutputLine=一物理行」不变量
+        pending.add(new OutputLine("▸ Task(" + agentName + ")" + (d.isEmpty() ? "" : " " + d),
+                OutputLine.Kind.SUBAGENT_START));
     }
 
     @Override
