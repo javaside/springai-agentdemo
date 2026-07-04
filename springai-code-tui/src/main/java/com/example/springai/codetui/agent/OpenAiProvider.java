@@ -16,10 +16,10 @@ import java.util.List;
 public final class OpenAiProvider implements LlmProvider {
 
     private static final String DEFAULT_MODEL = "gpt-5.5";
-    // 2026-07 在售：gpt-5.5 旗舰 / gpt-5.4-mini 低延迟低成本（旧 gpt-4o 系列已过时）。
+    // 2026-07 在售：gpt-5.5 旗舰 / gpt-5.4 低延迟低成本（旧 gpt-4o 系列已过时）。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("gpt-5.5",      "gpt-5.5",      "旗舰 · 复杂推理/编码"),
-            new ModelOption("gpt-5.4-mini", "gpt-5.4-mini", "快 · 便宜"));
+            new ModelOption("gpt-5.5", "gpt-5.5", "旗舰 · 复杂推理/编码"),
+            new ModelOption("gpt-5.4", "gpt-5.4", "快 · 便宜"));
 
     private final String apiKey;
     private final String baseUrl;            // 空→框架内置默认；配了→覆盖
