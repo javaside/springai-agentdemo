@@ -13,8 +13,7 @@ import java.util.List;
  *
  * <p>注意：Anthropic 的 {@code model()} 收 typed 枚举 {@link Model}，用静态 {@code Model.of(String)}；
  * 且 {@code max_tokens} 为必填，故默认 options 与每请求 options 都显式带 {@link #MAX_TOKENS}。
- * client 由 {@link AnthropicChatModel} 内部通过 {@code SpringAiAnthropicHttpClient} 自动构建，
- * 只需在 options 设置 apiKey 即可，无需手动装配 AnthropicClient。
+ * key/base-url 直接设在 {@link AnthropicChatOptions} builder 上：baseUrl 为空时不设，用框架内置默认；配了则覆盖。
  */
 public final class AnthropicProvider implements LlmProvider {
 
@@ -26,10 +25,16 @@ public final class AnthropicProvider implements LlmProvider {
             new ModelOption("claude-haiku-4-5",  "claude-haiku-4-5",  "快 · 便宜"));
 
     private final String apiKey;
+    private final String baseUrl;            // 空→框架内置默认；配了→覆盖
     private volatile ChatModel chatModel;
 
     public AnthropicProvider(String apiKey) {
+        this(apiKey, null);
+    }
+
+    public AnthropicProvider(String apiKey, String baseUrl) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
+        this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? "" : baseUrl.trim();
     }
 
     @Override public String id() { return "anthropic"; }
@@ -43,12 +48,15 @@ public final class AnthropicProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
+            AnthropicChatOptions.Builder opts = AnthropicChatOptions.builder()
+                    .apiKey(apiKey)
+                    .model(Model.of(DEFAULT_MODEL))
+                    .maxTokens(MAX_TOKENS);
+            if (!baseUrl.isEmpty()) {
+                opts.baseUrl(baseUrl);
+            }
             m = AnthropicChatModel.builder()
-                    .options(AnthropicChatOptions.builder()
-                            .apiKey(apiKey)
-                            .model(Model.of(DEFAULT_MODEL))
-                            .maxTokens(MAX_TOKENS)
-                            .build())
+                    .options(opts.build())
                     .build();
             chatModel = m;
         }

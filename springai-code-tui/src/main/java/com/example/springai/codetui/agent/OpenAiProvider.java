@@ -10,8 +10,8 @@ import java.util.List;
 /**
  * OpenAI provider（Spring AI 2.0 spring-ai-openai）。key 缺失即 unavailable。
  *
- * <p>构建（已实测网络无关）：把 apiKey 设到 {@link OpenAiChatOptions} 上，{@code OpenAiChatModel.build()}
- * 自行派生底层 client——不用供应商 {@code OpenAIOkHttpClient}（不在 classpath）。
+ * <p>构建（已实测网络无关）：key/base-url 直接设在 {@link OpenAiChatOptions} builder 上，baseUrl 为空时
+ * 用框架内置默认（{@code https://api.openai.com}），配了则覆盖；{@code OpenAiChatModel.build()} 自派生 client。
  */
 public final class OpenAiProvider implements LlmProvider {
 
@@ -21,10 +21,16 @@ public final class OpenAiProvider implements LlmProvider {
             new ModelOption("gpt-4o-mini", "gpt-4o-mini", "快 · 便宜"));
 
     private final String apiKey;
+    private final String baseUrl;            // 空→框架内置默认；配了→覆盖
     private volatile ChatModel chatModel;
 
     public OpenAiProvider(String apiKey) {
+        this(apiKey, null);
+    }
+
+    public OpenAiProvider(String apiKey, String baseUrl) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
+        this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? "" : baseUrl.trim();
     }
 
     @Override public String id() { return "openai"; }
@@ -38,8 +44,12 @@ public final class OpenAiProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
+            OpenAiChatOptions.Builder opts = OpenAiChatOptions.builder().apiKey(apiKey).model(DEFAULT_MODEL);
+            if (!baseUrl.isEmpty()) {
+                opts.baseUrl(baseUrl);
+            }
             m = OpenAiChatModel.builder()
-                    .options(OpenAiChatOptions.builder().apiKey(apiKey).model(DEFAULT_MODEL).build())
+                    .options(opts.build())
                     .build();
             chatModel = m;
         }

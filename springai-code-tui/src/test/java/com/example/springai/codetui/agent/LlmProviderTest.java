@@ -64,4 +64,20 @@ class LlmProviderTest {
         assertFalse(p.available());
         assertThrows(IllegalStateException.class, p::chatModel);
     }
+
+    /** 自定义 base-url：非空即覆盖，仍网络无关地建出 model。 */
+    @Test
+    void customBaseUrl_isAcceptedAndModelStillBuilds() {
+        assertTrue(new DeepSeekProvider("fake-key", "https://proxy.example/ds").chatModel() != null);
+        assertTrue(new AnthropicProvider("fake-key", "https://proxy.example/an").chatModel() != null);
+        assertTrue(new OpenAiProvider("fake-key", "https://proxy.example/oa").chatModel() != null);
+    }
+
+    /** 空/null base-url：回落各家内置默认，仍能建出 model。 */
+    @Test
+    void blankBaseUrl_fallsBackToDefaultAndStillBuilds() {
+        assertTrue(new DeepSeekProvider("fake-key", "   ").chatModel() != null);
+        assertTrue(new AnthropicProvider("fake-key", null).chatModel() != null);
+        assertTrue(new OpenAiProvider("fake-key", "").chatModel() != null);
+    }
 }

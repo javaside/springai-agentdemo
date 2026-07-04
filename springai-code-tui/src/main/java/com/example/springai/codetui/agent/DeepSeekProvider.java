@@ -14,17 +14,23 @@ import java.util.List;
  */
 public final class DeepSeekProvider implements LlmProvider {
 
-    private static final String BASE_URL = "https://api.deepseek.com";
+    private static final String DEFAULT_BASE_URL = "https://api.deepseek.com";
     private static final String DEFAULT_MODEL = "deepseek-v4-flash";
     private static final List<ModelOption> MODELS = List.of(
             new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
             new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"));
 
     private final String apiKey;
+    private final String baseUrl;            // 空→内置默认；配了→覆盖
     private volatile ChatModel chatModel;   // 懒建，单例
 
     public DeepSeekProvider(String apiKey) {
+        this(apiKey, null);
+    }
+
+    public DeepSeekProvider(String apiKey, String baseUrl) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
+        this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? DEFAULT_BASE_URL : baseUrl.trim();
     }
 
     @Override public String id() { return "deepseek"; }
@@ -38,7 +44,7 @@ public final class DeepSeekProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
-            DeepSeekApi api = DeepSeekApi.builder().apiKey(apiKey).baseUrl(BASE_URL).build();
+            DeepSeekApi api = DeepSeekApi.builder().apiKey(apiKey).baseUrl(baseUrl).build();
             m = DeepSeekChatModel.builder()
                     .deepSeekApi(api)
                     .options(DeepSeekChatOptions.builder().model(DEFAULT_MODEL).build())
