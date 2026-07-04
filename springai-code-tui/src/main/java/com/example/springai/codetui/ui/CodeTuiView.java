@@ -34,8 +34,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static com.example.springai.codetui.ui.Theme.*;   // 配色 / 样式（DIM/HINT/PICK_SEL/… + styleFor），定义见 Theme
 import static dev.tamboui.toolkit.InlineToolkit.scope;
@@ -90,6 +92,7 @@ public final class CodeTuiView extends InlineApp {
     private int askQ;                                                 // 当前问题下标
     private int askOpt;                                               // 当前问题内高亮的选项下标
     private final Map<String, String> askAnswers = new HashMap<>();   // 已答问题→答案
+    private final Set<Integer> askChecked = new LinkedHashSet<>();     // 当前多选问题已勾选的选项下标（保序）
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
@@ -196,7 +199,7 @@ public final class CodeTuiView extends InlineApp {
         if (pa != null && pa != activeAsk) {
             if (isAnswerable(pa)) {
                 activeAsk = pa;
-                askQ = 0; askOpt = 0; askAnswers.clear();
+                askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
             } else {
                 // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
                 // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消，从 state 摘除避免反复重入。
@@ -680,8 +683,20 @@ public final class CodeTuiView extends InlineApp {
         for (int i = 0; i < n && i < 9; i++) {
             if (k.isChar((char) ('1' + i))) { askOpt = i; return EventResult.HANDLED; }   // 仅移动高亮
         }
+        // 多选：空格切换当前高亮项勾选
+        if (q.multiSelect() && k.isChar(' ')) {
+            if (!askChecked.remove(askOpt)) askChecked.add(askOpt);
+            return EventResult.HANDLED;
+        }
         if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
-            askAnswers.put(q.question(), q.options().get(askOpt).label());   // 记本问答案（单选=label）
+            if (q.multiSelect()) {
+                if (askChecked.isEmpty()) { state.setNotice("至少选择一项"); return EventResult.HANDLED; }
+                List<String> picked = new ArrayList<>();
+                for (int i : askChecked) picked.add(q.options().get(i).label());
+                askAnswers.put(q.question(), String.join(", ", picked));   // 多选=逗号分隔（同 Claude Code）
+            } else {
+                askAnswers.put(q.question(), q.options().get(askOpt).label());   // 记本问答案（单选=label）
+            }
             advanceOrFinish();
             return EventResult.HANDLED;
         }
@@ -691,7 +706,7 @@ public final class CodeTuiView extends InlineApp {
     /** 本问答完：还有下一问则前进（复位高亮），否则提交全部答案唤醒工具线程。 */
     private void advanceOrFinish() {
         if (askQ + 1 < activeAsk.questions().size()) {
-            askQ++; askOpt = 0;
+            askQ++; askOpt = 0; askChecked.clear();
             return;
         }
         AskRequest req = activeAsk;
@@ -713,7 +728,7 @@ public final class CodeTuiView extends InlineApp {
 
     /** 清作答态并从 state 摘除 pendingAsk（避免 drain 再次进入）。 */
     private void clearAskState() {
-        activeAsk = null; askQ = 0; askOpt = 0; askAnswers.clear();
+        activeAsk = null; askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
         state.clearPendingAsk();
     }
 
@@ -727,7 +742,8 @@ public final class CodeTuiView extends InlineApp {
         for (int i = 0; i < q.options().size(); i++) {
             OptionSpec o = q.options().get(i);
             boolean sel = i == askOpt;
-            els.add(text("  " + (sel ? "❯ " : "  ") + (i + 1) + ". " + o.label() + "   " + o.description())
+            String box = q.multiSelect() ? (askChecked.contains(i) ? "[x] " : "[ ] ") : "";
+            els.add(text("  " + (sel ? "❯ " : "  ") + box + (i + 1) + ". " + o.label() + "   " + o.description())
                     .style(sel ? PICK_SEL : PICK_DESC));
         }
         return els.toArray(new Element[0]);
@@ -804,7 +820,11 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element statusLine() {
-        if (activeAsk != null) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
+        if (activeAsk != null) {
+            boolean multi = activeAsk.questions().get(askQ).multiSelect();
+            return text(multi ? "↑↓ 移动 · 空格勾选 · Enter 确认 · Esc 取消"
+                              : "↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
+        }
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);

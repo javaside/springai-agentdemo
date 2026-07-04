@@ -36,6 +36,12 @@ class CodeTuiViewAskTest {
         return new QuestionSpec(qn, "选择", os, false);
     }
 
+    private static QuestionSpec multi(String qn, String... labels) {
+        java.util.List<OptionSpec> os = new java.util.ArrayList<>();
+        for (String l : labels) os.add(new OptionSpec(l, l + " 说明"));
+        return new QuestionSpec(qn, "特性", os, true);
+    }
+
     private static CodeTuiView view(ConversationState s) {
         return new CodeTuiView(s, (SubmitHandler) t -> null, Path.of("."));
     }
@@ -96,5 +102,33 @@ class CodeTuiViewAskTest {
         assertNull(s.pendingAsk(), "畸形问询应从 state 摘除，避免反复重入");
         // 进模态后若误入，下面这次 ↑ 会除零抛异常；不抛即证明未入模态。
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));
+    }
+
+    @Test
+    void multiSelect_spaceTogglesCommaJoined() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), multi("要哪些?", "认证", "数据库", "缓存")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofChar(' '));            // 勾选「认证」(高亮在 0)
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // 高亮→数据库
+        v.feedKeyForTest(KeyEvent.ofChar(' '));            // 勾选「数据库」
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 确认
+        assertEquals(Map.of("要哪些?", "认证, 数据库"), got.get());
+    }
+
+    @Test
+    void multiSelect_enterWithNoneShowsNoticeAndStays() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), multi("要哪些?", "A", "B")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 未勾选
+        assertNull(got.get(), "未勾选不应提交");
+        assertEquals("至少选择一项", s.notice());
     }
 }
