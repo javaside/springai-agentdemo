@@ -59,8 +59,8 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  * <p><b>布局（自底向上钉在终端底部，其上是 println 出来的 scrollback）</b>：
  * <pre>
  *   [流式预览]        —— AI 生成中的当前残行（未换行段），{@code scope} 空则收起
- *   [📋 任务面板]     —— 控制器/主 agent 计划（开发计划进度），✓/▶/○ 分色，{@code scope} 无计划则收起
- *   [▸ 子 agent todo] —— 当前在跑子 agent 的内部 todo，{@code scope} 无在跑子 agent 则收起
+ *   [📋 计划/todo 面板] —— 主 agent（控制器）的 todo，✓/▶/○ 分色，{@code scope} 无计划则收起
+ *   [⟐ 任务面板]      —— 本回合派出的子 agent 状态（▶/✓/✗ + 当前工具），{@code scope} 无子 agent 则收起
  *   [圆角输入框]      —— 原生 {@code textArea}，多行/自动增高，自带光标/编辑/中文输入
  *   [状态行]
  * </pre>
@@ -71,8 +71,8 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  */
 public final class CodeTuiView extends InlineApp {
 
-    private static final int TODO_CAP = 10;      // 任务面板（控制器计划）最多显示几条
-    private static final int SUBTASK_CAP = 6;    // todo 面板（当前子 agent 内部 todo）最多显示几条
+    private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
+    private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     private static final String INDENT = "  ";  // 对话内容缩进；工具/计划行自带前缀
     // 配色 / 样式集中在 {@link Theme}，本类经 import static Theme.* 引入（DIM/HINT/PICK_SEL/… 写法不变）。
 
@@ -141,13 +141,13 @@ public final class CodeTuiView extends InlineApp {
     @Override
     protected Element render() {
         List<String> todos = state.todoSnapshot();
-        ConversationState.SubAgentTodo subAgent = state.subAgentTodoSnapshot();
+        List<ConversationState.SubtaskView> subs = state.subtaskSnapshot();
         List<String> queued = state.queuedSnapshot();
         String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
         return column(
                 scope(!tail.isEmpty(), richText(printer.preview(tail)).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
-                scope(subAgent != null, subAgentTodoChildren(subAgent)),
+                scope(!subs.isEmpty(), subtaskChildren(subs)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
@@ -866,8 +866,7 @@ public final class CodeTuiView extends InlineApp {
     // ── 计划面板 / 状态行 ────────────────────────────────────────────────
     private Element[] todoChildren(List<String> todos) {
         List<Element> els = new ArrayList<>();
-        long done = todos.stream().filter(t -> t.startsWith("✓")).count();
-        els.add(text("📋 任务  ✓" + done + "/" + todos.size()).style(TODO_TITLE));   // 开发计划进度
+        els.add(text("📋 计划").style(TODO_TITLE));   // 主 agent（控制器）的 todo
         int shown = Math.min(todos.size(), TODO_CAP);
         for (int i = 0; i < shown; i++) els.add(todoRow(todos.get(i)));
         if (todos.size() > TODO_CAP) {
@@ -877,27 +876,59 @@ public final class CodeTuiView extends InlineApp {
     }
 
     /**
-     * todo 面板：当前在跑子 agent 的内部 todo。标题标明是哪个子 agent（"▸ <agent>"），下列它的 todo 行
-     * （复用 {@link #todoRow} 的 ✓/▶/○ 分色，纯前景无底色）；超 SUBTASK_CAP 时折叠尾部并注记。
+     * 任务面板：本回合派出的子 agent 状态。计数标题 + 可见子任务各一行（✓/▶/✗ 分色，纯前景无底色）；
+     * 超 SUBTASK_CAP 时折叠靠前的、"当前运行"那条恒可见（串行下运行行总是最后一条）。
      */
-    private Element[] subAgentTodoChildren(ConversationState.SubAgentTodo sub) {
-        if (sub == null || sub.lines().isEmpty()) return new Element[0];   // scope eager 求值：首行判空
-        List<String> lines = sub.lines();
+    private Element[] subtaskChildren(List<ConversationState.SubtaskView> subs) {
+        if (subs == null || subs.isEmpty()) return new Element[0];   // scope eager 求值：首行判空
         List<Element> els = new ArrayList<>();
-        els.add(text(subAgentTodoHeaderText(sub)).style(TODO_TITLE));
-        int shown = Math.min(lines.size(), SUBTASK_CAP);
-        for (int i = 0; i < shown; i++) els.add(todoRow(lines.get(i)));
-        if (lines.size() > SUBTASK_CAP) {
-            els.add(text("  … 还有 " + (lines.size() - SUBTASK_CAP) + " 项").style(DIM));
+        els.add(text(subtaskHeaderText(subs)).style(TODO_TITLE));
+        List<ConversationState.SubtaskView> vis = visibleSubtasks(subs);
+        int hidden = subs.size() - vis.size();
+        if (hidden > 0) {                       // 折叠靠前的已完成条，注记在顶部
+            els.add(text("  … 前 " + hidden + " 项已折叠").style(DIM));
         }
+        for (ConversationState.SubtaskView s : vis) els.add(subtaskRow(s));
         return els.toArray(new Element[0]);
     }
 
-    /** todo 面板标题："▸ <agent>  ✓N/M"（该子 agent 内部 todo 的完成进度）。 */
-    static String subAgentTodoHeaderText(ConversationState.SubAgentTodo sub) {
-        List<String> lines = sub.lines();
-        long done = lines.stream().filter(l -> l.startsWith("✓")).count();
-        return "▸ " + sub.agentName() + "  ✓" + done + "/" + lines.size();
+    /** 面板可见子任务：末尾 SUBTASK_CAP 条。串行执行下"运行中"总是最后一条，取末尾保证它恒可见（否则大回合会把运行行折叠掉）。 */
+    static List<ConversationState.SubtaskView> visibleSubtasks(List<ConversationState.SubtaskView> subs) {
+        int from = Math.max(0, subs.size() - SUBTASK_CAP);
+        return subs.subList(from, subs.size());
+    }
+
+    /** 一条子任务：✓完成=绿 / ▶运行=亮黄加粗 / ✗失败=红（纯前景）。 */
+    private static Element subtaskRow(ConversationState.SubtaskView s) {
+        Style st = switch (s.status()) {
+            case DONE -> OK;
+            case FAILED -> ERROR;
+            case RUNNING -> TODO_RUN;
+        };
+        return text(subtaskRowText(s)).style(st);
+    }
+
+    /** 任务面板标题文本："⟐ 任务  ✓N 完成 · ▶M 运行[ · ✗K 失败]"。 */
+    static String subtaskHeaderText(List<ConversationState.SubtaskView> subs) {
+        long done = subs.stream().filter(s -> s.status() == ConversationState.SubtaskStatus.DONE).count();
+        long running = subs.stream().filter(s -> s.status() == ConversationState.SubtaskStatus.RUNNING).count();
+        long failed = subs.stream().filter(s -> s.status() == ConversationState.SubtaskStatus.FAILED).count();
+        StringBuilder h = new StringBuilder("⟐ 任务  ✓" + done + " 完成 · ▶" + running + " 运行");
+        if (failed > 0) h.append(" · ✗").append(failed).append(" 失败");
+        return h.toString();
+    }
+
+    /** 一条子任务的行文本："  <图标> <agent>  <描述>[ · <当前工具>]"（运行态且有当前工具才附尾巴）。 */
+    static String subtaskRowText(ConversationState.SubtaskView s) {
+        String icon = switch (s.status()) {
+            case DONE -> "✓";
+            case FAILED -> "✗";
+            case RUNNING -> "▶";
+        };
+        String tail = (s.status() == ConversationState.SubtaskStatus.RUNNING
+                && s.currentTool() != null && !s.currentTool().isEmpty())
+                ? " · " + s.currentTool() : "";
+        return "  " + icon + " " + s.agentName() + "  " + s.description() + tail;
     }
 
     /** 排队消息面板：固定在输入框上方，每条一行（暗灰底、› 前缀、超宽截断），仿 Claude Code。 */
