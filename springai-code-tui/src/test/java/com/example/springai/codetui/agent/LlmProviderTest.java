@@ -47,4 +47,21 @@ class LlmProviderTest {
         assertFalse(p.available());
         assertThrows(IllegalStateException.class, p::chatModel);
     }
+
+    @Test
+    void openai_withKey_availableAndOptionsCarryModel() {
+        OpenAiProvider p = new OpenAiProvider("fake-key");
+        assertEquals("openai", p.id());
+        assertTrue(p.available());
+        assertEquals("gpt-4o", p.defaultModel());
+        assertTrue(p.chatModel() != null);   // 实测网络无关：build() 从 options.apiKey 派生 client
+        assertEquals("gpt-4o-mini", p.options("gpt-4o-mini").getModel());
+    }
+
+    @Test
+    void openai_withoutKey_isUnavailable() {
+        OpenAiProvider p = new OpenAiProvider("");
+        assertFalse(p.available());
+        assertThrows(IllegalStateException.class, p::chatModel);
+    }
 }
