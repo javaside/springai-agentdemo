@@ -129,6 +129,29 @@ class CodeTuiViewAskTest {
         v.tickForTest();
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 未勾选
         assertNull(got.get(), "未勾选不应提交");
-        assertEquals("至少选择一项", s.notice());
+        // 提示必须真正出现在作答态状态行（statusLine 早于通用 notice 分支 return，故须自带回显）。
+        assertTrue(v.askStatusText().startsWith("至少选择一项"), "空选确认应在状态行显示提示，实际：" + v.askStatusText());
+        // 勾选一项后提示应消失，且能正常提交。
+        v.feedKeyForTest(KeyEvent.ofChar(' '));
+        assertEquals("↑↓ 移动 · 空格勾选 · Enter 确认 · Esc 取消", v.askStatusText(), "勾选后应清掉提示、恢复操作指引");
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
+        assertEquals(Map.of("要哪些?", "A"), got.get());
+    }
+
+    @Test
+    void multiSelect_untoggleRemovesFromAnswer() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), multi("要哪些?", "认证", "数据库", "缓存")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofChar(' '));            // 勾选「认证」(idx0)
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // →数据库
+        v.feedKeyForTest(KeyEvent.ofChar(' '));            // 勾选「数据库」(idx1)
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));      // ←认证
+        v.feedKeyForTest(KeyEvent.ofChar(' '));            // 取消勾选「认证」
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 确认：只剩「数据库」
+        assertEquals(Map.of("要哪些?", "数据库"), got.get());
     }
 }

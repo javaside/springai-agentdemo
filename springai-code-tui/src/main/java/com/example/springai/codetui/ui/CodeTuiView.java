@@ -686,6 +686,7 @@ public final class CodeTuiView extends InlineApp {
         // 多选：空格切换当前高亮项勾选
         if (q.multiSelect() && k.isChar(' ')) {
             if (!askChecked.remove(askOpt)) askChecked.add(askOpt);
+            state.setNotice("");   // 勾选后清掉「至少选择一项」的残留提示
             return EventResult.HANDLED;
         }
         if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
@@ -701,6 +702,18 @@ public final class CodeTuiView extends InlineApp {
             return EventResult.HANDLED;
         }
         return EventResult.HANDLED;   // 其余键一律吞掉，不落进输入框
+    }
+
+    /**
+     * 作答态状态行文本：有 notice（如「至少选择一项」）时优先显示，否则按单/多选给操作提示。
+     * 作答时 statusLine 会早于通用 notice 分支 return，故必须在这里自己回显 notice——否则空选确认的提示永远看不见。
+     */
+    String askStatusText() {
+        String notice = state.notice();
+        if (notice != null && !notice.isEmpty()) return notice + " · Esc 取消";
+        boolean multi = activeAsk.questions().get(askQ).multiSelect();
+        return multi ? "↑↓ 移动 · 空格勾选 · Enter 确认 · Esc 取消"
+                     : "↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消";
     }
 
     /** 本问答完：还有下一问则前进（复位高亮），否则提交全部答案唤醒工具线程。 */
@@ -820,11 +833,7 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element statusLine() {
-        if (activeAsk != null) {
-            boolean multi = activeAsk.questions().get(askQ).multiSelect();
-            return text(multi ? "↑↓ 移动 · 空格勾选 · Enter 确认 · Esc 取消"
-                              : "↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
-        }
+        if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
