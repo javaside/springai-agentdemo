@@ -33,11 +33,11 @@ class LlmProviderTest {
         AnthropicProvider p = new AnthropicProvider("fake-key");
         assertEquals("anthropic", p.id());
         assertTrue(p.available());
-        assertEquals("claude-sonnet-4-5", p.defaultModel());
+        assertEquals("claude-sonnet-5", p.defaultModel());
         assertTrue(p.chatModel() != null);
         org.springframework.ai.anthropic.AnthropicChatOptions opts =
-                (org.springframework.ai.anthropic.AnthropicChatOptions) p.options("claude-opus-4-5");
-        assertEquals("claude-opus-4-5", opts.getModel());
+                (org.springframework.ai.anthropic.AnthropicChatOptions) p.options("claude-opus-4-8");
+        assertEquals("claude-opus-4-8", opts.getModel());
         assertEquals(8192, opts.getMaxTokens());
     }
 
@@ -53,9 +53,9 @@ class LlmProviderTest {
         OpenAiProvider p = new OpenAiProvider("fake-key");
         assertEquals("openai", p.id());
         assertTrue(p.available());
-        assertEquals("gpt-4o", p.defaultModel());
+        assertEquals("gpt-5.5", p.defaultModel());
         assertTrue(p.chatModel() != null);   // 实测网络无关：build() 从 options.apiKey 派生 client
-        assertEquals("gpt-4o-mini", p.options("gpt-4o-mini").getModel());
+        assertEquals("gpt-5.4-mini", p.options("gpt-5.4-mini").getModel());
     }
 
     @Test

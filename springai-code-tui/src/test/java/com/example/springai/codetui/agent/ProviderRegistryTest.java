@@ -20,18 +20,18 @@ class ProviderRegistryTest {
         assertEquals("deepseek-v4-flash", reg.activeModelId());
         List<String> ids = reg.allModels().stream().map(ModelOption::id).toList();
         assertTrue(ids.contains("deepseek-v4-flash"));
-        assertTrue(ids.contains("claude-sonnet-4-5"));
-        assertFalse(ids.contains("gpt-4o"));   // openai 不可用，不列出
+        assertTrue(ids.contains("claude-sonnet-5"));
+        assertFalse(ids.contains("gpt-5.5"));   // openai 不可用，不列出
     }
 
     @Test
     void selectCrossProviderModelSwitchesActive() {
         ProviderRegistry reg = new ProviderRegistry(List.of(
                 new DeepSeekProvider("k"), new AnthropicProvider("k")));
-        reg.select("claude-opus-4-5");
+        reg.select("claude-opus-4-8");
         assertEquals("anthropic", reg.active().id());
-        assertEquals("claude-opus-4-5", reg.activeModelId());
-        assertEquals("claude-opus-4-5", reg.activeChatOptions().getModel());
+        assertEquals("claude-opus-4-8", reg.activeModelId());
+        assertEquals("claude-opus-4-8", reg.activeChatOptions().getModel());
     }
 
     @Test
