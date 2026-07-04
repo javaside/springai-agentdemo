@@ -206,4 +206,41 @@ class CodeTuiViewAskTest {
         assertTrue(cancelled.get(), "自由文本里 Esc 应取消整回合");
         assertNull(s.pendingAsk());
     }
+
+    @Test
+    void other_highlightThenBackToRealOption_recordsLabel() {
+        // 高亮移到合成「其他」行再退回真实选项，Enter 应记该选项 label（合成 sentinel 不误触发自由文本）。
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), single("选?", "A", "B")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // A→B
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // B→「其他」(idx2)
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));      // 「其他」→B
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 选 B（不进自由文本）
+        assertEquals(Map.of("选?", "B"), got.get());
+    }
+
+    @Test
+    void other_blankNoticeDoesNotLeakToNextQuestion() {
+        // 多问：Q1「其他」空确认留下提示 → 输入有效值提交 → Q2 状态行不应残留「请输入内容」。
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(),
+                single("Q1?", "A", "B"), single("Q2?", "X", "Y")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // Q1→「其他」
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 进自由文本
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 空确认 → 提示
+        v.feedKeyForTest(KeyEvent.ofChar('z'));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 提交 "z"，进 Q2
+        assertTrue(v.askStatusText().startsWith("↑↓/kj 选择"), "Q2 状态行不应残留提示，实际：" + v.askStatusText());
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // Q2 → X
+        assertEquals(Map.of("Q1?", "z", "Q2?", "X"), got.get());
+    }
 }

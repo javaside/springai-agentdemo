@@ -202,6 +202,7 @@ public final class CodeTuiView extends InlineApp {
             if (isAnswerable(pa)) {
                 activeAsk = pa;
                 askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
+                askFreeText = false; askInput.clear();   // 与其它复位点一致，防上一问询的自由文本残留
             } else {
                 // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
                 // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消，从 state 摘除避免反复重入。
@@ -682,14 +683,16 @@ public final class CodeTuiView extends InlineApp {
         if (askFreeText) {   // 自由文本子模式：可打印键输入、Backspace 删、Enter 确认非空、其余吞掉
             if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
                 String txt = askInput.text();
-                if (txt.isBlank()) { state.setNotice("请输入内容或 Esc 取消"); return EventResult.HANDLED; }
+                if (txt.isBlank()) { state.setNotice("请输入内容"); return EventResult.HANDLED; }   // 状态行已自带「· Esc 取消」后缀
                 askAnswers.put(q.question(), txt);
                 askFreeText = false; askInput.clear();
+                state.setNotice("");   // 清掉可能残留的「请输入内容」提示，避免带进下一问
                 advanceOrFinish();
                 return EventResult.HANDLED;
             }
             if (k.code() == KeyCode.BACKSPACE) { askInput.deleteBackward(); return EventResult.HANDLED; }
-            if (k.code() == KeyCode.CHAR) { askInput.insert(k.character()); return EventResult.HANDLED; }
+            // insert(String)：用 k.string()（Character.toChars）而非 char，兼容 U+FFFF 以上的星平面码点（emoji 等）
+            if (k.code() == KeyCode.CHAR) { askInput.insert(k.string()); return EventResult.HANDLED; }
             return EventResult.HANDLED;   // 子模式吞掉其余键
         }
         int n = q.options().size() + (q.multiSelect() ? 0 : 1);   // 单选多一条合成「其他」；多选无
