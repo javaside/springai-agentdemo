@@ -222,7 +222,7 @@ public final class ConversationState implements AgentListener {
     }
 
     @Override
-    public void onQuestionAsked(long turnId, AskRequest request) {
+    public synchronized void onQuestionAsked(long turnId, AskRequest request) {
         if (turnId != acceptingTurnId) {
             // 迟到：回合已被取消/切换。桥侧的 take() 靠取消路径唤醒，这里直接丢弃不弹面板。
             request.responder().cancel();
