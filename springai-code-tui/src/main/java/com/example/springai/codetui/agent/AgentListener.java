@@ -19,6 +19,14 @@ public interface AgentListener {
     /** 子 agent 结束。finalText=子 agent 的最终返回文本（回灌主 agent 的内容）。 */
     void onSubagentFinished(long turnId, String taskId, String finalText);
 
+    /**
+     * 子 agent 结束（带成败维度）。ok=true 正常返回、false 执行抛错。
+     * 默认委托回 3 参版本，只有需要区分成败的实现（ConversationState 面板）覆写本方法。
+     */
+    default void onSubagentFinished(long turnId, String taskId, String finalText, boolean ok) {
+        onSubagentFinished(turnId, taskId, finalText);
+    }
+
     /** 带 taskId 的工具事件（子 agent 内部工具）：默认委托无 taskId 版本，只有需缩进渲染的实现覆写。 */
     default void onToolStarted(long turnId, String taskId, String toolName, String input) {
         onToolStarted(turnId, toolName, input);
