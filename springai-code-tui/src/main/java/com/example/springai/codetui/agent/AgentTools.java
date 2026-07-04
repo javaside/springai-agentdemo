@@ -258,19 +258,12 @@ public final class AgentTools {
                                List<SkillInfo> skills,
                                ToolCallback skillTool) {}
 
-    /** 测试钩子：返回 build 注册的工具名集合（不发网络请求）。与 build 内保持一致。 */
-    static java.util.List<String> toolNamesForTest(DeepSeekChatModel model, Path root, AgentListener listener) {
-        FileSystemTools fs = FileSystemTools.builder().allowedDirectory(root).build();
-        ShellTools sh = ShellTools.builder().build();
-        GrepTool grep = GrepTool.builder().workingDirectory(root).build();
-        GlobTool glob = GlobTool.builder().workingDirectory(root).build();
-        TodoWriteTool todo = TodoWriteTool.builder().build();
-        ChatClient aux = ChatClient.builder(model).build();
-        SmartWebFetchTool webFetch = SmartWebFetchTool.builder(aux).domainSafetyCheck(false).build();
+    /** 测试钩子：返回反问工具经 {@link ToolCallbacks#from} 派生出的工具名（校验它确被识别为 @Tool 并注册）。 */
+    static List<String> askToolNamesForTest(AgentListener listener) {
         AskUserQuestionTool ask = AskUserQuestionTool.builder()
                 .questionHandler(new UserQuestionBridge(listener)).build();
-        java.util.List<String> names = new java.util.ArrayList<>();
-        for (ToolCallback c : ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch, ask)) {
+        List<String> names = new ArrayList<>();
+        for (ToolCallback c : ToolCallbacks.from(ask)) {
             names.add(c.getToolDefinition().name());
         }
         return names;
