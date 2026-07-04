@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** AgentTools.build 只做装配、不发网络请求：用假 key 也能造出完整 AgentRuntime。 */
 class AgentRuntimeTest {
@@ -51,6 +52,13 @@ class AgentRuntimeTest {
 
         assertNotNull(rt.skillTool(), "有技能时应暴露被装饰的 Skill 工具");
         assertEquals("Skill", rt.skillTool().getToolDefinition().name(), "工具名应为 Skill");
+    }
+
+    @Test
+    void build_registersAskUserQuestionTool() {
+        // 反问工具经 ToolCallbacks.from 派生出的工具名应含 AskUserQuestionTool（生产 build 用同一 from 调用注册它）。
+        assertTrue(AgentTools.askToolNamesForTest(new StubListener()).contains("AskUserQuestionTool"),
+                "应识别 AskUserQuestionTool 为可注册工具");
     }
 
     @Test

@@ -44,6 +44,7 @@ class ToolEventCallbackTest {
         @Override public void onTodoUpdated(long turnId, List<String> todoLines) { }
         @Override public void onTurnComplete(long turnId) { }
         @Override public void onError(long turnId, Throwable error) { }
+        @Override public void onQuestionAsked(long turnId, AskRequest request) { }
         @Override public void onCompactionStarted(String reason) { }
         @Override public void onCompactionFinished(int eventsRemoved, int tokensSaved) { }
         @Override public void onCompactionFailed(String message) { }

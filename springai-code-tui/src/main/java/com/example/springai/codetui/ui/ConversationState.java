@@ -1,6 +1,7 @@
 package com.example.springai.codetui.ui;
 
 import com.example.springai.codetui.agent.AgentListener;
+import com.example.springai.codetui.agent.AskRequest;
 import dev.tamboui.text.CharWidth;
 
 import java.util.ArrayDeque;
@@ -61,6 +62,9 @@ public final class ConversationState implements AgentListener {
     private volatile long compactStartNanos = 0L;
     private volatile String compactReason = "";
 
+    // ── AskUserQuestion 瞬态：待作答的问询（渲染线程读、工具线程写；迟到过滤后置入） ──
+    private volatile AskRequest pendingAsk;
+
     // ── 输入缓冲 ────────────────────────────────────────────────────────
     public synchronized void typeChar(char c) { notice = ""; input.append(c); }
     public synchronized void typeString(String s) { notice = ""; input.append(s); }
@@ -86,6 +90,11 @@ public final class ConversationState implements AgentListener {
     public String activeTool() { return activeTool; }
     public String activeToolSummary() { return activeToolSummary; }
     public long acceptingTurnId() { return acceptingTurnId; }
+
+    /** 当前待作答的问询（无则 null）；渲染线程读。 */
+    public AskRequest pendingAsk() { return pendingAsk; }
+    /** 清除待作答问询（UI 答完/取消后调）。 */
+    public void clearPendingAsk() { this.pendingAsk = null; }
 
     // ── 压缩状态读取（渲染线程用） ──
     public boolean isCompacting() { return compacting; }
@@ -210,6 +219,16 @@ public final class ConversationState implements AgentListener {
         activeTool = "";
         activeToolSummary = "";
         status = Status.IDLE;
+    }
+
+    @Override
+    public synchronized void onQuestionAsked(long turnId, AskRequest request) {
+        if (turnId != acceptingTurnId) {
+            // 迟到：回合已被取消/切换。桥侧的 take() 靠取消路径唤醒，这里直接丢弃不弹面板。
+            request.responder().cancel();
+            return;
+        }
+        this.pendingAsk = request;
     }
 
     @Override

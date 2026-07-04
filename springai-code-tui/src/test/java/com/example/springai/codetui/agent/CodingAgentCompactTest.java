@@ -121,6 +121,7 @@ class CodingAgentCompactTest {
         @Override public void onTodoUpdated(long turnId, List<String> todoLines) { }
         @Override public void onTurnComplete(long turnId) { }
         @Override public void onError(long turnId, Throwable error) { }
+        @Override public void onQuestionAsked(long turnId, AskRequest request) { }
         @Override public void onCompactionStarted(String reason) { events.add("started:" + reason); }
         @Override public void onCompactionFinished(int eventsRemoved, int tokensSaved) {
             events.add("finished:" + eventsRemoved + ":" + tokensSaved);

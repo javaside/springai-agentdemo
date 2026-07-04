@@ -16,6 +16,12 @@ public interface AgentListener {
     void onTurnComplete(long turnId);
     void onError(long turnId, Throwable error);
 
+    /**
+     * 模型经 AskUserQuestionTool 发问：UI 应弹出作答面板并最终经 {@code request.responder()} 应答。
+     * 与其它方法一样带 turnId 供迟到过滤。落地端会阻塞工具线程直到 UI 应答（见 UserQuestionBridge）。
+     */
+    void onQuestionAsked(long turnId, AskRequest request);
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);

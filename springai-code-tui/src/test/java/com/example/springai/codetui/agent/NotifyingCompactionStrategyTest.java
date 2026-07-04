@@ -29,6 +29,7 @@ class NotifyingCompactionStrategyTest {
         @Override public void onTodoUpdated(long turnId, List<String> todoLines) { }
         @Override public void onTurnComplete(long turnId) { }
         @Override public void onError(long turnId, Throwable error) { }
+        @Override public void onQuestionAsked(long turnId, AskRequest request) { }
         @Override public void onCompactionStarted(String reason) { startedReason = reason; }
         @Override public void onCompactionFinished(int eventsRemoved, int tokensSaved) {
             finishedRemoved = eventsRemoved; finishedSaved = tokensSaved;

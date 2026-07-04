@@ -1,6 +1,9 @@
 package com.example.springai.codetui.ui;
 
+import com.example.springai.codetui.agent.AskRequest;
 import com.example.springai.codetui.agent.ModelOption;
+import com.example.springai.codetui.agent.OptionSpec;
+import com.example.springai.codetui.agent.QuestionSpec;
 import com.example.springai.codetui.agent.SkillInfo;
 import com.example.springai.codetui.agent.SubmitHandler;
 import com.example.springai.codetui.ui.ConversationState.OutputLine;
@@ -30,7 +33,11 @@ import reactor.core.Disposable;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static com.example.springai.codetui.ui.Theme.*;   // 配色 / 样式（DIM/HINT/PICK_SEL/… + styleFor），定义见 Theme
 import static dev.tamboui.toolkit.InlineToolkit.scope;
@@ -81,6 +88,13 @@ public final class CodeTuiView extends InlineApp {
     private boolean pickingModel;                                    // /model 选择器是否激活
     private boolean pickingSkill;                                    // /skill 选择器是否激活
     private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
+    private AskRequest activeAsk;                                     // 当前正在作答的问询（null=非作答态）
+    private int askQ;                                                 // 当前问题下标
+    private int askOpt;                                               // 当前问题内高亮的选项下标
+    private final Map<String, String> askAnswers = new HashMap<>();   // 已答问题→答案
+    private final Set<Integer> askChecked = new LinkedHashSet<>();     // 当前多选问题已勾选的选项下标（保序）
+    private boolean askFreeText;                                      // 自由文本子模式（单选选了「其他」）
+    private final TextAreaState askInput = new TextAreaState();       // 「其他」的自定义输入缓冲（单行直存直取）
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
@@ -133,6 +147,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
+                scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
                 scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
                 scope(pendingSkill != null, skillTag()),            // 已挂载技能标签：固定在输入框正上方，发送时随消息带走
                 inputElement(),
@@ -181,12 +196,36 @@ public final class CodeTuiView extends InlineApp {
         for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
             printer.streamingLine(row);
         }
+        // 侦测到新问询（身份不同）→ 进入作答态并复位到第一问。
+        AskRequest pa = state.pendingAsk();
+        if (pa != null && pa != activeAsk) {
+            if (isAnswerable(pa)) {
+                activeAsk = pa;
+                askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
+                askFreeText = false; askInput.clear();   // 与其它复位点一致，防上一问询的自由文本残留
+            } else {
+                // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
+                // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消整回合。
+                // 必须与 Esc 走同一 cancelTurnFor：只 responder.cancel、不 dispose 回滚，会残留悬空 tool_calls → 下条 400。
+                state.clearPendingAsk();
+                cancelTurnFor(pa, "问询格式无效，已取消当前回合");
+            }
+        }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
             ConversationState.Queued next = state.pollQueued();
             if (next != null) dispatch(next.text(), next.skill());
         }
     }
+
+    /** 测试专用：跑一次 drain（侦测 pendingAsk 并进入作答态）。 */
+    void tickForTest() { drain(); }
+
+    /** 测试专用：把一个按键喂给输入框按键入口（等价真实按键路由）。 */
+    EventResult feedKeyForTest(KeyEvent k) { return onInputKey(k); }
+
+    /** 测试专用：构造一帧 UI 树（等价渲染线程每帧调用的 render）。用于回归「每帧构造子面板」类空指针。 */
+    Element renderForTest() { return render(); }
 
     /** 终端列数；拿不到时退化为 80。 */
     private int terminalWidth() {
@@ -329,6 +368,7 @@ public final class CodeTuiView extends InlineApp {
             quit();
             return EventResult.HANDLED;
         }
+        if (activeAsk != null) return onAskKey(k);      // 作答模态：全部按键交给它，屏蔽文本编辑
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
         // 正在浏览历史（histIndex<size）时 ↑↓ 始终翻历史——即使翻到的是一条 /命令、补全菜单也弹出来了，
@@ -628,6 +668,154 @@ public final class CodeTuiView extends InlineApp {
         return text("  🎯 " + pendingSkill + "   （发送时自动加载 · Esc 移除）").style(PICK_TITLE);
     }
 
+    // ── AskUserQuestion 作答面板 ─────────────────────────────────────────
+    /** 可作答性：至少 1 问、且每问至少 1 个选项（否则 onAskKey 的 `% n` 会除零崩线程，见 drain 的降级）。 */
+    private static boolean isAnswerable(AskRequest ask) {
+        List<QuestionSpec> qs = ask.questions();
+        if (qs.isEmpty()) return false;
+        for (QuestionSpec q : qs) {
+            if (q.options().isEmpty()) return false;
+        }
+        return true;
+    }
+
+    /** 作答按键（单选）：↑↓/kj 移动高亮、1–9 移到第 n 项（不隐式确认）、Enter 选中进下一问、Esc 取消整回合。 */
+    private EventResult onAskKey(KeyEvent k) {
+        List<QuestionSpec> qs = activeAsk.questions();
+        QuestionSpec q = qs.get(askQ);
+        if (k.isCancel()) { cancelAsk(); return EventResult.HANDLED; }   // Esc 优先：子模式内也取消整回合
+        if (askFreeText) {   // 自由文本子模式：可打印键输入、Backspace 删、Enter 确认非空、其余吞掉
+            if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+                String txt = askInput.text();
+                if (txt.isBlank()) { state.setNotice("请输入内容"); return EventResult.HANDLED; }   // 状态行已自带「· Esc 取消」后缀
+                askAnswers.put(q.question(), txt);
+                askFreeText = false; askInput.clear();
+                state.setNotice("");   // 清掉可能残留的「请输入内容」提示，避免带进下一问
+                advanceOrFinish();
+                return EventResult.HANDLED;
+            }
+            if (k.code() == KeyCode.BACKSPACE) { askInput.deleteBackward(); return EventResult.HANDLED; }
+            // insert(String)：用 k.string()（Character.toChars）而非 char，兼容 U+FFFF 以上的星平面码点（emoji 等）
+            if (k.code() == KeyCode.CHAR) { askInput.insert(k.string()); return EventResult.HANDLED; }
+            return EventResult.HANDLED;   // 子模式吞掉其余键
+        }
+        int n = q.options().size() + (q.multiSelect() ? 0 : 1);   // 单选多一条合成「其他」；多选无
+        if (k.code() == KeyCode.UP || k.isChar('k'))   { askOpt = (askOpt - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) { askOpt = (askOpt + 1) % n;     return EventResult.HANDLED; }
+        for (int i = 0; i < q.options().size() && i < 9; i++) {
+            if (k.isChar((char) ('1' + i))) { askOpt = i; return EventResult.HANDLED; }   // 仅移动高亮（不跳合成「其他」行）
+        }
+        // 多选：空格切换当前高亮项勾选
+        if (q.multiSelect() && k.isChar(' ')) {
+            if (!askChecked.remove(askOpt)) askChecked.add(askOpt);
+            state.setNotice("");   // 勾选后清掉「至少选择一项」的残留提示
+            return EventResult.HANDLED;
+        }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            if (q.multiSelect()) {
+                if (askChecked.isEmpty()) { state.setNotice("至少选择一项"); return EventResult.HANDLED; }
+                List<String> picked = new ArrayList<>();
+                for (int i : askChecked) picked.add(q.options().get(i).label());
+                askAnswers.put(q.question(), String.join(", ", picked));   // 多选=逗号分隔（同 Claude Code）
+            } else {
+                if (askOpt == q.options().size()) {   // 高亮在合成的「其他」行 → 进自由文本子模式
+                    askFreeText = true; askInput.clear();
+                    return EventResult.HANDLED;        // 不记 label、不 advance
+                }
+                askAnswers.put(q.question(), q.options().get(askOpt).label());   // 记本问答案（单选=label）
+            }
+            advanceOrFinish();
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;   // 其余键一律吞掉，不落进输入框
+    }
+
+    /**
+     * 作答态状态行文本：有 notice（如「至少选择一项」）时优先显示，否则按单/多选给操作提示。
+     * 作答时 statusLine 会早于通用 notice 分支 return，故必须在这里自己回显 notice——否则空选确认的提示永远看不见。
+     */
+    String askStatusText() {
+        if (askFreeText) {   // 自由文本子模式：单独提示（Esc 仍取消整回合）
+            String fn = state.notice();
+            if (fn != null && !fn.isEmpty()) return fn + " · Esc 取消";
+            return "输入自定义内容 · Enter 确认 · Esc 取消";
+        }
+        String notice = state.notice();
+        if (notice != null && !notice.isEmpty()) return notice + " · Esc 取消";
+        boolean multi = activeAsk.questions().get(askQ).multiSelect();
+        return multi ? "↑↓ 移动 · 空格勾选 · Enter 确认 · Esc 取消"
+                     : "↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消";
+    }
+
+    /** 本问答完：还有下一问则前进（复位高亮），否则提交全部答案唤醒工具线程。 */
+    private void advanceOrFinish() {
+        if (askQ + 1 < activeAsk.questions().size()) {
+            askQ++; askOpt = 0; askChecked.clear();
+            askFreeText = false; askInput.clear();
+            return;
+        }
+        AskRequest req = activeAsk;
+        Map<String, String> answers = new HashMap<>(askAnswers);
+        clearAskState();
+        req.responder().answer(answers);   // 唤醒阻塞的工具线程
+    }
+
+    /** Esc 取消：唤醒工具线程 + 取消整回合（复用既有回合取消 → doOnCancel 回滚会话，不 400）。 */
+    private void cancelAsk() {
+        AskRequest req = activeAsk;
+        clearAskState();
+        cancelTurnFor(req, "已取消当前回合");
+    }
+
+    /**
+     * 取消一个由问询发起的回合：先唤醒阻塞的工具线程（responder.cancel），再 dispose + cancelCurrent
+     * 让 {@code doOnCancel} 回滚会话——否则半截的 {@code assistant(tool_calls)} 会残留、下条消息 400。
+     * Esc 取消与「畸形问询降级取消」共用此路径，保证二者都走同一套已验证的回滚（见记忆
+     * cancel-tool-turn-leaves-dangling-toolcalls）。
+     */
+    private void cancelTurnFor(AskRequest req, String notice) {
+        req.responder().cancel();
+        if (current != null) { current.dispose(); current = null; }
+        state.cancelCurrent();
+        state.clearQueued();
+        state.setNotice(notice);
+    }
+
+    /** 清作答态并从 state 摘除 pendingAsk（避免 drain 再次进入）。 */
+    private void clearAskState() {
+        activeAsk = null; askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
+        askFreeText = false; askInput.clear();
+        state.clearPendingAsk();
+    }
+
+    /** 作答面板：进度 + header + 问题文本 + 逐项选项（单选 ❯ 高亮）。 */
+    private Element[] askChildren() {
+        // scope(cond, el) 会「先构造 el 再按 cond 决定是否显示」——即本方法每帧都被调用（含非作答态），
+        // 故必须先 null 判空，否则 activeAsk==null 时解引用会每帧崩渲染线程（单测只驱动按键、不跑 render，漏掉此路径）。
+        if (activeAsk == null) return new Element[0];
+        List<QuestionSpec> qs = activeAsk.questions();
+        QuestionSpec q = qs.get(askQ);
+        List<Element> els = new ArrayList<>();
+        String progress = qs.size() > 1 ? "（第 " + (askQ + 1) + "/" + qs.size() + " 问）" : "";
+        els.add(text("  ❓ [" + q.header() + "] " + q.question() + progress).style(PICK_TITLE));
+        for (int i = 0; i < q.options().size(); i++) {
+            OptionSpec o = q.options().get(i);
+            boolean sel = i == askOpt;
+            String box = q.multiSelect() ? (askChecked.contains(i) ? "[x] " : "[ ] ") : "";
+            els.add(text("  " + (sel ? "❯ " : "  ") + box + (i + 1) + ". " + o.label() + "   " + o.description())
+                    .style(sel ? PICK_SEL : PICK_DESC));
+        }
+        if (!q.multiSelect()) {   // 单选追加合成「其他」行；进子模式时再回显输入
+            int otherIdx = q.options().size();
+            boolean sel = askOpt == otherIdx;
+            els.add(text("  " + (sel ? "❯ " : "  ") + "✎ 其他（自定义输入）").style(sel ? PICK_SEL : PICK_DESC));
+            if (askFreeText) {
+                els.add(text("     ▏" + askInput.text()).style(PICK_TITLE));   // 输入回显
+            }
+        }
+        return els.toArray(new Element[0]);
+    }
+
     /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
     private void printHelp() {
         state.pushInfo("可用命令：");
@@ -699,6 +887,7 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element statusLine() {
+        if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
