@@ -63,6 +63,8 @@ class CodingAgentSpikeTest {
         @Override public void onToolFinished(long turnId, String toolName, String output, boolean ok) {
             toolFinished.add(new Object[]{turnId, toolName, output, ok});
         }
+        @Override public void onSubagentStarted(long turnId, String taskId, String agentName, String description) { }
+        @Override public void onSubagentFinished(long turnId, String taskId, String finalText) { }
         @Override public void onTodoUpdated(long turnId, List<String> todoLines) {
             todoUpdated.add(new Object[]{turnId, todoLines});
         }

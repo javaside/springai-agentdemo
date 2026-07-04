@@ -192,6 +192,16 @@ public final class ConversationState implements AgentListener {
     }
 
     @Override
+    public synchronized void onSubagentStarted(long turnId, String taskId, String agentName, String description) {
+        // Task 9 将补全子 agent 嵌套渲染；此处先空实现以满足接缝。
+    }
+
+    @Override
+    public synchronized void onSubagentFinished(long turnId, String taskId, String finalText) {
+        // Task 9 将补全子 agent 嵌套渲染；此处先空实现以满足接缝。
+    }
+
+    @Override
     public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
         if (turnId != acceptingTurnId) return;
         todo.clear();                     // 原地替换：固定面板显示，不进 scrollback

@@ -12,6 +12,20 @@ public interface AgentListener {
     void onAssistantToken(long turnId, String token);
     void onToolStarted(long turnId, String toolName, String input);
     void onToolFinished(long turnId, String toolName, String output, boolean ok);
+
+    // ── 子 agent（Task 工具委派） ──
+    /** 子 agent 开始。taskId 唯一标识一次委派；agentName=subagent_type；description=调用方给的简述。 */
+    void onSubagentStarted(long turnId, String taskId, String agentName, String description);
+    /** 子 agent 结束。finalText=子 agent 的最终返回文本（回灌主 agent 的内容）。 */
+    void onSubagentFinished(long turnId, String taskId, String finalText);
+
+    /** 带 taskId 的工具事件（子 agent 内部工具）：默认委托无 taskId 版本，只有需缩进渲染的实现覆写。 */
+    default void onToolStarted(long turnId, String taskId, String toolName, String input) {
+        onToolStarted(turnId, toolName, input);
+    }
+    default void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
+        onToolFinished(turnId, toolName, output, ok);
+    }
     void onTodoUpdated(long turnId, List<String> todoLines);   // Todos 转成可显示的行
     void onTurnComplete(long turnId);
     void onError(long turnId, Throwable error);
