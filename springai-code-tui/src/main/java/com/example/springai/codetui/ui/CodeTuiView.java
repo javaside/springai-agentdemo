@@ -597,7 +597,10 @@ public final class CodeTuiView extends InlineApp {
             ModelOption chosen = models.get(pickIndex);
             onSubmit.selectModel(chosen.id());
             pickingModel = false;
-            state.setNotice("已切换模型 · " + chosen.label());
+            // 不用 sticky notice：notice 会一直占据状态栏、遮蔽常态行（模型名 + 上下文%）直到下次按键，
+            // 造成「切换模型后状态栏信息就没了」。改为下沉一行 scrollback 确认，状态栏立刻回到常态。
+            state.pushInfo("⚙ 已切换模型 · " + chosen.label());
+            lastShownModel = chosen.id();   // 避免下个回合 dispatch 再重复打「⚙ 使用模型」
             return EventResult.HANDLED;
         }
         return EventResult.HANDLED;                       // 其余按键一律吞掉，不落进输入框
