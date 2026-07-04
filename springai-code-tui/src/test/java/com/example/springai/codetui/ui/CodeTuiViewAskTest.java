@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -205,6 +206,19 @@ class CodeTuiViewAskTest {
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));  // 子模式里 Esc 仍取消整回合
         assertTrue(cancelled.get(), "自由文本里 Esc 应取消整回合");
         assertNull(s.pendingAsk());
+    }
+
+    @Test
+    void render_isNpeSafe_withAndWithoutActiveAsk() {
+        // 回归：scope(activeAsk!=null, askChildren()) 会每帧 eager 构造 askChildren()，
+        // 非作答态若不 null 判空则每帧崩渲染线程（单测只驱动按键、不 render，故此前漏掉）。
+        ConversationState s = new ConversationState();
+        CodeTuiView v = view(s);
+        assertNotNull(v.renderForTest(), "非作答态 render 不应抛 NPE");   // activeAsk == null
+        s.onTurnStarted(1);
+        s.onQuestionAsked(1, ask(new AtomicReference<>(), new AtomicBoolean(), single("选?", "A", "B")));
+        v.tickForTest();                                                // 进入作答态
+        assertNotNull(v.renderForTest(), "作答态 render 应正常构造面板");
     }
 
     @Test

@@ -223,6 +223,9 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：把一个按键喂给输入框按键入口（等价真实按键路由）。 */
     EventResult feedKeyForTest(KeyEvent k) { return onInputKey(k); }
 
+    /** 测试专用：构造一帧 UI 树（等价渲染线程每帧调用的 render）。用于回归「每帧构造子面板」类空指针。 */
+    Element renderForTest() { return render(); }
+
     /** 终端列数；拿不到时退化为 80。 */
     private int terminalWidth() {
         try {
@@ -776,6 +779,9 @@ public final class CodeTuiView extends InlineApp {
 
     /** 作答面板：进度 + header + 问题文本 + 逐项选项（单选 ❯ 高亮）。 */
     private Element[] askChildren() {
+        // scope(cond, el) 会「先构造 el 再按 cond 决定是否显示」——即本方法每帧都被调用（含非作答态），
+        // 故必须先 null 判空，否则 activeAsk==null 时解引用会每帧崩渲染线程（单测只驱动按键、不跑 render，漏掉此路径）。
+        if (activeAsk == null) return new Element[0];
         List<QuestionSpec> qs = activeAsk.questions();
         QuestionSpec q = qs.get(askQ);
         List<Element> els = new ArrayList<>();
