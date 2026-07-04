@@ -14,8 +14,8 @@
 - 关键 API（已用 javap 核实）：
   - 三家 ChatModel 都 `implements org.springframework.ai.chat.model.ChatModel`，`ChatClient.builder(ChatModel)` 通吃。
   - **DeepSeek**：`DeepSeekApi.builder().apiKey(k).baseUrl(u).build()` → `DeepSeekChatModel.builder().deepSeekApi(api).options(DeepSeekChatOptions.builder().model(m).build()).build()`。
-  - **Anthropic**：`AnthropicOkHttpClient.builder().apiKey(k).build()`（返回 `com.anthropic.client.AnthropicClient`）→ `AnthropicChatModel.builder().anthropicClient(client).options(AnthropicChatOptions.builder().model(com.anthropic.models.messages.Model.of(m)).maxTokens(8192).build()).build()`。Anthropic 的 `model()` 收 typed enum，用静态 `Model.of(String)`；`max_tokens` 必填。
-  - **OpenAI**：`OpenAIOkHttpClient.builder().apiKey(k).build()`（返回 `com.openai.client.OpenAIClient`）→ `OpenAiChatModel.builder().openAiClient(client).options(OpenAiChatOptions.builder().model(m).build()).build()`。
+  - **Anthropic**（已实测，网络无关）：`AnthropicChatModel.builder().options(AnthropicChatOptions.builder().apiKey(k).model(com.anthropic.models.messages.Model.of(m)).maxTokens(8192).build()).build()`。**不用** 供应商 okhttp wrapper——`spring-ai-anthropic:2.0.0` 只带 `anthropic-java-core`，把 apiKey 设到 options 上、`build()` 会自行派生底层 client（`SpringAiAnthropicHttpClient`）。`model()` 收 typed enum，用静态 `Model.of(String)`；`max_tokens` 必填。
+  - **OpenAI**（已实测，网络无关）：`OpenAiChatModel.builder().options(OpenAiChatOptions.builder().apiKey(k).model(m).build()).build()`。同理**不用** `OpenAIOkHttpClient`（不在 classpath）——apiKey 设到 options 上、`build()` 自行派生 client。`OpenAiChatOptions.builder().model(String)` + `apiKey(String)` 均存在。
   - 每请求模型覆盖：各 provider 返回自己 native 的 `ChatOptions`（`DeepSeekChatOptions`/`OpenAiChatOptions` 用 `model(String)`；`AnthropicChatOptions` 用 `model(Model.of(id)).maxTokens(...)`）。`ChatClient.prompt().options(ChatOptions)` 接受任意 `ChatOptions` 子类型。
 - 现状：`CodeTuiApplication` 造 `DeepSeekChatModel` → `AgentTools.build(model, root, listener)` 返回 `AgentRuntime(client, ...)` → `new CodingAgent(client, ...)`。`CodingAgent` 里 `MODELS` 是静态 DeepSeek 两项，`submit` 用 `DeepSeekChatOptions.builder().model(model)` 覆盖模型名，`/model` 经 `models()/currentModel()/selectModel()` 走 `SubmitHandler`。
 
@@ -431,6 +431,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
         assertEquals("openai", p.id());
         assertTrue(p.available());
         assertEquals("gpt-4o", p.defaultModel());
+        assertTrue(p.chatModel() != null);   // 实测网络无关：build() 从 options.apiKey 派生 client
         assertEquals("gpt-4o-mini", p.options("gpt-4o-mini").getModel());
     }
 
@@ -452,8 +453,6 @@ Expected: 编译失败（`OpenAiProvider` 不存在）。
 ```java
 package com.example.springai.codetui.agent;
 
-import com.openai.client.OpenAIClient;
-import com.openai.client.okhttp.OpenAIOkHttpClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -461,7 +460,13 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 
 import java.util.List;
 
-/** OpenAI provider（Spring AI 2.0 spring-ai-openai，底层官方 OpenAIClient）。key 缺失即 unavailable。 */
+/**
+ * OpenAI provider（Spring AI 2.0 spring-ai-openai）。key 缺失即 unavailable。
+ *
+ * <p>构建（已实测网络无关）：把 apiKey 设到 {@link OpenAiChatOptions} 上，{@code OpenAiChatModel.build()}
+ * 自行派生底层 client——**不用** 供应商 {@code OpenAIOkHttpClient}（不在 classpath，spring-ai-openai 只带
+ * {@code openai-java-core}）。
+ */
 public final class OpenAiProvider implements LlmProvider {
 
     private static final String DEFAULT_MODEL = "gpt-4o";
@@ -487,10 +492,8 @@ public final class OpenAiProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
-            OpenAIClient client = OpenAIOkHttpClient.builder().apiKey(apiKey).build();
             m = OpenAiChatModel.builder()
-                    .openAiClient(client)
-                    .options(OpenAiChatOptions.builder().model(DEFAULT_MODEL).build())
+                    .options(OpenAiChatOptions.builder().apiKey(apiKey).model(DEFAULT_MODEL).build())
                     .build();
             chatModel = m;
         }
