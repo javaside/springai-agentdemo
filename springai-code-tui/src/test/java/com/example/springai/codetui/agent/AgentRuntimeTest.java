@@ -9,7 +9,6 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** AgentTools.build 只做装配、不发网络请求：用假 key 也能造出完整 AgentRuntime。 */
@@ -56,12 +55,16 @@ class AgentRuntimeTest {
     }
 
     @Test
-    void build_skillToolNull_whenNoSkills(@TempDir Path root, @TempDir Path fakeHome) {
+    void build_alwaysRegistersReloadableSkillTool_evenWhenNoSkills(@TempDir Path root, @TempDir Path fakeHome) {
+        // 现在始终注册可重载 Skill 代理（即便零技能），以支持运行期 /reload 从零热加载——见 ReloadableSkillTool。
         String prevHome = System.getProperty("user.home");
         System.setProperty("user.home", fakeHome.toString());   // 隔离真实 ~/.codetui/skills，避免本机有用户级技能时误判
         try {
             AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
-            assertNull(rt.skillTool(), "无技能时 skillTool 应为 null");
+            assertNotNull(rt.skillTool(), "始终注册代理：零技能时 skillTool 仍非 null");
+            assertEquals("Skill", rt.skillTool().getToolDefinition().name(), "工具名恒为 Skill");
+            assertNotNull(rt.reloadableSkill(), "应暴露可重载 Skill 源（供 /reload）");
+            assertTrue(rt.skills().isEmpty(), "零技能时初始清单为空");
         } finally {
             if (prevHome == null) System.clearProperty("user.home");
             else System.setProperty("user.home", prevHome);

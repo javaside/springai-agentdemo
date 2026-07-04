@@ -41,7 +41,8 @@ public class CodeTuiApplication {
         AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state);
         CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
                 runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
-                runtime.skills(), runtime.skillTool(), runtime.sessionRepository());
+                runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
+                runtime.reloadableSkill());
         CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
         view.run();
     }

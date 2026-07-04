@@ -61,8 +61,9 @@ public final class CodingAgent implements SubmitHandler {
     private final CompactionStrategy manualStrategy;
     private final TokenCountEstimator tokenCountEstimator;   // 与压缩共用，供 /context 估算会话 token
     private final AtomicBoolean compactionInFlight = new AtomicBoolean(false);   // 防止并发/重复触发手动压缩
-    private final List<SkillInfo> skills;   // 可用技能清单（/skills 展示）；装配期确定、运行期只读
+    private final List<SkillInfo> skills;   // 固定技能清单（测试桩用）；生产走 reloadableSkill 实时取
     private final ToolCallback skillTool;   // 被 ToolEventCallback 装饰的 Skill 工具（可空）；手动 /skill 发送前调用它
+    private final ReloadableSkillTool reloadableSkill;   // 可空：生产路径的可重载技能源（/reload 命令触发重扫）
     private final SessionRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel）
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
@@ -103,18 +104,22 @@ public final class CodingAgent implements SubmitHandler {
         this.tokenCountEstimator = tokenCountEstimator;
         this.skills = List.copyOf(skills);
         this.skillTool = skillTool;
+        this.reloadableSkill = null;   // 单-client 桩路径：无可重载源，skills() 用固定 skills、reloadSkills() 无操作
         this.sessionRepository = sessionRepository;
     }
 
     /**
      * 多 provider 生产构造：registry 决定激活 provider 与模型，clientsByProvider 提供各家 ChatClient。
      * submit 按激活 provider 选 ChatClient + 用该家 options 覆盖模型；/model 走 registry 跨家。
+     *
+     * @param reloadableSkill 可重载技能源（{@code /reload} 触发重扫）；亦作 {@code skills()} 的实时数据源。可空。
      */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository) {
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -126,6 +131,7 @@ public final class CodingAgent implements SubmitHandler {
         this.tokenCountEstimator = tokenCountEstimator;
         this.skills = List.copyOf(skills);
         this.skillTool = skillTool;
+        this.reloadableSkill = reloadableSkill;
         this.sessionRepository = sessionRepository;
     }
 
@@ -230,7 +236,15 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     @Override
-    public List<SkillInfo> skills() { return skills; }
+    public List<SkillInfo> skills() { return reloadableSkill != null ? reloadableSkill.skills() : skills; }
+
+    /** {@code /reload}：重扫技能目录（用户级 + 项目级），使运行中新增/删除的技能对模型与 {@code /skills} 生效。 */
+    @Override
+    public void reloadSkills() {
+        if (reloadableSkill != null) {
+            reloadableSkill.reload();
+        }
+    }
 
     @Override
     public List<ModelOption> models() {

@@ -16,7 +16,7 @@ class CodingAgentModelSwitchTest {
         ProviderRegistry reg = new ProviderRegistry(List.of(
                 new DeepSeekProvider("k"), new AnthropicProvider("k")));
         return new CodingAgent(reg, Map.of(), new StubListener(), "s", new AtomicLong(),
-                null, null, null, List.of(), null, null);
+                null, null, null, List.of(), null, null, null);
     }
 
     @Test

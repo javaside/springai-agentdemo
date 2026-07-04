@@ -116,6 +116,7 @@ public final class CodeTuiView extends InlineApp {
             // 若 /skills 在前，输入 "/skill" 回车会误选到 /skills（只读清单）而进不了选择器。
             new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
+            new SlashCommand("/reload",  "重新扫描技能目录（新增/删除的 SKILL.md 生效）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
 
@@ -544,6 +545,11 @@ public final class CodeTuiView extends InlineApp {
             openSkillPicker();
             return;
         }
+        if (cmd.equals("/reload")) {                 // 重扫技能目录：运行中新增/删除的 SKILL.md 就此对模型与 /skills 生效
+            inputState.clear();
+            reloadSkills();
+            return;
+        }
         if (cmd.equals("/help")) {
             inputState.clear();
             printHelp();
@@ -830,11 +836,19 @@ public final class CodeTuiView extends InlineApp {
         state.pushInfo("快捷键：Enter 发送 · \\+Enter 换行 · Esc 取消 · Ctrl+C 退出");
     }
 
+    /** /reload：重扫两层技能目录后打一行结果 + 复用 {@link #printSkills} 展示最新清单（运行中增删 SKILL.md 即时生效，无需重启）。 */
+    private void reloadSkills() {
+        onSubmit.reloadSkills();
+        int n = onSubmit.skills().size();
+        state.pushInfo("↻ 已重新扫描技能目录：当前 " + n + " 个技能");
+        printSkills();
+    }
+
     /** /skills：把可用技能清单（名字 · 来源层 · 描述）打进 scrollback（灰色信息行）。 */
     private void printSkills() {
         List<SkillInfo> list = onSubmit.skills();
         if (list.isEmpty()) {
-            state.pushInfo("当前没有可用技能。可在 .codetui/skills/<名字>/SKILL.md 添加后重启生效。");
+            state.pushInfo("当前没有可用技能。可在 .codetui/skills/<名字>/SKILL.md 添加后用 /reload 重新加载生效。");
             return;
         }
         state.pushInfo("可用技能（模型会按需自动调用）：");

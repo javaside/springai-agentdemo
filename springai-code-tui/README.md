@@ -10,7 +10,7 @@
 - **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。
 - 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task`，把子任务委派给专门子 agent）。
 - **子 agent（Task）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`），串行前台阻塞执行，内部工具活动带 taskId 内联嵌套显示。
-- **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能。
+- **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
 - **上下文管理**：窗口记忆多轮会话，token 用量估算（`/context` 查看），超阈值自动压缩 + `/compact` 手动压缩。把 cwd / git 状态 / 模型名注入系统提示做 grounding。
 - Esc 取消当前回合、Ctrl+C 退出。
 
@@ -79,6 +79,7 @@ java -jar /Users/zxh/IdeaProjects/springai-agentdemo/springai-code-tui/target/sp
 | `/context` | 查看上下文用量（事件数 / token） |
 | `/skill` | 为本条消息指定技能 |
 | `/skills` | 查看可用技能清单（模型按需自动调用） |
+| `/reload` | 重新扫描技能目录（运行中新增/删除的 `SKILL.md` 生效，无需重启） |
 | `/help` | 显示可用命令与快捷键 |
 | `/exit` | 退出程序 |
 

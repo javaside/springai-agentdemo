@@ -166,9 +166,10 @@ public final class AgentTools {
                 .maxRetries(3)
                 .build();
 
-        // 技能（Skill）：解析两层技能来源（用户 ~/.codetui/skills + 项目 <root>/.codetui/skills），
-        // 去重后构建名为 "Skill" 的工具。无任何技能时 tool()==null——不注册，避免空 <available_skills> 污染上下文。
-        SkillCatalog.Loaded skills = SkillCatalog.load(root);
+        // 技能（Skill）：可重载代理，扫描两层技能来源（用户 ~/.codetui/skills + 项目 <root>/.codetui/skills）。
+        // 与一次性 SkillCatalog 不同，这里<b>始终注册</b>该代理——即便当前零技能，也保留槽位，
+        // 使运行中新增 SKILL.md 经 /reload 能被热加载（见 ReloadableSkillTool 类注释）。
+        ReloadableSkillTool reloadableSkill = new ReloadableSkillTool(root);
 
         // 反问工具：QuestionHandler 阻塞工具线程、等 UI 经 onQuestionAsked → responder 应答（见 UserQuestionBridge）。
         AskUserQuestionTool askTool = AskUserQuestionTool.builder()
@@ -181,15 +182,13 @@ public final class AgentTools {
         // 使「技能被调用」也在 TUI 显示为一行工具活动。
         List<ToolCallback> all = new ArrayList<>(Arrays.asList(
                 ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch, askTool)));
-        if (skills.tool() != null) {
-            all.add(skills.tool());
-        }
+        all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
         ToolCallback[] decorated = new ToolCallback[all.size()];
         ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
         for (int i = 0; i < all.size(); i++) {
             decorated[i] = new ToolEventCallback(all.get(i), listener);
-            if (all.get(i) == skills.tool()) {
-                decoratedSkillTool = decorated[i];   // 记住 Skill 工具装饰后的实例（无技能时保持 null）
+            if (all.get(i) == reloadableSkill) {
+                decoratedSkillTool = decorated[i];   // 记住 Skill 代理装饰后的实例（供手动 /skill 复用）
             }
         }
 
@@ -263,7 +262,8 @@ public final class AgentTools {
         }
 
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
-                manualStrategy, tokenCountEstimator, skills.skills(), decoratedSkillTool);
+                manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
+                reloadableSkill);
     }
 
     /**
@@ -275,8 +275,9 @@ public final class AgentTools {
      * @param sessionRepository   会话事件仓库（取消回合时 {@code CodingAgent} 用它 {@code replaceEvents} 回滚半截历史）
      * @param manualStrategy      激进的手动压缩策略（未包装装饰器，见类注释）
      * @param tokenCountEstimator token 估算器（与压缩共用，供 {@code /context} 估算会话 token）
-     * @param skills              去重后的可用技能清单（供 {@code /skills} 展示；无技能时为空列表）
-     * @param skillTool           被 ToolEventCallback 装饰的 Skill 工具（供手动 /skill 复用）；无技能时为 null
+     * @param skills              初始（装配期）可用技能清单快照；运行期实时清单改经 {@link #reloadableSkill}
+     * @param skillTool           被 ToolEventCallback 装饰的 Skill 代理（供手动 /skill 复用）；始终非 null
+     * @param reloadableSkill     可重载 Skill 代理（{@code /reload} 触发重扫 + {@code skills()} 实时数据源）
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -285,7 +286,8 @@ public final class AgentTools {
                                CompactionStrategy manualStrategy,
                                TokenCountEstimator tokenCountEstimator,
                                List<SkillInfo> skills,
-                               ToolCallback skillTool) {
+                               ToolCallback skillTool,
+                               ReloadableSkillTool reloadableSkill) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
