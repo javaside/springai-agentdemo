@@ -31,11 +31,11 @@ class ScrollbackPrinterTest {
         RecordingSink sink = new RecordingSink();
         printerOver(sink).welcome("deepseek-v4-flash");
 
-        // 顶/底边框各 1 + 6 行内容 + 末尾 1 空行 = 9 行
-        assertEquals(9, sink.lines.size(), "欢迎横幅应输出 9 行");
+        // 顶/底边框各 1 + 8 行内容 + 末尾 1 空行 = 11 行
+        assertEquals(11, sink.lines.size(), "欢迎横幅应输出 11 行");
         assertTrue(sink.lines.get(0).startsWith("╭"), "首行应为圆角上边框");
-        assertTrue(sink.lines.get(7).startsWith("╰"), "倒数第二行应为圆角下边框");
-        assertEquals("", sink.lines.get(8), "末行应为留白空行");
+        assertTrue(sink.lines.get(9).startsWith("╰"), "倒数第二行应为圆角下边框");
+        assertEquals("", sink.lines.get(10), "末行应为留白空行");
         assertTrue(sink.lines.stream().anyMatch(l -> l.contains("deepseek-v4-flash")), "应含所选模型名");
         assertTrue(sink.lines.stream().anyMatch(l -> l.contains("/work")), "应含 cwd 路径");
     }
