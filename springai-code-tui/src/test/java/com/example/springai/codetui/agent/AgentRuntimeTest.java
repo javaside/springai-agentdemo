@@ -54,6 +54,13 @@ class AgentRuntimeTest {
     }
 
     @Test
+    void build_registersAskUserQuestionTool(@TempDir Path root) {
+        java.util.List<String> names = AgentTools.toolNamesForTest(dummyModel(), root, new StubListener());
+        org.junit.jupiter.api.Assertions.assertTrue(names.contains("AskUserQuestionTool"),
+                "应注册 AskUserQuestionTool，实际：" + names);
+    }
+
+    @Test
     void build_skillToolNull_whenNoSkills(@TempDir Path root, @TempDir Path fakeHome) {
         String prevHome = System.getProperty("user.home");
         System.setProperty("user.home", fakeHome.toString());   // 隔离真实 ~/.codetui/skills，避免本机有用户级技能时误判

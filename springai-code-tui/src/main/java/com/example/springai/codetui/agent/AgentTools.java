@@ -1,5 +1,6 @@
 package com.example.springai.codetui.agent;
 
+import org.springaicommunity.agent.tools.AskUserQuestionTool;
 import org.springaicommunity.agent.tools.FileSystemTools;
 import org.springaicommunity.agent.tools.GlobTool;
 import org.springaicommunity.agent.tools.GrepTool;
@@ -113,6 +114,8 @@ public final class AgentTools {
               它只读网页、不能登录或执行 JS。别凭记忆臆断外部事实。
             - 当任务匹配某个「可用技能」的描述时（如撰写规范提交信息、遵循某领域规范），先调用 Skill 工具并传入技能名，
               读取其完整指令后再据此产出结果；没有匹配的技能时正常作答，不要臆造技能名。
+            - 当需求含糊、或需要用户在多个实现方案之间拍板时，用 AskUserQuestionTool 向用户提问（一次 1–4 个问题，
+              每问 2–4 个选项，可单选或多选）；不要在信息不足时自行臆测方向。
             - 回答简洁，聚焦用户的目标本身。
 
             关于工作边界（请务必遵守）：
@@ -167,10 +170,17 @@ public final class AgentTools {
         // 去重后构建名为 "Skill" 的工具。无任何技能时 tool()==null——不注册，避免空 <available_skills> 污染上下文。
         SkillCatalog.Loaded skills = SkillCatalog.load(root);
 
-        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：6 个 @Tool 对象转 ToolCallback。
+        // 反问工具：QuestionHandler 阻塞工具线程、等 UI 经 onQuestionAsked → responder 应答（见 UserQuestionBridge）。
+        AskUserQuestionTool askTool = AskUserQuestionTool.builder()
+                .questionHandler(new UserQuestionBridge(listener))
+                .answersValidation(true)   // UI 顺序问询保证答案完整，故校验开着也不会触发异常
+                .build();
+
+        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：7 个 @Tool 对象转 ToolCallback。
         // Skill 工具本身已是 ToolCallback（非 @Tool 对象），单独追加进列表；随后统一用 ToolEventCallback 装饰，
         // 使「技能被调用」也在 TUI 显示为一行工具活动。
-        List<ToolCallback> all = new ArrayList<>(Arrays.asList(ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch)));
+        List<ToolCallback> all = new ArrayList<>(Arrays.asList(
+                ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch, askTool)));
         if (skills.tool() != null) {
             all.add(skills.tool());
         }
@@ -247,6 +257,24 @@ public final class AgentTools {
                                TokenCountEstimator tokenCountEstimator,
                                List<SkillInfo> skills,
                                ToolCallback skillTool) {}
+
+    /** 测试钩子：返回 build 注册的工具名集合（不发网络请求）。与 build 内保持一致。 */
+    static java.util.List<String> toolNamesForTest(DeepSeekChatModel model, Path root, AgentListener listener) {
+        FileSystemTools fs = FileSystemTools.builder().allowedDirectory(root).build();
+        ShellTools sh = ShellTools.builder().build();
+        GrepTool grep = GrepTool.builder().workingDirectory(root).build();
+        GlobTool glob = GlobTool.builder().workingDirectory(root).build();
+        TodoWriteTool todo = TodoWriteTool.builder().build();
+        ChatClient aux = ChatClient.builder(model).build();
+        SmartWebFetchTool webFetch = SmartWebFetchTool.builder(aux).domainSafetyCheck(false).build();
+        AskUserQuestionTool ask = AskUserQuestionTool.builder()
+                .questionHandler(new UserQuestionBridge(listener)).build();
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (ToolCallback c : ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch, ask)) {
+            names.add(c.getToolDefinition().name());
+        }
+        return names;
+    }
 
     /** 把 {@link Todos} 转成可显示的行：状态标记 + 内容。 */
     static List<String> toLines(Todos todos) {
