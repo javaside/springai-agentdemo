@@ -144,13 +144,25 @@ public final class CodingAgent implements SubmitHandler {
         // 否则工具回合被中途取消会在会话里留下「带 tool_calls 但无 tool 结果」的悬空 assistant 消息，
         // 下一次请求把这段坏历史发给 DeepSeek 会 400（insufficient tool messages following tool_calls）。
         List<SessionEvent> mark = snapshotSession();
-        ChatClient client = (registry != null)
-                ? clientsByProvider.get(registry.active().id())
-                : chatClient;
-        org.springframework.ai.chat.prompt.ChatOptions perRequestOptions = (registry != null)
-                ? registry.activeChatOptions()
-                : DeepSeekChatOptions.builder().model(model).build();
-        String modelGrounding = currentModel();
+        // 一次性快照激活 provider：client / options / grounding 全部由同一个 provider 派生，
+        // 避免与并发 /model 切换交错（虽当前 submit 与 selectModel 同在 UI 线程，快照更自洽）。
+        ChatClient client;
+        org.springframework.ai.chat.prompt.ChatOptions perRequestOptions;
+        String modelGrounding;
+        if (registry != null) {
+            LlmProvider active = registry.active();
+            String activeModelId = registry.activeModelId();
+            client = clientsByProvider.get(active.id());
+            if (client == null) {
+                throw new IllegalStateException("激活 provider 无对应 ChatClient：" + active.id());
+            }
+            perRequestOptions = active.options(activeModelId);
+            modelGrounding = activeModelId;
+        } else {
+            client = chatClient;
+            perRequestOptions = DeepSeekChatOptions.builder().model(model).build();
+            modelGrounding = model;
+        }
         try {
             return client.prompt()
                     .user(effectiveText)

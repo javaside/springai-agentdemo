@@ -235,7 +235,9 @@ public final class AgentTools {
                     .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                             .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
                             .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
-                            .param(AgentEnvironment.AGENT_MODEL_KEY, registry.activeModelId()))
+                            // 每个 client 烘焙自家默认模型，保证 defaultSystem 自洽；
+                            // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
+                            .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel()))
                     .defaultTools((Object[]) decorated)
                     .defaultAdvisors(memoryAdvisor)
                     .build();
