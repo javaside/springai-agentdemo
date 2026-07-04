@@ -43,6 +43,26 @@ public final class ConversationState implements AgentListener {
         }
     }
 
+    /** 子任务状态（面板显示）。 */
+    public enum SubtaskStatus { RUNNING, DONE, FAILED }
+
+    /** 子任务只读快照（供渲染线程读，与内部可变状态解耦）。 */
+    public record SubtaskView(String agentName, String description, SubtaskStatus status, String currentTool) {}
+
+    /** 内部可变持有者：status/currentTool 就地更新。仅本类访问。 */
+    private static final class Subtask {
+        final String taskId;
+        final String agentName;
+        final String description;
+        SubtaskStatus status = SubtaskStatus.RUNNING;
+        String currentTool = "";
+        Subtask(String taskId, String agentName, String description) {
+            this.taskId = taskId;
+            this.agentName = agentName;
+            this.description = description;
+        }
+    }
+
     private final Deque<OutputLine> pending = new ArrayDeque<>();
 
     /** 排队的用户消息 + 其挂载技能（可空）。挂载随消息入队，出队时一并带出。 */
@@ -51,6 +71,7 @@ public final class ConversationState implements AgentListener {
     private final Deque<Queued> queued = new ArrayDeque<>();       // 忙时排队的用户消息（回合结束后自动出队提交）
     private final StringBuilder streaming = new StringBuilder();
     private final List<String> todo = new ArrayList<>();          // 当前计划（固定面板显示，不进 scrollback）
+    private final List<Subtask> subtasks = new ArrayList<>();   // 本回合子任务（固定面板显示，不进 scrollback）
     private final StringBuilder input = new StringBuilder();
     private volatile Status status = Status.IDLE;
     private volatile String notice = "";
@@ -154,6 +175,7 @@ public final class ConversationState implements AgentListener {
         // 新回合清空上一份计划：面板内容变空（用完即走）。这只是清内容、不改 live 高度，
         // 不触发 InlineDisplay 收缩(deleteLines)的漂移，因此不会复现「面板消失」。
         todo.clear();
+        subtasks.clear();                 // 新回合清空子任务面板，与 todo 同生命周期
     }
 
     @Override
@@ -199,12 +221,23 @@ public final class ConversationState implements AgentListener {
         String d = summarize(description);               // 折叠空白/换行，守住「一 OutputLine=一物理行」不变量
         pending.add(new OutputLine("▸ Task(" + agentName + ")" + (d.isEmpty() ? "" : " " + d),
                 OutputLine.Kind.SUBAGENT_START));
+        subtasks.add(new Subtask(taskId, agentName, d));   // d 已 summarize（一物理行）
     }
 
     @Override
     public synchronized void onSubagentFinished(long turnId, String taskId, String finalText) {
+        onSubagentFinished(turnId, taskId, finalText, true);
+    }
+
+    @Override
+    public synchronized void onSubagentFinished(long turnId, String taskId, String finalText, boolean ok) {
         if (turnId != acceptingTurnId) return;
-        pending.add(new OutputLine("  ⎿ " + firstLine(finalText), OutputLine.Kind.SUBAGENT_END));
+        pending.add(new OutputLine("  ⎿ " + firstLine(finalText), OutputLine.Kind.SUBAGENT_END));   // 保留 scrollback 结论行
+        Subtask st = findSubtask(taskId);
+        if (st != null) {
+            st.status = ok ? SubtaskStatus.DONE : SubtaskStatus.FAILED;
+            st.currentTool = "";
+        }
     }
 
     /** 子 agent 内部工具（taskId 非空）：缩进一级挂在当前 Task 块下；taskId 为空则走主流工具路径。 */
@@ -215,6 +248,8 @@ public final class ConversationState implements AgentListener {
         String s = summarize(input);
         pending.add(new OutputLine("    ⎿ " + toolName + (s.isEmpty() ? "" : " " + s),
                 OutputLine.Kind.SUBAGENT_TOOL));
+        Subtask st = findSubtask(taskId);
+        if (st != null) st.currentTool = toolName;
     }
 
     /** 子 agent 内部工具结束：taskId 非空时不再单独出行（起始行已够，减少噪音）；taskId 为空走主流。 */
@@ -235,6 +270,19 @@ public final class ConversationState implements AgentListener {
 
     /** 当前计划快照（供底部固定面板显示）。 */
     public synchronized List<String> todoSnapshot() { return List.copyOf(todo); }
+
+    /** 当前子任务快照（供固定面板显示）。返回不可变值副本，与内部可变状态解耦。 */
+    public synchronized List<SubtaskView> subtaskSnapshot() {
+        List<SubtaskView> out = new ArrayList<>(subtasks.size());
+        for (Subtask s : subtasks) out.add(new SubtaskView(s.agentName, s.description, s.status, s.currentTool));
+        return out;
+    }
+
+    /** 按 taskId 定位子任务；找不到（迟到/已清）返回 null，调用方静默忽略。 */
+    private Subtask findSubtask(String taskId) {
+        for (Subtask s : subtasks) if (s.taskId.equals(taskId)) return s;
+        return null;
+    }
 
     @Override
     public synchronized void onTurnComplete(long turnId) {

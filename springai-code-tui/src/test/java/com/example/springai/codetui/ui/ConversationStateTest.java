@@ -285,4 +285,77 @@ class ConversationStateTest {
         s.onCompactionFinished(1, 1);
         assertFalse(s.isBusy(), "压缩结束：不忙");
     }
+
+    // ── 子任务面板（本回合汇总，独立于 scrollback） ──
+
+    @Test
+    void subtaskPanel_started_addsRunningEntry() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "分析认证模块");
+        List<ConversationState.SubtaskView> snap = s.subtaskSnapshot();
+        assertEquals(1, snap.size());
+        assertEquals("explore", snap.get(0).agentName());
+        assertEquals("分析认证模块", snap.get(0).description());
+        assertEquals(ConversationState.SubtaskStatus.RUNNING, snap.get(0).status());
+    }
+
+    @Test
+    void subtaskPanel_finishedOk_marksDone() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onSubagentFinished(1L, "t1", "结论文本", true);
+        assertEquals(ConversationState.SubtaskStatus.DONE, s.subtaskSnapshot().get(0).status());
+    }
+
+    @Test
+    void subtaskPanel_finishedFail_marksFailed() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onSubagentFinished(1L, "t1", "子 agent 执行失败：boom", false);
+        assertEquals(ConversationState.SubtaskStatus.FAILED, s.subtaskSnapshot().get(0).status());
+    }
+
+    @Test
+    void subtaskPanel_toolStart_updatesCurrentTool() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onToolStarted(1L, "t1", "Grep", "{\"pattern\":\"auth\"}");
+        assertEquals("Grep", s.subtaskSnapshot().get(0).currentTool());
+    }
+
+    @Test
+    void subtaskPanel_turnStart_clears() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onTurnStarted(2L);
+        assertTrue(s.subtaskSnapshot().isEmpty(), "新回合应清空子任务面板");
+    }
+
+    @Test
+    void subtaskPanel_unknownTaskId_noCrashNoEntry() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onToolStarted(1L, "ghost", "Grep", "{}");         // 无对应子任务
+        s.onSubagentFinished(1L, "ghost", "x", true);       // 无对应子任务
+        assertTrue(s.subtaskSnapshot().isEmpty(), "未知 taskId 不产生面板条、不抛异常");
+    }
+
+    @Test
+    void subtaskPanel_coexistsWithScrollbackLines() {
+        // 回归：面板不取代 scrollback 内联详情行（共存形态）
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "分析认证");
+        s.onToolStarted(1L, "t1", "Grep", "{\"pattern\":\"auth\"}");
+        s.onSubagentFinished(1L, "t1", "认证走 JWT", true);
+        List<ConversationState.OutputLine> out = s.drainPending();
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_START));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_TOOL));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_END));
+    }
 }
