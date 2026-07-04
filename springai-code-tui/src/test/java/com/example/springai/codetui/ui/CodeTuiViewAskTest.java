@@ -81,4 +81,20 @@ class CodeTuiViewAskTest {
         assertTrue(cancelled.get(), "Esc 应触发 responder.cancel");
         assertNull(s.pendingAsk());
     }
+
+    @Test
+    void emptyOptions_autoCancelsWithoutEnteringModal() {
+        // 上游 Java 校验不强制选项数；空选项问询若进模态，首个 ↑↓ 会 `% 0` 除零崩线程。drain 应优雅降级为取消。
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicBoolean cancelled = new AtomicBoolean();
+        QuestionSpec noOpts = new QuestionSpec("坏问题?", "坏", List.of(), false);
+        s.onQuestionAsked(1, ask(new AtomicReference<>(), cancelled, noOpts));
+        CodeTuiView v = view(s);
+        v.tickForTest();                                   // 侦测到畸形问询
+        assertTrue(cancelled.get(), "空选项问询应被自动取消");
+        assertNull(s.pendingAsk(), "畸形问询应从 state 摘除，避免反复重入");
+        // 进模态后若误入，下面这次 ↑ 会除零抛异常；不抛即证明未入模态。
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));
+    }
 }

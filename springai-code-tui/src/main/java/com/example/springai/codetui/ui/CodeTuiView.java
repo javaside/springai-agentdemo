@@ -194,8 +194,15 @@ public final class CodeTuiView extends InlineApp {
         // 侦测到新问询（身份不同）→ 进入作答态并复位到第一问。
         AskRequest pa = state.pendingAsk();
         if (pa != null && pa != activeAsk) {
-            activeAsk = pa;
-            askQ = 0; askOpt = 0; askAnswers.clear();
+            if (isAnswerable(pa)) {
+                activeAsk = pa;
+                askQ = 0; askOpt = 0; askAnswers.clear();
+            } else {
+                // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
+                // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消，从 state 摘除避免反复重入。
+                state.clearPendingAsk();
+                pa.responder().cancel();
+            }
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
@@ -652,6 +659,16 @@ public final class CodeTuiView extends InlineApp {
     }
 
     // ── AskUserQuestion 作答面板 ─────────────────────────────────────────
+    /** 可作答性：至少 1 问、且每问至少 1 个选项（否则 onAskKey 的 `% n` 会除零崩线程，见 drain 的降级）。 */
+    private static boolean isAnswerable(AskRequest ask) {
+        List<QuestionSpec> qs = ask.questions();
+        if (qs.isEmpty()) return false;
+        for (QuestionSpec q : qs) {
+            if (q.options().isEmpty()) return false;
+        }
+        return true;
+    }
+
     /** 作答按键（单选）：↑↓/kj 移动高亮、1–9 移到第 n 项（不隐式确认）、Enter 选中进下一问、Esc 取消整回合。 */
     private EventResult onAskKey(KeyEvent k) {
         List<QuestionSpec> qs = activeAsk.questions();
@@ -787,7 +804,7 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element statusLine() {
-        if (activeAsk != null) return text("↑↓/kj 选择 · Enter 确认 · Esc 取消").style(THINK);
+        if (activeAsk != null) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
