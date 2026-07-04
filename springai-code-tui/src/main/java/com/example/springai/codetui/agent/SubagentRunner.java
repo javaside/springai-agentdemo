@@ -58,10 +58,10 @@ public final class SubagentRunner {
                     .call()
                     .content();
             String finalText = result == null ? "" : result;
-            listener.onSubagentFinished(parentTurnId, taskId, finalText);
+            listener.onSubagentFinished(parentTurnId, taskId, finalText, true);
             return finalText;
         } catch (RuntimeException ex) {
-            listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + ex.getMessage());
+            listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + ex.getMessage(), false);
             throw ex;
         }
     }
