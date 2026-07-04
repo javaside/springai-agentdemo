@@ -10,7 +10,6 @@ import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springaicommunity.agent.utils.AgentEnvironment;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.SessionRepository;
@@ -70,9 +69,6 @@ public final class AgentTools {
 
     private AgentTools() {
     }
-
-    /** DeepSeek 模型名（V4 现役 v4-flash；旧 deepseek-chat/reasoner 将于 2026-07-24 停用）。运行时可经 /model 覆盖。 */
-    private static final String MODEL_NAME = "deepseek-v4-flash";
 
     /**
      * 触发压缩的累计 token 阈值：超过即对更早历史做摘要压缩。
@@ -138,13 +134,13 @@ public final class AgentTools {
     /**
      * 组装编码 Agent 的 ChatClient。仅做装配，不发起任何网络请求，也不要求有效的 API key。
      *
-     * @param model    DeepSeek 模型（由上游创建）
+     * @param registry provider 注册表（每个可用 provider 各建一个 ChatClient；auxClient 与系统提示的模型名取激活 provider）
      * @param root     项目根目录（FileSystemTools 的强制边界 + Grep/Glob 的默认工作目录）
      * @param listener 工具 / Todo 事件出口
      *                 <p>注：conversationId（会话记忆）由 {@code CodingAgent.submit} 每次请求传入，
      *                 不在装配期绑定，故此处不需要 sessionId 参数。
      */
-    public static AgentRuntime build(DeepSeekChatModel model, Path root, AgentListener listener) {
+    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener) {
         FileSystemTools fs = FileSystemTools.builder().allowedDirectory(root).build();
         ShellTools sh = ShellTools.builder().build();
         GrepTool grep = GrepTool.builder().workingDirectory(root).build();
@@ -157,7 +153,9 @@ public final class AgentTools {
 
         // 「裸」ChatClient（同模型、无工具、无记忆 advisor）：一份复用给两处内部 LLM 调用——
         // ① SmartWebFetch 的网页内容 AI 抽取；② 会话历史的滚动摘要。都不能带工具/记忆，否则会递归触发工具或记忆循环。
-        ChatClient auxClient = ChatClient.builder(model).build();
+        // 绑定激活（默认）provider 的模型。
+        org.springframework.ai.chat.model.ChatModel activeModel = registry.active().chatModel();
+        ChatClient auxClient = ChatClient.builder(activeModel).build();
 
         // 网页获取工具：抓取→转 Markdown→按 prompt AI 抽取。关掉 domainSafetyCheck（见类注释）。
         SmartWebFetchTool webFetch = SmartWebFetchTool.builder(auxClient)
@@ -226,23 +224,33 @@ public final class AgentTools {
                 .compactionStrategy(autoStrategy)
                 .build();
 
-        ChatClient client = ChatClient.builder(model)
-                .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
-                        .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
-                        .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
-                        .param(AgentEnvironment.AGENT_MODEL_KEY, MODEL_NAME))
-                .defaultTools((Object[]) decorated)
-                .defaultAdvisors(memoryAdvisor)
-                .build();
+        // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
+        // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
+        java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
+        for (LlmProvider provider : registry.allProviders()) {
+            if (!provider.available()) {
+                continue;
+            }
+            ChatClient c = ChatClient.builder(provider.chatModel())
+                    .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
+                            .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
+                            .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
+                            .param(AgentEnvironment.AGENT_MODEL_KEY, registry.activeModelId()))
+                    .defaultTools((Object[]) decorated)
+                    .defaultAdvisors(memoryAdvisor)
+                    .build();
+            clients.put(provider.id(), c);
+        }
 
-        return new AgentRuntime(client, sessionService, sessionRepository, manualStrategy, tokenCountEstimator,
-                skills.skills(), decoratedSkillTool);
+        return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
+                manualStrategy, tokenCountEstimator, skills.skills(), decoratedSkillTool);
     }
 
     /**
-     * build 的产物：装好的 ChatClient + 手动 /compact 所需的会话句柄。
+     * build 的产物：每个可用 provider 的 ChatClient（按 provider id 索引）+ 手动 /compact 所需的会话句柄。
      *
-     * @param client              注册好工具与会话记忆 advisor 的 ChatClient
+     * @param clients             每个可用 provider 各一个 ChatClient，键为 {@code provider.id()}（共享工具/记忆/系统模板，仅底层 ChatModel 不同）
+     * @param activeProviderId    激活（默认）provider 的 id，{@link #client()} 据此选默认 ChatClient
      * @param sessionService      会话服务（手动压缩经它 {@code compact(id, trigger, strategy)}；/context 经它读事件）
      * @param sessionRepository   会话事件仓库（取消回合时 {@code CodingAgent} 用它 {@code replaceEvents} 回滚半截历史）
      * @param manualStrategy      激进的手动压缩策略（未包装装饰器，见类注释）
@@ -250,13 +258,18 @@ public final class AgentTools {
      * @param skills              去重后的可用技能清单（供 {@code /skills} 展示；无技能时为空列表）
      * @param skillTool           被 ToolEventCallback 装饰的 Skill 工具（供手动 /skill 复用）；无技能时为 null
      */
-    public record AgentRuntime(ChatClient client,
+    public record AgentRuntime(java.util.Map<String, ChatClient> clients,
+                               String activeProviderId,
                                SessionService sessionService,
                                SessionRepository sessionRepository,
                                CompactionStrategy manualStrategy,
                                TokenCountEstimator tokenCountEstimator,
                                List<SkillInfo> skills,
-                               ToolCallback skillTool) {}
+                               ToolCallback skillTool) {
+
+        /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
+        public ChatClient client() { return clients.get(activeProviderId); }
+    }
 
     /** 测试钩子：返回反问工具经 {@link ToolCallbacks#from} 派生出的工具名（校验它确被识别为 @Tool 并注册）。 */
     static List<String> askToolNamesForTest(AgentListener listener) {

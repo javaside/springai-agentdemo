@@ -3,9 +3,6 @@ package com.example.springai.codetui.agent;
 import com.example.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.DeepSeekApi;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,16 +15,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** AgentTools.build 只做装配、不发网络请求：用假 key 也能造出完整 AgentRuntime。 */
 class AgentRuntimeTest {
 
-    private static DeepSeekChatModel dummyModel() {
-        DeepSeekApi api = DeepSeekApi.builder().apiKey("test-key")
-                .baseUrl("https://api.deepseek.com").build();
-        return DeepSeekChatModel.builder().deepSeekApi(api)
-                .options(DeepSeekChatOptions.builder().model("deepseek-v4-flash").build()).build();
+    private static ProviderRegistry dummyRegistry() {
+        return new ProviderRegistry(java.util.List.of(new DeepSeekProvider("fake-key")));
     }
 
     @Test
     void build_returnsRuntime_withAllHandles(@TempDir Path root) {
-        AgentTools.AgentRuntime rt = AgentTools.build(dummyModel(), root, new ConversationState());
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
         assertNotNull(rt.client(), "ChatClient 必须装配出来");
         assertNotNull(rt.sessionService(), "SessionService 必须暴露（供手动 /compact）");
         assertNotNull(rt.manualStrategy(), "手动压缩策略必须暴露");
@@ -48,7 +42,7 @@ class AgentRuntimeTest {
                 # 正文
                 """);
 
-        AgentTools.AgentRuntime rt = AgentTools.build(dummyModel(), root, new ConversationState());
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
 
         assertNotNull(rt.skillTool(), "有技能时应暴露被装饰的 Skill 工具");
         assertEquals("Skill", rt.skillTool().getToolDefinition().name(), "工具名应为 Skill");
@@ -66,7 +60,7 @@ class AgentRuntimeTest {
         String prevHome = System.getProperty("user.home");
         System.setProperty("user.home", fakeHome.toString());   // 隔离真实 ~/.codetui/skills，避免本机有用户级技能时误判
         try {
-            AgentTools.AgentRuntime rt = AgentTools.build(dummyModel(), root, new ConversationState());
+            AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
             assertNull(rt.skillTool(), "无技能时 skillTool 应为 null");
         } finally {
             if (prevHome == null) System.clearProperty("user.home");
