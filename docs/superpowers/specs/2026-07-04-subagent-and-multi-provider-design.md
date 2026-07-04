@@ -161,7 +161,7 @@ record SubagentSpec(
 3. **不写 `model`** —— 跟随激活 provider；需固定某家时才写 `provider:model`。
 4. **保留精华** —— explore 只读约束、plan 输出格式、bash 的 git 安全条款、thoroughness 档次原样保留。
 
-> 语言：子 agent prompt **默认英文**（贴近内置、跨模型稳）。如需与主 agent 中文风格统一，可在重写时一并中文化 —— 留待评审时按需决定，不阻塞设计。
+> 语言（已定）：子 agent prompt **保持英文**（贴近内置、跨模型稳），不中文化。
 
 **只读保证**：explore/plan 的 prompt 本身已含强只读约束，且 `tools` 只列只读工具。叠加已知边界（沿用主 agent 诚实声明）：只有 FileSystemTools 有强制目录边界；Shell/Grep/Glob 技术上不受强制约束，靠 prompt + tools 白名单双保险。
 
