@@ -154,4 +154,56 @@ class CodeTuiViewAskTest {
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 确认：只剩「数据库」
         assertEquals(Map.of("要哪些?", "数据库"), got.get());
     }
+
+    @Test
+    void other_entersFreeTextAndSubmitsTyped() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), single("选?", "A", "B")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // A→B
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // B→「其他」(idx2)
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 进自由文本
+        v.feedKeyForTest(KeyEvent.ofChar('C'));
+        v.feedKeyForTest(KeyEvent.ofChar('+'));
+        v.feedKeyForTest(KeyEvent.ofChar('+'));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.BACKSPACE));  // 删一个 '+'
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 确认 "C+"
+        assertEquals(Map.of("选?", "C+"), got.get());
+    }
+
+    @Test
+    void other_blankTextShowsNoticeAndStays() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), single("选?", "A", "B")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // →「其他」
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 进自由文本（空）
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 空文本确认
+        assertNull(got.get(), "空文本不应提交");
+        assertTrue(v.askStatusText().startsWith("请输入内容"), "空文本应提示，实际：" + v.askStatusText());
+    }
+
+    @Test
+    void other_escCancelsTurnFromFreeText() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicBoolean cancelled = new AtomicBoolean();
+        s.onQuestionAsked(1, ask(new AtomicReference<>(), cancelled, single("选?", "A", "B")));
+        CodeTuiView v = view(s);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // →「其他」
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 进自由文本
+        v.feedKeyForTest(KeyEvent.ofChar('x'));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));  // 子模式里 Esc 仍取消整回合
+        assertTrue(cancelled.get(), "自由文本里 Esc 应取消整回合");
+        assertNull(s.pendingAsk());
+    }
 }

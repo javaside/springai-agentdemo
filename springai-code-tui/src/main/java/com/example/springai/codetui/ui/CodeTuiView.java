@@ -93,6 +93,8 @@ public final class CodeTuiView extends InlineApp {
     private int askOpt;                                               // 当前问题内高亮的选项下标
     private final Map<String, String> askAnswers = new HashMap<>();   // 已答问题→答案
     private final Set<Integer> askChecked = new LinkedHashSet<>();     // 当前多选问题已勾选的选项下标（保序）
+    private boolean askFreeText;                                      // 自由文本子模式（单选选了「其他」）
+    private final TextAreaState askInput = new TextAreaState();       // 「其他」的自定义输入缓冲（单行直存直取）
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
@@ -676,12 +678,25 @@ public final class CodeTuiView extends InlineApp {
     private EventResult onAskKey(KeyEvent k) {
         List<QuestionSpec> qs = activeAsk.questions();
         QuestionSpec q = qs.get(askQ);
-        int n = q.options().size();
-        if (k.isCancel()) { cancelAsk(); return EventResult.HANDLED; }
+        if (k.isCancel()) { cancelAsk(); return EventResult.HANDLED; }   // Esc 优先：子模式内也取消整回合
+        if (askFreeText) {   // 自由文本子模式：可打印键输入、Backspace 删、Enter 确认非空、其余吞掉
+            if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+                String txt = askInput.text();
+                if (txt.isBlank()) { state.setNotice("请输入内容或 Esc 取消"); return EventResult.HANDLED; }
+                askAnswers.put(q.question(), txt);
+                askFreeText = false; askInput.clear();
+                advanceOrFinish();
+                return EventResult.HANDLED;
+            }
+            if (k.code() == KeyCode.BACKSPACE) { askInput.deleteBackward(); return EventResult.HANDLED; }
+            if (k.code() == KeyCode.CHAR) { askInput.insert(k.character()); return EventResult.HANDLED; }
+            return EventResult.HANDLED;   // 子模式吞掉其余键
+        }
+        int n = q.options().size() + (q.multiSelect() ? 0 : 1);   // 单选多一条合成「其他」；多选无
         if (k.code() == KeyCode.UP || k.isChar('k'))   { askOpt = (askOpt - 1 + n) % n; return EventResult.HANDLED; }
         if (k.code() == KeyCode.DOWN || k.isChar('j')) { askOpt = (askOpt + 1) % n;     return EventResult.HANDLED; }
-        for (int i = 0; i < n && i < 9; i++) {
-            if (k.isChar((char) ('1' + i))) { askOpt = i; return EventResult.HANDLED; }   // 仅移动高亮
+        for (int i = 0; i < q.options().size() && i < 9; i++) {
+            if (k.isChar((char) ('1' + i))) { askOpt = i; return EventResult.HANDLED; }   // 仅移动高亮（不跳合成「其他」行）
         }
         // 多选：空格切换当前高亮项勾选
         if (q.multiSelect() && k.isChar(' ')) {
@@ -696,6 +711,10 @@ public final class CodeTuiView extends InlineApp {
                 for (int i : askChecked) picked.add(q.options().get(i).label());
                 askAnswers.put(q.question(), String.join(", ", picked));   // 多选=逗号分隔（同 Claude Code）
             } else {
+                if (askOpt == q.options().size()) {   // 高亮在合成的「其他」行 → 进自由文本子模式
+                    askFreeText = true; askInput.clear();
+                    return EventResult.HANDLED;        // 不记 label、不 advance
+                }
                 askAnswers.put(q.question(), q.options().get(askOpt).label());   // 记本问答案（单选=label）
             }
             advanceOrFinish();
@@ -709,6 +728,11 @@ public final class CodeTuiView extends InlineApp {
      * 作答时 statusLine 会早于通用 notice 分支 return，故必须在这里自己回显 notice——否则空选确认的提示永远看不见。
      */
     String askStatusText() {
+        if (askFreeText) {   // 自由文本子模式：单独提示（Esc 仍取消整回合）
+            String fn = state.notice();
+            if (fn != null && !fn.isEmpty()) return fn + " · Esc 取消";
+            return "输入自定义内容 · Enter 确认 · Esc 取消";
+        }
         String notice = state.notice();
         if (notice != null && !notice.isEmpty()) return notice + " · Esc 取消";
         boolean multi = activeAsk.questions().get(askQ).multiSelect();
@@ -720,6 +744,7 @@ public final class CodeTuiView extends InlineApp {
     private void advanceOrFinish() {
         if (askQ + 1 < activeAsk.questions().size()) {
             askQ++; askOpt = 0; askChecked.clear();
+            askFreeText = false; askInput.clear();
             return;
         }
         AskRequest req = activeAsk;
@@ -742,6 +767,7 @@ public final class CodeTuiView extends InlineApp {
     /** 清作答态并从 state 摘除 pendingAsk（避免 drain 再次进入）。 */
     private void clearAskState() {
         activeAsk = null; askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
+        askFreeText = false; askInput.clear();
         state.clearPendingAsk();
     }
 
@@ -758,6 +784,14 @@ public final class CodeTuiView extends InlineApp {
             String box = q.multiSelect() ? (askChecked.contains(i) ? "[x] " : "[ ] ") : "";
             els.add(text("  " + (sel ? "❯ " : "  ") + box + (i + 1) + ". " + o.label() + "   " + o.description())
                     .style(sel ? PICK_SEL : PICK_DESC));
+        }
+        if (!q.multiSelect()) {   // 单选追加合成「其他」行；进子模式时再回显输入
+            int otherIdx = q.options().size();
+            boolean sel = askOpt == otherIdx;
+            els.add(text("  " + (sel ? "❯ " : "  ") + "✎ 其他（自定义输入）").style(sel ? PICK_SEL : PICK_DESC));
+            if (askFreeText) {
+                els.add(text("     ▏" + askInput.text()).style(PICK_TITLE));   // 输入回显
+            }
         }
         return els.toArray(new Element[0]);
     }
