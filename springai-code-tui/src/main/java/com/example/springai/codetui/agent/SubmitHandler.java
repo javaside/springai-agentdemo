@@ -32,4 +32,7 @@ public interface SubmitHandler {
 
     /** 当前可用技能清单（/skills 展示）。默认空，便于回显桩/测试桩省略。 */
     default List<SkillInfo> skills() { return List.of(); }
+
+    /** 重新扫描技能目录（/reload），使运行中新增/删除的技能生效。默认空实现，便于回显桩/测试桩省略。 */
+    default void reloadSkills() { }
 }

@@ -34,11 +34,32 @@ public final class ConversationState implements AgentListener {
      * @param raw      仅 {@code TOOL_START}：工具原始 JSON 入参（供 UI 侧 {@link DiffRenderer} 渲染 diff）；其余为 null
      */
     public record OutputLine(String text, Kind kind, String toolName, String raw) {
-        public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR, INFO }
+        public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR, INFO,
+                           SUBAGENT_START, SUBAGENT_TOOL, SUBAGENT_END }
 
         /** 普通行（无工具元数据）。 */
         public OutputLine(String text, Kind kind) {
             this(text, kind, null, null);
+        }
+    }
+
+    /** 子任务（一次子 agent 作业）状态——<b>任务面板</b>显示。 */
+    public enum SubtaskStatus { RUNNING, DONE, FAILED }
+
+    /** 子任务只读快照（供渲染线程读，与内部可变状态解耦）。 */
+    public record SubtaskView(String agentName, String description, SubtaskStatus status, String currentTool) {}
+
+    /** 内部可变持有者：status/currentTool 就地更新。仅本类访问。 */
+    private static final class Subtask {
+        final String taskId;
+        final String agentName;
+        final String description;
+        SubtaskStatus status = SubtaskStatus.RUNNING;
+        String currentTool = "";
+        Subtask(String taskId, String agentName, String description) {
+            this.taskId = taskId;
+            this.agentName = agentName;
+            this.description = description;
         }
     }
 
@@ -49,7 +70,8 @@ public final class ConversationState implements AgentListener {
 
     private final Deque<Queued> queued = new ArrayDeque<>();       // 忙时排队的用户消息（回合结束后自动出队提交）
     private final StringBuilder streaming = new StringBuilder();
-    private final List<String> todo = new ArrayList<>();          // 当前计划（固定面板显示，不进 scrollback）
+    private final List<String> todo = new ArrayList<>();          // 主 agent（控制器）的 todo/计划（todo 面板，不进 scrollback）
+    private final List<Subtask> subtasks = new ArrayList<>();     // 本回合派出的子 agent 状态（任务面板，不进 scrollback）
     private final StringBuilder input = new StringBuilder();
     private volatile Status status = Status.IDLE;
     private volatile String notice = "";
@@ -153,6 +175,7 @@ public final class ConversationState implements AgentListener {
         // 新回合清空上一份计划：面板内容变空（用完即走）。这只是清内容、不改 live 高度，
         // 不触发 InlineDisplay 收缩(deleteLines)的漂移，因此不会复现「面板消失」。
         todo.clear();
+        subtasks.clear();                 // 新回合清空任务面板（子 agent 状态），与 todo 同生命周期
     }
 
     @Override
@@ -192,14 +215,85 @@ public final class ConversationState implements AgentListener {
     }
 
     @Override
-    public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
+    public synchronized void onSubagentStarted(long turnId, String taskId, String agentName, String description) {
+        if (turnId != acceptingTurnId) return;           // 迟到过滤，与其它事件一致
+        flushStreaming();                                // 把在建助手残行定稿，子 agent 块另起
+        String d = summarize(description);               // 折叠空白/换行，守住「一 OutputLine=一物理行」不变量
+        pending.add(new OutputLine("▸ Task(" + agentName + ")" + (d.isEmpty() ? "" : " " + d),
+                OutputLine.Kind.SUBAGENT_START));
+        subtasks.add(new Subtask(taskId, agentName, d));   // 任务面板追加一条运行中子 agent（d 已 summarize=一物理行）
+    }
+
+    @Override
+    public synchronized void onSubagentFinished(long turnId, String taskId, String finalText) {
+        onSubagentFinished(turnId, taskId, finalText, true);
+    }
+
+    @Override
+    public synchronized void onSubagentFinished(long turnId, String taskId, String finalText, boolean ok) {
         if (turnId != acceptingTurnId) return;
-        todo.clear();                     // 原地替换：固定面板显示，不进 scrollback
+        String prefix = ok ? "  ⎿ " : "  ⎿ ✗ ";
+        pending.add(new OutputLine(prefix + firstLine(finalText), OutputLine.Kind.SUBAGENT_END));   // 保留 scrollback 结论行
+        Subtask st = findSubtask(taskId);
+        if (st != null) {
+            st.status = ok ? SubtaskStatus.DONE : SubtaskStatus.FAILED;
+            st.currentTool = "";
+        }
+    }
+
+    /** 子 agent 内部工具（taskId 非空）：缩进一级挂在当前 Task 块下；taskId 为空则走主流工具路径。 */
+    @Override
+    public synchronized void onToolStarted(long turnId, String taskId, String toolName, String input) {
+        if (taskId == null) { onToolStarted(turnId, toolName, input); return; }
+        if (turnId != acceptingTurnId) return;
+        String s = summarize(input);
+        pending.add(new OutputLine("    ⎿ " + toolName + (s.isEmpty() ? "" : " " + s),
+                OutputLine.Kind.SUBAGENT_TOOL));
+        Subtask st = findSubtask(taskId);
+        if (st != null) st.currentTool = toolName;   // 任务面板：更新该子 agent 的当前工具
+    }
+
+    /** 子 agent 内部工具结束：taskId 非空时不再单独出行（起始行已够，减少噪音）；taskId 为空走主流。 */
+    @Override
+    public synchronized void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
+        if (taskId == null) { onToolFinished(turnId, toolName, output, ok); return; }
+        // 子 agent 内部工具：仅在失败时补一行更深缩进的告警，成功时静默（起始行已展示活动）。
+        if (turnId != acceptingTurnId || ok) return;
+        pending.add(new OutputLine("      ✗ " + toolName, OutputLine.Kind.SUBAGENT_TOOL));
+    }
+
+    @Override
+    public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
+        onTodoUpdated(turnId, null, todoLines);   // 无 taskId：视为控制器计划（任务面板）
+    }
+
+    /**
+     * 分流：taskId==null 是主 agent（控制器）的 todo → todo 面板；
+     * taskId!=null 是子 agent 内部 todo → 丢弃（不进任何面板，仅 scrollback 有其工具活动行）。
+     */
+    @Override
+    public synchronized void onTodoUpdated(long turnId, String taskId, List<String> todoLines) {
+        if (turnId != acceptingTurnId) return;
+        if (taskId != null) return;       // 子 agent 内部 todo 不上面板
+        todo.clear();                     // todo 面板原地替换：不进 scrollback
         todo.addAll(todoLines);
     }
 
-    /** 当前计划快照（供底部固定面板显示）。 */
+    /** todo 面板快照（主 agent 的 todo/计划）。 */
     public synchronized List<String> todoSnapshot() { return List.copyOf(todo); }
+
+    /** 任务面板快照：本回合派出的子 agent 状态。返回不可变值副本，与内部可变状态解耦。 */
+    public synchronized List<SubtaskView> subtaskSnapshot() {
+        List<SubtaskView> out = new ArrayList<>(subtasks.size());
+        for (Subtask s : subtasks) out.add(new SubtaskView(s.agentName, s.description, s.status, s.currentTool));
+        return List.copyOf(out);
+    }
+
+    /** 按 taskId 定位子任务；找不到（迟到/已清）返回 null，调用方静默忽略。 */
+    private Subtask findSubtask(String taskId) {
+        for (Subtask s : subtasks) if (s.taskId.equals(taskId)) return s;
+        return null;
+    }
 
     @Override
     public synchronized void onTurnComplete(long turnId) {
@@ -275,5 +369,13 @@ public final class ConversationState implements AgentListener {
         if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);
         if (CharWidth.of(oneLine) <= 80) return oneLine;
         return CharWidth.substringByWidth(oneLine, 79) + "…";
+    }
+
+    /** 取首行 + 超长按显示宽度截断（子 agent 结论行用）。 */
+    private static String firstLine(String s) {
+        if (s == null || s.isEmpty()) return "";
+        String one = s.lines().findFirst().orElse("").strip();
+        if (CharWidth.of(one) <= 80) return one;
+        return CharWidth.substringByWidth(one, 79) + "…";
     }
 }

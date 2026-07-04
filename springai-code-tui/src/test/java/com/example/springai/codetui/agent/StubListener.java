@@ -9,6 +9,8 @@ class StubListener implements AgentListener {
     @Override public void onAssistantToken(long turnId, String token) {}
     @Override public void onToolStarted(long turnId, String toolName, String input) {}
     @Override public void onToolFinished(long turnId, String toolName, String output, boolean ok) {}
+    @Override public void onSubagentStarted(long turnId, String taskId, String agentName, String description) {}
+    @Override public void onSubagentFinished(long turnId, String taskId, String finalText) {}
     @Override public void onTodoUpdated(long turnId, List<String> todoLines) {}
     @Override public void onTurnComplete(long turnId) {}
     @Override public void onError(long turnId, Throwable error) {}

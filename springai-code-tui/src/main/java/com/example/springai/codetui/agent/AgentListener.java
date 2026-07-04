@@ -12,7 +12,38 @@ public interface AgentListener {
     void onAssistantToken(long turnId, String token);
     void onToolStarted(long turnId, String toolName, String input);
     void onToolFinished(long turnId, String toolName, String output, boolean ok);
+
+    // ── 子 agent（Task 工具委派） ──
+    /** 子 agent 开始。taskId 唯一标识一次委派；agentName=subagent_type；description=调用方给的简述。 */
+    void onSubagentStarted(long turnId, String taskId, String agentName, String description);
+    /** 子 agent 结束。finalText=子 agent 的最终返回文本（回灌主 agent 的内容）。 */
+    void onSubagentFinished(long turnId, String taskId, String finalText);
+
+    /**
+     * 子 agent 结束（带成败维度）。ok=true 正常返回、false 执行抛错。
+     * 默认委托回 3 参版本，只有需要区分成败的实现（ConversationState 面板）覆写本方法。
+     */
+    default void onSubagentFinished(long turnId, String taskId, String finalText, boolean ok) {
+        onSubagentFinished(turnId, taskId, finalText);
+    }
+
+    /** 带 taskId 的工具事件（子 agent 内部工具）：默认委托无 taskId 版本，只有需缩进渲染的实现覆写。 */
+    default void onToolStarted(long turnId, String taskId, String toolName, String input) {
+        onToolStarted(turnId, toolName, input);
+    }
+    default void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
+        onToolFinished(turnId, toolName, output, ok);
+    }
     void onTodoUpdated(long turnId, List<String> todoLines);   // Todos 转成可显示的行
+
+    /**
+     * 带 taskId 的 Todo 事件：taskId==null 是控制器（主 agent）的计划 todo（开发计划进度，进任务面板）；
+     * taskId!=null 是子 agent 内部 todo（当前子 agent 的进度，进 todo 面板）。
+     * 默认委托无 taskId 版本，只有需按层分流的实现（ConversationState）覆写本方法。
+     */
+    default void onTodoUpdated(long turnId, String taskId, List<String> todoLines) {
+        onTodoUpdated(turnId, todoLines);
+    }
     void onTurnComplete(long turnId);
     void onError(long turnId, Throwable error);
 

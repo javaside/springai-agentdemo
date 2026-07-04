@@ -66,18 +66,28 @@ final class ScrollbackPrinter {
     /** 圆角欢迎横幅（仿 Claude Code），下沉到 scrollback 顶部。model 由调用方传入（printer 不依赖 SubmitHandler）。 */
     void welcome(String model) {
         Sink r = sink;
-        int w = Math.min(Math.max(terminalWidth.getAsInt() - 1, 48), 76);
+        int w = Math.min(Math.max(terminalWidth.getAsInt() - 1, 52), 76);
         String bar = "─".repeat(Math.max(0, w - 2));
         r.println(Text.styled("╭" + bar + "╮", WELCOME_BORDER));
-        welcomeLine(w, "✻ ", "Spring AI Code TUI", WELCOME_TITLE);
-        welcomeLine(w, "  ", "", WELCOME_BODY);
-        welcomeLine(w, "  ", "基于 DeepSeek 的编码智能体 · " + model, WELCOME_BODY);
-        welcomeLine(w, "  ", "Enter 发送 · \\+Enter 换行 · /model 切换模型 · Esc 取消 · Ctrl+C 退出", WELCOME_HINT);
-        welcomeLine(w, "  ", "", WELCOME_BODY);
-        welcomeLine(w, "  ", "cwd: " + root, WELCOME_HINT);
+        // 标题行：品牌星标（橙）+ 标题（亮白粗）
+        welcomeRow(w, Span.styled(" ✻ ", WELCOME_STAR), Span.styled(" Spring AI Code TUI", WELCOME_TITLE));
+        welcomeRow(w);
+        // 简介 + 当前模型（模型名用薄荷强调色）
+        welcomeRow(w, Span.styled("  多 provider 编码智能体  ·  ", WELCOME_BODY),
+                Span.styled(model, WELCOME_ACCENT));
+        welcomeRow(w);
+        // 快捷键：键名着橙、说明灰，一行两组更紧凑（前导 2 空格与上文对齐）
+        welcomeRow(w, hint("  "), key("Enter"), hint(" 发送     "), key("\\+Enter"), hint(" 换行     "), key("/model"), hint(" 切换模型"));
+        welcomeRow(w, hint("  "), key("Esc"),   hint(" 取消     "), key("/help"),   hint(" 帮助     "), key("Ctrl+C"), hint(" 退出"));
+        welcomeRow(w);
+        // 工作目录
+        welcomeRow(w, hint("  cwd  "), Span.styled(String.valueOf(root), WELCOME_BODY));
         r.println(Text.styled("╰" + bar + "╯", WELCOME_BORDER));
         r.println("");   // 与后续对话留白
     }
+
+    private static Span key(String s)  { return Span.styled(s, WELCOME_KEY); }
+    private static Span hint(String s) { return Span.styled(s, WELCOME_HINT); }
 
     /** 用户消息：灰底白字块，仿 Claude Code。按终端宽度软折行，每行右侧补白使灰底铺满整行。新回合先重置 md 围栏态。 */
     void userBlock(String text) {
@@ -137,17 +147,30 @@ final class ScrollbackPrinter {
 
     // ── 私有渲染细节（原视图私有方法，逐字搬运） ─────────────────────────
 
-    /** 组一行欢迎框内容：{@code │ + 前缀内容(截断/补白到内宽) + │}。 */
-    private void welcomeLine(int w, String prefix, String body, Style contentStyle) {
+    /**
+     * 组一行欢迎框内容：{@code │ + 内容(多 span，按显示宽度截断/右补白到内宽) + │}。
+     * 各 span 自带样式（键名/模型名/说明分色）；总宽超内宽时截断末段并补 …。无参即空行。
+     */
+    private void welcomeRow(int w, Span... content) {
         int inner = Math.max(1, w - 2);
-        String content = " " + prefix + body;                     // 左侧留一空格
-        if (displayWidth(content) > inner) {                      // 过长（如深路径）：按显示宽度截断
-            content = CharWidth.substringByWidth(content, inner - 1) + "…";
-        }
-        int pad = Math.max(0, inner - displayWidth(content));
         List<Span> spans = new ArrayList<>();
         spans.add(Span.styled("│", WELCOME_BORDER));
-        spans.add(Span.styled(content, contentStyle));
+        int used = 0;
+        for (Span sp : content) {
+            if (used >= inner) break;
+            String t = sp.content();
+            int cw = displayWidth(t);
+            if (used + cw > inner) {                               // 末段过长（如深路径）：按剩余宽截断 + …
+                t = CharWidth.substringByWidth(t, Math.max(0, inner - used - 1)) + "…";
+                cw = displayWidth(t);
+                spans.add(Span.styled(t, WELCOME_HINT));
+                used += cw;
+                break;
+            }
+            spans.add(sp);
+            used += cw;
+        }
+        int pad = Math.max(0, inner - used);
         if (pad > 0) spans.add(Span.raw(" ".repeat(pad)));
         spans.add(Span.styled("│", WELCOME_BORDER));
         sink.println(Text.from(Line.from(spans)));

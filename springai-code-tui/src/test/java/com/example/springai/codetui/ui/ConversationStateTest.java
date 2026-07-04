@@ -244,6 +244,33 @@ class ConversationStateTest {
     }
 
     @Test
+    void subagentEvents_produceNestedOutputLines() {
+        ConversationState st = new ConversationState();
+        st.onTurnStarted(1L);
+        st.onSubagentStarted(1L, "task_1", "explore", "分析认证模块");
+        st.onToolStarted(1L, "task_1", "Grep", "{\"pattern\":\"auth\"}");   // 4-arg (taskId) overload
+        st.onSubagentFinished(1L, "task_1", "认证走 JWT\n（更多细节）");
+        List<ConversationState.OutputLine> out = st.drainPending();
+        // 找到三类子 agent 行
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_START
+                && o.text().contains("Task(explore)")));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_TOOL
+                && o.text().contains("Grep")));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_END
+                && o.text().contains("认证走 JWT") && !o.text().contains("更多细节")));  // 只取首行
+    }
+
+    @Test
+    void mainFlowTool_withNullTaskId_usesNormalPath() {
+        ConversationState st = new ConversationState();
+        st.onTurnStarted(1L);
+        st.onToolStarted(1L, null, "Bash", "{\"cmd\":\"ls\"}");   // taskId=null → 委托主流
+        List<ConversationState.OutputLine> out = st.drainPending();
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.TOOL_START
+                && o.text().contains("Bash")));
+    }
+
+    @Test
     void isBusy_trueWhenTurnActive_orCompacting_elseFalse() {
         ConversationState s = new ConversationState();
         assertFalse(s.isBusy(), "初始空闲、未压缩：不忙");
@@ -257,5 +284,107 @@ class ConversationStateTest {
         assertTrue(s.isBusy(), "压缩中：忙（即便无活跃回合）");
         s.onCompactionFinished(1, 1);
         assertFalse(s.isBusy(), "压缩结束：不忙");
+    }
+
+    // ── todo 面板（主 agent 的 todo，taskId==null）vs 任务面板（子 agent 状态） ──
+
+    @Test
+    void todoPanel_onlyTakesMainAgentTodo_discardsSubagentTodo() {
+        // taskId==null 是主 agent 的 todo → 进 todo 面板；taskId!=null 是子 agent 内部 todo → 丢弃
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onTodoUpdated(1L, null, List.of("▶ 计划1", "○ 计划2"));      // 主 agent todo
+        s.onSubagentStarted(1L, "t1", "implementer", "实现计划1");
+        s.onTodoUpdated(1L, "t1", List.of("✓ 写测试", "▶ 实现"));      // 子 agent 内部 todo：应被丢弃
+        assertEquals(List.of("▶ 计划1", "○ 计划2"), s.todoSnapshot(), "todo 面板只显主 agent todo，不被子 agent 覆盖");
+    }
+
+    @Test
+    void taskPanel_started_addsRunningEntry() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "分析认证模块");
+        List<ConversationState.SubtaskView> snap = s.subtaskSnapshot();
+        assertEquals(1, snap.size());
+        assertEquals("explore", snap.get(0).agentName());
+        assertEquals("分析认证模块", snap.get(0).description());
+        assertEquals(ConversationState.SubtaskStatus.RUNNING, snap.get(0).status());
+    }
+
+    @Test
+    void taskPanel_finishedOk_marksDone() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onToolStarted(1L, "t1", "Grep", "{}");
+        s.onSubagentFinished(1L, "t1", "结论文本", true);
+        assertEquals(ConversationState.SubtaskStatus.DONE, s.subtaskSnapshot().get(0).status());
+        assertEquals("", s.subtaskSnapshot().get(0).currentTool(), "完成后清空当前工具");
+    }
+
+    @Test
+    void taskPanel_finishedFail_marksFailed() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onSubagentFinished(1L, "t1", "子 agent 执行失败：boom", false);
+        assertEquals(ConversationState.SubtaskStatus.FAILED, s.subtaskSnapshot().get(0).status());
+    }
+
+    @Test
+    void taskPanel_toolStart_updatesCurrentTool() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d");
+        s.onToolStarted(1L, "t1", "Grep", "{\"pattern\":\"auth\"}");
+        assertEquals("Grep", s.subtaskSnapshot().get(0).currentTool());
+    }
+
+    @Test
+    void taskPanel_multipleSubagents_accumulate() {
+        // 子 agent 逐个派发逐个累积（动态）：任务面板显全部已派子 agent 状态
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "implementer", "d1");
+        s.onSubagentFinished(1L, "t1", "done", true);
+        s.onSubagentStarted(1L, "t2", "reviewer", "d2");
+        List<ConversationState.SubtaskView> snap = s.subtaskSnapshot();
+        assertEquals(2, snap.size(), "两个子 agent 都在任务面板");
+        assertEquals(ConversationState.SubtaskStatus.DONE, snap.get(0).status(), "第一个已完成");
+        assertEquals(ConversationState.SubtaskStatus.RUNNING, snap.get(1).status(), "第二个运行中");
+    }
+
+    @Test
+    void taskPanel_turnStart_clearsBothPanels() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onTodoUpdated(1L, null, List.of("▶ 计划1"));
+        s.onSubagentStarted(1L, "t1", "implementer", "d");
+        s.onTurnStarted(2L);
+        assertTrue(s.todoSnapshot().isEmpty(), "新回合清空 todo 面板");
+        assertTrue(s.subtaskSnapshot().isEmpty(), "新回合清空任务面板");
+    }
+
+    @Test
+    void taskPanel_unknownTaskId_noCrashNoEntry() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onToolStarted(1L, "ghost", "Grep", "{}");         // 无对应子任务
+        s.onSubagentFinished(1L, "ghost", "x", true);       // 无对应子任务
+        assertTrue(s.subtaskSnapshot().isEmpty(), "未知 taskId 不产生面板条、不抛异常");
+    }
+
+    @Test
+    void subagentEvents_stillCoexistWithScrollbackLines() {
+        // 回归：面板机制变了，但 scrollback 内联详情行不受影响（共存形态）
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "分析认证");
+        s.onToolStarted(1L, "t1", "Grep", "{\"pattern\":\"auth\"}");
+        s.onSubagentFinished(1L, "t1", "认证走 JWT", true);
+        List<ConversationState.OutputLine> out = s.drainPending();
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_START));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_TOOL));
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_END));
     }
 }

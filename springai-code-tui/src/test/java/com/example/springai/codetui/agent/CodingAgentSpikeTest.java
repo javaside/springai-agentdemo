@@ -4,9 +4,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.DeepSeekApi;
 import reactor.core.Disposable;
 
 import java.nio.file.Files;
@@ -66,6 +63,8 @@ class CodingAgentSpikeTest {
         @Override public void onToolFinished(long turnId, String toolName, String output, boolean ok) {
             toolFinished.add(new Object[]{turnId, toolName, output, ok});
         }
+        @Override public void onSubagentStarted(long turnId, String taskId, String agentName, String description) { }
+        @Override public void onSubagentFinished(long turnId, String taskId, String finalText) { }
         @Override public void onTodoUpdated(long turnId, List<String> todoLines) {
             todoUpdated.add(new Object[]{turnId, todoLines});
         }
@@ -85,16 +84,9 @@ class CodingAgentSpikeTest {
         }
     }
 
-    private DeepSeekChatModel buildModel() {
-        String apiKey = System.getenv("DEEPSEEK_API_KEY");
-        DeepSeekApi api = DeepSeekApi.builder()
-                .apiKey(apiKey)
-                .baseUrl("https://api.deepseek.com")
-                .build();
-        return DeepSeekChatModel.builder()
-                .deepSeekApi(api)
-                .options(DeepSeekChatOptions.builder().build())
-                .build();
+    private ProviderRegistry buildRegistry() {
+        // 多 provider 后：spike 仍只跑 DeepSeek（本类绑 DEEPSEEK_API_KEY）。
+        return new ProviderRegistry(List.of(new DeepSeekProvider(System.getenv("DEEPSEEK_API_KEY"))));
     }
 
     /** 忙等某回合完成，超时即 fail（带清晰信息）。 */
@@ -130,7 +122,7 @@ class CodingAgentSpikeTest {
     void streamingTextExtraction() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildRegistry(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-text", active,
                 rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
@@ -151,7 +143,7 @@ class CodingAgentSpikeTest {
         Path file = tempRoot.resolve("note.txt");
         Files.writeString(file, "香蕉苹果西瓜-SPIKE-42");
 
-        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildRegistry(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-tool", active,
                 rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
@@ -172,7 +164,7 @@ class CodingAgentSpikeTest {
     void multiTurnMemory() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildRegistry(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-memory", active,
                 rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
@@ -193,7 +185,7 @@ class CodingAgentSpikeTest {
     void cancellationStopsUiTokens() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildRegistry(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-cancel", active,
                 rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 
@@ -219,7 +211,7 @@ class CodingAgentSpikeTest {
     void todoTurnIdBinding() {
         Recorder rec = new Recorder();
         AtomicLong active = new AtomicLong();
-        AgentTools.AgentRuntime rt = AgentTools.build(buildModel(), tempRoot, rec);
+        AgentTools.AgentRuntime rt = AgentTools.build(buildRegistry(), tempRoot, rec);
         CodingAgent agent = new CodingAgent(rt.client(), rec, "spike-session-todo", active,
                 rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
 

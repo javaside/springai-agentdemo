@@ -48,11 +48,15 @@ final class Theme {
     static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 
-    // 欢迎横幅（仿 Claude Code）
-    static final Style WELCOME_BORDER = Style.create().fg(Color.indexed(215));            // 暖橙边框
-    static final Style WELCOME_TITLE  = Style.create().fg(Color.indexed(215)).bold();     // 暖橙加粗标题
-    static final Style WELCOME_BODY   = Style.create().fg(Color.GRAY);
-    static final Style WELCOME_HINT   = Style.create().fg(Color.DARK_GRAY);
+    // 欢迎横幅：暖橙品牌色作主调，边框退到柔和陶土色让框体后退；
+    // 模型名用冷薄荷（与暖橙互补，凸显「当前模型」）；快捷键名提亮、说明用可读灰（避开近黑 DARK_GRAY）。
+    static final Style WELCOME_BORDER = Style.create().fg(Color.indexed(173));            // 柔和陶土边框（比标题暗，退后）
+    static final Style WELCOME_STAR   = Style.create().fg(Color.indexed(215)).bold();     // ✻ 品牌星标=暖橙
+    static final Style WELCOME_TITLE  = Style.create().fg(Color.BRIGHT_WHITE).bold();     // 标题=亮白加粗（最高对比）
+    static final Style WELCOME_BODY   = Style.create().fg(Color.indexed(250));            // 正文=可读浅灰
+    static final Style WELCOME_ACCENT = Style.create().fg(Color.indexed(115)).bold();     // 强调（模型名）=冷薄荷加粗
+    static final Style WELCOME_KEY    = Style.create().fg(Color.indexed(215));            // 快捷键名=暖橙
+    static final Style WELCOME_HINT   = Style.create().fg(Color.indexed(245));            // 说明/路径=中灰（可读，非近黑）
 
     // diff 展示（Claude Code 式）：整行底色铺满，行号列灰、加/删号亮。
     // ⚠ 背景必须用 256 色 indexed()，不能用 rgb()：目标终端（Apple Terminal 等，COLORTERM 为空）
@@ -76,6 +80,9 @@ final class Theme {
             case TODO -> TODO;
             case ERROR -> ERROR;
             case INFO -> INFO_LINE;   // 灰白，暗色终端可读（原 DIM=DARK_GRAY 近黑看不清）
+            case SUBAGENT_START -> RUNNING;   // ▸ Task(...) 起始：青色，醒目区分委派
+            case SUBAGENT_TOOL -> TOOL;       // 内部工具行：与主流工具同为淡黄
+            case SUBAGENT_END -> INFO_LINE;   // 结论行：灰白
         };
     }
 }

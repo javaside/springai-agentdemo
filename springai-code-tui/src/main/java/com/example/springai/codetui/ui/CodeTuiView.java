@@ -59,7 +59,8 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  * <p><b>布局（自底向上钉在终端底部，其上是 println 出来的 scrollback）</b>：
  * <pre>
  *   [流式预览]        —— AI 生成中的当前残行（未换行段），{@code scope} 空则收起
- *   [📋 计划面板]     —— 完整清单，✓/▶/○ 分色，{@code scope} 无计划则收起
+ *   [📋 计划/todo 面板] —— 主 agent（控制器）的 todo，✓/▶/○ 分色，{@code scope} 无计划则收起
+ *   [⟐ 任务面板]      —— 本回合派出的子 agent 状态（▶/✓/✗ + 当前工具），{@code scope} 无子 agent 则收起
  *   [圆角输入框]      —— 原生 {@code textArea}，多行/自动增高，自带光标/编辑/中文输入
  *   [状态行]
  * </pre>
@@ -70,7 +71,8 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  */
 public final class CodeTuiView extends InlineApp {
 
-    private static final int TODO_CAP = 10;      // 计划面板最多显示几条
+    private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
+    private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     private static final String INDENT = "  ";  // 对话内容缩进；工具/计划行自带前缀
     // 配色 / 样式集中在 {@link Theme}，本类经 import static Theme.* 引入（DIM/HINT/PICK_SEL/… 写法不变）。
 
@@ -114,6 +116,7 @@ public final class CodeTuiView extends InlineApp {
             // 若 /skills 在前，输入 "/skill" 回车会误选到 /skills（只读清单）而进不了选择器。
             new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
+            new SlashCommand("/reload",  "重新扫描技能目录（新增/删除的 SKILL.md 生效）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
 
@@ -139,11 +142,13 @@ public final class CodeTuiView extends InlineApp {
     @Override
     protected Element render() {
         List<String> todos = state.todoSnapshot();
+        List<ConversationState.SubtaskView> subs = state.subtaskSnapshot();
         List<String> queued = state.queuedSnapshot();
         String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
         return column(
                 scope(!tail.isEmpty(), richText(printer.preview(tail)).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
+                scope(!subs.isEmpty(), subtaskChildren(subs)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
@@ -289,11 +294,11 @@ public final class CodeTuiView extends InlineApp {
             Rect inner = block.inner(rect);
             int ix = inner.x(), iy = inner.y(), iw = Math.max(1, inner.width()), ih = inner.height();
 
-            if (inputState.text().isEmpty()) {              // 空态：反显块光标 + 占位符（右移让开）
-                // 只 setCursorPosition 时，硬件光标常被行内 runner 隐藏/难察觉 → 给人「没光标、没聚焦」的错觉。
-                // 与有字时一致地画一个反显块作可见光标（放在文本起点 ix），占位符从 ix+2 起，别盖住光标。
+            if (inputState.text().isEmpty()) {              // 空态：只画反显块光标，不画框内占位符
+                // 不放框内占位符：中文输入法拼字（候选未上屏）时 inputState 仍为空，占位符会与拼音并存、
+                // 显得「打字时占位符还在」。输入引导已在下方状态行常驻，框内保持干净只留可见光标即可。
+                // 只 setCursorPosition 时硬件光标常被行内 runner 隐藏 → 给人「没光标/没聚焦」错觉，故画反显块。
                 buf.set(ix, iy, buf.get(ix, iy).patchStyle(Style.EMPTY.reversed()));
-                buf.setString(ix + 2, iy, "输入消息，Enter 发送，\\ + Enter 换行", HINT);
                 frame.setCursorPosition(ix, iy);
                 return;
             }
@@ -540,6 +545,11 @@ public final class CodeTuiView extends InlineApp {
             openSkillPicker();
             return;
         }
+        if (cmd.equals("/reload")) {                 // 重扫技能目录：运行中新增/删除的 SKILL.md 就此对模型与 /skills 生效
+            inputState.clear();
+            reloadSkills();
+            return;
+        }
         if (cmd.equals("/help")) {
             inputState.clear();
             printHelp();
@@ -597,7 +607,10 @@ public final class CodeTuiView extends InlineApp {
             ModelOption chosen = models.get(pickIndex);
             onSubmit.selectModel(chosen.id());
             pickingModel = false;
-            state.setNotice("已切换模型 · " + chosen.label());
+            // 不用 sticky notice：notice 会一直占据状态栏、遮蔽常态行（模型名 + 上下文%）直到下次按键，
+            // 造成「切换模型后状态栏信息就没了」。改为下沉一行 scrollback 确认，状态栏立刻回到常态。
+            state.pushInfo("⚙ 已切换模型 · " + chosen.label());
+            lastShownModel = chosen.id();   // 避免下个回合 dispatch 再重复打「⚙ 使用模型」
             return EventResult.HANDLED;
         }
         return EventResult.HANDLED;                       // 其余按键一律吞掉，不落进输入框
@@ -823,11 +836,19 @@ public final class CodeTuiView extends InlineApp {
         state.pushInfo("快捷键：Enter 发送 · \\+Enter 换行 · Esc 取消 · Ctrl+C 退出");
     }
 
+    /** /reload：重扫两层技能目录后打一行结果 + 复用 {@link #printSkills} 展示最新清单（运行中增删 SKILL.md 即时生效，无需重启）。 */
+    private void reloadSkills() {
+        onSubmit.reloadSkills();
+        int n = onSubmit.skills().size();
+        state.pushInfo("↻ 已重新扫描技能目录：当前 " + n + " 个技能");
+        printSkills();
+    }
+
     /** /skills：把可用技能清单（名字 · 来源层 · 描述）打进 scrollback（灰色信息行）。 */
     private void printSkills() {
         List<SkillInfo> list = onSubmit.skills();
         if (list.isEmpty()) {
-            state.pushInfo("当前没有可用技能。可在 .codetui/skills/<名字>/SKILL.md 添加后重启生效。");
+            state.pushInfo("当前没有可用技能。可在 .codetui/skills/<名字>/SKILL.md 添加后用 /reload 重新加载生效。");
             return;
         }
         state.pushInfo("可用技能（模型会按需自动调用）：");
@@ -859,13 +880,69 @@ public final class CodeTuiView extends InlineApp {
     // ── 计划面板 / 状态行 ────────────────────────────────────────────────
     private Element[] todoChildren(List<String> todos) {
         List<Element> els = new ArrayList<>();
-        els.add(text("📋 计划").style(TODO_TITLE));
+        els.add(text("📋 计划").style(TODO_TITLE));   // 主 agent（控制器）的 todo
         int shown = Math.min(todos.size(), TODO_CAP);
         for (int i = 0; i < shown; i++) els.add(todoRow(todos.get(i)));
         if (todos.size() > TODO_CAP) {
             els.add(text("  … 还有 " + (todos.size() - TODO_CAP) + " 项").style(DIM));
         }
         return els.toArray(new Element[0]);
+    }
+
+    /**
+     * 任务面板：本回合派出的子 agent 状态。计数标题 + 可见子任务各一行（✓/▶/✗ 分色，纯前景无底色）；
+     * 超 SUBTASK_CAP 时折叠靠前的、"当前运行"那条恒可见（串行下运行行总是最后一条）。
+     */
+    private Element[] subtaskChildren(List<ConversationState.SubtaskView> subs) {
+        if (subs == null || subs.isEmpty()) return new Element[0];   // scope eager 求值：首行判空
+        List<Element> els = new ArrayList<>();
+        els.add(text(subtaskHeaderText(subs)).style(TODO_TITLE));
+        List<ConversationState.SubtaskView> vis = visibleSubtasks(subs);
+        int hidden = subs.size() - vis.size();
+        if (hidden > 0) {                       // 折叠靠前的已完成条，注记在顶部
+            els.add(text("  … 前 " + hidden + " 项已折叠").style(DIM));
+        }
+        for (ConversationState.SubtaskView s : vis) els.add(subtaskRow(s));
+        return els.toArray(new Element[0]);
+    }
+
+    /** 面板可见子任务：末尾 SUBTASK_CAP 条。串行执行下"运行中"总是最后一条，取末尾保证它恒可见（否则大回合会把运行行折叠掉）。 */
+    static List<ConversationState.SubtaskView> visibleSubtasks(List<ConversationState.SubtaskView> subs) {
+        int from = Math.max(0, subs.size() - SUBTASK_CAP);
+        return subs.subList(from, subs.size());
+    }
+
+    /** 一条子任务：✓完成=绿 / ▶运行=亮黄加粗 / ✗失败=红（纯前景）。 */
+    private static Element subtaskRow(ConversationState.SubtaskView s) {
+        Style st = switch (s.status()) {
+            case DONE -> OK;
+            case FAILED -> ERROR;
+            case RUNNING -> TODO_RUN;
+        };
+        return text(subtaskRowText(s)).style(st);
+    }
+
+    /** 任务面板标题文本："⟐ 任务  ✓N 完成 · ▶M 运行[ · ✗K 失败]"。 */
+    static String subtaskHeaderText(List<ConversationState.SubtaskView> subs) {
+        long done = subs.stream().filter(s -> s.status() == ConversationState.SubtaskStatus.DONE).count();
+        long running = subs.stream().filter(s -> s.status() == ConversationState.SubtaskStatus.RUNNING).count();
+        long failed = subs.stream().filter(s -> s.status() == ConversationState.SubtaskStatus.FAILED).count();
+        StringBuilder h = new StringBuilder("⟐ 任务  ✓" + done + " 完成 · ▶" + running + " 运行");
+        if (failed > 0) h.append(" · ✗").append(failed).append(" 失败");
+        return h.toString();
+    }
+
+    /** 一条子任务的行文本："  <图标> <agent>  <描述>[ · <当前工具>]"（运行态且有当前工具才附尾巴）。 */
+    static String subtaskRowText(ConversationState.SubtaskView s) {
+        String icon = switch (s.status()) {
+            case DONE -> "✓";
+            case FAILED -> "✗";
+            case RUNNING -> "▶";
+        };
+        String tail = (s.status() == ConversationState.SubtaskStatus.RUNNING
+                && s.currentTool() != null && !s.currentTool().isEmpty())
+                ? " · " + s.currentTool() : "";
+        return "  " + icon + " " + s.agentName() + "  " + s.description() + tail;
     }
 
     /** 排队消息面板：固定在输入框上方，每条一行（暗灰底、› 前缀、超宽截断），仿 Claude Code。 */

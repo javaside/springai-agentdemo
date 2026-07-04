@@ -41,6 +41,8 @@ class ToolEventCallbackTest {
             events.add("finished:" + turnId + ":" + toolName + ":" + output + ":" + ok);
         }
 
+        @Override public void onSubagentStarted(long turnId, String taskId, String agentName, String description) { }
+        @Override public void onSubagentFinished(long turnId, String taskId, String finalText) { }
         @Override public void onTodoUpdated(long turnId, List<String> todoLines) { }
         @Override public void onTurnComplete(long turnId) { }
         @Override public void onError(long turnId, Throwable error) { }
@@ -137,5 +139,23 @@ class ToolEventCallbackTest {
 
         assertEquals(List.of(7L), observedDuringCall, "call() 执行期间 ThreadLocal 应暴露正在执行的 turnId");
         assertEquals(-1L, ToolEventCallback.currentTurnId(), "call() 返回后应恢复为调用前的值");
+    }
+
+    @Test
+    void passesTaskIdFromContextToListener() {
+        java.util.concurrent.atomic.AtomicReference<String> seen = new java.util.concurrent.atomic.AtomicReference<>();
+        AgentListener listener = new StubListener() {
+            @Override public void onToolStarted(long turnId, String taskId, String toolName, String input) {
+                seen.set(taskId);
+            }
+        };
+        ToolCallback delegate = new ToolCallback() {
+            @Override public ToolDefinition getToolDefinition() { return readToolDefinition(); }
+            @Override public String call(String toolInput) { return call(toolInput, null); }
+            @Override public String call(String toolInput, ToolContext toolContext) { return "ok"; }
+        };
+        ToolCallback probe = new ToolEventCallback(delegate, listener);
+        probe.call("{}", new ToolContext(java.util.Map.of("turnId", 1L, "taskId", "task_42")));
+        org.junit.jupiter.api.Assertions.assertEquals("task_42", seen.get());
     }
 }

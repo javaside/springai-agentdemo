@@ -1,13 +1,13 @@
 package com.example.springai.codetui;
 
 import com.example.springai.codetui.agent.AgentTools;
+import com.example.springai.codetui.agent.AnthropicProvider;
 import com.example.springai.codetui.agent.CodingAgent;
+import com.example.springai.codetui.agent.DeepSeekProvider;
+import com.example.springai.codetui.agent.OpenAiProvider;
+import com.example.springai.codetui.agent.ProviderRegistry;
 import com.example.springai.codetui.ui.CodeTuiView;
 import com.example.springai.codetui.ui.ConversationState;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.DeepSeekApi;
-import org.springframework.ai.chat.client.ChatClient;
 
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,35 +20,29 @@ public class CodeTuiApplication {
     public static void main(String[] args) throws Exception {
         Path root = Path.of(System.getProperty("user.dir")).toAbsolutePath();
 
-        String apiKey = System.getenv("DEEPSEEK_API_KEY");
-        if (apiKey == null || apiKey.isBlank()) {
-            System.out.println("⚠️  未检测到 DEEPSEEK_API_KEY。请先：export DEEPSEEK_API_KEY=你的key 再运行。");
+        // 三家 provider：谁配了 key 谁 available。至少需一家可用（通常 DeepSeek）。
+        // base-url 可选：配了 *_BASE_URL 就覆盖，否则用各家内置默认（便于走代理/私有网关）。
+        ProviderRegistry registry;
+        try {
+            registry = new ProviderRegistry(java.util.List.of(
+                    new DeepSeekProvider(System.getenv("DEEPSEEK_API_KEY"), System.getenv("DEEPSEEK_BASE_URL")),
+                    new AnthropicProvider(System.getenv("ANTHROPIC_API_KEY"), System.getenv("ANTHROPIC_BASE_URL")),
+                    new OpenAiProvider(System.getenv("OPENAI_API_KEY"), System.getenv("OPENAI_BASE_URL"))));
+        } catch (IllegalStateException e) {
+            System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
+                    "DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY，再运行。");
             return;
         }
 
-        DeepSeekApi deepSeekApi = DeepSeekApi.builder()
-                .apiKey(apiKey)
-                .baseUrl("https://api.deepseek.com")
-                .build();
-
-        // 模型名 "deepseek-v4-flash"（V4 现役；旧的 deepseek-chat/deepseek-reasoner 将于 2026-07-24 停用，
-        // 期间被透明路由到 v4-flash）。显式设置，避免依赖会过期的默认名。
-        DeepSeekChatModel model = DeepSeekChatModel.builder()
-                .deepSeekApi(deepSeekApi)
-                .options(DeepSeekChatOptions.builder()
-                        .model("deepseek-v4-flash")
-                        .build())
-                .build();
-
         ConversationState state = new ConversationState();       // implements AgentListener
-        AtomicLong activeTurnId = new AtomicLong();               // 交给 CodingAgent 生成 id
-        String sessionId = "code-tui-session";                    // v1 单会话固定 id
+        AtomicLong activeTurnId = new AtomicLong();
+        String sessionId = "code-tui-session";                   // v1 单会话固定 id
 
-        AgentTools.AgentRuntime runtime = AgentTools.build(model, root, state);
-        ChatClient client = runtime.client();
-        CodingAgent agent = new CodingAgent(client, state, sessionId, activeTurnId,
+        AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state);
+        CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
                 runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
-                runtime.skills(), runtime.skillTool(), runtime.sessionRepository());
+                runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
+                runtime.reloadableSkill());
         CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
         view.run();
     }

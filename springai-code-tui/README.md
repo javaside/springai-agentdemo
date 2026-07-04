@@ -1,14 +1,17 @@
 # springai-code-tui
 
-基于 Spring AI 2.0 的编码智能体 + [TamboUI](https://github.com/quanticc/tambo-ui)（`0.4.0`，纯 Java 原始 API）单栏终端界面的命令行编码助手。模型使用 DeepSeek（`deepseek-v4-flash`）。
+基于 Spring AI 2.0 的编码智能体 + [TamboUI](https://github.com/quanticc/tambo-ui)（`0.4.0`，纯 Java 原始 API）单栏终端界面的命令行编码助手。**多 provider**：按环境变量激活 DeepSeek / Anthropic / OpenAI，`/model` 可运行时切换。
 
 > 说明：DeepSeek 旧模型名 `deepseek-chat` / `deepseek-reasoner` 将于 2026-07-24 15:59 UTC 停用（期间被透明路由到 V4-Flash），现役模型为 `deepseek-v4-flash`（非思考）与 `deepseek-v4-pro`（强推理）。
 
 ## 模块用途
 
-- 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + Todo 状态）、输入框、底部状态栏。
-- 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`。
-- 多轮会话记忆（窗口记忆），把 cwd / git 状态 / 模型名注入系统提示做 grounding。
+- 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、输入框、底部状态栏。
+- **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。
+- 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task`，把子任务委派给专门子 agent）。
+- **子 agent（Task）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`），串行前台阻塞执行，内部工具活动带 taskId 内联嵌套显示。
+- **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
+- **上下文管理**：窗口记忆多轮会话，token 用量估算（`/context` 查看），超阈值自动压缩 + `/compact` 手动压缩。把 cwd / git 状态 / 模型名注入系统提示做 grounding。
 - Esc 取消当前回合、Ctrl+C 退出。
 
 ## ⚠️ 安全声明（请务必阅读）
@@ -20,6 +23,8 @@
   - `ShellTools.bash(...)` 直接 `new ProcessBuilder(...).start()`，没有设置工作目录约束，模型可以执行任意 shell 命令（包括 `cd /`、绝对路径操作、`rm -rf`、`curl | bash` 等）。
   - `GrepTool` / `GlobTool` 的 `workingDirectory` 只是**默认基准目录**，不是强制边界——只要参数传绝对路径或 `../`，照样能读到/列出 root 之外的任意文件。
 - 也就是说：**智能体（在被越权提示注入或自身犯错的情况下）可以读写磁盘上任意它有权限触及的位置、执行任意命令**，不局限于当前工作目录。
+- **联网出口无过滤**：`SmartWebFetchTool` 可发起对外 HTTP 请求，无域名白名单/出网限制——被提示注入时可能外泄本地读到的内容。
+- **子 agent 同权**：`SubagentTool`（`Task`）派出的子 agent 复用同一套未沙箱工具，其执行同样不受目录约束。
 
 这是 v1 已知且被接受的残余风险（诚实披露，而不是技术强制沙箱）。**请不要将本工具的这一版本理解或宣传为"安全隔离"。**
 
@@ -39,7 +44,11 @@ mvn -pl springai-code-tui -am package
 ## 运行
 
 ```bash
-export DEEPSEEK_API_KEY=你的key
+# 至少配置一个 provider 的 key（首个可用者激活；可同时配多个，用 /model 切换）
+export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役）
+# export ANTHROPIC_API_KEY=你的key       # Anthropic（默认 claude-opus-4-8，另有 fable-5/sonnet-5/haiku-4-5）
+# export OPENAI_API_KEY=你的key          # OpenAI（gpt-5.5 等）
+# 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
 
 # 切到一个可以随意丢弃、且被版本控制干净纳管的目录再运行
 cd /path/to/some/disposable/project
@@ -65,7 +74,12 @@ java -jar /Users/zxh/IdeaProjects/springai-agentdemo/springai-code-tui/target/sp
 
 | 命令 | 行为 |
 | --- | --- |
-| `/model` | 切换 AI 模型（`deepseek-v4-flash` / `deepseek-v4-pro`） |
+| `/model` | 打开模型选择器，在当前 provider 的模型间切换 |
+| `/compact` | 手动压缩会话历史 |
+| `/context` | 查看上下文用量（事件数 / token） |
+| `/skill` | 为本条消息指定技能 |
+| `/skills` | 查看可用技能清单（模型按需自动调用） |
+| `/reload` | 重新扫描技能目录（运行中新增/删除的 `SKILL.md` 生效，无需重启） |
 | `/help` | 显示可用命令与快捷键 |
 | `/exit` | 退出程序 |
 
@@ -75,4 +89,5 @@ java -jar /Users/zxh/IdeaProjects/springai-agentdemo/springai-code-tui/target/sp
 - **宽字符光标对齐**：输入框光标位置按显示宽度（东亚宽字符计 2 列）对齐，但极端的 grapheme 组合（如某些 emoji ZWJ 序列、组合字符）可能出现轻微偏移。
 - **工具沙箱不完整**：见上方安全声明——只有文件系统工具受 root 约束，Shell/Grep/Glob 不受限。自写的真沙箱（`SandboxedShellTool` 等，方案 A）列为 v1 之后的增强项，本版本未实现。
 - 单会话固定 id，不支持多会话/会话持久化。
-- 不含联网检索、子智能体、长期记忆、技能调用、向用户反问等能力（v1 明确排除）。
+- **子 agent 串行执行**：一次最多 1 个子任务前台阻塞运行，暂不支持并行/后台（`run_in_background`）与 `/tasks` 详情面板（列为后续增强）。
+- **无长期记忆**：会话记忆仅内存态窗口记忆，退出不保留（跨会话记忆未实现）。
