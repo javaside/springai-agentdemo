@@ -874,17 +874,24 @@ public final class CodeTuiView extends InlineApp {
         return els.toArray(new Element[0]);
     }
 
-    /** 子任务面板：计数标题 + 每条一行（✓/▶/✗ 分色，纯前景无底色），SUBTASK_CAP 溢出显示"还有 N 项"。 */
+    /** 子任务面板：计数标题 + 可见子任务各一行（✓/▶/✗ 分色，纯前景无底色）；超 SUBTASK_CAP 时折叠靠前的、"当前运行"那条恒可见。 */
     private Element[] subtaskChildren(List<ConversationState.SubtaskView> subs) {
         if (subs == null || subs.isEmpty()) return new Element[0];   // scope eager 求值：首行判空
         List<Element> els = new ArrayList<>();
         els.add(text(subtaskHeaderText(subs)).style(TODO_TITLE));
-        int shown = Math.min(subs.size(), SUBTASK_CAP);
-        for (int i = 0; i < shown; i++) els.add(subtaskRow(subs.get(i)));
-        if (subs.size() > SUBTASK_CAP) {
-            els.add(text("  … 还有 " + (subs.size() - SUBTASK_CAP) + " 项").style(DIM));
+        List<ConversationState.SubtaskView> vis = visibleSubtasks(subs);
+        int hidden = subs.size() - vis.size();
+        if (hidden > 0) {                       // 折叠靠前的已完成条，注记在顶部
+            els.add(text("  … 前 " + hidden + " 项已折叠").style(DIM));
         }
+        for (ConversationState.SubtaskView s : vis) els.add(subtaskRow(s));
         return els.toArray(new Element[0]);
+    }
+
+    /** 面板可见子任务：末尾 SUBTASK_CAP 条。串行执行下"当前运行"那条总是最后追加，取末尾保证它恒可见（否则大回合会把运行行折叠掉）。 */
+    static List<ConversationState.SubtaskView> visibleSubtasks(List<ConversationState.SubtaskView> subs) {
+        int from = Math.max(0, subs.size() - SUBTASK_CAP);
+        return subs.subList(from, subs.size());
     }
 
     /** 一条子任务：✓完成=绿 / ▶运行=亮黄加粗 / ✗失败=红（纯前景）。 */

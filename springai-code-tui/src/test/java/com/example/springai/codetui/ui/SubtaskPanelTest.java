@@ -57,6 +57,26 @@ class SubtaskPanelTest {
     }
 
     @Test
+    void visibleSubtasks_keepsRunningTail_whenOverCap() {
+        // 串行执行下"运行中"总是最后一条：超 CAP 时窗口取末尾，保证运行行不被折叠掉
+        java.util.List<SubtaskView> subs = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; i++) subs.add(v("done" + i, "d" + i, SubtaskStatus.DONE, ""));
+        subs.set(7, v("running", "最后一条", SubtaskStatus.RUNNING, "Grep"));
+        List<SubtaskView> vis = CodeTuiView.visibleSubtasks(subs);
+        assertEquals(6, vis.size(), "可见条数 = SUBTASK_CAP");
+        assertTrue(vis.stream().anyMatch(x -> x.status() == SubtaskStatus.RUNNING), "运行行必须在可见窗口内");
+        assertEquals("running", vis.get(vis.size() - 1).agentName(), "运行行是末条");
+    }
+
+    @Test
+    void visibleSubtasks_returnsAll_whenWithinCap() {
+        List<SubtaskView> subs = List.of(
+                v("a", "1", SubtaskStatus.DONE, ""),
+                v("b", "2", SubtaskStatus.RUNNING, "Read"));
+        assertEquals(2, CodeTuiView.visibleSubtasks(subs).size(), "未超 CAP 时全显示");
+    }
+
+    @Test
     void renderTree_withSubtasks_doesNotThrow() {
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
