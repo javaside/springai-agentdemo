@@ -1,0 +1,31 @@
+#!/bin/sh
+# springai-code-tui 启动脚本。解压发布包后直接执行本脚本即可运行。
+# 需求：JDK 21+。API key 通过环境变量提供（至少一个）：
+#   DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY
+# 用法：在一个「可随意丢弃、且已被 git 干净纳管」的项目目录里运行本工具。
+set -e
+
+# 解析脚本真实所在目录（跟随符号链接），推出安装根目录
+SCRIPT="$0"
+while [ -h "$SCRIPT" ]; do
+    LINK=$(readlink "$SCRIPT")
+    case "$LINK" in
+        /*) SCRIPT="$LINK" ;;
+        *)  SCRIPT="$(dirname "$SCRIPT")/$LINK" ;;
+    esac
+done
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT")" && pwd -P)
+APP_HOME=$(CDPATH= cd -- "$BIN_DIR/.." && pwd -P)
+
+# 定位 java：优先 JAVA_HOME
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    JAVA="$JAVA_HOME/bin/java"
+elif command -v java >/dev/null 2>&1; then
+    JAVA=java
+else
+    echo "错误：未找到 java。请安装 JDK 21+（或设置 JAVA_HOME）后重试。" >&2
+    exit 1
+fi
+
+# manifest 的 Class-Path 相对 jar 定位 lib/，故这里以 jar 绝对路径启动，cwd 保持用户当前项目目录
+exec "$JAVA" ${JAVA_OPTS:-} -jar "$APP_HOME/springai-code-tui.jar" "$@"

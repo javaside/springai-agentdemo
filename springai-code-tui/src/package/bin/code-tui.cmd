@@ -1,0 +1,19 @@
+@echo off
+rem springai-code-tui 启动脚本（Windows）。解压后直接运行本脚本。
+rem 需求：JDK 21+。API key 通过环境变量提供：DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY
+setlocal
+set "APP_HOME=%~dp0.."
+
+if defined JAVA_HOME (
+    set "JAVA=%JAVA_HOME%\bin\java.exe"
+) else (
+    set "JAVA=java"
+)
+
+where "%JAVA%" >nul 2>nul
+if errorlevel 1 (
+    echo 错误: 未找到 java。请安装 JDK 21+ 或设置 JAVA_HOME 后重试。 1>&2
+    exit /b 1
+)
+
+"%JAVA%" %JAVA_OPTS% -jar "%APP_HOME%\springai-code-tui.jar" %*

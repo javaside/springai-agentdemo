@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  发布包描述符：把「可直接运行」的运行时布局打进一个归档。
+  解压后目录形如：
+    springai-code-tui-<version>/
+      bin/code-tui           启动脚本（sh）
+      bin/code-tui.cmd       启动脚本（Windows）
+      springai-code-tui.jar  主程序（manifest 里 Class-Path 指向同级 lib/）
+      lib/*.jar              全部运行期依赖
+      README.md
+  运行：解压后执行 bin/code-tui（或 java -jar springai-code-tui.jar）。
+-->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
+    <id>dist</id>
+    <formats>
+        <format>tar.gz</format>
+        <format>zip</format>
+    </formats>
+    <!-- 顶层带一层 <artifactId>-<version> 目录，解压后不散落当前目录 -->
+    <includeBaseDirectory>true</includeBaseDirectory>
+    <baseDirectory>${project.artifactId}-${project.version}</baseDirectory>
+
+    <files>
+        <!-- 主 jar 放到根；其 manifest 的 Class-Path 相对 jar 定位 lib/，故与 lib/ 同级即可运行 -->
+        <file>
+            <source>${project.build.directory}/${project.build.finalName}.jar</source>
+            <outputDirectory>.</outputDirectory>
+        </file>
+    </files>
+
+    <fileSets>
+        <!-- 启动脚本：置为可执行 -->
+        <fileSet>
+            <directory>${project.basedir}/src/package/bin</directory>
+            <outputDirectory>bin</outputDirectory>
+            <fileMode>0755</fileMode>
+            <lineEnding>unix</lineEnding>
+            <includes>
+                <include>code-tui</include>
+            </includes>
+        </fileSet>
+        <fileSet>
+            <directory>${project.basedir}/src/package/bin</directory>
+            <outputDirectory>bin</outputDirectory>
+            <fileMode>0644</fileMode>
+            <lineEnding>dos</lineEnding>
+            <includes>
+                <include>code-tui.cmd</include>
+            </includes>
+        </fileSet>
+        <!-- 说明文档 -->
+        <fileSet>
+            <directory>${project.basedir}</directory>
+            <outputDirectory>.</outputDirectory>
+            <includes>
+                <include>README.md</include>
+            </includes>
+        </fileSet>
+    </fileSets>
+
+    <dependencySets>
+        <!-- 全部运行期依赖 → lib/；不含本模块自身 jar（已由 <files> 放到根） -->
+        <dependencySet>
+            <outputDirectory>lib</outputDirectory>
+            <useProjectArtifact>false</useProjectArtifact>
+            <scope>runtime</scope>
+        </dependencySet>
+    </dependencySets>
+</assembly>

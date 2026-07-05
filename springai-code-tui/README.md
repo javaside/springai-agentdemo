@@ -58,6 +58,42 @@ java -jar /Users/zxh/IdeaProjects/springai-agentdemo/springai-code-tui/target/sp
 
 启动后直接进入 TUI（当前工作区即上面 `cd` 进入的目录）。请自行遵循上方「安全声明」的使用建议。
 
+## 发布打包（可分发、解压即运行）
+
+打一个自包含发布包（含启动脚本 + 主 jar + 全部运行期依赖），需 JDK 21+：
+
+```bash
+mvn -pl springai-code-tui clean package -Pdist
+```
+
+产出（`-Pdist` profile 触发，默认 `package` 不打，保持日常构建轻量）：
+
+- `target/springai-code-tui-<version>-dist.tar.gz`
+- `target/springai-code-tui-<version>-dist.zip`
+
+解压后目录结构：
+
+```
+springai-code-tui-<version>/
+├── bin/code-tui         # 启动脚本（sh；自动定位安装目录与 java）
+├── bin/code-tui.cmd     # 启动脚本（Windows）
+├── springai-code-tui.jar
+├── lib/*.jar            # 全部运行期依赖
+└── README.md
+```
+
+在目标机器上运行（先配好 API key，切到可随意丢弃的项目目录）：
+
+```bash
+tar xzf springai-code-tui-<version>-dist.tar.gz
+export DEEPSEEK_API_KEY=你的key
+cd /path/to/some/disposable/project
+/path/to/springai-code-tui-<version>/bin/code-tui
+```
+
+> 也可直接 `java -jar /path/to/springai-code-tui-<version>/springai-code-tui.jar`——jar 的
+> manifest 里 `Class-Path` 相对自身定位同级 `lib/`，与 cwd 无关。
+
 ## 操作键
 
 | 按键 | 行为 |
