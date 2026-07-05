@@ -99,6 +99,8 @@
                             <mainClass>com.example.springai.codetui.CodeTuiApplication</mainClass>
                             <addClasspath>true</addClasspath>
                             <classpathPrefix>lib/</classpathPrefix>
+                            <!-- 写入 Implementation-Version（=project.version），供欢迎横幅在运行时读取版本号 -->
+                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
                         </manifest>
                     </archive>
                 </configuration>

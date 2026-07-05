@@ -29,11 +29,13 @@ class ScrollbackPrinterTest {
     @Test
     void welcome_printsRoundedBannerWithModelAndCwd() {
         RecordingSink sink = new RecordingSink();
-        printerOver(sink).welcome("deepseek-v4-flash");
+        printerOver(sink).welcome("deepseek-v4-flash", "v9.9.9");
 
-        // 顶/底边框各 1 + 8 行内容 + 末尾 1 空行 = 11 行
+        // 顶边框(标题+版本嵌入) 1 + 内容 7 + 底边框 1 + 末尾空行 1 = 11 行
         assertEquals(11, sink.lines.size(), "欢迎横幅应输出 11 行");
         assertTrue(sink.lines.get(0).startsWith("╭"), "首行应为圆角上边框");
+        assertTrue(sink.lines.get(0).contains("Spring AI Code TUI"), "标题应嵌入顶部边框");
+        assertTrue(sink.lines.get(0).contains("v9.9.9"), "版本号应嵌入顶部边框");
         assertTrue(sink.lines.get(9).startsWith("╰"), "倒数第二行应为圆角下边框");
         assertEquals("", sink.lines.get(10), "末行应为留白空行");
         assertTrue(sink.lines.stream().anyMatch(l -> l.contains("deepseek-v4-flash")), "应含所选模型名");

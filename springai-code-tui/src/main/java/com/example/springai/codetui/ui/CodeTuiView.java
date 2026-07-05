@@ -181,7 +181,8 @@ public final class CodeTuiView extends InlineApp {
 
     @Override
     protected void onStart() {
-        runner().runOnRenderThread(() -> printer.welcome(onSubmit.currentModel()));   // 启动欢迎横幅（一次性下沉 scrollback）
+        runner().runOnRenderThread(() -> printer.welcome(onSubmit.currentModel(),
+                com.example.springai.codetui.AppInfo.versionLabel()));   // 启动欢迎横幅（一次性下沉 scrollback）
         // 在渲染线程、两帧之间安全推进 scrollback（println 会移动光标/插行，绝不能在绘制中途调用）。
         runner().scheduleRepeating(() -> runner().runOnRenderThread(this::drain), Duration.ofMillis(33));
     }

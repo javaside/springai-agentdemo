@@ -63,27 +63,101 @@ final class ScrollbackPrinter {
         return indented(md.renderPreview(tail));
     }
 
-    /** 圆角欢迎横幅（仿 Claude Code），下沉到 scrollback 顶部。model 由调用方传入（printer 不依赖 SubmitHandler）。 */
-    void welcome(String model) {
+    /** 一条快捷键：键名 + 说明。欢迎横幅按显示宽度排成两列对齐。 */
+    private record Shortcut(String keyName, String desc) {}
+
+    private static final Shortcut[][] SHORTCUTS = {
+            { new Shortcut("Enter", "发送"),   new Shortcut("\\+Enter", "换行") },
+            { new Shortcut("Esc", "取消"),     new Shortcut("/model", "切换模型") },
+            { new Shortcut("/help", "帮助"),   new Shortcut("Ctrl+C", "退出") },
+    };
+
+    /**
+     * 圆角欢迎横幅（仿 Claude Code），下沉到 scrollback 顶部。标题与版本号嵌入顶部边框，
+     * 正文为对齐的「标签 值」元信息 + 两列对齐的快捷键。model / version 由调用方传入（printer 不依赖 SubmitHandler）。
+     */
+    void welcome(String model, String version) {
         Sink r = sink;
         int w = Math.min(Math.max(terminalWidth.getAsInt() - 1, 52), 76);
-        String bar = "─".repeat(Math.max(0, w - 2));
-        r.println(Text.styled("╭" + bar + "╮", WELCOME_BORDER));
-        // 标题行：品牌星标（橙）+ 标题（亮白粗）
-        welcomeRow(w, Span.styled(" ✻ ", WELCOME_STAR), Span.styled(" Spring AI Code TUI", WELCOME_TITLE));
+
+        r.println(topBorder(w, version));                       // ╭─ ✻ 标题 ──… v1.0.0 ─╮
         welcomeRow(w);
-        // 简介 + 当前模型（模型名用薄荷强调色）
-        welcomeRow(w, Span.styled("  多 provider 编码智能体  ·  ", WELCOME_BODY),
-                Span.styled(model, WELCOME_ACCENT));
+        welcomeRow(w, Span.styled("  终端编码智能体 · 多模型可切换", WELCOME_BODY));
+        metaRow(w, "模型", model, WELCOME_ACCENT);              // 模型名薄荷强调
+        metaRow(w, "目录", abbreviateHome(String.valueOf(root)), WELCOME_BODY);
         welcomeRow(w);
-        // 快捷键：键名着橙、说明灰，一行两组更紧凑（前导 2 空格与上文对齐）
-        welcomeRow(w, hint("  "), key("Enter"), hint(" 发送     "), key("\\+Enter"), hint(" 换行     "), key("/model"), hint(" 切换模型"));
-        welcomeRow(w, hint("  "), key("Esc"),   hint(" 取消     "), key("/help"),   hint(" 帮助     "), key("Ctrl+C"), hint(" 退出"));
-        welcomeRow(w);
-        // 工作目录
-        welcomeRow(w, hint("  cwd  "), Span.styled(String.valueOf(root), WELCOME_BODY));
-        r.println(Text.styled("╰" + bar + "╯", WELCOME_BORDER));
+        shortcutRows(w);                                        // 三行 × 两列，按显示宽度对齐
+        r.println(Text.styled("╰" + "─".repeat(Math.max(0, w - 2)) + "╯", WELCOME_BORDER));
         r.println("");   // 与后续对话留白
+    }
+
+    /** 顶部边框，标题嵌左、版本号嵌右：{@code ╭─ ✻ Spring AI Code TUI ──…── v1.0.0 ─╮}。过窄放不下时回退成纯边框。 */
+    private static Text topBorder(int w, String version) {
+        String title = "Spring AI Code TUI";
+        String ver = version == null || version.isBlank() ? "" : version;
+        // 左段 = ╭─ + ✻  + 标题 + 空格；右段 = 空格 + 版本 + 空格 ─╮
+        int leftW = displayWidth("╭─ ") + displayWidth("✻ ") + displayWidth(title) + 1;
+        int rightW = 1 + displayWidth(ver) + displayWidth(" ─╮");
+        int fill = w - leftW - rightW;
+        if (fill < 1) {                                         // 极窄终端：退回不嵌标题的纯边框
+            return Text.styled("╭" + "─".repeat(Math.max(0, w - 2)) + "╮", WELCOME_BORDER);
+        }
+        List<Span> spans = new ArrayList<>();
+        spans.add(Span.styled("╭─ ", WELCOME_BORDER));
+        spans.add(Span.styled("✻ ", WELCOME_STAR));
+        spans.add(Span.styled(title + " ", WELCOME_TITLE));
+        spans.add(Span.styled("─".repeat(fill), WELCOME_BORDER));
+        spans.add(Span.styled(" ", WELCOME_BORDER));
+        spans.add(Span.styled(ver, WELCOME_HINT));
+        spans.add(Span.styled(" ─╮", WELCOME_BORDER));
+        return Text.from(Line.from(spans));
+    }
+
+    /** 元信息行：{@code   标签   值}（标签灰、按 4 列宽对齐，值 3 空格后起）。 */
+    private void metaRow(int w, String label, String value, Style valueStyle) {
+        int gap = Math.max(1, 4 - displayWidth(label)) + 3;    // 标签列宽 4 + 3 空格
+        welcomeRow(w, Span.styled("  " + label + " ".repeat(gap), WELCOME_HINT),
+                Span.styled(value, valueStyle));
+    }
+
+    /** 三行快捷键，两列对齐：列宽按各列键名/说明的最大显示宽度算，右列起点全表统一。 */
+    private void shortcutRows(int w) {
+        int leftKeyW = 0, leftDescW = 0, rightKeyW = 0;
+        for (Shortcut[] row : SHORTCUTS) {
+            leftKeyW  = Math.max(leftKeyW,  displayWidth(row[0].keyName()));
+            leftDescW = Math.max(leftDescW, displayWidth(row[0].desc()));
+            rightKeyW = Math.max(rightKeyW, displayWidth(row[1].keyName()));
+        }
+        int col1KeyAt  = 2 + leftKeyW + 2 + leftDescW + 4;     // 左列块 + 4 空格间距
+        int col1DescAt = col1KeyAt + rightKeyW + 2;
+        for (Shortcut[] row : SHORTCUTS) {
+            List<Span> spans = new ArrayList<>();
+            int used = padTo(spans, 0, 2);                     // 前导缩进
+            spans.add(key(row[0].keyName())); used += displayWidth(row[0].keyName());
+            used = padTo(spans, used, 2 + leftKeyW + 2);
+            spans.add(hint(row[0].desc())); used += displayWidth(row[0].desc());
+            used = padTo(spans, used, col1KeyAt);
+            spans.add(key(row[1].keyName())); used += displayWidth(row[1].keyName());
+            used = padTo(spans, used, col1DescAt);
+            spans.add(hint(row[1].desc()));
+            welcomeRow(w, spans.toArray(new Span[0]));
+        }
+    }
+
+    /** 追加空格 span 使已用显示宽度补到 {@code target}；返回补齐后的宽度。 */
+    private static int padTo(List<Span> spans, int used, int target) {
+        int pad = Math.max(0, target - used);
+        if (pad > 0) spans.add(Span.raw(" ".repeat(pad)));
+        return used + pad;
+    }
+
+    /** 把 $HOME 前缀缩写成 {@code ~}，缩短工作目录展示。 */
+    private static String abbreviateHome(String path) {
+        String home = System.getProperty("user.home");
+        if (home != null && !home.isBlank() && path.startsWith(home)) {
+            return "~" + path.substring(home.length());
+        }
+        return path;
     }
 
     private static Span key(String s)  { return Span.styled(s, WELCOME_KEY); }

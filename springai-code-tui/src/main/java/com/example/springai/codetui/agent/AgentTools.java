@@ -241,6 +241,11 @@ public final class AgentTools {
                 .compactionStrategy(autoStrategy)
                 .build();
 
+        // 环境信息 / git 状态只取一次，供所有 provider 共用：既省掉每 provider 一次 git 子进程，
+        // 也把 gitStatus 的调用收敛到一处 —— 便于用 quietGitStatus 屏蔽它对 System.out 的杂散打印。
+        String environmentInfo = AgentEnvironment.info();
+        String gitStatus = quietGitStatus();
+
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
         java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
@@ -250,8 +255,8 @@ public final class AgentTools {
             }
             ChatClient c = ChatClient.builder(provider.chatModel())
                     .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
-                            .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, AgentEnvironment.info())
-                            .param(AgentEnvironment.GIT_STATUS_KEY, AgentEnvironment.gitStatus())
+                            .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, environmentInfo)
+                            .param(AgentEnvironment.GIT_STATUS_KEY, gitStatus)
                             // 每个 client 烘焙自家默认模型，保证 defaultSystem 自洽；
                             // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
                             .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel()))
@@ -312,6 +317,25 @@ public final class AgentTools {
         return todos.todos().stream()
                 .map(item -> statusMarker(item.status()) + " " + item.content())
                 .toList();
+    }
+
+    /**
+     * 调 {@link AgentEnvironment#gitStatus()} 但屏蔽它对 {@code System.out} 的杂散打印。
+     *
+     * <p>该库方法在「git 不可用」或「当前目录不是 git 仓库」两个分支里，会直接
+     * {@code System.out.println("Not inside a git repository." / "Git is not available...")}
+     * 并返回空串。code-tui 是内联 TUI、与库共用 stdout，这行会漏进终端 scrollback 污染画面。
+     * 这里在装配期（单线程、TUI 尚未接管终端）临时把 stdout 换成黑洞，取回返回值后立即还原——
+     * 返回值（正常时是格式化好的 git 状态块、异常分支是空串）照旧喂给系统提示，只是不再打印。
+     */
+    private static String quietGitStatus() {
+        java.io.PrintStream original = System.out;
+        try {
+            System.setOut(new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+            return AgentEnvironment.gitStatus();
+        } finally {
+            System.setOut(original);
+        }
     }
 
     private static String statusMarker(Todos.Status status) {
