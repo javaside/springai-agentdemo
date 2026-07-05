@@ -41,8 +41,8 @@
     </modules>
 
     <properties>
-        <java.version>21</java.version>
-        <maven.compiler.release>21</maven.compiler.release>
+        <java.version>17</java.version>
+        <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <spring-ai.version>2.0.0</spring-ai.version>
         <spring-boot.version>4.0.7</spring-boot.version>
@@ -123,7 +123,7 @@
         </pluginManagement>
 
         <plugins>
-            <!-- 所有模块统一用 Java 21 编译 -->
+            <!-- 所有模块统一用 Java 17 编译（基线：Spring 全家为 Java 17 字节码） -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

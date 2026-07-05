@@ -52,7 +52,7 @@
 
 ## 🚀 下载与运行（解压即用）
 
-**前置**：JDK 21+；至少配置一个 provider 的 API key。
+**前置**：JDK 17+；至少配置一个 provider 的 API key。（JDK 21+ 时 jline 用更现代的 FFM 终端后端，17 用 jni provider，功能一致。）
 
 ```bash
 # 1) 解压（二选一）
@@ -119,14 +119,14 @@ springai-code-tui-1.0.0/
 ## 🔐 校验（SHA-256）
 
 ```
-552127ad0fd4c955da0a64cc6fc21c1c563f7a2b424de05b1a514bb8427300a3  springai-code-tui-1.0.0-dist.tar.gz
-3207d744bb5e5cf1076c89296a7226d7dfe9915ba6253946a001c31a7da892ee  springai-code-tui-1.0.0-dist.zip
+0280952902de605aa801dfa1f23bb7e96f7a07387f405b1c5582a71341fcb197  springai-code-tui-1.0.0-dist.tar.gz
+d8a0499ff6695f0f5d5ea139a9669e18ac3da9d5cabf58029d81f8910e1a7538  springai-code-tui-1.0.0-dist.zip
 ```
 
 ```bash
 shasum -a 256 -c <<'EOF'
-552127ad0fd4c955da0a64cc6fc21c1c563f7a2b424de05b1a514bb8427300a3  springai-code-tui-1.0.0-dist.tar.gz
-3207d744bb5e5cf1076c89296a7226d7dfe9915ba6253946a001c31a7da892ee  springai-code-tui-1.0.0-dist.zip
+0280952902de605aa801dfa1f23bb7e96f7a07387f405b1c5582a71341fcb197  springai-code-tui-1.0.0-dist.tar.gz
+d8a0499ff6695f0f5d5ea139a9669e18ac3da9d5cabf58029d81f8910e1a7538  springai-code-tui-1.0.0-dist.zip
 EOF
 ```
 
@@ -142,4 +142,4 @@ EOF
 
 [Apache License 2.0](LICENSE)。发布包内随附 `LICENSE` 与 `NOTICE`（含所分发第三方库：Spring AI / Spring Boot / spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）。
 
-**环境**：JDK 21+，macOS / Linux / Windows。
+**环境**：JDK 17+，macOS / Linux / Windows。

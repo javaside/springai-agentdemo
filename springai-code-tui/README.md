@@ -79,7 +79,7 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 
 ## 发布打包（可分发、解压即运行）
 
-打一个自包含发布包（含启动脚本 + 主 jar + 全部运行期依赖），需 JDK 21+：
+打一个自包含发布包（含启动脚本 + 主 jar + 全部运行期依赖），需 JDK 17+：
 
 ```bash
 mvn -pl springai-code-tui clean package -Pdist
