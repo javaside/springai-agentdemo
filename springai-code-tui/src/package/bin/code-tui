@@ -27,5 +27,14 @@ else
     exit 1
 fi
 
+# 日志目录：默认写到安装目录（解压包）下的 logs/，与程序同处、不污染用户项目目录。
+# 若安装在只读位置无法写入，回退到用户级 ~/.codetui/logs。选定后经系统属性交给 logback（见 logback.xml）。
+# 务必在此确保目录可写：logback 配置期若因目录不可写报 WARN，会把内部状态打到 stdout 撕裂 TUI。
+LOG_DIR="$APP_HOME/logs"
+if ! ( mkdir -p "$LOG_DIR" 2>/dev/null && [ -w "$LOG_DIR" ] ); then
+    LOG_DIR="$HOME/.codetui/logs"
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+fi
+
 # manifest 的 Class-Path 相对 jar 定位 lib/，故这里以 jar 绝对路径启动，cwd 保持用户当前项目目录
-exec "$JAVA" ${JAVA_OPTS:-} -jar "$APP_HOME/springai-code-tui.jar" "$@"
+exec "$JAVA" ${JAVA_OPTS:-} -Dcodetui.log.dir="$LOG_DIR" -jar "$APP_HOME/springai-code-tui.jar" "$@"

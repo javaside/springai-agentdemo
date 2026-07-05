@@ -16,4 +16,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-"%JAVA%" %JAVA_OPTS% -jar "%APP_HOME%\springai-code-tui.jar" %*
+rem 日志目录：默认写到安装目录下 logs\，不污染用户项目目录；创建失败则回退到 %USERPROFILE%\.codetui\logs。
+set "LOG_DIR=%APP_HOME%\logs"
+mkdir "%LOG_DIR%" 2>nul
+if not exist "%LOG_DIR%\" (
+    set "LOG_DIR=%USERPROFILE%\.codetui\logs"
+    mkdir "%USERPROFILE%\.codetui\logs" 2>nul
+)
+
+"%JAVA%" %JAVA_OPTS% -Dcodetui.log.dir="%LOG_DIR%" -jar "%APP_HOME%\springai-code-tui.jar" %*

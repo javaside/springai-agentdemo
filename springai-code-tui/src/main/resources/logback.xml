@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
+    <!-- 日志目录：优先用启动器传入的 codetui.log.dir（= 解压包安装目录下的 logs/，见 bin/code-tui）；
+         未设置时（mvn/dev 或直接 java -jar）落到用户级 ~/.codetui/logs——绝不写进当前工作目录，
+         免得每个被操作的项目里都冒出一个 logs/。启动器已确保该目录可写，避免配置期 WARN 撕裂 TUI。 -->
+    <property name="LOG_DIR" value="${codetui.log.dir:-${user.home}/.codetui/logs}" />
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${user.dir}/logs/springai-code-tui.log</file>
+        <file>${LOG_DIR}/springai-code-tui.log</file>
         <!-- 不能设 append=false：RollingFileAppender 强制 append，配置期任何 WARN 都会让 logback
              把内部状态整段打到 System.out，撕裂内联 TUI 画面。历史由下面的 rollingPolicy 兜底。 -->
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${user.dir}/logs/springai-code-tui.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <fileNamePattern>${LOG_DIR}/springai-code-tui.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
             <maxFileSize>10MB</maxFileSize>
             <maxHistory>7</maxHistory>
             <totalSizeCap>100MB</totalSizeCap>
