@@ -75,6 +75,16 @@
     <build>
         <finalName>${project.artifactId}</finalName>
         <plugins>
+            <!-- 生成方法参数名（-parameters）：本模块自写的 @Tool（如 TodoWriteToolAdapter）依赖参数名
+                 作为工具入参 schema 的属性名。缺了它 Spring AI 只拿到 arg0，schema 与模型产出对不上。
+                 库自带的工具类在其各自 jar 里已带 -parameters，故只需给本模块补上。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <parameters>true</parameters>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>

@@ -21,6 +21,8 @@ import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.chat.model.ToolContext;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -179,8 +181,16 @@ public final class AgentTools {
         // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：7 个 @Tool 对象转 ToolCallback。
         // Skill 工具本身已是 ToolCallback（非 @Tool 对象），单独追加进列表；随后统一用 ToolEventCallback 装饰，
         // 使「技能被调用」也在 TUI 显示为一行工具活动。
+        // TodoWrite 不直接注册库工具：其入参双层 todos 嵌套让模型频繁绑定失败（见 TodoWriteToolAdapter 类注释）。
+        // 改注册薄适配器（入参 List<TodoItem>、schema 单层），并把库工具那套完整的面向模型描述原样移植过来，
+        // 使模型看到的使用指引与升级前一致——唯一变化只是入参 schema 的形状。
+        ToolCallback todoCallback = describedAs(
+                ToolCallbacks.from(new TodoWriteToolAdapter(todo))[0],
+                ToolCallbacks.from(todo)[0].getToolDefinition().description());
+
         List<ToolCallback> all = new ArrayList<>(Arrays.asList(
-                ToolCallbacks.from(fs, sh, grep, glob, todo, webFetch, askTool)));
+                ToolCallbacks.from(fs, sh, grep, glob, webFetch, askTool)));
+        all.add(todoCallback);      // 薄适配器版 TodoWrite（名仍为 "TodoWrite"）
         all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
         ToolCallback[] decorated = new ToolCallback[all.size()];
         ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
@@ -336,6 +346,28 @@ public final class AgentTools {
         } finally {
             System.setOut(original);
         }
+    }
+
+    /** 包一层，仅把 {@link ToolDefinition} 的 description 换成给定文本（name / inputSchema 原样），调用透传委托。 */
+    private static ToolCallback describedAs(ToolCallback delegate, String description) {
+        return new DescribedToolCallback(delegate, description);
+    }
+
+    /** 借用另一处描述、其余全透传的 {@link ToolCallback} 装饰器（用于把库工具的完整描述移植到适配器上）。 */
+    private static final class DescribedToolCallback implements ToolCallback {
+        private final ToolCallback delegate;
+        private final ToolDefinition definition;
+
+        DescribedToolCallback(ToolCallback delegate, String description) {
+            this.delegate = delegate;
+            ToolDefinition d = delegate.getToolDefinition();
+            this.definition = ToolDefinition.builder()
+                    .name(d.name()).description(description).inputSchema(d.inputSchema()).build();
+        }
+
+        @Override public ToolDefinition getToolDefinition() { return definition; }
+        @Override public String call(String toolInput) { return delegate.call(toolInput); }
+        @Override public String call(String toolInput, ToolContext toolContext) { return delegate.call(toolInput, toolContext); }
     }
 
     private static String statusMarker(Todos.Status status) {
