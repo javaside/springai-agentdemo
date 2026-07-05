@@ -15,7 +15,7 @@
         - spring-boot-dependencies : 仅用于统一第三方库（如 logback、junit）和 boot 模块 starter 的版本
       “导入 BOM” 只管版本、不引入任何实际依赖，因此 core/agent 仍然是纯净的非 Boot 工程。
     -->
-    <groupId>com.example.springai</groupId>
+    <groupId>io.github.javaside</groupId>
     <artifactId>springai-agentdemo</artifactId>
     <version>1.0.0</version>
     <packaging>pom</packaging>

@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.example.springai</groupId>
+        <groupId>io.github.javaside</groupId>
         <artifactId>springai-agentdemo</artifactId>
         <version>1.0.0</version>
     </parent>
