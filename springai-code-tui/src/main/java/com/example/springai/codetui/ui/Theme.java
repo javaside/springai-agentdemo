@@ -52,7 +52,7 @@ final class Theme {
     // 模型名用冷薄荷（与暖橙互补，凸显「当前模型」）；快捷键名提亮、说明用可读灰（避开近黑 DARK_GRAY）。
     static final Style WELCOME_BORDER = Style.create().fg(Color.indexed(173));            // 柔和陶土边框（比标题暗，退后）
     static final Style WELCOME_STAR   = Style.create().fg(Color.indexed(215)).bold();     // ✻ 品牌星标=暖橙
-    static final Style WELCOME_TITLE  = Style.create().fg(Color.BRIGHT_WHITE).bold();     // 标题=亮白加粗（最高对比）
+    static final Style WELCOME_TITLE  = Style.create().fg(Color.LIGHT_YELLOW).bold();     // 标题=亮白加粗（最高对比）
     static final Style WELCOME_BODY   = Style.create().fg(Color.indexed(250));            // 正文=可读浅灰
     static final Style WELCOME_ACCENT = Style.create().fg(Color.indexed(115)).bold();     // 强调（模型名）=冷薄荷加粗
     static final Style WELCOME_KEY    = Style.create().fg(Color.indexed(215));            // 快捷键名=暖橙
