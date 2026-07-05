@@ -10,12 +10,12 @@ import java.util.List;
 
 /**
  * DeepSeek provider（现役、默认激活）。key 缺失即 unavailable。
- * 模型名 deepseek-v4-flash（V4 现役；旧 deepseek-chat/reasoner 2026-07-24 停用）。
+ * 默认模型 deepseek-v4-pro（强推理；另有 deepseek-v4-flash 非思考款，旧 deepseek-chat/reasoner 2026-07-24 停用）。
  */
 public final class DeepSeekProvider implements LlmProvider {
 
     private static final String DEFAULT_BASE_URL = "https://api.deepseek.com";
-    private static final String DEFAULT_MODEL = "deepseek-v4-flash";
+    private static final String DEFAULT_MODEL = "deepseek-v4-pro";
     private static final List<ModelOption> MODELS = List.of(
             new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
             new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"));

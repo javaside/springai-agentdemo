@@ -15,7 +15,7 @@ class LlmProviderTest {
         DeepSeekProvider p = new DeepSeekProvider("fake-key");
         assertEquals("deepseek", p.id());
         assertTrue(p.available());
-        assertEquals("deepseek-v4-flash", p.defaultModel());
+        assertEquals("deepseek-v4-pro", p.defaultModel());
         assertFalse(p.models().isEmpty());
         assertTrue(p.chatModel() != null);
         assertEquals("deepseek-v4-pro", p.options("deepseek-v4-pro").getModel());

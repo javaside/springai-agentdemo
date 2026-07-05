@@ -17,7 +17,7 @@ class ProviderRegistryTest {
                 new AnthropicProvider("k"),
                 new OpenAiProvider("")));        // 不可用
         assertEquals("deepseek", reg.active().id());
-        assertEquals("deepseek-v4-flash", reg.activeModelId());
+        assertEquals("deepseek-v4-pro", reg.activeModelId());
         List<String> ids = reg.allModels().stream().map(ModelOption::id).toList();
         assertTrue(ids.contains("deepseek-v4-flash"));
         assertTrue(ids.contains("claude-sonnet-5"));
@@ -38,6 +38,6 @@ class ProviderRegistryTest {
     void selectUnknownModelIsIgnored() {
         ProviderRegistry reg = new ProviderRegistry(List.of(new DeepSeekProvider("k")));
         reg.select("no-such-model");
-        assertEquals("deepseek-v4-flash", reg.activeModelId());
+        assertEquals("deepseek-v4-pro", reg.activeModelId());
     }
 }

@@ -45,7 +45,7 @@ mvn -pl springai-code-tui -am package
 
 ```bash
 # 至少配置一个 provider 的 key（首个可用者激活；可同时配多个，用 /model 切换）
-export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役）
+export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役，默认 deepseek-v4-pro，另有 v4-flash 非思考款）
 # export ANTHROPIC_API_KEY=你的key       # Anthropic（默认 claude-opus-4-8，另有 fable-5/sonnet-5/haiku-4-5）
 # export OPENAI_API_KEY=你的key          # OpenAI（gpt-5.5 等）
 # 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
