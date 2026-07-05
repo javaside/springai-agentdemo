@@ -146,10 +146,10 @@ public final class CodingAgent implements SubmitHandler {
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
         listener.onUserMessage(turnId, text);  // UI 展示用户原文（注入只影响发给模型的文本）
         String effectiveText = injectSkill(text, skillName, turnId);
-        // 回合前会话快照：取消（Esc → dispose）时用它回滚，删除本回合写入的半截历史。
-        // 否则工具回合被中途取消会在会话里留下「带 tool_calls 但无 tool 结果」的悬空 assistant 消息，
-        // 下一次请求把这段坏历史发给 DeepSeek 会 400（insufficient tool messages following tool_calls）。
-        List<SessionEvent> mark = snapshotSession();
+        // 中断（Esc 取消 / 报错）时只裁掉「悬空尾巴」——末尾带 tool_calls 却无配对 tool 结果的消息——
+        // 而保留已完成任务与计划（见 trimDanglingToolCalls）。否则中途取消会留下「带 tool_calls 无结果」的
+        // 悬空 assistant，下一次请求发给 DeepSeek 会 400（insufficient tool messages following tool_calls）；
+        // 而整段回滚又会连「任务 1..N 已完成、计划是什么」一起抹掉，导致无法续跑原计划。
         // 一次性快照激活 provider：client / options / grounding 全部由同一个 provider 派生，
         // 避免与并发 /model 切换交错（虽当前 submit 与 selectModel 同在 UI 线程，快照更自洽）。
         ChatClient client;
@@ -182,8 +182,8 @@ public final class CodingAgent implements SubmitHandler {
                     .doOnNext(resp -> handleChunk(resp, turnId))
                     .doOnError(err -> handleError(err, turnId))
                     .doOnComplete(() -> handleComplete(turnId))
-                    // 仅在「被取消」时触发（正常 complete/error 不触发）：把会话回滚到回合前，清掉半截历史。
-                    .doOnCancel(() -> rollbackTo(mark))
+                    // 仅在「被取消」时触发（正常 complete/error 不触发）：裁掉悬空 tool_calls 尾巴，保留干净前缀。
+                    .doOnCancel(this::trimDanglingToolCalls)
                     .subscribe();
         } catch (RuntimeException ex) {
             // 同步组装/订阅异常不走 doOnError：手动复位状态（onError → IDLE），
@@ -219,19 +219,22 @@ public final class CodingAgent implements SubmitHandler {
         }
     }
 
-    /** 回合前会话事件快照（复制一份，回合内的写入不会改动它）。sessionService 缺失（测试桩）时返回空。 */
-    List<SessionEvent> snapshotSession() {
-        return sessionService == null ? List.of() : List.copyOf(sessionService.getEvents(sessionId));
-    }
-
     /**
-     * 把会话回滚到 {@code mark} 快照（取消回合时调用）：用 {@link SessionRepository#replaceEvents} 覆盖写回，
-     * 删除本回合写入的半截历史（尤其是悬空的 {@code assistant(tool_calls)}）。
-     * 仓库缺失（测试桩）时静默跳过。
+     * 中断（取消 / 报错）时调用：把会话裁到「最长干净前缀」，删掉末尾任何 {@code tool_calls} 未被后续 tool
+     * 结果配平的悬空消息，用 {@link SessionRepository#replaceEvents} 覆盖写回。
+     *
+     * <p>相较「整段回滚到回合前」，这样能保留已完成任务与计划（TodoWrite / 已完成的 Task 回合）——它们都以
+     * 「tool_calls 全部配平」的干净状态留在历史里，故 {@code /continue} 能据此续跑原计划；同时仍删掉那条会导致
+     * 下轮 400 的悬空 {@code assistant(tool_calls)}。service / 仓库缺失（测试桩）时静默跳过。
      */
-    void rollbackTo(List<SessionEvent> mark) {
-        if (sessionRepository != null) {
-            sessionRepository.replaceEvents(sessionId, mark);
+    void trimDanglingToolCalls() {
+        if (sessionService == null || sessionRepository == null) {
+            return;
+        }
+        List<SessionEvent> events = sessionService.getEvents(sessionId);   // 时序、oldest-first
+        int cleanLen = SessionEvents.cleanPrefixLength(events);
+        if (cleanLen < events.size()) {
+            sessionRepository.replaceEvents(sessionId, List.copyOf(events.subList(0, cleanLen)));
         }
     }
 
@@ -377,6 +380,8 @@ public final class CodingAgent implements SubmitHandler {
 
     private void handleError(Throwable err, long turnId) {
         listener.onError(turnId, err);
+        // 报错也裁掉悬空 tool_calls 尾巴：既避免坏历史下轮 400，又保留已完成任务与计划以便 /continue 续跑。
+        trimDanglingToolCalls();
     }
 
     private void handleComplete(long turnId) {

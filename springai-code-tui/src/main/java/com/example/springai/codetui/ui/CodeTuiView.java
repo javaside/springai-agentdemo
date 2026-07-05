@@ -117,6 +117,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
             new SlashCommand("/reload",  "重新扫描技能目录（新增/删除的 SKILL.md 生效）"),
+            new SlashCommand("/continue", "继续执行上一批未完成的计划"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
 
@@ -554,6 +555,14 @@ public final class CodeTuiView extends InlineApp {
         if (cmd.equals("/reload")) {                 // 重扫技能目录：运行中新增/删除的 SKILL.md 就此对模型与 /skills 生效
             inputState.clear();
             reloadSkills();
+            return;
+        }
+        if (cmd.equals("/continue")) {               // 续跑：上一批计划被 Esc/报错中断后，据会话里保留的 todo 从首个未完成项接着做
+            inputState.clear();
+            String prompt = "继续执行上一批未完成的计划。请先回顾你的 todo 列表，从第一个尚未完成的任务开始，"
+                    + "用 Task 工具逐个委派子 agent 继续；已完成的任务不要重做。若没有未完成的计划，直接说明即可。";
+            if (state.isBusy()) state.enqueue(prompt, null);   // 忙/压缩中：排队，回合结束自动出队（同普通消息）
+            else dispatch(prompt, null);
             return;
         }
         if (cmd.equals("/help")) {
