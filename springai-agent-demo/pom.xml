@@ -95,7 +95,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.example.springai.agent.AgentDemoApplication</mainClass>
+                            <mainClass>io.github.javaside.springai.agent.AgentDemoApplication</mainClass>
                             <addClasspath>true</addClasspath>
                             <classpathPrefix>lib/</classpathPrefix>
                         </manifest>

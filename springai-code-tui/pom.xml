@@ -106,7 +106,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.example.springai.codetui.CodeTuiApplication</mainClass>
+                            <mainClass>io.github.javaside.springai.codetui.CodeTuiApplication</mainClass>
                             <addClasspath>true</addClasspath>
                             <classpathPrefix>lib/</classpathPrefix>
                             <!-- 写入 Implementation-Version（=project.version），供欢迎横幅在运行时读取版本号 -->

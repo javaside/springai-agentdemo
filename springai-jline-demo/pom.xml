@@ -46,7 +46,7 @@
                         <manifest>
                             <addClasspath>true</addClasspath>
                             <classpathPrefix>lib/</classpathPrefix>
-                            <mainClass>com.example.springai.jline.terminal.TerminalBasics</mainClass>
+                            <mainClass>io.github.javaside.springai.jline.terminal.TerminalBasics</mainClass>
                         </manifest>
                     </archive>
                 </configuration>

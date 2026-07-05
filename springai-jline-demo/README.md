@@ -4,7 +4,7 @@ JLine 3 `Terminal` 接口的入门示例。
 
 ## TerminalBasics —— 一个例子学会 Terminal 怎么用
 
-`com.example.springai.jline.terminal.TerminalBasics` 是一个**读源码就能学会、跑起来能看到效果**的单文件示例。
+`io.github.javaside.springai.jline.terminal.TerminalBasics` 是一个**读源码就能学会、跑起来能看到效果**的单文件示例。
 它按 `Terminal` 接口 Javadoc 的几大块，依次用**真实运行的代码**演示每个方法的用法，逐行注释；
 交互块会提示你操作、你操作后立刻有反应；每节之间停下来等你按键，不会一闪而过。
 

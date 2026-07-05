@@ -89,7 +89,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.example.springai.core.CoreDemoApplication</mainClass>
+                            <mainClass>io.github.javaside.springai.core.CoreDemoApplication</mainClass>
                             <addClasspath>true</addClasspath>
                             <classpathPrefix>lib/</classpathPrefix>
                         </manifest>
