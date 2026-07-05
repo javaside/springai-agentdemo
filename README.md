@@ -132,3 +132,14 @@ Spring AI 的 API 与模型解耦。换成 OpenAI / 通义 / Ollama 等：
 - [springai-boot-demo/README.md](springai-boot-demo/README.md)
 - [springai-jline-demo/README.md](springai-jline-demo/README.md)
 - [springai-code-tui/README.md](springai-code-tui/README.md)
+
+## 许可
+
+本项目以 [Apache License 2.0](LICENSE) 开源（见 [`LICENSE`](LICENSE)、[`NOTICE`](NOTICE)）。
+
+选它的理由：与所依赖的 Spring AI / spring-ai-community 全栈一致（均 Apache 2.0），并附带显式专利授权。
+所依赖的第三方库（Spring AI、Spring Boot、spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）均为宽松许可；
+`springai-code-tui` 的发布包（`-Pdist`）会分发它们的 jar，故包内随附 `LICENSE` 与 `NOTICE`。
+
+> `springai-code-tui` 给智能体开放了对本机文件系统与 shell 的实质访问、且**非安全沙箱**——按 Apache 2.0 «AS IS»
+> 条款不提供任何担保，请阅读该模块 README 的「安全声明」后自担风险使用。

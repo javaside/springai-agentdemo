@@ -22,6 +22,15 @@
 
     <name>springai-agentdemo</name>
     <description>Spring AI 2.0 学习示例：原始 API（core/agent） vs 自动装配（boot）</description>
+    <inceptionYear>2026</inceptionYear>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <modules>
         <module>springai-core-demo</module>

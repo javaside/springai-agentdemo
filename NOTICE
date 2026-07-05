@@ -1,0 +1,27 @@
+springai-agentdemo
+Copyright 2026 zxh
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this project except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+See the LICENSE file in this repository for the full text.
+
+--------------------------------------------------------------------------------
+Third-party components
+
+The distributable package (produced by `mvn -pl springai-code-tui package -Pdist`)
+bundles the following third-party libraries under `lib/`. Each remains governed by
+its own license; this project does not relicense them.
+
+  - Spring AI                (org.springframework.ai)   — Apache License 2.0
+  - Spring Framework / Boot  (org.springframework*)     — Apache License 2.0
+  - spring-ai-community      (org.springaicommunity)    — Apache License 2.0
+  - TamboUI                  (dev.tamboui)              — MIT License
+  - Jackson, Reactor, SLF4J, Logback, JTokkit, and other transitive dependencies
+    — see each jar's META-INF/ for its individual license and notices.
+
+A full machine-generated inventory can be produced on demand with the
+license-maven-plugin (goal `add-third-party` / `third-party-report`).
