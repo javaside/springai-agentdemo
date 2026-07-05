@@ -374,6 +374,11 @@ public final class CodeTuiView extends InlineApp {
             quit();
             return EventResult.HANDLED;
         }
+        // 任意按键消费掉上一条 sticky notice（如「已取消当前回合」），恢复状态栏常态行。
+        // 本次按键若要显示新 notice，会在下方各分支重新 setNotice（晚于此处），故当次提示不受影响。
+        // 修复：真实输入走 inputState 编辑器、不再触发旧 typeChar 清 notice，导致取消长回合（如子 agent）
+        // 后 notice 永久占据状态栏；这里补回「下次按键即清」的既定行为。
+        if (!state.notice().isEmpty()) state.setNotice("");
         if (activeAsk != null) return onAskKey(k);      // 作答模态：全部按键交给它，屏蔽文本编辑
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
