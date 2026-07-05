@@ -815,7 +815,7 @@ public final class CodeTuiView extends InlineApp {
         for (int i = 0; i < q.options().size(); i++) {
             OptionSpec o = q.options().get(i);
             boolean sel = i == askOpt;
-            String box = q.multiSelect() ? (askChecked.contains(i) ? "[x] " : "[ ] ") : "";
+            String box = q.multiSelect() ? (askChecked.contains(i) ? "[✓] " : "[ ] ") : "";
             els.add(text("  " + (sel ? "❯ " : "  ") + box + (i + 1) + ". " + o.label() + "   " + o.description())
                     .style(sel ? PICK_SEL : PICK_DESC));
         }
