@@ -3,6 +3,7 @@ package com.example.springai.codetui.ui;
 import com.example.springai.codetui.agent.AgentListener;
 import com.example.springai.codetui.agent.AskRequest;
 import dev.tamboui.text.CharWidth;
+import org.springframework.ai.chat.messages.Message;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -96,6 +97,21 @@ public final class ConversationState implements AgentListener {
 
     /** 追加一条信息行（灰色，进 scrollback）。用于「本回合实际使用的模型」等确定性提示。 */
     public synchronized void pushInfo(String text) { pending.add(new OutputLine(text, OutputLine.Kind.INFO)); }
+
+    /**
+     * -c 恢复启动：把历史消息回放进 scrollback（仿 Claude Code --continue），直观重现上次对话，
+     * 而非只提示「已恢复 N 条」。转换出的定稿行走正常 drain 通道下沉，故排在欢迎横幅之后、首条新输入之前。
+     * 空历史则什么都不做。
+     */
+    public synchronized void replayHistory(List<Message> messages) {
+        List<OutputLine> body = HistoryReplay.toReplayLines(messages);
+        if (body.isEmpty()) return;
+        pending.add(new OutputLine("↺ 已恢复上次会话（" + HistoryReplay.userTurns(messages) + " 轮对话）",
+                OutputLine.Kind.INFO));
+        pending.addAll(body);
+        pending.add(new OutputLine("──── 以上为历史 · 可继续对话，或 /continue 续跑未完成的计划 ────",
+                OutputLine.Kind.INFO));
+    }
 
     // ── 消息队列（忙时排队，回合结束自动出队） ───────────────────────────
     public synchronized void enqueue(String msg, String skill) { queued.add(new Queued(msg, skill)); }

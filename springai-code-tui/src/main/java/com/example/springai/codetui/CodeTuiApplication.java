@@ -57,10 +57,10 @@ public class CodeTuiApplication {
                 runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
                 runtime.reloadableSkill());
 
-        // 开场提示：恢复了显示历史条数；-c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
+        // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
+        // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
         if (resumed) {
-            int n = runtime.sessionService().getEvents(sessionId).size();
-            state.pushInfo("↺ 已恢复上次会话（" + n + " 条历史）。输入 /continue 可继续上次未完成的计划。");
+            state.replayHistory(runtime.sessionService().getMessages(sessionId));
         } else if (wantContinue) {
             state.pushInfo("（没有可恢复的会话，已开始新会话。）");
         } else if (latest.isPresent()) {
