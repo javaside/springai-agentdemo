@@ -232,9 +232,9 @@ public final class CodingAgent implements SubmitHandler {
             return;
         }
         List<SessionEvent> events = sessionService.getEvents(sessionId);   // 时序、oldest-first
-        int cleanLen = SessionEvents.cleanPrefixLength(events);
-        if (cleanLen < events.size()) {
-            sessionRepository.replaceEvents(sessionId, List.copyOf(events.subList(0, cleanLen)));
+        List<SessionEvent> clean = SessionEvents.sanitize(events);         // 裁尾部悬空 tool_calls + 丢孤儿 tool 结果
+        if (clean != events) {   // sanitize 无改动时返回同一引用；引用不同即有裁剪/重建
+            sessionRepository.replaceEvents(sessionId, List.copyOf(clean));
         }
     }
 

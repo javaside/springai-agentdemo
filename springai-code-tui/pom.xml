@@ -119,6 +119,13 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.3</version>
+                <configuration>
+                    <!-- 测试期日志导到 target/test-logs，不污染运行期日志位置（~/.codetui/logs）：
+                         否则 mvn test 会把测试噪声（含故意抛异常的用例栈）混进用户真实日志，误导排查。 -->
+                    <systemPropertyVariables>
+                        <codetui.log.dir>${project.build.directory}/test-logs</codetui.log.dir>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
         </plugins>
     </build>

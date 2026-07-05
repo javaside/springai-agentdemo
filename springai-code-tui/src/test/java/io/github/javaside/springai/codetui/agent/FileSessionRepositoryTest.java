@@ -147,6 +147,31 @@ class FileSessionRepositoryTest {
     }
 
     @Test
+    void loadDropsOrphanToolResponse(@TempDir Path dir) {
+        // 复现真实坏会话：asst(a,b) → tool(a,b) → tool(孤儿) → user。孤儿 tool 结果无对应 assistant tool_call，
+        // 恢复(-c)后首个请求会被 DeepSeek 判 400。加载时应清掉孤儿，得到 API 合法序列。
+        FileSessionRepository repo = new FileSessionRepository(dir);
+        repo.save(session(SID));
+        repo.appendEvent(ev(SID, new UserMessage("q")));
+        repo.appendEvent(ev(SID, asstCalls("a", "b")));
+        repo.appendEvent(ev(SID, toolResults("a", "b")));
+        repo.appendEvent(ev(SID, toolResults("orphan")));   // 孤儿：id 从未出现在任何 assistant tool_calls
+        repo.appendEvent(ev(SID, new UserMessage("接着问")));
+
+        FileSessionRepository reopened = new FileSessionRepository(dir);
+        List<Message> msgs = reopened.findEvents(SID, EventFilter.all()).stream().map(SessionEvent::getMessage).toList();
+        assertEquals(4, msgs.size(), "加载时应丢掉孤儿 tool 消息");
+        // 校验不变量：每条 tool 结果的 id 都能在其之前的 assistant tool_calls 里找到
+        java.util.Set<String> open = new java.util.HashSet<>();
+        for (Message m : msgs) {
+            if (m instanceof AssistantMessage am && am.hasToolCalls()) am.getToolCalls().forEach(tc -> open.add(tc.id()));
+            else if (m instanceof ToolResponseMessage trm) trm.getResponses().forEach(r ->
+                    assertTrue(open.remove(r.id()), "残留孤儿 tool 结果：" + r.id()));
+        }
+        assertEquals("接着问", msgs.get(3).getText(), "末尾用户消息保留");
+    }
+
+    @Test
     void corruptFileIsSkippedNotFatal(@TempDir Path dir) throws Exception {
         Files.createDirectories(dir);
         Files.writeString(dir.resolve("garbage.json"), "{ not valid json ]");

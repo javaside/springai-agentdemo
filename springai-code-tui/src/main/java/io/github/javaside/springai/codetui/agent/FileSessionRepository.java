@@ -237,11 +237,9 @@ public final class FileSessionRepository implements SessionRepository {
             for (PersistedEvent pe : nullToEmpty(dto.events())) {
                 events.add(toEvent(pe));
             }
-            // 加载即裁掉悬空 tool_calls 尾巴（内存态即可，下次变更自然回写）
-            int cleanLen = SessionEvents.cleanPrefixLength(events);
-            if (cleanLen < events.size()) {
-                events = new ArrayList<>(events.subList(0, cleanLen));
-            }
+            // 加载即净化成 API 合法序列：裁掉尾部悬空 tool_calls，并丢掉孤儿 tool 结果（否则恢复会话首个请求 400）。
+            // 内存态即可，下次变更自然回写。
+            events = SessionEvents.sanitize(events);
             return new SessionData(session, List.copyOf(events), dto.version());
         } catch (RuntimeException | IOException e) {
             log.warn("跳过损坏的会话文件 {}：{}", file, e.toString());
