@@ -11,7 +11,6 @@ import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springaicommunity.agent.utils.AgentEnvironment;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.session.DefaultSessionService;
-import org.springframework.ai.session.InMemorySessionRepository;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
@@ -40,8 +39,8 @@ import java.util.List;
  *
  * <p><b>会话记忆（spring-ai-session）</b>：取代原先的 {@code MessageChatMemoryAdvisor} 定长滑窗。
  * 事件溯源存储 + 「回合/token 感知」压缩——超过 token 阈值时用 LLM 滚动摘要把更早历史压成一条摘要事件，
- * 且压缩尊重回合边界、不会拆散某轮的 tool_call 与 tool_result。当前用内存仓库
- * （{@link InMemorySessionRepository}），进程退出即失效。
+ * 且压缩尊重回合边界、不会拆散某轮的 tool_call 与 tool_result。用文件仓库
+ * （{@link FileSessionRepository}，落盘 {@code <root>/.codetui/sessions/}），进程重启后可加载、按项目隔离。
  *
  * <p><b>返回 {@link AgentRuntime}</b>：{@link #build} 除了 {@link ChatClient}，还暴露 {@link SessionService}
  * 与一份更激进的手动压缩策略（保留 20 事件），供上层 {@code /compact} 命令直接触发压缩。
@@ -208,9 +207,10 @@ public final class AgentTools {
         System.arraycopy(decorated, 0, toolsWithTask, 0, decorated.length);
         toolsWithTask[decorated.length] = decoratedTaskTool;
 
-        // 事件溯源会话记忆：内存仓库 + 「回合/token 感知」压缩，取代原滑窗记忆。
-        // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 回滚半截历史（DefaultSessionService 不暴露该能力）。
-        SessionRepository sessionRepository = InMemorySessionRepository.builder().build();
+        // 事件溯源会话记忆：文件仓库（<root>/.codetui/sessions/，按项目隔离，进程重启后可加载）+ 「回合/token 感知」压缩。
+        // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 裁剪半截历史（DefaultSessionService 不暴露该能力）。
+        SessionRepository sessionRepository =
+                new FileSessionRepository(root.resolve(".codetui").resolve("sessions"));
         SessionService sessionService = DefaultSessionService.builder()
                 .sessionRepository(sessionRepository)
                 .build();

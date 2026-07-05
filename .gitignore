@@ -7,3 +7,6 @@ target/
 # code-tui 运行时日志（logback 写到 ${user.dir}）
 springai-code-tui.log
 *.log
+# code-tui 运行时目录：持久化会话（.codetui/sessions/）与项目级技能，按项目生成，不入库
+.codetui/
+logs/

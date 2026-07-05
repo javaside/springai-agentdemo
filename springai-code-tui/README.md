@@ -54,9 +54,20 @@ export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役，默认 de
 cd /path/to/some/disposable/project
 
 java -jar /Users/zxh/IdeaProjects/springai-agentdemo/springai-code-tui/target/springai-code-tui.jar
+
+# 恢复上次会话（仿 Claude Code 的 -c）：接着上次的对话/计划继续
+java -jar .../springai-code-tui.jar -c            # 或 --continue
 ```
 
 启动后直接进入 TUI（当前工作区即上面 `cd` 进入的目录）。请自行遵循上方「安全声明」的使用建议。
+
+### 会话持久化与恢复
+
+会话事件持久化在 `<项目根>/.codetui/sessions/<sessionId>.json`（**按项目隔离**，已被 `.gitignore`）。
+
+- **默认启动**：开一个**全新会话**（干净上下文，不读旧历史），生成一个新 session 文件；旧会话文件原封不动。
+- **`-c` / `--continue` 启动**：恢复**最近一次**会话（按文件最后修改时间选），可继续上次的对话，并用 `/continue` 接着上次未完成的计划跑。
+- 仓库惰性加载：默认启动不读盘；只有 `-c` 选中的那个会话才被载入。加载时会裁掉上次硬中断残留的悬空工具调用，避免续跑首个请求报错。
 
 ## 发布打包（可分发、解压即运行）
 
