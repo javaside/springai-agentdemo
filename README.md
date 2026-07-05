@@ -23,7 +23,7 @@
 |------|------|
 | Spring AI | 2.0.0 |
 | Spring Boot | 4.0.7（仅 boot 模块使用） |
-| Java | 21 |
+| Java | 17（基线；JDK 21+ 时 jline 自动启用 FFM 终端后端） |
 | Maven | 3.9+ |
 
 ## 项目结构
@@ -103,7 +103,7 @@ java -jar springai-core-demo/target/springai-core-demo.jar
 java -jar springai-agent-demo/target/springai-agent-demo.jar
 
 # 自动装配模块（Spring Boot，可执行 fat jar；也可用 mvn -pl springai-boot-demo spring-boot:run）
-java -jar springai-boot-demo/target/springai-boot-demo-1.0.0.jar
+java -jar springai-boot-demo/target/springai-boot-demo-1.1.0.jar
 
 # 终端基础示例（JLine 3）
 java -jar springai-jline-demo/target/springai-jline-demo.jar

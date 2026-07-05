@@ -9,7 +9,7 @@
 ```bash
 export DEEPSEEK_API_KEY=你的key
 mvn -pl springai-boot-demo spring-boot:run
-# 或：mvn -pl springai-boot-demo -am package && java -jar springai-boot-demo/target/springai-boot-demo-1.0.0.jar
+# 或：mvn -pl springai-boot-demo -am package && java -jar springai-boot-demo/target/springai-boot-demo-1.1.0.jar
 ```
 
 ## 示例清单
