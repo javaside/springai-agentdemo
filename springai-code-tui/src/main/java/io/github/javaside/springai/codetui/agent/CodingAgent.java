@@ -55,7 +55,7 @@ public final class CodingAgent implements SubmitHandler {
     private final ProviderRegistry registry;                       // 可空：多 provider 路径；null 走旧单-client 路径
     private final java.util.Map<String, ChatClient> clientsByProvider;   // 可空：按 provider id 取 ChatClient
     private final AgentListener listener;
-    private final String sessionId;
+    private volatile String sessionId;   // /clear 换新会话时原地替换；submit 里 advisor param 每回合实时读取
     private final AtomicLong activeTurnId;
     private final SessionService sessionService;
     private final CompactionStrategy manualStrategy;
@@ -283,6 +283,21 @@ public final class CodingAgent implements SubmitHandler {
         Thread t = new Thread(this::runCompaction, "manual-compact");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * {@code /clear}：切到一个全新空会话。仅换 {@link #sessionId}（volatile 写），下一个回合的
+     * {@code SessionMemoryAdvisor} 会按新 id 自动创建空会话；旧会话事件/文件<b>原样保留</b>，可 {@code -c} 恢复。
+     * 调用方（{@code CodeTuiView}）已保证仅在空闲（非回合中/非压缩中）时调用，故此处无需再守卫并发。
+     */
+    @Override
+    public void clearContext() {
+        this.sessionId = SessionIds.newId();
+    }
+
+    /** 当前会话 id（包级可见，供测试断言换会话是否生效）。 */
+    String sessionId() {
+        return sessionId;
     }
 
     /**
