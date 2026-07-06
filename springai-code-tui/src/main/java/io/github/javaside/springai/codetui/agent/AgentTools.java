@@ -98,6 +98,9 @@ public final class AgentTools {
     /** 记忆系统提示注入的 param 键；与 SYSTEM_TEMPLATE 里的 {AUTO_MEMORY} 占位符对应。 */
     private static final String AUTO_MEMORY_KEY = "AUTO_MEMORY";
 
+    /** 项目指令注入的 param 键；与 SYSTEM_TEMPLATE 里的 {PROJECT_INSTRUCTIONS} 占位符对应。 */
+    private static final String PROJECT_INSTRUCTIONS_KEY = "PROJECT_INSTRUCTIONS";
+
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
      * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
@@ -136,6 +139,8 @@ public final class AgentTools {
             当前模型：{AGENT_MODEL}。
 
             {AUTO_MEMORY}
+
+            {PROJECT_INSTRUCTIONS}
             """;
 
     /**
@@ -269,6 +274,9 @@ public final class AgentTools {
         // 记忆系统提示：渲染一次供所有 provider 共用（注入记忆根路径；见 MemoryPrompt 为何不走 ST 渲染）
         String autoMemoryPrompt = MemoryPrompt.render(memoryDir(root).toString());
 
+        // 项目指令（AGENTS.md，人手写、提交入库）：渲染一次供主/子 agent 共用；无文件则为空段。
+        String projectInstructions = ProjectInstructions.load(root);
+
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
         java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
@@ -283,7 +291,8 @@ public final class AgentTools {
                             // 每个 client 烘焙自家默认模型，保证 defaultSystem 自洽；
                             // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
                             .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel())
-                            .param(AUTO_MEMORY_KEY, autoMemoryPrompt))
+                            .param(AUTO_MEMORY_KEY, autoMemoryPrompt)
+                            .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions))
                     .defaultTools(toolsWithTask)
                     .defaultAdvisors(memoryAdvisor)
                     .build();
