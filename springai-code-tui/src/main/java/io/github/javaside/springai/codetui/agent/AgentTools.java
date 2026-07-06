@@ -212,10 +212,13 @@ public final class AgentTools {
             }
         }
 
+        // 项目指令（AGENTS.md，人手写、提交入库）：渲染一次供主/子 agent 共用；无文件则为空段。
+        String projectInstructions = ProjectInstructions.load(root);
+
         // 子 agent（Task 工具）：SubagentRunner 复用「已装饰、带边界」的工具列表 decorated；
         // Task 工具本身也用 ToolEventCallback 装饰，故委派本身在主流显示为一行。
         java.util.List<ToolCallback> decoratedList = java.util.List.of(decorated);
-        SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener);
+        SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener, projectInstructions);
         java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
         ToolCallback taskTool = SubagentTool.create(subagentSpecs,
                 (spec, prompt, desc, turnIgnored) ->
@@ -273,9 +276,6 @@ public final class AgentTools {
 
         // 记忆系统提示：渲染一次供所有 provider 共用（注入记忆根路径；见 MemoryPrompt 为何不走 ST 渲染）
         String autoMemoryPrompt = MemoryPrompt.render(memoryDir(root).toString());
-
-        // 项目指令（AGENTS.md，人手写、提交入库）：渲染一次供主/子 agent 共用；无文件则为空段。
-        String projectInstructions = ProjectInstructions.load(root);
 
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。

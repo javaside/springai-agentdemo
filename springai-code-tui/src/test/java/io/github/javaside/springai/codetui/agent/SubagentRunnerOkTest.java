@@ -61,7 +61,7 @@ class SubagentRunnerOkTest {
     void success_emitsOkTrue_andReturnsContent() {
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel(true))));
         RecordingListener lis = new RecordingListener();
-        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis);
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis, "");
         String out = runner.run(spec(), "hi", "desc", 1L);
         assertEquals("done", out);
         assertEquals(Boolean.TRUE, lis.ok);
@@ -71,7 +71,7 @@ class SubagentRunnerOkTest {
     void failure_emitsOkFalse_andRethrows() {
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel(false))));
         RecordingListener lis = new RecordingListener();
-        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis);
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis, "");
         assertThrows(RuntimeException.class, () -> runner.run(spec(), "hi", "desc", 1L));
         assertEquals(Boolean.FALSE, lis.ok);
     }
