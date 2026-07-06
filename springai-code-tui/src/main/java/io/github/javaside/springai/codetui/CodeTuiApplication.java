@@ -7,15 +7,12 @@ import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.SessionIds;
 import io.github.javaside.springai.codetui.ui.CodeTuiView;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 
 import java.nio.file.Path;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -49,7 +46,7 @@ public class CodeTuiApplication {
         boolean wantContinue = hasContinueFlag(args);
         Optional<String> latest = FileSessionRepository.latestSessionId(sessionsDir);
         boolean resumed = wantContinue && latest.isPresent();
-        String sessionId = resumed ? latest.get() : newSessionId();
+        String sessionId = resumed ? latest.get() : SessionIds.newId();
 
         AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state);
         CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
@@ -81,10 +78,4 @@ public class CodeTuiApplication {
         return false;
     }
 
-    /** 新会话 id：UTC 时间戳 + 短随机，文件名安全（[0-9A-Za-z-]），可按名近似排序。 */
-    private static String newSessionId() {
-        String ts = DateTimeFormatter.ofPattern("uuuuMMdd'T'HHmmss")
-                .withZone(ZoneOffset.UTC).format(Instant.now());
-        return ts + "-" + UUID.randomUUID().toString().substring(0, 6);
-    }
 }
