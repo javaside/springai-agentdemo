@@ -29,6 +29,12 @@ class SubagentInstructionsTest {
     }
 
     @Test
+    void nullInstructions_treatedAsEmpty() {
+        String eff = runnerWith(null).effectiveSystemPrompt(spec());
+        assertEquals("SUBAGENT 系统提示正文", eff, "null 项目指令应归一化为空、原样返回 spec 提示");
+    }
+
+    @Test
     void nonEmptyInstructions_appendedAfterSpecPrompt() {
         String eff = runnerWith("PROJ_INSTR_文本").effectiveSystemPrompt(spec());
         assertTrue(eff.startsWith("SUBAGENT 系统提示正文"), "spec 提示在前");
