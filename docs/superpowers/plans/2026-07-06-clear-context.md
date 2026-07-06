@@ -577,13 +577,14 @@ Expected: FAIL —— `/clear` 尚未被识别为命令，被当普通文本提�
 ```java
         if (cmd.equals("/clear")) {                  // 换新空会话：旧会话留盘可 -c 恢复
             inputState.clear();
-            if (!state.isIdle()) {                   // 回合中/压缩中：拒绝（同 /compact 守卫）
-                state.setNotice("忙碌中，无法清空");
+            if (state.isBusy()) {                    // 回合中 或 压缩中：拒绝（isBusy = !isIdle || compacting）
+                state.setNotice("忙碌中，无法清空");   // 注意：必须用 isBusy 而非 isIdle——/compact 后台压缩时 status 仍 IDLE
                 return;
             }
             onSubmit.clearContext();                 // (A) 换 sessionId
             state.resetForNewSession();              // 复位面板/排队/提示
             lastShownModel = "";                     // 新会话首个回合重新打「⚙ 使用模型 X」
+            pendingSkill = null;                     // 清掉未发送的技能挂载：新会话不继承
             var r = runner();
             if (r != null) {                         // (B) 真清屏只在运行态做（测试态 runner==null 跳过）
                 r.runOnRenderThread(() -> {

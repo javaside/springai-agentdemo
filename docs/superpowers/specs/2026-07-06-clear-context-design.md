@@ -49,7 +49,7 @@
 ```
 用户输入 /clear
   → CodeTuiView.submitInput() 识别命令
-  → 若 !state.isIdle() → setNotice("忙碌中，无法清空")，return
+  → 若 state.isBusy() → setNotice("忙碌中，无法清空")，return   // isBusy = !isIdle || compacting（不能只用 isIdle：/compact 后台压缩时 status 仍 IDLE）
   → onSubmit.clearContext()               // (A) CodingAgent 换 volatile sessionId
   → state.resetForNewSession()            // 重置 todo/子任务/pending/notice/queued
   → runOnRenderThread:
@@ -93,7 +93,7 @@
 
 - **反射失效（库升级等）**：`ScreenCleaner.clear()` 吞异常返回 `false` → 降级打印分割线。**上下文照样已换新会话**
   （A 与 B 解耦），最坏情况只是屏幕没清干净，功能不残。
-- **忙时**：`!state.isIdle()` 直接拒绝并 `setNotice`，与 `/compact` 同一守卫，杜绝换 id 时旧回合订阅仍在写。
+- **忙时**：`state.isBusy()`（= `!isIdle() || compacting`）直接拒绝并 `setNotice`，与 `/compact` 同一守卫（回合中 + 压缩中）。**不能只用 `isIdle()`**：手动 `/compact` 在后台线程压缩，其间 `status` 仍是 `IDLE`、只有 `compacting=true`，只查 `isIdle()` 会漏掉压缩中这一路，导致换会话时压缩仍在写、并把「已压缩」消息漏进新会话。
 - **空会话不落盘**：`/clear` 后立即退出，新空会话无文件，`-c` 仍恢复旧会话——无数据丢失。
 - **`/clear` 后 `-c` 语义**：旧会话仍是 `latestSessionId`（按 mtime），直到新会话首次发消息才易主。一致、无意外。
 
