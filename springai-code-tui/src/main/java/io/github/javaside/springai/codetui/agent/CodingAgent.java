@@ -231,10 +231,12 @@ public final class CodingAgent implements SubmitHandler {
         if (sessionService == null || sessionRepository == null) {
             return;
         }
-        List<SessionEvent> events = sessionService.getEvents(sessionId);   // 时序、oldest-first
+        String sid = sessionId;   // 快照：本方法可能在 reactive/后台线程运行，clearContext 会在 UI 线程换掉 volatile sessionId；
+                                   // 两次读之间被换会把「旧会话净化后的事件」写进新会话 id（污染新会话 + 旧会话悬空 tool_calls 漏净化）。
+        List<SessionEvent> events = sessionService.getEvents(sid);   // 时序、oldest-first
         List<SessionEvent> clean = SessionEvents.sanitize(events);         // 裁尾部悬空 tool_calls + 丢孤儿 tool 结果
         if (clean != events) {   // sanitize 无改动时返回同一引用；引用不同即有裁剪/重建
-            sessionRepository.replaceEvents(sessionId, List.copyOf(clean));
+            sessionRepository.replaceEvents(sid, List.copyOf(clean));
         }
     }
 
@@ -343,7 +345,8 @@ public final class CodingAgent implements SubmitHandler {
      */
     @Override
     public ContextStats contextStats() {
-        List<SessionEvent> events = sessionService.getEvents(sessionId);
+        String sid = sessionId;   // 快照一次：contextStats 内两读 sessionId，/clear 换 volatile 会致撕裂读（事件按旧会话、消息按新会话）
+        List<SessionEvent> events = sessionService.getEvents(sid);
         int user = 0, assistant = 0, tool = 0, other = 0;
         for (SessionEvent e : events) {
             MessageType type = e.getMessageType();
@@ -358,7 +361,7 @@ public final class CodingAgent implements SubmitHandler {
             }
         }
         StringBuilder sb = new StringBuilder();
-        for (Message m : sessionService.getMessages(sessionId)) {
+        for (Message m : sessionService.getMessages(sid)) {
             String text = m.getText();
             if (text != null && !text.isEmpty()) {
                 sb.append(text).append('\n');
