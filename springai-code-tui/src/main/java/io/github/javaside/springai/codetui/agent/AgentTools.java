@@ -95,6 +95,9 @@ public final class AgentTools {
     /** 会话记忆的默认用户 id（单会话 TUI，仅作归属占位）。 */
     private static final String DEFAULT_USER_ID = "code-tui-user";
 
+    /** 记忆系统提示注入的 param 键；与 SYSTEM_TEMPLATE 里的 {AUTO_MEMORY} 占位符对应。 */
+    private static final String AUTO_MEMORY_KEY = "AUTO_MEMORY";
+
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
      * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
@@ -264,7 +267,7 @@ public final class AgentTools {
         String gitStatus = quietGitStatus();
 
         // 记忆系统提示：渲染一次供所有 provider 共用（注入记忆根路径；见 MemoryPrompt 为何不走 ST 渲染）
-        String autoMemoryPrompt = MemoryPrompt.render(root.resolve(".codetui").resolve("memory").toString());
+        String autoMemoryPrompt = MemoryPrompt.render(memoryDir(root).toString());
 
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
@@ -280,7 +283,7 @@ public final class AgentTools {
                             // 每个 client 烘焙自家默认模型，保证 defaultSystem 自洽；
                             // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
                             .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel())
-                            .param("AUTO_MEMORY", autoMemoryPrompt))
+                            .param(AUTO_MEMORY_KEY, autoMemoryPrompt))
                     .defaultTools(toolsWithTask)
                     .defaultAdvisors(memoryAdvisor)
                     .build();
@@ -304,7 +307,7 @@ public final class AgentTools {
      * @param skills              初始（装配期）可用技能清单快照；运行期实时清单改经 {@link #reloadableSkill}
      * @param skillTool           被 ToolEventCallback 装饰的 Skill 代理（供手动 /skill 复用）；始终非 null
      * @param reloadableSkill     可重载 Skill 代理（{@code /reload} 触发重扫 + {@code skills()} 实时数据源）
-     * @param subagentRunner      子 agent 执行器（持有子 agent 可见的工具列表——记忆工具刻意不在其中）
+     * @param subagentRunner      子 agent 执行器；当前主要供测试观测「记忆工具不泄漏给子 agent」的边界（生产暂无消费方）
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -328,14 +331,19 @@ public final class AgentTools {
      * 单一事实来源：build() 与测试钩子共用本方法，避免装配与断言漂移。
      */
     static ToolCallback[] buildMemoryTools(Path root, AgentListener listener) {
-        Path memoryDir = root.resolve(".codetui").resolve("memory");
-        AutoMemoryTools memoryTools = AutoMemoryTools.builder().memoriesDir(memoryDir).build();
+        Path dir = memoryDir(root);
+        AutoMemoryTools memoryTools = AutoMemoryTools.builder().memoriesDir(dir).build();
         ToolCallback[] raw = ToolCallbacks.from(memoryTools);
         ToolCallback[] decorated = new ToolCallback[raw.length];
         for (int i = 0; i < raw.length; i++) {
             decorated[i] = new ToolEventCallback(raw[i], listener);
         }
         return decorated;
+    }
+
+    /** 记忆根目录 <root>/.codetui/memory（与会话仓库同级、按项目隔离；已被 .codetui/ gitignore）。单一事实来源：prompt 与工具根共用。 */
+    static Path memoryDir(Path root) {
+        return root.resolve(".codetui").resolve("memory");
     }
 
     /** 测试钩子：返回反问工具经 {@link ToolCallbacks#from} 派生出的工具名（校验它确被识别为 @Tool 并注册）。 */
