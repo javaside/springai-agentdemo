@@ -10,9 +10,11 @@ import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** SubagentRunner.run 成功传 ok=true、异常传 ok=false 并抛出。用假 ChatModel/Provider，不联网。 */
 class SubagentRunnerOkTest {
@@ -61,7 +63,7 @@ class SubagentRunnerOkTest {
     void success_emitsOkTrue_andReturnsContent() {
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel(true))));
         RecordingListener lis = new RecordingListener();
-        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis);
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis, "");
         String out = runner.run(spec(), "hi", "desc", 1L);
         assertEquals("done", out);
         assertEquals(Boolean.TRUE, lis.ok);
@@ -71,8 +73,35 @@ class SubagentRunnerOkTest {
     void failure_emitsOkFalse_andRethrows() {
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel(false))));
         RecordingListener lis = new RecordingListener();
-        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis);
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis, "");
         assertThrows(RuntimeException.class, () -> runner.run(spec(), "hi", "desc", 1L));
         assertEquals(Boolean.FALSE, lis.ok);
+    }
+
+    /**
+     * 端到端 wiring：run() 应把 spec 系统提示 + 项目指令一并写进发给模型的 Prompt 的系统消息。
+     * 用捕获式假 ChatModel 抓下真实 Prompt，断言系统消息文本两者兼含——覆盖 effectiveSystemPrompt 的纯函数单测够不着的「真的接进了 .system(...)」这一段。
+     */
+    @Test
+    void run_carriesProjectInstructionsIntoPromptSystemMessage() {
+        AtomicReference<Prompt> captured = new AtomicReference<>();
+        ChatModel capturing = new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) {
+                captured.set(prompt);
+                return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
+            }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) {
+                throw new UnsupportedOperationException("blocking path only");
+            }
+            @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
+        };
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(capturing)));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), new StubListener(), "PROJ_WIRING_MARKER");
+
+        runner.run(spec(), "hi", "desc", 1L);
+
+        String systemText = captured.get().getSystemMessage().getText();
+        assertTrue(systemText.contains("sys"), "系统消息应含 spec 自身系统提示（spec()=\"sys\"）");
+        assertTrue(systemText.contains("PROJ_WIRING_MARKER"), "系统消息应含项目指令（证明真的接进了 .system(...)）");
     }
 }

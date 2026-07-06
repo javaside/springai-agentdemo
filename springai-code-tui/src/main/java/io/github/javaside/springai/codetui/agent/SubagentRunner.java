@@ -23,17 +23,20 @@ public final class SubagentRunner {
     private final ProviderRegistry registry;
     private final List<ToolCallback> tools;   // 已被 ToolEventCallback 装饰、带 root 边界的主 agent 工具列表
     private final AgentListener listener;
+    private final String projectInstructions;   // AGENTS.md 项目指令；追加到每个子 agent 的 spec 系统提示（可空）
     private final Supplier<String> taskIdSupplier;
 
-    public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener) {
-        this(registry, tools, listener, () -> "task_" + UUID.randomUUID());
+    public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                          String projectInstructions) {
+        this(registry, tools, listener, projectInstructions, () -> "task_" + UUID.randomUUID());
     }
 
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
-                   Supplier<String> taskIdSupplier) {
+                   String projectInstructions, Supplier<String> taskIdSupplier) {
         this.registry = registry;
         this.tools = tools;
         this.listener = listener;
+        this.projectInstructions = projectInstructions == null ? "" : projectInstructions;
         this.taskIdSupplier = taskIdSupplier;
     }
 
@@ -48,7 +51,7 @@ public final class SubagentRunner {
                     .build();
             ChatOptions options = resolveOptions(spec);
             String result = client.prompt()
-                    .system(spec.systemPrompt())
+                    .system(effectiveSystemPrompt(spec))
                     .user(prompt)
                     // .options 接收 native builder（与 CodingAgent.submit 一致，mutate 保留 maxTokens 等）
                     .options(options.mutate())
@@ -64,6 +67,14 @@ public final class SubagentRunner {
             listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + ex.getMessage(), false);
             throw ex;
         }
+    }
+
+    /** 子 agent 有效系统提示：spec 自身提示 + 项目指令（非空时追加）。纯函数，便于单测。 */
+    String effectiveSystemPrompt(SubagentSpec spec) {
+        if (projectInstructions.isEmpty()) {
+            return spec.systemPrompt();
+        }
+        return spec.systemPrompt() + "\n\n" + projectInstructions;
     }
 
     /** 测试钩子：子 agent 可见工具（未经 spec 过滤）的注册名——校验主 agent 独有工具（如记忆工具）不泄漏给子 agent。 */
