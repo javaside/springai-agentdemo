@@ -1,0 +1,79 @@
+# springai-agentdemo v1.1.0
+
+在 [v1.0.0](release-notes-v1.0.0.md) 基础上的功能增量版。核心交付物仍是终端编码智能体 **`springai-code-tui`**，本版新增**清空上下文、跨会话长期记忆、AGENTS.md 项目指令**三大能力，并修复了辅助模型调用不跟随 `/model` 切换等问题。
+
+**下载物仍是两个自包含运行包（解压即用，无需构建）：**
+
+- `springai-code-tui-1.1.0-dist.tar.gz`（macOS / Linux 首选）
+- `springai-code-tui-1.1.0-dist.zip`（Windows 首选）
+
+两者内容一致：启动脚本（`bin/`）+ 主 jar + 全部运行期依赖（`lib/`）+ `LICENSE`/`NOTICE`/`README`。运行时界面版本标识为 **`v1.1.0`**。
+
+> 完整的功能全景与⚠️安全声明见 [v1.0.0 发布说明](release-notes-v1.0.0.md)；本文只列出相对 v1.0.0 的变化。
+
+---
+
+## ✨ 新增能力
+
+### 🧹 `/clear` —— 清空当前会话上下文
+开一个全新空会话 + 真清屏 + 复位计划/任务面板，等价于「重新开始」。旧会话文件原样保留，仍可 `-c` 恢复。忙时（含压缩中）守卫，避免与回合/压缩交错。
+
+### 🧠 跨会话长期记忆（AutoMemoryTools）
+主 agent 具备一块**持久、文件化**的长期记忆（`<项目根>/.codetui/memory/`，按项目隔离、已 gitignore）：agent 可跨会话主动记下用户偏好、项目背景等「读代码读不出来」的事实，下次会话据此更贴合。**仅主 agent** 拥有记忆工具——子 agent 不写长期记忆，避免污染。
+
+### 📜 AGENTS.md 项目指令
+支持 `CLAUDE.md`/`AGENTS.md` 生态标准的**人手写项目约定**，两层加载：用户级 `~/.codetui/AGENTS.md`（跨项目）+ 项目级 `<项目根>/AGENTS.md`（团队共享、优先级更高）。启动时读一次、只读，注入**主 + 子 agent** 系统提示。与「agent 自写的长期记忆」正交互补。
+
+---
+
+## 🐛 修复与改进
+
+- **fix(provider)**：辅助 ChatClient（`SmartWebFetch` 网页内容抽取 + 会话历史滚动摘要）此前绑死在启动时的 provider，`/model` 切换后仍打到旧家；改用动态解析激活 provider/模型的 `DynamicAuxChatModel`，两处内部 LLM 调用现正确跟随 `/model` 切换。
+- **refactor(subagent)**：子 agent 迁移到 **Spring AI 2.0 工具调用 API**——去掉已废弃且待删除的 `ToolCallAdvisor`（2.0 由 `ChatClient` 自动注册 `ToolCallingAdvisor`，带可观测性），`defaultToolCallbacks` → `defaultTools`，与主 agent 装配范式一致。
+- **fix(session)**：`/clear` 与后台净化/统计并发时快照 `volatile sessionId`，消除撕裂读。
+
+---
+
+## 🔧 工程
+
+- **JDK 基线降到 17**（此前 21）：本项目代码不需要 21，仅 jline 的 FFM provider 需要；降基线扩大可运行环境。
+- 全模块版本号 1.0.0 → **1.1.0**。
+- 全量测试：`springai-code-tui` 257 用例通过；`-Pdist` 产出 1.1.0 运行包。
+
+---
+
+## 📦 仓库模块
+
+| 模块 | 说明 |
+| --- | --- |
+| **springai-code-tui** ⭐ | 终端编码智能体（**本次发布的可下载运行物**）。 |
+| springai-core-demo | Spring AI 原始 API 教学。 |
+| springai-agent-demo | 智能体教学：工具调用、多步 agent、会话记忆等。 |
+| springai-boot-demo | Spring Boot 自动装配版对照。 |
+| springai-jline-demo | JLine 终端交互基础示例。 |
+
+> demo 模块请 clone 源码后 `mvn` 运行，见各模块 README；下载包只含 `springai-code-tui`。
+
+---
+
+## 🔐 校验（SHA-256）
+
+```
+4c8b81db30b20fbfe20e800ffecc088e41543cab7b7b395f2309f69c8a86dc3f  springai-code-tui-1.1.0-dist.tar.gz
+60b064140be4df3919943c846a9dba971fc3092dfcb332702380422b7d997eed  springai-code-tui-1.1.0-dist.zip
+```
+
+```bash
+shasum -a 256 -c <<'EOF'
+4c8b81db30b20fbfe20e800ffecc088e41543cab7b7b395f2309f69c8a86dc3f  springai-code-tui-1.1.0-dist.tar.gz
+60b064140be4df3919943c846a9dba971fc3092dfcb332702380422b7d997eed  springai-code-tui-1.1.0-dist.zip
+EOF
+```
+
+---
+
+## 📄 许可
+
+[Apache License 2.0](LICENSE)。发布包内随附 `LICENSE` 与 `NOTICE`（含所分发第三方库：Spring AI / Spring Boot / spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）。
+
+**环境**：JDK 17+，macOS / Linux / Windows。
