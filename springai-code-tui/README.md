@@ -8,10 +8,11 @@
 
 - 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、输入框、底部状态栏。
 - **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。
-- 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task`，把子任务委派给专门子 agent）。
+- 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task`，把子任务委派给专门子 agent）、`AutoMemoryTools`（`Memory*` 六件套：跨会话长期记忆的读写/增删/改名，仅主 agent）。
 - **子 agent（Task）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`），串行前台阻塞执行，内部工具活动带 taskId 内联嵌套显示。
 - **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
 - **上下文管理**：窗口记忆多轮会话，token 用量估算（`/context` 查看），超阈值自动压缩 + `/compact` 手动压缩。把 cwd / git 状态 / 模型名注入系统提示做 grounding。
+- **长期记忆（跨会话）**：基于 `spring-ai-agent-utils` 的 `AutoMemoryTools`（Anthropic Claude Code 那套：`MEMORY.md` 索引 + 分型 Markdown 文件 + 两步保存）。记忆落盘 `<项目根>/.codetui/memory/`（**按项目隔离**，已被 `.gitignore`）；agent 会主动记住用户偏好、项目上下文与反馈，并在后续会话（含 `/clear` 开新会话后）读 `MEMORY.md` 召回。仅主 agent 具备，子 agent 不写长期记忆。与会话记忆互补：会话记忆是当前对话的内存态窗口，长期记忆是跨会话的磁盘态精选事实。
 - Esc 取消当前回合、Ctrl+C 退出。
 
 ## ⚠️ 安全声明（请务必阅读）
@@ -145,4 +146,4 @@ cd /path/to/some/disposable/project
 - **工具沙箱不完整**：见上方安全声明——只有文件系统工具受 root 约束，Shell/Grep/Glob 不受限。自写的真沙箱（`SandboxedShellTool` 等，方案 A）列为 v1 之后的增强项，本版本未实现。
 - 单会话固定 id，不支持多会话/会话持久化。
 - **子 agent 串行执行**：一次最多 1 个子任务前台阻塞运行，暂不支持并行/后台（`run_in_background`）与 `/tasks` 详情面板（列为后续增强）。
-- **无长期记忆**：会话记忆仅内存态窗口记忆，退出不保留（跨会话记忆未实现）。
+- **长期记忆无「自动整理」**：跨会话长期记忆已具备（见上「长期记忆」），但暂未接入定期 consolidation（自动汇总/去重冗余记忆）触发器；记忆的增删改全由模型按需驱动。
