@@ -48,6 +48,7 @@ springai-agentdemo                  父工程（聚合 + 版本管理，packagin
 └── springai-code-tui              【综合应用】命令行编码智能体（TUI）
     └── 多 provider（DeepSeek/Anthropic/OpenAI）+ 子 agent（Task）+ 技能
         + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ 计划/任务面板 + 会话压缩
+        + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
 ```
 
 > **学习路线建议**：先看 `springai-boot-demo` 的「自动配置揭秘」示例，了解 Boot 帮你创建了哪些 Bean；
