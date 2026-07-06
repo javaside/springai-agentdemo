@@ -5,6 +5,7 @@ import org.springframework.core.io.ClassPathResource;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 
 /**
  * 加载 spring-ai-agent-utils jar 内的长期记忆系统提示，并注入记忆根目录路径。
@@ -34,9 +35,19 @@ public final class MemoryPrompt {
      *
      * @param memoriesDir 记忆根目录的绝对路径字符串（如 {@code <root>/.codetui/memory}）
      * @return 渲染好的整段提示；供作为主系统模板的一个 param 值注入
+     * @throws NullPointerException  当 {@code memoriesDir} 为 null
+     * @throws IllegalStateException 当上游 prompt 已无该占位符（更名/修正拼写）——把静默漏注入变成显式失败
      */
     public static String render(String memoriesDir) {
+        Objects.requireNonNull(memoriesDir, "memoriesDir");
         String raw = load();
+        // String.replace 找不到占位符会原样返回，导致「无路径注入」却无任何报错。
+        // 一旦上游修正 DIERCTORY 拼写或更名 key，这里必须炸响，而非让 agent 带着坏指令运行。
+        if (!raw.contains(ROOT_PLACEHOLDER)) {
+            throw new IllegalStateException(
+                    "记忆提示中未找到占位符 " + ROOT_PLACEHOLDER
+                            + "，spring-ai-agent-utils 可能已更名或修正拼写（检查上游版本）");
+        }
         return raw.replace(ROOT_PLACEHOLDER, memoriesDir);
     }
 

@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.agent;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 // 注：本模块测试栈只有 JUnit 5（AssertJ 未在 classpath），故用 org.junit.jupiter.api.Assertions
@@ -33,5 +34,10 @@ class MemoryPromptTest {
         String out = MemoryPrompt.render("/x/memory");
         assertFalse(out.isBlank(), "渲染结果不应为空白");
         assertTrue(out.length() > 2000, "真 prompt ~11KB，长度应 > 2000");
+    }
+
+    @Test
+    void render_rejectsNullDir() {
+        assertThrows(NullPointerException.class, () -> MemoryPrompt.render(null));
     }
 }
