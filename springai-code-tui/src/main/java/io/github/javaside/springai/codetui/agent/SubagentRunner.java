@@ -1,7 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -15,8 +14,14 @@ import java.util.function.Supplier;
  * provider 中立的子 agent 执行器。前台串行：在主 agent 的 Task 工具调用内同步执行，
  * 子 agent 内部工具活动经带 taskId 的工具事件实时上报（见 {@link ToolEventCallback}）。
  *
- * <p>用激活 provider 的 chatModel 建子 agent 专用 ChatClient（过滤后工具 + system=spec.systemPrompt
- * + ToolCallAdvisor），<b>不挂</b> SessionMemory advisor——子 agent 上下文独立。model 空→跟随激活 provider。
+ * <p>用激活 provider 的 chatModel 建子 agent 专用 ChatClient（过滤后工具 + system=spec.systemPrompt），
+ * <b>不挂</b> SessionMemory advisor——子 agent 上下文独立。model 空→跟随激活 provider。
+ *
+ * <p><b>工具调用（Spring AI 2.0）</b>：2.0 已把工具执行循环从 ChatModel 内部搬进 advisor 链，且
+ * {@code ChatClient.builder(model)} 会<b>自动注册</b> {@code ToolCallingAdvisor}（带 observation 的
+ * {@code ToolCallingManager}），故这里<b>不再</b>显式挂 {@code ToolCallAdvisor}（该类 2.0 起 deprecated 且待删除；
+ * 显式挂反而会抑制自动注册、丢掉工具调用可观测性）。与主 agent（{@code AgentTools}）一致：只 {@code defaultTools}，
+ * 工具循环交给自动注册的 advisor。
  */
 public final class SubagentRunner {
 
@@ -45,9 +50,10 @@ public final class SubagentRunner {
         String taskId = taskIdSupplier.get();
         listener.onSubagentStarted(parentTurnId, taskId, spec.name(), description);
         try {
+            // Spring AI 2.0：defaultTools 取代已废弃的 defaultToolCallbacks；工具调用 advisor 由 ChatClient 自动注册，
+            // 不再显式挂（见类注释）。传 Object[]（每个元素是 ToolCallback）——与主 agent 的 defaultTools(toolsWithTask) 同构。
             ChatClient client = ChatClient.builder(registry.active().chatModel())
-                    .defaultToolCallbacks(filterTools(tools, spec))
-                    .defaultAdvisors(ToolCallAdvisor.builder().build())
+                    .defaultTools(filterTools(tools, spec).toArray())
                     .build();
             ChatOptions options = resolveOptions(spec);
             String result = client.prompt()
