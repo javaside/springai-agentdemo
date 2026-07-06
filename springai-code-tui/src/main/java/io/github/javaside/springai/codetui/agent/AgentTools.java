@@ -167,9 +167,9 @@ public final class AgentTools {
 
         // 「裸」ChatClient（同模型、无工具、无记忆 advisor）：一份复用给两处内部 LLM 调用——
         // ① SmartWebFetch 的网页内容 AI 抽取；② 会话历史的滚动摘要。都不能带工具/记忆，否则会递归触发工具或记忆循环。
-        // 绑定激活（默认）provider 的模型。
-        org.springframework.ai.chat.model.ChatModel activeModel = registry.active().chatModel();
-        ChatClient auxClient = ChatClient.builder(activeModel).build();
+        // 底层用 DynamicAuxChatModel：每次调用实时解析激活 provider/模型，使这两处跟随 /model 切换
+        // （否则绑死在启动那家，切换后仍打到旧家——见 DynamicAuxChatModel 类注释）。
+        ChatClient auxClient = ChatClient.builder(new DynamicAuxChatModel(registry)).build();
 
         // 网页获取工具：抓取→转 Markdown→按 prompt AI 抽取。关掉 domainSafetyCheck（见类注释）。
         SmartWebFetchTool webFetch = SmartWebFetchTool.builder(auxClient)
