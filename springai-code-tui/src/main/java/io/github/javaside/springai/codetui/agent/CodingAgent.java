@@ -55,7 +55,7 @@ public final class CodingAgent implements SubmitHandler {
     private final ProviderRegistry registry;                       // 可空：多 provider 路径；null 走旧单-client 路径
     private final java.util.Map<String, ChatClient> clientsByProvider;   // 可空：按 provider id 取 ChatClient
     private final AgentListener listener;
-    private final String sessionId;
+    private volatile String sessionId;   // /clear 换新会话时原地替换；submit 里 advisor param 每回合实时读取
     private final AtomicLong activeTurnId;
     private final SessionService sessionService;
     private final CompactionStrategy manualStrategy;
@@ -231,10 +231,12 @@ public final class CodingAgent implements SubmitHandler {
         if (sessionService == null || sessionRepository == null) {
             return;
         }
-        List<SessionEvent> events = sessionService.getEvents(sessionId);   // 时序、oldest-first
+        String sid = sessionId;   // 快照：本方法可能在 reactive/后台线程运行，clearContext 会在 UI 线程换掉 volatile sessionId；
+                                   // 两次读之间被换会把「旧会话净化后的事件」写进新会话 id（污染新会话 + 旧会话悬空 tool_calls 漏净化）。
+        List<SessionEvent> events = sessionService.getEvents(sid);   // 时序、oldest-first
         List<SessionEvent> clean = SessionEvents.sanitize(events);         // 裁尾部悬空 tool_calls + 丢孤儿 tool 结果
         if (clean != events) {   // sanitize 无改动时返回同一引用；引用不同即有裁剪/重建
-            sessionRepository.replaceEvents(sessionId, List.copyOf(clean));
+            sessionRepository.replaceEvents(sid, List.copyOf(clean));
         }
     }
 
@@ -286,6 +288,21 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
+     * {@code /clear}：切到一个全新空会话。仅换 {@link #sessionId}（volatile 写），下一个回合的
+     * {@code SessionMemoryAdvisor} 会按新 id 自动创建空会话；旧会话事件/文件<b>原样保留</b>，可 {@code -c} 恢复。
+     * 调用方（{@code CodeTuiView}）已保证仅在空闲（非回合中/非压缩中）时调用，故此处无需再守卫并发。
+     */
+    @Override
+    public void clearContext() {
+        this.sessionId = SessionIds.newId();
+    }
+
+    /** 当前会话 id（包级可见，供测试断言换会话是否生效）。 */
+    String sessionId() {
+        return sessionId;
+    }
+
+    /**
      * 同步执行一次手动压缩（供 {@link #compact()} 的后台线程调用；包级可见便于测试直调）。
      * 用恒真触发器绕过 token 阈值，配合激进的手动策略。
      *
@@ -328,7 +345,8 @@ public final class CodingAgent implements SubmitHandler {
      */
     @Override
     public ContextStats contextStats() {
-        List<SessionEvent> events = sessionService.getEvents(sessionId);
+        String sid = sessionId;   // 快照一次：contextStats 内两读 sessionId，/clear 换 volatile 会致撕裂读（事件按旧会话、消息按新会话）
+        List<SessionEvent> events = sessionService.getEvents(sid);
         int user = 0, assistant = 0, tool = 0, other = 0;
         for (SessionEvent e : events) {
             MessageType type = e.getMessageType();
@@ -343,7 +361,7 @@ public final class CodingAgent implements SubmitHandler {
             }
         }
         StringBuilder sb = new StringBuilder();
-        for (Message m : sessionService.getMessages(sessionId)) {
+        for (Message m : sessionService.getMessages(sid)) {
             String text = m.getText();
             if (text != null && !text.isEmpty()) {
                 sb.append(text).append('\n');

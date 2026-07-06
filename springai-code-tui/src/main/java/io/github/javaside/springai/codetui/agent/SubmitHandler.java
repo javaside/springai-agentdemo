@@ -27,6 +27,9 @@ public interface SubmitHandler {
     /** 手动压缩会话历史（/compact）。默认空实现，便于回显桩/测试桩省略。 */
     default void compact() { }
 
+    /** {@code /clear}：切到一个全新空会话（旧会话留盘可 -c 恢复）。默认空实现，便于回显桩/测试桩省略。 */
+    default void clearContext() { }
+
     /** 当前会话上下文用量快照（/context）。默认空快照，便于回显桩/测试桩省略。 */
     default ContextStats contextStats() { return ContextStats.empty(); }
 

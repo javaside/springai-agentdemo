@@ -120,6 +120,18 @@ public final class ConversationState implements AgentListener {
     public synchronized void clearQueued() { queued.clear(); }
     public synchronized List<String> queuedSnapshot() { return queued.stream().map(Queued::text).toList(); }
 
+    /**
+     * {@code /clear}：把面板与状态复位到「刚启动」——清 todo 面板、子 agent 任务面板、未定稿输出、排队消息、状态提示。
+     * 不动会话事件（那是 {@link io.github.javaside.springai.codetui.agent.CodingAgent#clearContext()} 的职责）。
+     */
+    public synchronized void resetForNewSession() {
+        todo.clear();
+        subtasks.clear();
+        pending.clear();
+        queued.clear();
+        notice = "";
+    }
+
     // ── 单飞 / 状态 ─────────────────────────────────────────────────────
     public boolean isIdle() { return status == Status.IDLE; }
     public Status status() { return status; }
