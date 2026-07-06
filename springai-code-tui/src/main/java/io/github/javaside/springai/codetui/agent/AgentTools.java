@@ -1,6 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
+import org.springaicommunity.agent.tools.AutoMemoryTools;
 import org.springaicommunity.agent.tools.FileSystemTools;
 import org.springaicommunity.agent.tools.GlobTool;
 import org.springaicommunity.agent.tools.GrepTool;
@@ -130,6 +131,8 @@ public final class AgentTools {
             </git_status>
 
             当前模型：{AGENT_MODEL}。
+
+            {AUTO_MEMORY}
             """;
 
     /**
@@ -212,10 +215,14 @@ public final class AgentTools {
                         subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()));
         ToolCallback decoratedTaskTool = new ToolEventCallback(taskTool, listener);
 
-        // 主 agent 工具集 = 原装饰工具 + Task 工具
-        Object[] toolsWithTask = new Object[decorated.length + 1];
+        // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
+        ToolCallback[] memoryDecorated = buildMemoryTools(root, listener);
+
+        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ Task 工具
+        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 1];
         System.arraycopy(decorated, 0, toolsWithTask, 0, decorated.length);
-        toolsWithTask[decorated.length] = decoratedTaskTool;
+        System.arraycopy(memoryDecorated, 0, toolsWithTask, decorated.length, memoryDecorated.length);
+        toolsWithTask[toolsWithTask.length - 1] = decoratedTaskTool;
 
         // 事件溯源会话记忆：文件仓库（<root>/.codetui/sessions/，按项目隔离，进程重启后可加载）+ 「回合/token 感知」压缩。
         // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 裁剪半截历史（DefaultSessionService 不暴露该能力）。
@@ -256,6 +263,9 @@ public final class AgentTools {
         String environmentInfo = AgentEnvironment.info();
         String gitStatus = quietGitStatus();
 
+        // 记忆系统提示：渲染一次供所有 provider 共用（注入记忆根路径；见 MemoryPrompt 为何不走 ST 渲染）
+        String autoMemoryPrompt = MemoryPrompt.render(root.resolve(".codetui").resolve("memory").toString());
+
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
         java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
@@ -269,7 +279,8 @@ public final class AgentTools {
                             .param(AgentEnvironment.GIT_STATUS_KEY, gitStatus)
                             // 每个 client 烘焙自家默认模型，保证 defaultSystem 自洽；
                             // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
-                            .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel()))
+                            .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel())
+                            .param("AUTO_MEMORY", autoMemoryPrompt))
                     .defaultTools(toolsWithTask)
                     .defaultAdvisors(memoryAdvisor)
                     .build();
@@ -278,7 +289,7 @@ public final class AgentTools {
 
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
-                reloadableSkill);
+                reloadableSkill, subagentRunner);
     }
 
     /**
@@ -293,6 +304,7 @@ public final class AgentTools {
      * @param skills              初始（装配期）可用技能清单快照；运行期实时清单改经 {@link #reloadableSkill}
      * @param skillTool           被 ToolEventCallback 装饰的 Skill 代理（供手动 /skill 复用）；始终非 null
      * @param reloadableSkill     可重载 Skill 代理（{@code /reload} 触发重扫 + {@code skills()} 实时数据源）
+     * @param subagentRunner      子 agent 执行器（持有子 agent 可见的工具列表——记忆工具刻意不在其中）
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -302,10 +314,28 @@ public final class AgentTools {
                                TokenCountEstimator tokenCountEstimator,
                                List<SkillInfo> skills,
                                ToolCallback skillTool,
-                               ReloadableSkillTool reloadableSkill) {
+                               ReloadableSkillTool reloadableSkill,
+                               SubagentRunner subagentRunner) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
+    }
+
+    /**
+     * 长期记忆工具（spring-ai-agent-utils 的 AutoMemoryTools，6 个 @Tool）——仅主 agent 使用。
+     * 记忆根 <root>/.codetui/memory（与会话仓库同级、按项目隔离；AutoMemoryTools.build() 自动建目录，
+     * 已被 .codetui/ gitignore）。每个工具用 ToolEventCallback 装饰，使记忆操作在 TUI 显示成一行工具活动。
+     * 单一事实来源：build() 与测试钩子共用本方法，避免装配与断言漂移。
+     */
+    static ToolCallback[] buildMemoryTools(Path root, AgentListener listener) {
+        Path memoryDir = root.resolve(".codetui").resolve("memory");
+        AutoMemoryTools memoryTools = AutoMemoryTools.builder().memoriesDir(memoryDir).build();
+        ToolCallback[] raw = ToolCallbacks.from(memoryTools);
+        ToolCallback[] decorated = new ToolCallback[raw.length];
+        for (int i = 0; i < raw.length; i++) {
+            decorated[i] = new ToolEventCallback(raw[i], listener);
+        }
+        return decorated;
     }
 
     /** 测试钩子：返回反问工具经 {@link ToolCallbacks#from} 派生出的工具名（校验它确被识别为 @Tool 并注册）。 */

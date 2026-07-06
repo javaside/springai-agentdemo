@@ -66,6 +66,11 @@ public final class SubagentRunner {
         }
     }
 
+    /** 测试钩子：子 agent 可见工具（未经 spec 过滤）的注册名——校验主 agent 独有工具（如记忆工具）不泄漏给子 agent。 */
+    List<String> toolNamesForTest() {
+        return tools.stream().map(t -> t.getToolDefinition().name()).toList();
+    }
+
     /** model 空→激活 provider 默认（activeChatOptions）；否则用 spec.model 覆盖（走激活 provider 的 options）。 */
     private ChatOptions resolveOptions(SubagentSpec spec) {
         if (spec.model() == null || spec.model().isBlank()) {
