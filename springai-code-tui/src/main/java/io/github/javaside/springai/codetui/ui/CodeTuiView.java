@@ -111,6 +111,7 @@ public final class CodeTuiView extends InlineApp {
     private static final List<SlashCommand> COMMANDS = List.of(
             new SlashCommand("/model",   "切换 AI 模型"),
             new SlashCommand("/compact", "压缩会话历史（手动）"),
+            new SlashCommand("/clear",   "清空上下文，开新会话"),
             new SlashCommand("/context", "查看上下文用量（事件数 / token）"),
             // /skill 必须排在 /skills 之前：二者中 /skill 是 /skills 的前缀，补全菜单默认高亮首个匹配；
             // 若 /skills 在前，输入 "/skill" 回车会误选到 /skills（只读清单）而进不了选择器。
@@ -228,8 +229,15 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：跑一次 drain（侦测 pendingAsk 并进入作答态）。 */
     void tickForTest() { drain(); }
 
-    /** 测试专用：把一个按键喂给输入框按键入口（等价真实按键路由）。 */
-    EventResult feedKeyForTest(KeyEvent k) { return onInputKey(k); }
+    /**
+     * 测试专用：把一个按键喂给输入框按键入口（等价真实按键路由）。
+     *
+     * <p>必须复用 {@link InputBox#handleKeyEvent}（而非只调 {@code onInputKey}）：普通字符键
+     * {@code onInputKey} 自己并不插入文本——它只拦截 Ctrl+C/Esc/Enter/方向键等特例，未拦截时
+     * 返回 {@code UNHANDLED}，真正的字符插入落在 {@code InputBox.handleKeyEvent} 的兜底分支
+     * （转交不渲染的 {@link #inputKeys}）。只调 {@code onInputKey} 会让「打字」在测试里静默丢失。
+     */
+    EventResult feedKeyForTest(KeyEvent k) { return new InputBox().handleKeyEvent(k, true); }
 
     /** 测试专用：构造一帧 UI 树（等价渲染线程每帧调用的 render）。用于回归「每帧构造子面板」类空指针。 */
     Element renderForTest() { return render(); }
@@ -535,6 +543,32 @@ public final class CodeTuiView extends InlineApp {
                 return;
             }
             onSubmit.compact();
+            return;
+        }
+        if (cmd.equals("/clear")) {                  // 换新空会话：旧会话留盘可 -c 恢复
+            inputState.clear();
+            if (state.isBusy()) {                    // 回合中 或 压缩中：拒绝（isBusy = !isIdle || compacting）
+                state.setNotice("忙碌中，无法清空");
+                return;
+            }
+            onSubmit.clearContext();                 // (A) 换 sessionId
+            state.resetForNewSession();              // 复位面板/排队/提示
+            lastShownModel = "";                     // 新会话首个回合重新打「⚙ 使用模型 X」
+            pendingSkill = null;                      // 清掉未发送的技能挂载：新会话不继承
+            var r = runner();
+            if (r != null) {                         // (B) 真清屏只在运行态做（测试态 runner==null 跳过）
+                r.runOnRenderThread(() -> {
+                    boolean ok = ScreenCleaner.clear(r);
+                    if (ok) {
+                        printer.welcome(onSubmit.currentModel(),
+                                io.github.javaside.springai.codetui.AppInfo.versionLabel());
+                    } else {
+                        state.pushInfo("─── 新会话（上下文已清空）───");   // 反射失败降级；pushInfo 经 drain 下沉 scrollback
+                    }
+                });
+            } else {
+                state.pushInfo("─── 新会话（上下文已清空）───");
+            }
             return;
         }
         if (cmd.equals("/context")) {          // 只读快照：任何时刻都可查（含回合进行中），不打断
