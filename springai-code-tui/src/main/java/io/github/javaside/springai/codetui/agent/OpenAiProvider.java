@@ -51,13 +51,19 @@ public final class OpenAiProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
-            OpenAiChatOptions.Builder opts = OpenAiChatOptions.builder().apiKey(apiKey).model(DEFAULT_MODEL);
-            if (!baseUrl.isEmpty()) {
-                opts.baseUrl(baseUrl);
+            // 超时必须设在 SDK client 的 ClientOptions 上（见 OpenAiTimeouts）；apiKey/baseUrl 也随 client。
+            // 流式走 async client、阻塞（子 agent）走 sync client——两个都要带超时，否则流式仍吃 SDK 默认 60s/10min。
+            com.openai.core.Timeout timeout = OpenAiTimeouts.of(TIMEOUTS);
+            var syncB = com.openai.client.okhttp.OpenAIOkHttpClient.builder().apiKey(apiKey).timeout(timeout);
+            var asyncB = com.openai.client.okhttp.OpenAIOkHttpClientAsync.builder().apiKey(apiKey).timeout(timeout);
+            if (!baseUrl.isEmpty()) {   // 空→SDK 内置默认 https://api.openai.com/v1
+                syncB.baseUrl(baseUrl);
+                asyncB.baseUrl(baseUrl);
             }
             m = OpenAiChatModel.builder()
-                    .options(opts.build())
-                    .httpClientBuilderCustomizer(OpenAiTimeoutCustomizer.of(TIMEOUTS))
+                    .openAiClient(syncB.build())
+                    .openAiClientAsync(asyncB.build())
+                    .options(OpenAiChatOptions.builder().model(DEFAULT_MODEL).build())
                     .build();
             chatModel = m;
         }

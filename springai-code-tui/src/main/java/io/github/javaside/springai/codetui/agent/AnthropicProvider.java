@@ -53,22 +53,28 @@ public final class AnthropicProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
-            AnthropicChatOptions.Builder opts = AnthropicChatOptions.builder()
-                    .apiKey(apiKey)
-                    .model(Model.of(DEFAULT_MODEL))
-                    .maxTokens(MAX_TOKENS);
-            if (!baseUrl.isEmpty()) {
-                opts.baseUrl(baseUrl);
+            // 超时必须设在 SDK client 的 ClientOptions（同 OpenAI 家族：http-client customizer 会被每请求覆盖）。
+            // request=ZERO 禁 callTimeout、read 可配。async client 供主 agent 流式、sync 供子 agent 阻塞。
+            com.anthropic.core.Timeout timeout = com.anthropic.core.Timeout.builder()
+                    .connect(TIMEOUTS.connectTimeout())
+                    .read(TIMEOUTS.readTimeout())
+                    .write(TIMEOUTS.readTimeout())
+                    .request(Duration.ZERO)
+                    .build();
+            var syncB = com.anthropic.client.okhttp.AnthropicOkHttpClient.builder().apiKey(apiKey).timeout(timeout);
+            var asyncB = com.anthropic.client.okhttp.AnthropicOkHttpClientAsync.builder().apiKey(apiKey).timeout(timeout);
+            if (!baseUrl.isEmpty()) {   // 空→SDK 内置默认 https://api.anthropic.com
+                syncB.baseUrl(baseUrl);
+                asyncB.baseUrl(baseUrl);
             }
+            AnthropicChatOptions opts = AnthropicChatOptions.builder()
+                    .model(Model.of(DEFAULT_MODEL))
+                    .maxTokens(MAX_TOKENS)
+                    .build();
             m = AnthropicChatModel.builder()
-                    .options(opts.build())
-                    .httpClientBuilderCustomizer(b -> b.timeout(
-                            com.anthropic.core.Timeout.builder()
-                                    .connect(TIMEOUTS.connectTimeout())
-                                    .read(TIMEOUTS.readTimeout())
-                                    .write(TIMEOUTS.readTimeout())
-                                    .request(Duration.ZERO)   // 禁用 callTimeout（同 OpenAI-SDK 家族的流式 bug）
-                                    .build()))
+                    .anthropicClient(syncB.build())
+                    .anthropicClientAsync(asyncB.build())
+                    .options(opts)
                     .build();
             chatModel = m;
         }
