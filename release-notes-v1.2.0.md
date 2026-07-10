@@ -1,0 +1,85 @@
+# springai-agentdemo v1.2.0
+
+在 [v1.1.0](release-notes-v1.1.0.md) 基础上的功能增量版。核心交付物仍是终端编码智能体 **`springai-code-tui`**，本版新增**智谱 GLM 接入、并行子 agent、统一可配 LLM 超时**三大能力，补齐 **OpenAI GPT-5.6** 系列模型，并让发布包**解压即填即用**（内置 `bin/config.env`）。
+
+**下载物仍是两个自包含运行包（解压即用，无需构建）：**
+
+- `springai-code-tui-1.2.0-dist.tar.gz`（macOS / Linux 首选）
+- `springai-code-tui-1.2.0-dist.zip`（Windows 首选）
+
+两者内容一致：启动脚本（`bin/`）+ 主 jar + 全部运行期依赖（`lib/`）+ `LICENSE`/`NOTICE`/`README`。运行时界面版本标识为 **`v1.2.0`**。
+
+> 完整的功能全景与⚠️安全声明见 [v1.0.0 发布说明](release-notes-v1.0.0.md)；本文只列出相对 v1.1.0 的变化。
+
+---
+
+## ✨ 新增能力
+
+### 🧩 智谱 GLM 接入（第四家 provider）
+Spring AI 2.0 不再自带智谱 starter，本版**复用 `spring-ai-openai`**（智谱 `/api/paas/v4` 与 OpenAI 接口兼容）接入，无需自写 `ChatModel`。新增 `ZhipuProvider`：默认 `glm-5.2`，另含 `glm-5.1`、`glm-5-turbo`；`/model` 可与 DeepSeek / Anthropic / OpenAI 自由切换。配 `ZHIPU_API_KEY`（可选 `ZHIPU_BASE_URL`）即启用。
+
+### ⚡ 并行子 agent（`ParallelTasks` 批量工具）
+在原有串行 `Task` 之外新增 `ParallelTasks` 批量工具：主 agent 一次派发多个子 agent 并发执行，回合级线程池（守护线程 `subagent-parallel-<n>`）、**失败隔离**（单个子 agent 失败以「失败：」前缀降级、不拖垮其余）、结构化汇总。并发度可配 `CODETUI_SUBAGENT_CONCURRENCY`（默认 4，钳制 [1,32]）。仅主 agent 持有该工具，子 agent 不再嵌套并行。
+
+### ⏱️ 统一可配的 LLM 请求超时（四家全生效）
+取代 OpenAI SDK 默认 10 分钟 `request` 超时导致的「卡很久才报错」。新增全局 `CODETUI_LLM_READ_TIMEOUT_SECONDS`（默认 300s，钳制 [10,3600]），连接超时固定 30s、禁用整体 `callTimeout`（避免误杀正常长流式）。**DeepSeek / 智谱 / Anthropic / OpenAI 四家统一生效**，作用于主 + 子 agent。
+
+### 🤖 OpenAI GPT-5.6 系列
+补齐 OpenAI 今日新模型：`gpt-5.6-sol`（默认）、`gpt-5.6-terra`、`gpt-5.6-luna`，并保留 `gpt-5.5` / `gpt-5.4`。
+
+### 🗂️ 发布包内置配置文件（解压即填即用）
+发布包 `bin/` 下随附 `config.env.example`。用法：`cd bin && cp config.env.example config.env`，填入至少一家的 API Key，启动脚本自动加载（查找序：`CODETUI_CONFIG` > `bin/config.env` > `~/.codetui/config.env`）。免去每次手动 `export`。⚠️ `config.env` 含明文密钥，切勿提交到 git。
+
+---
+
+## 🐛 修复与改进
+
+- **fix(timeout)**：OpenAI / 智谱 / Anthropic 的「Stream failed」超时卡顿——根因是 SDK 每请求从 `ClientOptions.timeout` 重建 OkHttp 调用、绕过了 base client 的 `httpClientBuilderCustomizer`；改为直接以 `OpenAIOkHttpClient.builder().timeout(...)` / `AnthropicOkHttpClient` 在 **ClientOptions 层**设超时，方才真正落到底层 socket。
+- **fix(timeout)**：DeepSeek 沿用 Spring 按 classpath **检测出的默认 HTTP 栈**（阻塞 `HttpComponentsClientHttpRequestFactory` + 流式 `JdkClientHttpConnector`）只叠加读超时，不换实现——避免此前换 `SimpleClientHttpRequestFactory` / reactor-netty 破坏真实 SSE 流式。
+- 真实 hung-socket 运行时验证：四家 provider 超时均在 ~2s 触发（`ProviderTimeoutRuntimeTest`）；DeepSeek 真实调用回归 22.75s 通过、未被误伤。
+
+---
+
+## 🔧 工程
+
+- 全模块版本号 1.1.0 → **1.2.0**。
+- 全量测试：`springai-code-tui` **279 用例通过**；`-Pdist` 产出 1.2.0 运行包。
+- 文档全量同步：智谱 / GPT-5.6 / `ParallelTasks` 并行 / 统一超时 / `config.env` 就位于 `bin/`。
+
+---
+
+## 📦 仓库模块
+
+| 模块 | 说明 |
+| --- | --- |
+| **springai-code-tui** ⭐ | 终端编码智能体（**本次发布的可下载运行物**）。 |
+| springai-core-demo | Spring AI 原始 API 教学。 |
+| springai-agent-demo | 智能体教学：工具调用、多步 agent、会话记忆等。 |
+| springai-boot-demo | Spring Boot 自动装配版对照。 |
+| springai-jline-demo | JLine 终端交互基础示例。 |
+
+> demo 模块请 clone 源码后 `mvn` 运行，见各模块 README；下载包只含 `springai-code-tui`。
+
+---
+
+## 🔐 校验（SHA-256）
+
+```
+2e355aea66fb4530c8a922d8ad11d62e3de2db2cddf1688fd3f4510d8e289333  springai-code-tui-1.2.0-dist.tar.gz
+3e0787ef4bd306393b3b30099ca85f33e45053fcd3cb9d1411ea5a07da72b51e  springai-code-tui-1.2.0-dist.zip
+```
+
+```bash
+shasum -a 256 -c <<'EOF'
+2e355aea66fb4530c8a922d8ad11d62e3de2db2cddf1688fd3f4510d8e289333  springai-code-tui-1.2.0-dist.tar.gz
+3e0787ef4bd306393b3b30099ca85f33e45053fcd3cb9d1411ea5a07da72b51e  springai-code-tui-1.2.0-dist.zip
+EOF
+```
+
+---
+
+## 📄 许可
+
+[Apache License 2.0](LICENSE)。发布包内随附 `LICENSE` 与 `NOTICE`（含所分发第三方库：Spring AI / Spring Boot / spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）。
+
+**环境**：JDK 17+，macOS / Linux / Windows。
