@@ -9,6 +9,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * provider 中立的子 agent 执行器。前台串行：在主 agent 的 Task 工具调用内同步执行，
@@ -30,19 +35,28 @@ public final class SubagentRunner {
     private final AgentListener listener;
     private final String projectInstructions;   // AGENTS.md 项目指令；追加到每个子 agent 的 spec 系统提示（可空）
     private final Supplier<String> taskIdSupplier;
+    /** 批量 runAll 的并发上限（同时在飞的子 agent 数）。默认 4；装配层可传入自定义值。 */
+    private final int maxConcurrency;
 
     public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                           String projectInstructions) {
-        this(registry, tools, listener, projectInstructions, () -> "task_" + UUID.randomUUID());
+        this(registry, tools, listener, projectInstructions, 4);
+    }
+
+    public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                          String projectInstructions, int maxConcurrency) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency,
+                () -> "task_" + UUID.randomUUID());
     }
 
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
-                   String projectInstructions, Supplier<String> taskIdSupplier) {
+                   String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier) {
         this.registry = registry;
         this.tools = tools;
         this.listener = listener;
         this.projectInstructions = projectInstructions == null ? "" : projectInstructions;
         this.taskIdSupplier = taskIdSupplier;
+        this.maxConcurrency = Math.max(1, maxConcurrency);
     }
 
     /** 执行一次委派，返回子 agent 最终文本。parentTurnId=发起 Task 的回合。 */
@@ -72,6 +86,59 @@ public final class SubagentRunner {
         } catch (RuntimeException ex) {
             listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + ex.getMessage(), false);
             throw ex;
+        }
+    }
+
+    /**
+     * 批量并发执行多个子 agent，join 全部后按<b>入参顺序</b>返回各自结果。
+     *
+     * <p>失败隔离：单个子 agent 抛错不影响其他，该位置返回「失败：<msg>」文本（子 agent 内 run() 已 emit
+     * onSubagentFinished(ok=false)）。turnId <b>显式</b>传入每个任务闭包——绝不在子线程读 ThreadLocal
+     * （否则 turnId 丢失、UI 事件被迟到过滤器丢弃）。
+     *
+     * <p>线程池为<b>回合级局部</b>：容量 min(N, maxConcurrency)，join 后 shutdownNow 立即回收，无常驻线程。
+     *
+     * <p><b>中断（取消）语义</b>：被中断时立即 shutdownNow 并返回/抛出，<b>不</b> awaitTermination——
+     * 保证调用方（回合取消）快速回到 IDLE。在飞子 agent 可能因底层网络阻塞不响应 interrupt 而继续跑完，
+     * 其迟到事件由 ConversationState 的 turnId 迟到过滤器丢弃（best-effort 取消，取消可靠性的深入验证见 Task 5）。
+     */
+    public List<String> runAll(List<Dispatch> dispatches, long parentTurnId) {
+        int n = dispatches.size();
+        if (n == 0) {
+            return new ArrayList<>();
+        }
+        AtomicLong seq = new AtomicLong();
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(n, maxConcurrency), r -> {
+            Thread t = new Thread(r, "subagent-parallel-" + seq.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
+        try {
+            List<Callable<String>> tasks = new ArrayList<>(n);
+            for (Dispatch d : dispatches) {
+                tasks.add(() -> {
+                    try {
+                        return run(d.spec(), d.prompt(), d.description(), parentTurnId);
+                    } catch (RuntimeException ex) {
+                        return "失败：" + ex.getMessage();
+                    }
+                });
+            }
+            List<Future<String>> futures = pool.invokeAll(tasks);
+            List<String> results = new ArrayList<>(n);
+            for (Future<String> f : futures) {
+                try {
+                    results.add(f.get());
+                } catch (Exception ex) {
+                    results.add("失败：" + ex.getMessage());
+                }
+            }
+            return results;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("并行子任务被中断", ie);
+        } finally {
+            pool.shutdownNow();
         }
     }
 
@@ -112,5 +179,9 @@ public final class SubagentRunner {
             }
         }
         return result;
+    }
+
+    /** 一次批量委派中的单个子任务：路由后的 spec + 该子任务的 prompt/description。 */
+    public record Dispatch(SubagentSpec spec, String prompt, String description) {
     }
 }

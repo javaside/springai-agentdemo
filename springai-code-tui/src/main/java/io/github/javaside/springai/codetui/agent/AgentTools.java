@@ -218,7 +218,9 @@ public final class AgentTools {
         // 子 agent（Task 工具）：SubagentRunner 复用「已装饰、带边界」的工具列表 decorated；
         // Task 工具本身也用 ToolEventCallback 装饰，故委派本身在主流显示为一行。
         java.util.List<ToolCallback> decoratedList = java.util.List.of(decorated);
-        SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener, projectInstructions);
+        int subagentConcurrency = resolveSubagentConcurrency();
+        SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener,
+                projectInstructions, subagentConcurrency);
         java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
         ToolCallback taskTool = SubagentTool.create(subagentSpecs,
                 (spec, prompt, desc, turnIgnored) ->
@@ -226,14 +228,23 @@ public final class AgentTools {
                         subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()));
         ToolCallback decoratedTaskTool = new ToolEventCallback(taskTool, listener);
 
+        // 批量 ParallelTasks 工具：并发执行多个独立子 agent。parentTurnId 在工具线程（fan-out 前）从 ThreadLocal 取，
+        // 再由 runAll 显式传入每个子任务闭包（子线程不读 ThreadLocal）。
+        ToolCallback parallelTool = SubagentTool.createParallel(subagentSpecs,
+                (dispatches, turnIgnored) ->
+                        subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()));
+        ToolCallback decoratedParallelTool = new ToolEventCallback(parallelTool, listener);
+
         // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
         ToolCallback[] memoryDecorated = buildMemoryTools(root, listener);
 
-        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ Task 工具
-        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 1];
+        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ Task 工具 + ParallelTasks 工具
+        // 注意：ParallelTasks 仅给主 agent，不进 decoratedList，故子 agent 不能再派并行子 agent（禁递归 fan-out）。
+        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 2];
         System.arraycopy(decorated, 0, toolsWithTask, 0, decorated.length);
         System.arraycopy(memoryDecorated, 0, toolsWithTask, decorated.length, memoryDecorated.length);
-        toolsWithTask[toolsWithTask.length - 1] = decoratedTaskTool;
+        toolsWithTask[toolsWithTask.length - 2] = decoratedTaskTool;
+        toolsWithTask[toolsWithTask.length - 1] = decoratedParallelTool;
 
         // 事件溯源会话记忆：文件仓库（<root>/.codetui/sessions/，按项目隔离，进程重启后可加载）+ 「回合/token 感知」压缩。
         // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 裁剪半截历史（DefaultSessionService 不暴露该能力）。
@@ -302,6 +313,19 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner);
+    }
+
+    /** 子 agent 并行并发度：环境变量 CODETUI_SUBAGENT_CONCURRENCY，非法/缺失回退 4，钳制到 [1, 32]。 */
+    private static int resolveSubagentConcurrency() {
+        String raw = System.getenv("CODETUI_SUBAGENT_CONCURRENCY");
+        if (raw == null || raw.isBlank()) {
+            return 4;
+        }
+        try {
+            return Math.min(32, Math.max(1, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException e) {
+            return 4;
+        }
     }
 
     /**
