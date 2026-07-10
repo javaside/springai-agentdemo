@@ -59,4 +59,22 @@ class AgentMemoryToolsTest {
         assertTrue(subNames.contains("TodoWrite"),
                 "子 agent 应含共享工具（如 TodoWrite），证明读回的列表真实非空，实际=" + subNames);
     }
+
+    /**
+     * 禁递归 fan-out：委派工具（Task / ParallelTasks）只拼进主 agent 的 toolsWithTask，从不进入
+     * 传给 SubagentRunner 的 decoratedList——否则子 agent 能再派子 agent（乃至并行 fan-out）。
+     * 目前仅靠 build 里的数组构造顺序保证，加此回归测试防未来重构回退。
+     */
+    @Test
+    void subagentToolSet_excludesTaskAndParallelTasks(@TempDir Path root) {
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
+        List<String> subNames = rt.subagentRunner().toolNamesForTest();
+        assertFalse(subNames.contains("Task"),
+                "子 agent 工具集不应含委派工具 Task（禁递归 fan-out），实际=" + subNames);
+        assertFalse(subNames.contains("ParallelTasks"),
+                "子 agent 工具集不应含批量委派工具 ParallelTasks（禁递归 fan-out），实际=" + subNames);
+        // 防空转：确认读回的列表真实非空。
+        assertTrue(subNames.contains("TodoWrite"),
+                "子 agent 应含共享工具（如 TodoWrite），证明读回的列表真实非空，实际=" + subNames);
+    }
 }
