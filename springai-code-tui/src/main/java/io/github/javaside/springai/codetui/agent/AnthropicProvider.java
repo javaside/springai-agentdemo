@@ -6,6 +6,7 @@ import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -25,6 +26,8 @@ public final class AnthropicProvider implements LlmProvider {
             new ModelOption("claude-fable-5",   "claude-fable-5",   "最新旗舰"),
             new ModelOption("claude-sonnet-5",  "claude-sonnet-5",  "均衡 · 日常编码"),
             new ModelOption("claude-haiku-4-5", "claude-haiku-4-5", "快 · 便宜"));
+
+    private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
 
     private final String apiKey;
     private final String baseUrl;            // 空→框架内置默认；配了→覆盖
@@ -59,6 +62,13 @@ public final class AnthropicProvider implements LlmProvider {
             }
             m = AnthropicChatModel.builder()
                     .options(opts.build())
+                    .httpClientBuilderCustomizer(b -> b.timeout(
+                            com.anthropic.core.Timeout.builder()
+                                    .connect(TIMEOUTS.connectTimeout())
+                                    .read(TIMEOUTS.readTimeout())
+                                    .write(TIMEOUTS.readTimeout())
+                                    .request(Duration.ZERO)   // 禁用 callTimeout（同 OpenAI-SDK 家族的流式 bug）
+                                    .build()))
                     .build();
             chatModel = m;
         }
