@@ -37,13 +37,14 @@ Spring AI 2.0 不再自带智谱 starter，本版**复用 `spring-ai-openai`**�
 - **fix(timeout)**：OpenAI / 智谱 / Anthropic 的「Stream failed」超时卡顿——根因是 SDK 每请求从 `ClientOptions.timeout` 重建 OkHttp 调用、绕过了 base client 的 `httpClientBuilderCustomizer`；改为直接以 `OpenAIOkHttpClient.builder().timeout(...)` / `AnthropicOkHttpClient` 在 **ClientOptions 层**设超时，方才真正落到底层 socket。
 - **fix(timeout)**：DeepSeek 沿用 Spring 按 classpath **检测出的默认 HTTP 栈**（阻塞 `HttpComponentsClientHttpRequestFactory` + 流式 `JdkClientHttpConnector`）只叠加读超时，不换实现——避免此前换 `SimpleClientHttpRequestFactory` / reactor-netty 破坏真实 SSE 流式。
 - 真实 hung-socket 运行时验证：四家 provider 超时均在 ~2s 触发（`ProviderTimeoutRuntimeTest`）；DeepSeek 真实调用回归 22.75s 通过、未被误伤。
+- **fix(skill)**：手动 `/skill` 注入前解包工具结果的 JSON 字符串——`ToolCallback.call` 对返回 String 的工具会序列化成 JSON 字符串字面量（首尾引号 + `\n` 转义成两字符），此前原样嵌进 `<skill_instruction>` 导致字面 `\n` 与引号落进会话；`-c` 回放时用户块按真实 `\n` 拆行拆不开、整段塌成一条长灰条。改为先 `unwrapToolText` 解回原始多行文本再注入。
 
 ---
 
 ## 🔧 工程
 
 - 全模块版本号 1.1.0 → **1.2.0**。
-- 全量测试：`springai-code-tui` **279 用例通过**；`-Pdist` 产出 1.2.0 运行包。
+- 全量测试：`springai-code-tui` **283 用例通过**；`-Pdist` 产出 1.2.0 运行包。
 - 文档全量同步：智谱 / GPT-5.6 / `ParallelTasks` 并行 / 统一超时 / `config.env` 就位于 `bin/`。
 
 ---
@@ -65,14 +66,14 @@ Spring AI 2.0 不再自带智谱 starter，本版**复用 `spring-ai-openai`**�
 ## 🔐 校验（SHA-256）
 
 ```
-2e355aea66fb4530c8a922d8ad11d62e3de2db2cddf1688fd3f4510d8e289333  springai-code-tui-1.2.0-dist.tar.gz
-3e0787ef4bd306393b3b30099ca85f33e45053fcd3cb9d1411ea5a07da72b51e  springai-code-tui-1.2.0-dist.zip
+a5973c9257db61d6541c37118e4d475e6de7b2a6a37fa2501c59816949c524fb  springai-code-tui-1.2.0-dist.tar.gz
+dd71cf72bf9aaa6770e94708b5ed7aa995e9dd6c2029791bcf2017399d1fe723  springai-code-tui-1.2.0-dist.zip
 ```
 
 ```bash
 shasum -a 256 -c <<'EOF'
-2e355aea66fb4530c8a922d8ad11d62e3de2db2cddf1688fd3f4510d8e289333  springai-code-tui-1.2.0-dist.tar.gz
-3e0787ef4bd306393b3b30099ca85f33e45053fcd3cb9d1411ea5a07da72b51e  springai-code-tui-1.2.0-dist.zip
+a5973c9257db61d6541c37118e4d475e6de7b2a6a37fa2501c59816949c524fb  springai-code-tui-1.2.0-dist.tar.gz
+dd71cf72bf9aaa6770e94708b5ed7aa995e9dd6c2029791bcf2017399d1fe723  springai-code-tui-1.2.0-dist.zip
 EOF
 ```
 
