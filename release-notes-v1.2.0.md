@@ -37,14 +37,15 @@ Spring AI 2.0 不再自带智谱 starter，本版**复用 `spring-ai-openai`**�
 - **fix(timeout)**：OpenAI / 智谱 / Anthropic 的「Stream failed」超时卡顿——根因是 SDK 每请求从 `ClientOptions.timeout` 重建 OkHttp 调用、绕过了 base client 的 `httpClientBuilderCustomizer`；改为直接以 `OpenAIOkHttpClient.builder().timeout(...)` / `AnthropicOkHttpClient` 在 **ClientOptions 层**设超时，方才真正落到底层 socket。
 - **fix(timeout)**：DeepSeek 沿用 Spring 按 classpath **检测出的默认 HTTP 栈**（阻塞 `HttpComponentsClientHttpRequestFactory` + 流式 `JdkClientHttpConnector`）只叠加读超时，不换实现——避免此前换 `SimpleClientHttpRequestFactory` / reactor-netty 破坏真实 SSE 流式。
 - 真实 hung-socket 运行时验证：四家 provider 超时均在 ~2s 触发（`ProviderTimeoutRuntimeTest`）；DeepSeek 真实调用回归 22.75s 通过、未被误伤。
-- **fix(skill)**：手动 `/skill` 注入前解包工具结果的 JSON 字符串——`ToolCallback.call` 对返回 String 的工具会序列化成 JSON 字符串字面量（首尾引号 + `\n` 转义成两字符），此前原样嵌进 `<skill_instruction>` 导致字面 `\n` 与引号落进会话；`-c` 回放时用户块按真实 `\n` 拆行拆不开、整段塌成一条长灰条。改为先 `unwrapToolText` 解回原始多行文本再注入。
+- **fix(skill)**：手动 `/skill` 注入前解包工具结果的 JSON 字符串——`ToolCallback.call` 对返回 String 的工具会序列化成 JSON 字符串字面量（首尾引号 + `\n` 转义成两字符），此前原样嵌进 `<skill_instruction>` 导致字面 `\n` 与引号落进会话。改为先 `unwrapToolText` 解回原始多行文本再注入，保持会话数据干净。
+- **fix(replay)**：`-c` 回放剥掉用户块里注入的 `<skill_instruction>…</skill_instruction>` 前缀——会话持久化的是「注入后」的有效文本，但实时 UI 只显示用户原文（`onUserMessage` 收 `text` 而非 `effectiveText`）；此前回放把整块 skill 指令灌进灰底用户块、显示成一大坨样板文本。`HistoryReplay` 现只留用户原文，与实时一致（对新旧会话都生效）。
 
 ---
 
 ## 🔧 工程
 
 - 全模块版本号 1.1.0 → **1.2.0**。
-- 全量测试：`springai-code-tui` **283 用例通过**；`-Pdist` 产出 1.2.0 运行包。
+- 全量测试：`springai-code-tui` **286 用例通过**；`-Pdist` 产出 1.2.0 运行包。
 - 文档全量同步：智谱 / GPT-5.6 / `ParallelTasks` 并行 / 统一超时 / `config.env` 就位于 `bin/`。
 
 ---
@@ -66,14 +67,14 @@ Spring AI 2.0 不再自带智谱 starter，本版**复用 `spring-ai-openai`**�
 ## 🔐 校验（SHA-256）
 
 ```
-a5973c9257db61d6541c37118e4d475e6de7b2a6a37fa2501c59816949c524fb  springai-code-tui-1.2.0-dist.tar.gz
-dd71cf72bf9aaa6770e94708b5ed7aa995e9dd6c2029791bcf2017399d1fe723  springai-code-tui-1.2.0-dist.zip
+8588d5bab95dcb3af9e260242d877dd0751f75a6b64863eb81c3fd5a610fc563  springai-code-tui-1.2.0-dist.tar.gz
+2adef0fde4b1a59bf0d585677c1d8d9413c7949469f2264e2d8ce74f6363d735  springai-code-tui-1.2.0-dist.zip
 ```
 
 ```bash
 shasum -a 256 -c <<'EOF'
-a5973c9257db61d6541c37118e4d475e6de7b2a6a37fa2501c59816949c524fb  springai-code-tui-1.2.0-dist.tar.gz
-dd71cf72bf9aaa6770e94708b5ed7aa995e9dd6c2029791bcf2017399d1fe723  springai-code-tui-1.2.0-dist.zip
+8588d5bab95dcb3af9e260242d877dd0751f75a6b64863eb81c3fd5a610fc563  springai-code-tui-1.2.0-dist.tar.gz
+2adef0fde4b1a59bf0d585677c1d8d9413c7949469f2264e2d8ce74f6363d735  springai-code-tui-1.2.0-dist.zip
 EOF
 ```
 
