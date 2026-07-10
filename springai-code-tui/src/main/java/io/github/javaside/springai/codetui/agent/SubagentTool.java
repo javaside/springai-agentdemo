@@ -4,6 +4,8 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -31,6 +33,21 @@ public final class SubagentTool {
             - Choose subagent_type from the list above.
             """;
 
+    private static final String PARALLEL_DESCRIPTION_TEMPLATE = """
+            Launch MULTIPLE subagents CONCURRENTLY to handle several INDEPENDENT subtasks at once.
+
+            Use this ONLY when you have 2+ subtasks that are mutually independent and share no state
+            (e.g. investigating unrelated failures, exploring separate subsystems). If subtasks depend
+            on each other or need shared context, use the single Task tool instead.
+
+            Each subtask has the same shape as Task: description, prompt, subagent_type. All subtasks
+            run in parallel; results are returned together, one block per subtask (in input order),
+            each marked success/failure independently — one failing subtask does not abort the others.
+
+            Available subagent types:
+            %s
+            """;
+
     private SubagentTool() {
     }
 
@@ -41,10 +58,21 @@ public final class SubagentTool {
             @ToolParam(description = "Which subagent type to use") String subagent_type) {
     }
 
+    /** 批量子 agent 调用入参：一组子任务，每个复用单任务的三元组。 */
+    public record ParallelCall(
+            @ToolParam(description = "List of independent subtasks to run concurrently") List<SubagentCall> tasks) {
+    }
+
     /** 把一次委派交给执行器（SubagentRunner.run 的函数式视图）。turnId=当前回合。 */
     @FunctionalInterface
     public interface Dispatcher {
         String dispatch(SubagentSpec spec, String prompt, String description, long turnId);
+    }
+
+    /** 把一批路由后的委派交给并发执行器（SubagentRunner.runAll 的函数式视图），按入参顺序返回各自结果文本。 */
+    @FunctionalInterface
+    public interface BatchDispatcher {
+        List<String> dispatch(List<SubagentRunner.Dispatch> dispatches, long parentTurnId);
     }
 
     /** 构建名为 "Task" 的 ToolCallback。turnId 从 ThreadLocal 取（同主流工具，装配时落实）。 */
@@ -58,6 +86,17 @@ public final class SubagentTool {
                 .build();
     }
 
+    /** 构建名为 "ParallelTasks" 的批量 ToolCallback。parentTurnId 由 BatchDispatcher 实现内部经 ThreadLocal 取，这里占位 -1L。 */
+    public static ToolCallback createParallel(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher) {
+        String roster = specs.values().stream()
+                .map(s -> "- " + s.name() + ": " + s.description())
+                .collect(Collectors.joining("\n"));
+        return FunctionToolCallback.builder("ParallelTasks", batchFunction(specs, dispatcher))
+                .description(PARALLEL_DESCRIPTION_TEMPLATE.formatted(roster))
+                .inputType(ParallelCall.class)
+                .build();
+    }
+
     /** 纯路由函数：subagent_type → spec，未知则抛清晰错误；命中则交 dispatcher（turnId 由 Dispatcher 实现内部经 ThreadLocal 取，这里传 -1L 占位）。 */
     static Function<SubagentCall, String> function(Map<String, SubagentSpec> specs, Dispatcher dispatcher) {
         return callArgs -> {
@@ -67,6 +106,53 @@ public final class SubagentTool {
                         + ". Available: " + String.join(", ", specs.keySet()));
             }
             return dispatcher.dispatch(spec, callArgs.prompt(), callArgs.description(), -1L);
+        };
+    }
+
+    /**
+     * 批量路由函数：把每个 SubagentCall 路由成 SubagentRunner.Dispatch（未知类型该条降级为失败、<b>不抛</b>，
+     * 服从失败隔离——与单任务 Task 抛异常有意不同）。已知条交 BatchDispatcher 并发执行，最后按入参顺序结构化汇总。
+     */
+    static Function<ParallelCall, String> batchFunction(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher) {
+        return call -> {
+            List<SubagentTool.SubagentCall> tasks = call.tasks() == null ? List.of() : call.tasks();
+            List<SubagentRunner.Dispatch> dispatchable = new ArrayList<>();
+            List<Integer> dispatchIndex = new ArrayList<>();
+            String[] failure = new String[tasks.size()];
+            String[] typeName = new String[tasks.size()];
+            for (int i = 0; i < tasks.size(); i++) {
+                SubagentTool.SubagentCall t = tasks.get(i);
+                typeName[i] = t.subagent_type();
+                SubagentSpec spec = t.subagent_type() == null ? null : specs.get(t.subagent_type());
+                if (spec == null) {
+                    failure[i] = "未知 subagent 类型: " + t.subagent_type()
+                            + "（可用: " + String.join(", ", specs.keySet()) + "）";
+                } else {
+                    dispatchable.add(new SubagentRunner.Dispatch(spec, t.prompt(), t.description()));
+                    dispatchIndex.add(i);
+                }
+            }
+            List<String> ran = dispatcher.dispatch(dispatchable, -1L);
+            String[] body = new String[tasks.size()];
+            boolean[] ok = new boolean[tasks.size()];
+            for (int i = 0; i < tasks.size(); i++) {
+                if (failure[i] != null) { body[i] = failure[i]; ok[i] = false; }
+            }
+            for (int k = 0; k < ran.size(); k++) {
+                int idx = dispatchIndex.get(k);
+                String r = ran.get(k);
+                boolean failed = r != null && r.startsWith("失败：");
+                body[idx] = r;
+                ok[idx] = !failed;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < tasks.size(); i++) {
+                if (i > 0) sb.append("\n\n");
+                sb.append("[").append(i + 1).append("] ").append(typeName[i])
+                        .append(ok[i] ? " ✓" : " ✗");
+                sb.append("\n").append(body[i] == null ? "" : body[i]);
+            }
+            return sb.toString();
         };
     }
 }
