@@ -13,6 +13,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * provider 中立的子 agent 执行器。前台串行：在主 agent 的 Task 工具调用内同步执行，
@@ -106,7 +107,12 @@ public final class SubagentRunner {
         if (n == 0) {
             return new ArrayList<>();
         }
-        ExecutorService pool = Executors.newFixedThreadPool(Math.min(n, maxConcurrency));
+        AtomicLong seq = new AtomicLong();
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(n, maxConcurrency), r -> {
+            Thread t = new Thread(r, "subagent-parallel-" + seq.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
         try {
             List<Callable<String>> tasks = new ArrayList<>(n);
             for (Dispatch d : dispatches) {
