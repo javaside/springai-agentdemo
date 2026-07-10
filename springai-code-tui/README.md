@@ -45,7 +45,7 @@ mvn -pl springai-code-tui -am package
 
 ## 运行
 
-> 发布包（`-Pdist` 产出的 tar.gz/zip）用户：解压后把 `config.env.example` 复制为 `config.env` 填 key 即可，
+> 发布包（`-Pdist` 产出的 tar.gz/zip）用户：解压后把 `bin/config.env.example` 复制为 `bin/config.env` 填 key 即可，
 > `bin/code-tui` 会自动加载，无需手动 export。下面的环境变量方式与 `config.env` 里的键名完全一致、二选一。
 
 ```bash

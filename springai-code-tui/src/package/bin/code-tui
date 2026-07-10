@@ -1,7 +1,7 @@
 #!/bin/sh
 # springai-code-tui 启动脚本。解压发布包后直接执行本脚本即可运行。
 # 需求：JDK 21+。
-# 配置：把安装目录下 config.env.example 复制为 config.env 并填 API key（至少一家）；或直接用环境变量。
+# 配置：把 bin/config.env.example 复制为 bin/config.env 并填 API key（至少一家）；或直接用环境变量。
 #   可配项：DEEPSEEK_API_KEY / ZHIPU_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY（及各自 *_BASE_URL）、
 #   CODETUI_LLM_READ_TIMEOUT_SECONDS、CODETUI_SUBAGENT_CONCURRENCY、JAVA_OPTS。
 # 用法：在一个「可随意丢弃、且已被 git 干净纳管」的项目目录里运行本工具。
@@ -20,12 +20,12 @@ BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT")" && pwd -P)
 APP_HOME=$(CDPATH= cd -- "$BIN_DIR/.." && pwd -P)
 
 # 加载可选配置文件 config.env（KEY=VALUE；# 开头为注释）。取消注释的行覆盖同名环境变量。
-# 查找顺序：$CODETUI_CONFIG > 安装目录/config.env > ~/.codetui/config.env。set -a 使其自动导出给 JVM 进程。
+# 查找顺序：$CODETUI_CONFIG > bin/config.env（与本脚本同目录）> ~/.codetui/config.env。set -a 使其自动导出给 JVM 进程。
 CONFIG=""
 if [ -n "${CODETUI_CONFIG:-}" ] && [ -f "$CODETUI_CONFIG" ]; then
     CONFIG="$CODETUI_CONFIG"
-elif [ -f "$APP_HOME/config.env" ]; then
-    CONFIG="$APP_HOME/config.env"
+elif [ -f "$BIN_DIR/config.env" ]; then
+    CONFIG="$BIN_DIR/config.env"
 elif [ -f "$HOME/.codetui/config.env" ]; then
     CONFIG="$HOME/.codetui/config.env"
 fi
