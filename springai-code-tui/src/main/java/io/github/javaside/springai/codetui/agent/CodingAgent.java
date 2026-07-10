@@ -203,10 +203,28 @@ public final class CodingAgent implements SubmitHandler {
         }
         try {
             ToolContext ctx = new ToolContext(Map.of("turnId", turnId));
-            String body = skillTool.call(toJsonCommand(skillName), ctx);
+            String body = unwrapToolText(skillTool.call(toJsonCommand(skillName), ctx));
             return "<skill_instruction>\n" + body + "\n</skill_instruction>\n\n" + text;
         } catch (RuntimeException ex) {
             return text;   // 注入失败不阻断本轮：按原文发送（工具失败事件已由 ToolEventCallback 上报）
+        }
+    }
+
+    /**
+     * {@link ToolCallback#call} 的返回是「工具结果经 Spring AI 序列化」后的串——对返回 String 的工具即一个 JSON
+     * 字符串字面量（带首尾引号、{@code \n} 被转义成两字符 {@code \}+{@code n}）。手动 {@code /skill} 要把正文当
+     * <b>原始多行文本</b>嵌进用户消息，若原样嵌入，字面 {@code \n} 会连同引号一起落进会话并在 {@code -c} 回放里
+     * 显示成一行长条（无法按真实换行拆分）。此处把 JSON 字符串解回原文；非 JSON 字符串字面量则原样返回。
+     */
+    static String unwrapToolText(String toolResult) {
+        if (toolResult == null || toolResult.length() < 2
+                || toolResult.charAt(0) != '"' || toolResult.charAt(toolResult.length() - 1) != '"') {
+            return toolResult;   // 已是原文 / 非字符串结果（对象、数组）：原样返回
+        }
+        try {
+            return MAPPER.readValue(toolResult, String.class);
+        } catch (JacksonException e) {
+            return toolResult;   // 不是合法 JSON 字符串：降级为原样，不阻断本轮
         }
     }
 
