@@ -53,7 +53,7 @@ com.openai.errors.OpenAIIoException: Stream failed
 | read 默认值 | **300s**（取代祸首 60s；容忍推理思考期/慢 relay 首字节） |
 | callTimeout(request) | **禁用（设 0）**——流式绝不能用总时长超时 |
 | connect | 固定 30s，不暴露配置 |
-| 覆盖范围 | 四家 provider（OpenAI/智谱/Anthropic/DeepSeek）+ 主 agent(stream) 与子 agent(call) |
+| 覆盖范围 | **三家 OpenAI-SDK 家族**（OpenAI/智谱/Anthropic，共享 callTimeout 流式 bug）+ 主 agent(stream) 与子 agent(call)；**DeepSeek 保持现状不接**（无此 bug；见下） |
 | 配置入口 | 环境变量 `CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300，钳制 [10, 3600] |
 
 ## 架构与组件
@@ -63,13 +63,14 @@ com.openai.errors.OpenAIIoException: Stream failed
 - 暴露 `Duration readTimeout()`（配置值）、`Duration connectTimeout()`（固定 30s）。
 - 纯函数、无副作用，便于单测全覆盖。各 provider 复用它，避免重复读环境变量。
 
-**四家 provider 接线（共用 `LlmTimeouts` 解析出的 read/connect，各自底层机制不同）**
+**三家接线（共用 `LlmTimeouts` 解析出的 read/connect；OpenAI/智谱/Anthropic 均走各自 SDK 的
+`httpClientBuilderCustomizer`，在其中构造带 `request=ZERO` 的 Timeout——精确禁用 callTimeout）**
 
-| Provider | 接线机制 |
+| Provider | 接线机制（规划期已从字节码坐实 API） |
 |---|---|
-| OpenAI / 智谱 | 构造 `com.openai.core.Timeout`：`read=readTimeout()`、`connect=connectTimeout()`、`request=Duration.ZERO`（禁用 callTimeout）、`write` 保持默认；经 `SpringAiOpenAiHttpClient.builder().timeout(t)` 建 httpClient，挂到 `OpenAiChatModel.builder()`。 |
-| Anthropic | `AnthropicChatOptions.Builder.timeout(Duration)` 直接给 `readTimeout()`（其 SDK Timeout 语义与 OpenAI 一致）。 |
-| DeepSeek | 给 `DeepSeekApi` 的 `RestClient.Builder` 挂一个设了 read/connect 超时的 `ClientHttpRequestFactory`（如 `SimpleClientHttpRequestFactory`/`JdkClientHttpRequestFactory`）。DeepSeek 无 callTimeout，天然无需禁用。 |
+| OpenAI / 智谱 | `OpenAiChatModel.Builder.httpClientBuilderCustomizer(c)`；`c` 内 `builder.timeout(com.openai.core.Timeout.builder().connect(connect).read(read).write(read).request(Duration.ZERO).build())`。两家逻辑相同，抽成共享 helper。 |
+| Anthropic | `AnthropicChatModel.Builder.httpClientBuilderCustomizer(c)`；`c` 内 `builder.timeout(com.anthropic.core.Timeout.builder()...request(Duration.ZERO).build())`。**同 OpenAI-SDK 家族、同 callTimeout bug**，故同样用 customizer + request=ZERO（**不**用 `options.timeout(Duration)`——那映射到单一 request/callTimeout，是错的维度）。 |
+| DeepSeek | **不改**。DeepSeek 走 Spring `RestClient`/`WebClient`，无 callTimeout 概念，实测不超时；全覆盖需同时配 RestClient+WebClient 两处，收益低、给工作正常的 provider 引入风险，故保持现状。环境变量对 DeepSeek 不作用。 |
 
 **数据流**：`LlmTimeouts.fromEnv()` → 各 `*Provider.chatModel()` 在建 ChatModel 时读取并注入底层 client 超时 →
 主 agent `.stream()` 与子 agent `.call()` 都经此 client 发请求，故超时对两者统一生效。
