@@ -33,7 +33,10 @@ final class HistoryReplay {
             switch (m.getMessageType()) {
                 case USER -> {
                     out.add(new OutputLine("", Kind.ASSISTANT));                 // 回合间留白，与 onUserMessage 一致
-                    out.add(new OutputLine("› " + safe(m.getText()), Kind.USER));
+                    // 会话持久化的是「注入后」的有效文本；实时 UI 只显示用户原文（onUserMessage 传 text 而非
+                    // effectiveText），回放须一致，故剥掉 CodingAgent.injectSkill 注入的 <skill_instruction> 前缀。
+                    // 单行 OutputLine 即可——userBlock 自身按 \n 拆行、软折（与实时同路径）。
+                    out.add(new OutputLine("› " + stripSkillInstruction(safe(m.getText())), Kind.USER));
                 }
                 case ASSISTANT -> {
                     String text = m.getText();
@@ -75,6 +78,29 @@ final class HistoryReplay {
 
     private static String safe(String s) {
         return s == null ? "" : s;
+    }
+
+    /**
+     * 剥掉手动 {@code /skill} 注入到用户文本前的 {@code <skill_instruction>…</skill_instruction>} 块，只留用户原文，
+     * 使 {@code -c} 回放的用户块与实时一致（实时 {@code onUserMessage} 收到的是原文，注入只作用于发给模型的文本）。
+     *
+     * <p>注入格式见 {@code CodingAgent.injectSkill}：{@code "<skill_instruction>\n" + body + "\n</skill_instruction>\n\n" + text}。
+     * 对新旧会话都适用——即便 body 内含转义残留，闭合标记与其后的换行分隔仍是真实字符。非注入文本原样返回。
+     */
+    static String stripSkillInstruction(String userText) {
+        if (userText == null || !userText.startsWith("<skill_instruction>")) {
+            return userText;
+        }
+        int close = userText.indexOf("</skill_instruction>");
+        if (close < 0) {
+            return userText;                                    // 不完整：保底原样，不误删
+        }
+        int after = close + "</skill_instruction>".length();
+        while (after < userText.length()
+                && (userText.charAt(after) == '\n' || userText.charAt(after) == '\r')) {
+            after++;                                            // 跳过 injectSkill 附加的 "\n\n" 分隔（容忍 \r\n）
+        }
+        return userText.substring(after);
     }
 
     private static String stripCr(String s) {

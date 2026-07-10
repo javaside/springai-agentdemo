@@ -41,6 +41,32 @@ class HistoryReplayTest {
     }
 
     @Test
+    void userWithInjectedSkillInstructionShowsOnlyOriginalText() {
+        // 会话持久化的是 injectSkill 注入后的有效文本；回放须只显示用户原文（与实时 onUserMessage 一致）。
+        String stored = "<skill_instruction>\nBase directory: /skills/x\n\n# Systematic Debugging\n\n正文若干行\n</skill_instruction>\n\n帮我排查这个 bug";
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals(2, out.size());
+        assertEquals(Kind.USER, out.get(1).kind());
+        assertEquals("› 帮我排查这个 bug", out.get(1).text(), "只留用户原文，剥掉 skill_instruction 块");
+    }
+
+    @Test
+    void stripSkillInstructionLeavesPlainUserTextUntouched() {
+        assertEquals("普通消息", HistoryReplay.stripSkillInstruction("普通消息"));
+        assertEquals("", HistoryReplay.stripSkillInstruction(""));
+        // 只有开头是注入标记才剥；正文里偶然含该字样不受影响
+        assertEquals("聊聊 <skill_instruction> 这个标签",
+                HistoryReplay.stripSkillInstruction("聊聊 <skill_instruction> 这个标签"));
+    }
+
+    @Test
+    void stripSkillInstructionEmptyUserTextAfterSkill() {
+        // 用户仅触发 /skill、未附带正文：剥完为空，与实时空用户块一致
+        String stored = "<skill_instruction>\nbody\n</skill_instruction>\n\n";
+        assertEquals("", HistoryReplay.stripSkillInstruction(stored));
+    }
+
+    @Test
     void assistantTextThenToolCallRenderCompactly() {
         AssistantMessage am = AssistantMessage.builder()
                 .content("我来排查")
