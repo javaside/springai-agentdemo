@@ -88,6 +88,54 @@ public final class SubagentRunner {
         }
     }
 
+    /**
+     * 批量并发执行多个子 agent，join 全部后按<b>入参顺序</b>返回各自结果。
+     *
+     * <p>失败隔离：单个子 agent 抛错不影响其他，该位置返回「失败：<msg>」文本（子 agent 内 run() 已 emit
+     * onSubagentFinished(ok=false)）。turnId <b>显式</b>传入每个任务闭包——绝不在子线程读 ThreadLocal
+     * （否则 turnId 丢失、UI 事件被迟到过滤器丢弃）。
+     *
+     * <p>线程池为<b>回合级局部</b>：容量 min(N, maxConcurrency)，join 后 shutdownNow 立即回收，无常驻线程。
+     *
+     * <p><b>中断（取消）语义</b>：被中断时立即 shutdownNow 并返回/抛出，<b>不</b> awaitTermination——
+     * 保证调用方（回合取消）快速回到 IDLE。在飞子 agent 可能因底层网络阻塞不响应 interrupt 而继续跑完，
+     * 其迟到事件由 ConversationState 的 turnId 迟到过滤器丢弃（best-effort 取消，取消可靠性的深入验证见 Task 5）。
+     */
+    public List<String> runAll(List<Dispatch> dispatches, long parentTurnId) {
+        int n = dispatches.size();
+        if (n == 0) {
+            return new ArrayList<>();
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(n, maxConcurrency));
+        try {
+            List<Callable<String>> tasks = new ArrayList<>(n);
+            for (Dispatch d : dispatches) {
+                tasks.add(() -> {
+                    try {
+                        return run(d.spec(), d.prompt(), d.description(), parentTurnId);
+                    } catch (RuntimeException ex) {
+                        return "失败：" + ex.getMessage();
+                    }
+                });
+            }
+            List<Future<String>> futures = pool.invokeAll(tasks);
+            List<String> results = new ArrayList<>(n);
+            for (Future<String> f : futures) {
+                try {
+                    results.add(f.get());
+                } catch (Exception ex) {
+                    results.add("失败：" + ex.getMessage());
+                }
+            }
+            return results;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("并行子任务被中断", ie);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     /** 子 agent 有效系统提示：spec 自身提示 + 项目指令（非空时追加）。纯函数，便于单测。 */
     String effectiveSystemPrompt(SubagentSpec spec) {
         if (projectInstructions.isEmpty()) {
