@@ -13,7 +13,7 @@
 
 **③ 综合应用层** —— `springai-code-tui`：把前两层综合成一个**真正能用的命令行编码智能体**（多 provider、子 agent、工具调用、技能、TUI 面板）。
 
-- **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 Anthropic / OpenAI
+- **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 智谱 GLM / Anthropic / OpenAI
 - **向量模型**：本地 ONNX 模型（无需 API Key，离线运行）—— 因为 DeepSeek 官方 API 只提供对话、不提供向量
 - **运行方式**：core/agent/boot 为控制台菜单（输入数字选示例）；jline/code-tui 为交互式终端程序
 
@@ -46,7 +46,7 @@ springai-agentdemo                  父工程（聚合 + 版本管理，packagin
 │   └── 单文件逐节演示：原始/回显模式、光标、颜色、按键读取、窗口尺寸…
 │
 └── springai-code-tui              【综合应用】命令行编码智能体（TUI）
-    └── 多 provider（DeepSeek/Anthropic/OpenAI）+ 子 agent（Task）+ 技能
+    └── 多 provider（DeepSeek/智谱/Anthropic/OpenAI）+ 子 agent（Task + ParallelTasks 并行）+ 技能
         + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ 计划/任务面板 + 会话压缩
         + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
 ```
@@ -104,7 +104,7 @@ java -jar springai-core-demo/target/springai-core-demo.jar
 java -jar springai-agent-demo/target/springai-agent-demo.jar
 
 # 自动装配模块（Spring Boot，可执行 fat jar；也可用 mvn -pl springai-boot-demo spring-boot:run）
-java -jar springai-boot-demo/target/springai-boot-demo-1.1.0.jar
+java -jar springai-boot-demo/target/springai-boot-demo-1.2.0.jar
 
 # 终端基础示例（JLine 3）
 java -jar springai-jline-demo/target/springai-jline-demo.jar

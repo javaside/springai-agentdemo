@@ -23,5 +23,5 @@ JLine 3 `Terminal` 接口的入门示例。
 
 ```bash
 mvn -q -pl springai-jline-demo package
-java -jar springai-jline-demo/target/springai-jline-demo-1.1.0.jar
+java -jar springai-jline-demo/target/springai-jline-demo-1.2.0.jar
 ```
