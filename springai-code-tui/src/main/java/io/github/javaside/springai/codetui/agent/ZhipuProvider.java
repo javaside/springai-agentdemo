@@ -56,14 +56,17 @@ public final class ZhipuProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
-            OpenAiChatOptions opts = OpenAiChatOptions.builder()
-                    .apiKey(apiKey)
-                    .baseUrl(baseUrl)
-                    .model(DEFAULT_MODEL)
-                    .build();
+            // 超时设在 SDK client 的 ClientOptions（见 OpenAiTimeouts）；智谱 baseUrl 恒非空（/api/paas/v4）。
+            // async client 供主 agent 流式、sync client 供子 agent 阻塞——两个都带超时。
+            com.openai.core.Timeout timeout = OpenAiTimeouts.of(TIMEOUTS);
+            var syncClient = com.openai.client.okhttp.OpenAIOkHttpClient.builder()
+                    .apiKey(apiKey).baseUrl(baseUrl).timeout(timeout).build();
+            var asyncClient = com.openai.client.okhttp.OpenAIOkHttpClientAsync.builder()
+                    .apiKey(apiKey).baseUrl(baseUrl).timeout(timeout).build();
             m = OpenAiChatModel.builder()
-                    .options(opts)
-                    .httpClientBuilderCustomizer(OpenAiTimeoutCustomizer.of(TIMEOUTS))
+                    .openAiClient(syncClient)
+                    .openAiClientAsync(asyncClient)
+                    .options(OpenAiChatOptions.builder().model(DEFAULT_MODEL).build())
                     .build();
             chatModel = m;
         }
