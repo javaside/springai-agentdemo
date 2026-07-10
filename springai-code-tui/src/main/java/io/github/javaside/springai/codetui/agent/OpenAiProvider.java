@@ -25,6 +25,8 @@ public final class OpenAiProvider implements LlmProvider {
             new ModelOption("gpt-5.5", "gpt-5.5", "上一代旗舰"),
             new ModelOption("gpt-5.4", "gpt-5.4", "上一代 · 快"));
 
+    private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
+
     private final String apiKey;
     private final String baseUrl;            // 空→框架内置默认；配了→覆盖
     private volatile ChatModel chatModel;
@@ -55,6 +57,7 @@ public final class OpenAiProvider implements LlmProvider {
             }
             m = OpenAiChatModel.builder()
                     .options(opts.build())
+                    .httpClientBuilderCustomizer(OpenAiTimeoutCustomizer.of(TIMEOUTS))
                     .build();
             chatModel = m;
         }
