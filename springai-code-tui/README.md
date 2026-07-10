@@ -45,12 +45,17 @@ mvn -pl springai-code-tui -am package
 
 ## 运行
 
+> 发布包（`-Pdist` 产出的 tar.gz/zip）用户：解压后把 `config.env.example` 复制为 `config.env` 填 key 即可，
+> `bin/code-tui` 会自动加载，无需手动 export。下面的环境变量方式与 `config.env` 里的键名完全一致、二选一。
+
 ```bash
 # 至少配置一个 provider 的 key（首个可用者激活；可同时配多个，用 /model 切换）
 export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役，默认 deepseek-v4-pro，另有 v4-flash 非思考款）
+# export ZHIPU_API_KEY=你的key           # 智谱 GLM（默认 glm-5.2，另有 glm-5.1/glm-5-turbo；OpenAI 兼容通路）
 # export ANTHROPIC_API_KEY=你的key       # Anthropic（默认 claude-opus-4-8，另有 fable-5/sonnet-5/haiku-4-5）
-# export OPENAI_API_KEY=你的key          # OpenAI（gpt-5.5 等）
-# 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
+# export OPENAI_API_KEY=你的key          # OpenAI（默认 gpt-5.6-sol，另有 terra/luna）
+# 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ZHIPU_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
+# 可选调优：CODETUI_LLM_READ_TIMEOUT_SECONDS（默认 300）、CODETUI_SUBAGENT_CONCURRENCY（默认 4）
 
 # 切到一个可以随意丢弃、且被版本控制干净纳管的目录再运行
 cd /path/to/some/disposable/project

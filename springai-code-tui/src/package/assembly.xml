@@ -58,6 +58,14 @@
                 <include>README.md</include>
             </includes>
         </fileSet>
+        <!-- 配置示例：解压后复制为 config.env 填 key，启动脚本自动加载（见 bin/code-tui[.cmd]） -->
+        <fileSet>
+            <directory>${project.basedir}/src/package</directory>
+            <outputDirectory>.</outputDirectory>
+            <includes>
+                <include>config.env.example</include>
+            </includes>
+        </fileSet>
         <!-- 许可与第三方声明（在仓库根，比模块目录高一层）：发布包分发 lib/ 里的第三方 jar，
              Apache 2.0 §4 要求随分发保留许可与 NOTICE，故一并打进包根。 -->
         <fileSet>

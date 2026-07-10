@@ -1,8 +1,21 @@
 @echo off
 rem springai-code-tui 启动脚本（Windows）。解压后直接运行本脚本。
-rem 需求：JDK 21+。API key 通过环境变量提供：DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY
+rem 需求：JDK 21+。
+rem 配置：把安装目录下 config.env.example 复制为 config.env 并填 API key（至少一家）；或直接用环境变量。
+rem   可配项：DEEPSEEK_API_KEY / ZHIPU_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY（及各自 *_BASE_URL）、
+rem   CODETUI_LLM_READ_TIMEOUT_SECONDS、CODETUI_SUBAGENT_CONCURRENCY、JAVA_OPTS。
 setlocal
 set "APP_HOME=%~dp0.."
+
+rem 加载可选 config.env（KEY=VALUE；# 开头为注释）。取消注释的行覆盖同名环境变量。
+rem 查找：CODETUI_CONFIG > 安装目录\config.env > %USERPROFILE%\.codetui\config.env
+set "CONFIG="
+if defined CODETUI_CONFIG if exist "%CODETUI_CONFIG%" set "CONFIG=%CODETUI_CONFIG%"
+if not defined CONFIG if exist "%APP_HOME%\config.env" set "CONFIG=%APP_HOME%\config.env"
+if not defined CONFIG if exist "%USERPROFILE%\.codetui\config.env" set "CONFIG=%USERPROFILE%\.codetui\config.env"
+if defined CONFIG (
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%CONFIG%") do set "%%A=%%B"
+)
 
 if defined JAVA_HOME (
     set "JAVA=%JAVA_HOME%\bin\java.exe"
