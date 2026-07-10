@@ -30,6 +30,8 @@ public final class ZhipuProvider implements LlmProvider {
             new ModelOption("glm-5.1",     "glm-5.1",     "长任务 · 自规划"),
             new ModelOption("glm-5-turbo", "glm-5-turbo", "快 · 便宜"));
 
+    private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
+
     private final String apiKey;
     private final String baseUrl;            // 空→智谱内置默认；配了→覆盖（走 z.ai / 代理）
     private volatile ChatModel chatModel;   // 懒建，单例
@@ -61,6 +63,7 @@ public final class ZhipuProvider implements LlmProvider {
                     .build();
             m = OpenAiChatModel.builder()
                     .options(opts)
+                    .httpClientBuilderCustomizer(OpenAiTimeoutCustomizer.of(TIMEOUTS))
                     .build();
             chatModel = m;
         }
