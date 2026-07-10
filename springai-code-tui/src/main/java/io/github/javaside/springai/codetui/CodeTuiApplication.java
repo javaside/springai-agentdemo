@@ -8,6 +8,7 @@ import io.github.javaside.springai.codetui.agent.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.SessionIds;
+import io.github.javaside.springai.codetui.agent.ZhipuProvider;
 import io.github.javaside.springai.codetui.ui.CodeTuiView;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 
@@ -29,11 +30,12 @@ public class CodeTuiApplication {
         try {
             registry = new ProviderRegistry(java.util.List.of(
                     new DeepSeekProvider(System.getenv("DEEPSEEK_API_KEY"), System.getenv("DEEPSEEK_BASE_URL")),
+                    new ZhipuProvider(System.getenv("ZHIPU_API_KEY"), System.getenv("ZHIPU_BASE_URL")),
                     new AnthropicProvider(System.getenv("ANTHROPIC_API_KEY"), System.getenv("ANTHROPIC_BASE_URL")),
                     new OpenAiProvider(System.getenv("OPENAI_API_KEY"), System.getenv("OPENAI_BASE_URL"))));
         } catch (IllegalStateException e) {
             System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
-                    "DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY，再运行。");
+                    "DEEPSEEK_API_KEY / ZHIPU_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY，再运行。");
             return;
         }
 

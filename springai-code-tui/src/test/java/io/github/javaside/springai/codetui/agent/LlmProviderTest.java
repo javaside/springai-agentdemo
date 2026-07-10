@@ -53,7 +53,7 @@ class LlmProviderTest {
         OpenAiProvider p = new OpenAiProvider("fake-key");
         assertEquals("openai", p.id());
         assertTrue(p.available());
-        assertEquals("gpt-5.5", p.defaultModel());
+        assertEquals("gpt-5.6-sol", p.defaultModel());
         assertTrue(p.chatModel() != null);   // 实测网络无关：build() 从 options.apiKey 派生 client
         assertEquals("gpt-5.4", p.options("gpt-5.4").getModel());
     }
@@ -61,6 +61,24 @@ class LlmProviderTest {
     @Test
     void openai_withoutKey_isUnavailable() {
         OpenAiProvider p = new OpenAiProvider("");
+        assertFalse(p.available());
+        assertThrows(IllegalStateException.class, p::chatModel);
+    }
+
+    @Test
+    void zhipu_withKey_availableAndOptionsCarryModel() {
+        ZhipuProvider p = new ZhipuProvider("fake-key");
+        assertEquals("zhipu", p.id());
+        assertTrue(p.available());
+        assertEquals("glm-5.2", p.defaultModel());
+        assertFalse(p.models().isEmpty());
+        assertTrue(p.chatModel() != null);   // 复用 OpenAiChatModel：build() 从 options 派生 client，网络无关
+        assertEquals("glm-5.1", p.options("glm-5.1").getModel());
+    }
+
+    @Test
+    void zhipu_withoutKey_isUnavailable() {
+        ZhipuProvider p = new ZhipuProvider("  ");
         assertFalse(p.available());
         assertThrows(IllegalStateException.class, p::chatModel);
     }

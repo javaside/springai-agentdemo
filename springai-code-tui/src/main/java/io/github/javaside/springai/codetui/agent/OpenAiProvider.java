@@ -15,11 +15,15 @@ import java.util.List;
  */
 public final class OpenAiProvider implements LlmProvider {
 
-    private static final String DEFAULT_MODEL = "gpt-5.5";
-    // 2026-07 在售：gpt-5.5 旗舰 / gpt-5.4 低延迟低成本（旧 gpt-4o 系列已过时）。
+    private static final String DEFAULT_MODEL = "gpt-5.6-sol";
+    // 2026-07-09 发布 GPT-5.6 家族（新命名：数字=代，Sol/Terra/Luna=能力档）。
+    // 裸 gpt-5.6 别名路由到 Sol；要确定性路由用带后缀的显式 id。旧 gpt-5.5/5.4 保留作回退。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("gpt-5.5", "gpt-5.5", "旗舰 · 复杂推理/编码"),
-            new ModelOption("gpt-5.4", "gpt-5.4", "快 · 便宜"));
+            new ModelOption("gpt-5.6-sol",   "gpt-5.6-sol",   "旗舰 · 复杂推理/编码/安全"),
+            new ModelOption("gpt-5.6-terra", "gpt-5.6-terra", "均衡 · 中档"),
+            new ModelOption("gpt-5.6-luna",  "gpt-5.6-luna",  "快 · 便宜"),
+            new ModelOption("gpt-5.5", "gpt-5.5", "上一代旗舰"),
+            new ModelOption("gpt-5.4", "gpt-5.4", "上一代 · 快"));
 
     private final String apiKey;
     private final String baseUrl;            // 空→框架内置默认；配了→覆盖
