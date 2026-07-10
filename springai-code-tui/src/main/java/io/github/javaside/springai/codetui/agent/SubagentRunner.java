@@ -9,6 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * provider 中立的子 agent 执行器。前台串行：在主 agent 的 Task 工具调用内同步执行，
@@ -30,19 +34,28 @@ public final class SubagentRunner {
     private final AgentListener listener;
     private final String projectInstructions;   // AGENTS.md 项目指令；追加到每个子 agent 的 spec 系统提示（可空）
     private final Supplier<String> taskIdSupplier;
+    /** 批量 runAll 的并发上限（同时在飞的子 agent 数）。默认 4；装配层可传入自定义值。 */
+    private final int maxConcurrency;
 
     public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                           String projectInstructions) {
-        this(registry, tools, listener, projectInstructions, () -> "task_" + UUID.randomUUID());
+        this(registry, tools, listener, projectInstructions, 4);
+    }
+
+    public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                          String projectInstructions, int maxConcurrency) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency,
+                () -> "task_" + UUID.randomUUID());
     }
 
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
-                   String projectInstructions, Supplier<String> taskIdSupplier) {
+                   String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier) {
         this.registry = registry;
         this.tools = tools;
         this.listener = listener;
         this.projectInstructions = projectInstructions == null ? "" : projectInstructions;
         this.taskIdSupplier = taskIdSupplier;
+        this.maxConcurrency = Math.max(1, maxConcurrency);
     }
 
     /** 执行一次委派，返回子 agent 最终文本。parentTurnId=发起 Task 的回合。 */
@@ -112,5 +125,9 @@ public final class SubagentRunner {
             }
         }
         return result;
+    }
+
+    /** 一次批量委派中的单个子任务：路由后的 spec + 该子任务的 prompt/description。 */
+    public record Dispatch(SubagentSpec spec, String prompt, String description) {
     }
 }
