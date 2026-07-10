@@ -14,9 +14,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** SubagentRunner.runAll 并发执行：顺序、失败隔离、turnId 传播、并发上限。全部用假 ChatModel，不联网。 */
@@ -148,5 +150,38 @@ class SubagentRunnerParallelTest {
             release.countDown();
             t.join(3000);
         }
+    }
+
+    @Test
+    void runAll_whenCallingThreadInterrupted_throwsWrappedInterrupt() throws InterruptedException {
+        // 假模型：call 阻塞一会儿，确保主调线程停在 invokeAll 上，可被中断
+        ChatModel blocking = new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) {
+                try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                return new ChatResponse(List.of(new Generation(new AssistantMessage("ok"))));
+            }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
+        };
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(blocking)));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), new StubListener(), "", 4);
+        List<SubagentRunner.Dispatch> ds = List.of(
+                new SubagentRunner.Dispatch(spec(), "p1", "d1"),
+                new SubagentRunner.Dispatch(spec(), "p2", "d2"));
+
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread caller = new Thread(() -> {
+            try { runner.runAll(ds, 1L); }
+            catch (Throwable t) { thrown.set(t); }
+        });
+        caller.start();
+        Thread.sleep(200);      // 让 runAll 进入 invokeAll 阻塞
+        caller.interrupt();     // 中断主调线程
+        caller.join(3000);
+
+        assertNotNull(thrown.get(), "被中断的 runAll 应抛异常");
+        assertTrue(thrown.get() instanceof RuntimeException, "应为 RuntimeException，实际=" + thrown.get());
+        assertTrue(thrown.get().getMessage().contains("并行子任务被中断"),
+                "异常消息应含「并行子任务被中断」，实际=" + thrown.get().getMessage());
     }
 }
