@@ -12,7 +12,7 @@ ScreenCleaner only activates when a real Terminal/PTY is present
 verify the real clear-screen behavior end-to-end.
 
 Usage:
-    /usr/bin/python3 springai-code-tui/src/test/pty/clear_smoke.py
+    /usr/bin/python3 scripts/clear_smoke.py
 
 Exit code 0 + "SMOKE PASS" on success, non-zero + "SMOKE FAIL: <reason>" on
 failure. Always prints the BEFORE and AFTER screen snapshots for a human to
@@ -36,8 +36,10 @@ import pyte  # noqa: E402
 
 ROWS, COLS = 40, 120
 
+# 从源码位置 src/test/resources/scripts/ 上溯到模块根 springai-code-tui（5 层 dirname）：
+# scripts → resources → test → src → springai-code-tui。（从 src/test/pty/ 迁来时深了一层，故 4→5。）
 MODULE_ROOT = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 )
 CLASSES_DIR = os.path.join(MODULE_ROOT, "target", "classes")
 CP_FILE = os.path.join(MODULE_ROOT, "target", "cp.txt")

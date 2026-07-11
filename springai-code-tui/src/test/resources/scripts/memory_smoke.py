@@ -27,7 +27,7 @@ clear_smoke.py):
         -Dmdep.outputFile=target/cp.txt   # if target/cp.txt is missing
 
 Usage:
-    /usr/bin/python3 springai-code-tui/src/test/pty/memory_smoke.py
+    /usr/bin/python3 scripts/memory_smoke.py
 
 Exit code 0 + "SMOKE PASS" on success, non-zero + "SMOKE FAIL: <reason>" on
 failure. Always prints the last-seen screen snapshot on failure for a human to
