@@ -7,12 +7,15 @@ import org.springframework.ai.tool.ToolCallback;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -37,6 +40,14 @@ public final class SubagentRunner {
     private final Supplier<String> taskIdSupplier;
     /** 批量 runAll 的并发上限（同时在飞的子 agent 数）。默认 4；装配层可传入自定义值。 */
     private final int maxConcurrency;
+
+    /** 当前在飞的子 agent 总数（串行 run + 并行 runAll 都计）；供 UI 的 busy 闸门判断「取消后是否还有旧子 agent 未清」。 */
+    private final AtomicInteger inFlight = new AtomicInteger();
+    /**
+     * 按 parentTurnId 索引的并行线程池集合：一个回合可发多次 ParallelTasks，故每 turn 是一组池。
+     * 取消（{@link #cancelTurn}）据此 {@code shutdownNow} 拆掉该回合所有在飞并行子 agent（best-effort，见 runAll 中断语义）。
+     */
+    private final Map<Long, Set<ExecutorService>> poolsByTurn = new ConcurrentHashMap<>();
 
     public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                           String projectInstructions) {
@@ -63,6 +74,9 @@ public final class SubagentRunner {
     public String run(SubagentSpec spec, String prompt, String description, long parentTurnId) {
         String taskId = taskIdSupplier.get();
         listener.onSubagentStarted(parentTurnId, taskId, spec.name(), description);
+        // 增计数须紧贴 try（其间不得有可抛异常的语句）——否则 onSubagentStarted 抛出会漏掉 finally 的递减，
+        // 计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。故放在 onSubagentStarted 之后、try 之前。
+        inFlight.incrementAndGet();   // 进入在飞（finally 递减）——喂给 UI busy 闸门，取消后仍未清的旧子 agent 会挡住 /continue
         try {
             // Spring AI 2.0：defaultTools 取代已废弃的 defaultToolCallbacks；工具调用 advisor 由 ChatClient 自动注册，
             // 不再显式挂（见类注释）。传 Object[]（每个元素是 ToolCallback）——与主 agent 的 defaultTools(toolsWithTask) 同构。
@@ -86,6 +100,8 @@ public final class SubagentRunner {
         } catch (RuntimeException ex) {
             listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + ex.getMessage(), false);
             throw ex;
+        } finally {
+            inFlight.decrementAndGet();   // 无论成功/失败/被中断（shutdownNow → interrupt → 网络调用抛出）都退出在飞
         }
     }
 
@@ -113,6 +129,9 @@ public final class SubagentRunner {
             t.setDaemon(true);
             return t;
         });
+        // 注册进该 turn 的池集合：回合取消（Esc）时 cancelTurn 会对它 shutdownNow，拆掉在飞并行子 agent。
+        Set<ExecutorService> turnPools = poolsByTurn.computeIfAbsent(parentTurnId, k -> ConcurrentHashMap.newKeySet());
+        turnPools.add(pool);
         try {
             List<Callable<String>> tasks = new ArrayList<>(n);
             for (Dispatch d : dispatches) {
@@ -139,7 +158,33 @@ public final class SubagentRunner {
             throw new RuntimeException("并行子任务被中断", ie);
         } finally {
             pool.shutdownNow();
+            // 原子摘除本池；该 turn 再无池则连 key 一起清（避免每个用过 ParallelTasks 的回合都残留一个空集合）。
+            poolsByTurn.computeIfPresent(parentTurnId, (k, set) -> {
+                set.remove(pool);
+                return set.isEmpty() ? null : set;
+            });
         }
+    }
+
+    /**
+     * 取消某回合的所有在飞并行子 agent：对该 turn 名下每个线程池 {@code shutdownNow}（中断工作线程）。
+     * <b>立即返回、不 awaitTermination</b>——保证调用方（Esc 回合取消）快速回 IDLE，与 runAll 的中断语义一致。
+     * 被中断的子 agent 的迟到会话/UI 写入由 {@code CodingAgent} 的出站净化与 {@code ConversationState} 的 turnId
+     * 过滤兜底。未知 turn（无在飞并行任务）为静默无操作。串行 run() 无池、无法强制打断，靠出站净化 + busy 闸门兜底。
+     */
+    public void cancelTurn(long parentTurnId) {
+        Set<ExecutorService> turnPools = poolsByTurn.get(parentTurnId);
+        if (turnPools == null) {
+            return;
+        }
+        for (ExecutorService pool : turnPools) {
+            pool.shutdownNow();
+        }
+    }
+
+    /** 当前在飞子 agent 总数（串行 + 并行）。供 UI busy 闸门判断取消后是否仍有旧子 agent 未清。 */
+    public int inFlightCount() {
+        return inFlight.get();
     }
 
     /** 子 agent 有效系统提示：spec 自身提示 + 项目指令（非空时追加）。纯函数，便于单测。 */

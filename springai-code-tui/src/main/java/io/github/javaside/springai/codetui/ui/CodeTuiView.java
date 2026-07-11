@@ -220,7 +220,7 @@ public final class CodeTuiView extends InlineApp {
             }
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
-        if (!state.isBusy()) {   // 空闲且非压缩中才出队；压缩中不出队，避免与手动压缩并发触发版本冲突
+        if (!busy()) {   // 空闲、非压缩中、且无在飞子 agent 才出队（见 busy()）
             ConversationState.Queued next = state.pollQueued();
             if (next != null) dispatch(next.text(), next.skill());
         }
@@ -593,9 +593,12 @@ public final class CodeTuiView extends InlineApp {
         }
         if (cmd.equals("/continue")) {               // 续跑：上一批计划被 Esc/报错中断后，据会话里保留的 todo 从首个未完成项接着做
             inputState.clear();
-            String prompt = "继续执行上一批未完成的计划。请先回顾你的 todo 列表，从第一个尚未完成的任务开始，"
-                    + "用 Task 工具逐个委派子 agent 继续；已完成的任务不要重做。若没有未完成的计划，直接说明即可。";
-            if (state.isBusy()) state.enqueue(prompt, null);   // 忙/压缩中：排队，回合结束自动出队（同普通消息）
+            // 工具中立：别硬点 Task/串行——上一批若是 ParallelTasks 并行跑的，"逐个用 Task" 会把独立任务逼回串行、丢掉并行。
+            // 让模型按任务独立性自选，并与先前采用的方式保持一致。
+            String prompt = "继续执行上一批未完成的计划。请先回顾你的 todo 列表，从第一个尚未完成的任务开始委派子 agent 继续："
+                    + "相互独立、无共享状态的子任务用 ParallelTasks 并行委派，有依赖或需共享上下文的用 Task 串行委派"
+                    + "（与你先前采用的方式保持一致）；已完成的任务不要重做。若没有未完成的计划，直接说明即可。";
+            if (busy()) state.enqueue(prompt, null);   // 忙/压缩中/有在飞子 agent：排队，清空后自动出队（同普通消息）
             else dispatch(prompt, null);
             return;
         }
@@ -612,11 +615,29 @@ public final class CodeTuiView extends InlineApp {
         inputState.clear();
         String skill = pendingSkill;                 // 一次性：本条消息取走挂载
         pendingSkill = null;
-        if (state.isBusy()) {                        // 忙或压缩中：排队，挂载随消息入队
+        if (busy()) {                                // 忙/压缩中/有在飞子 agent：排队，挂载随消息入队
             state.enqueue(text, skill);              // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
             return;
         }
         dispatch(text, skill);
+    }
+
+    /**
+     * 是否不应立即起新回合：回合中 / 压缩中（{@link ConversationState#isBusy()}），
+     * <b>或</b>仍有在飞子 agent（上一回合被 Esc 取消后并行子 agent 可能仍在跑，其迟到写入会污染会话）。
+     * 后者让 /continue 等新回合排队到旧子 agent 清空后再起，杜绝两回合并发写同一会话。
+     */
+    private boolean busy() {
+        return state.isBusy() || onSubmit.hasInFlightSubagents();
+    }
+
+    /**
+     * 空闲态但仍有已取消子 agent 在收尾时的状态行提示标签；否则 {@code null}（走常态行/思考·工具指示）。
+     * Esc 取消并行子 agent 后 {@code state} 立即回 IDLE，但若子 agent 的 HTTP 不响应 interrupt 会继续收尾，
+     * 期间 {@link #busy()} 仍 true、新消息静默入队——给一句提示避免误判卡死。纯函数，便于单测（见 statusLine 调用）。
+     */
+    static String drainingSubagentsHint(boolean idle, boolean hasInFlightSubagents) {
+        return (idle && hasInFlightSubagents) ? "⟳ 等待已取消的子 agent 收尾…" : null;
     }
 
     /** 真正发起一个回合：提交给 agent（skill 可空——挂载技能则发送前注入正文）。仅当模型与上次不同时才打一行「⚙ 使用模型 X」（首个回合也会打）。 */
@@ -1023,6 +1044,9 @@ public final class CodeTuiView extends InlineApp {
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
+        // 空闲但仍有已取消子 agent 在收尾：给提示，避免「消息静默入队、无转轮」被误判为卡死（见 busy()/drainingSubagentsHint）。
+        String draining = drainingSubagentsHint(state.isIdle(), onSubmit.hasInFlightSubagents());
+        if (draining != null) return richText(statusBar.shimmer(draining, qs + " · Ctrl+C 退出", THINK, animTick));
         return switch (state.status()) {
             case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel() + ctxUsage.suffix()).style(HINT);
             case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK, animTick));

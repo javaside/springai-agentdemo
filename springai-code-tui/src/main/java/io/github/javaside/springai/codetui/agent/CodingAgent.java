@@ -65,6 +65,7 @@ public final class CodingAgent implements SubmitHandler {
     private final ToolCallback skillTool;   // 被 ToolEventCallback 装饰的 Skill 工具（可空）；手动 /skill 发送前调用它
     private final ReloadableSkillTool reloadableSkill;   // 可空：生产路径的可重载技能源（/reload 命令触发重扫）
     private final SessionRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel）
+    private final SubagentRunner subagentRunner;   // 可空（测试桩）：取消回合时 shutdownNow 在飞并行子 agent + 供 busy 闸门查在飞数
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -106,6 +107,7 @@ public final class CodingAgent implements SubmitHandler {
         this.skillTool = skillTool;
         this.reloadableSkill = null;   // 单-client 桩路径：无可重载源，skills() 用固定 skills、reloadSkills() 无操作
         this.sessionRepository = sessionRepository;
+        this.subagentRunner = null;    // 单-client 桩路径：无子 agent 执行器
     }
 
     /**
@@ -114,12 +116,24 @@ public final class CodingAgent implements SubmitHandler {
      *
      * @param reloadableSkill 可重载技能源（{@code /reload} 触发重扫）；亦作 {@code skills()} 的实时数据源。可空。
      */
+    /** 向后兼容重载（无子 agent 执行器：测试桩用）。等价 subagentRunner=null（取消不拆并行池、busy 闸门恒不含在飞子 agent）。 */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
                        ToolCallback skillTool, SessionRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, null);
+    }
+
+    /** 多 provider 生产构造（全参）：{@code subagentRunner} 取消回合时拆在飞并行子 agent、并供 busy 闸门查在飞数（可空）；其余同上。 */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -133,6 +147,7 @@ public final class CodingAgent implements SubmitHandler {
         this.skillTool = skillTool;
         this.reloadableSkill = reloadableSkill;
         this.sessionRepository = sessionRepository;
+        this.subagentRunner = subagentRunner;
     }
 
     @Override
@@ -143,6 +158,11 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public Disposable submit(String text, String skillName) {
         long turnId = activeTurnId.incrementAndGet();
+        // 出站净化（层①）：发请求前先把会话裁到合法前缀。上一回合若被取消、且有迟到的子 agent 写入漏进会话
+        // （留下悬空 assistant(tool_calls) 或孤儿 tool 结果），只有 doOnCancel/handleError/磁盘加载三处净化，
+        // 活进程会话常驻内存永不重载 → 坏数据会一直发出去、每条请求都 400。这里在每个回合出站前再净化一次兜底，
+        // 使 /continue 等后续请求自愈；会话本就干净时为 no-op（sanitize 返回同引用、不写回）。
+        trimDanglingToolCalls();
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
         listener.onUserMessage(turnId, text);  // UI 展示用户原文（注入只影响发给模型的文本）
         String effectiveText = injectSkill(text, skillName, turnId);
@@ -170,7 +190,7 @@ public final class CodingAgent implements SubmitHandler {
             modelGrounding = model;
         }
         try {
-            return client.prompt()
+            Disposable reactive = client.prompt()
                     .user(effectiveText)
                     .options(perRequestOptions.mutate())   // 每次请求按当前所选模型覆盖（mutate 回 native builder，保留 maxTokens 等）
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
@@ -185,6 +205,13 @@ public final class CodingAgent implements SubmitHandler {
                     // 仅在「被取消」时触发（正常 complete/error 不触发）：裁掉悬空 tool_calls 尾巴，保留干净前缀。
                     .doOnCancel(this::trimDanglingToolCalls)
                     .subscribe();
+            // 组合取消（层②）：dispose() 既取消 reactive 链，也对本回合在飞的并行子 agent shutdownNow。
+            // Reactor 取消不 interrupt 阻塞在网络 IO 的子 agent 工具线程，若不显式拆池，取消后子 agent 仍会跑完、
+            // 其迟到写入会污染会话并与随后的 /continue 竞态。cancelTurn 立即返回、不 await，不拖慢回 IDLE。
+            if (subagentRunner == null) {
+                return reactive;
+            }
+            return Disposables.composite(reactive, () -> subagentRunner.cancelTurn(turnId));
         } catch (RuntimeException ex) {
             // 同步组装/订阅异常不走 doOnError：手动复位状态（onError → IDLE），
             // 否则 UI 会永远卡在 THINKING（无终态事件），且异常会逃逸出 View.handle。
@@ -267,6 +294,12 @@ public final class CodingAgent implements SubmitHandler {
         if (reloadableSkill != null) {
             reloadableSkill.reload();
         }
+    }
+
+    /** busy 闸门查询（层③）：仍有在飞子 agent 时，UI 把 /continue 等新回合排队而非立即起跑。桩路径（runner 为 null）恒 false。 */
+    @Override
+    public boolean hasInFlightSubagents() {
+        return subagentRunner != null && subagentRunner.inFlightCount() > 0;
     }
 
     @Override

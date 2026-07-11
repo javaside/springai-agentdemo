@@ -38,4 +38,11 @@ public interface SubmitHandler {
 
     /** 重新扫描技能目录（/reload），使运行中新增/删除的技能生效。默认空实现，便于回显桩/测试桩省略。 */
     default void reloadSkills() { }
+
+    /**
+     * 是否仍有在飞子 agent（上一回合被取消后可能仍在跑、且其迟到写入会污染会话）。
+     * UI 的 busy 闸门据此把 {@code /continue} 等新回合排队而非立即起跑，避免两回合并发写同一会话。
+     * 默认 false，便于回显桩/测试桩省略。
+     */
+    default boolean hasInFlightSubagents() { return false; }
 }

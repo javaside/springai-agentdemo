@@ -153,6 +153,79 @@ class SubagentRunnerParallelTest {
     }
 
     @Test
+    void inFlightCount_isZeroAfterNormalCompletion() {
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel("ok", false))));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), new StubListener(), "", 4);
+        assertEquals(0, runner.inFlightCount(), "起始在飞计数为 0");
+        runner.runAll(List.of(
+                new SubagentRunner.Dispatch(spec(), "p1", "d1"),
+                new SubagentRunner.Dispatch(spec(), "p2", "d2")), 1L);
+        assertEquals(0, runner.inFlightCount(), "正常完成后在飞计数归零（每个 run 的 finally 递减）");
+    }
+
+    @Test
+    void cancelTurn_shutsDownInFlightSubagents_andDrainsInFlightCount() throws InterruptedException {
+        CountDownLatch started = new CountDownLatch(1);
+        // 阻塞到被中断的假模型：中断时以 RuntimeException 传播，使 run() 正常 unwind、finally 递减在飞计数。
+        ChatModel blocking = new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) {
+                started.countDown();
+                try { Thread.sleep(5000); }
+                catch (InterruptedException e) { throw new RuntimeException("interrupted", e); }
+                return new ChatResponse(List.of(new Generation(new AssistantMessage("ok"))));
+            }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
+        };
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(blocking)));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), new StubListener(), "", 4);
+        List<SubagentRunner.Dispatch> ds = List.of(
+                new SubagentRunner.Dispatch(spec(), "p1", "d1"),
+                new SubagentRunner.Dispatch(spec(), "p2", "d2"));
+        Thread t = new Thread(() -> runner.runAll(ds, 99L));
+        t.setDaemon(true);
+        t.start();
+        assertTrue(started.await(2, TimeUnit.SECONDS), "子 agent 应已开跑");
+        Thread.sleep(100);   // 让两个子任务都进场
+        assertTrue(runner.inFlightCount() > 0, "取消前应有在飞子 agent，实际=" + runner.inFlightCount());
+
+        runner.cancelTurn(99L);   // 对该 turn 名下的池 shutdownNow（立即返回、不 await）
+
+        long deadline = System.currentTimeMillis() + 3000;
+        while (runner.inFlightCount() > 0 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertEquals(0, runner.inFlightCount(), "cancelTurn 后在飞计数应随中断传播归零");
+        t.join(3000);
+    }
+
+    @Test
+    void inFlight_decrementsEvenIfOnSubagentStartedThrows() {
+        // 若 onSubagentStarted 抛出，run() 仍须退出在飞——否则计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。
+        StubListener throwing = new StubListener() {
+            @Override public void onSubagentStarted(long turnId, String taskId, String name, String desc) {
+                throw new RuntimeException("listener boom");
+            }
+        };
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel("ok", false))));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), throwing, "", 4);
+        try {
+            runner.run(spec(), "p", "d", 1L);
+        } catch (RuntimeException expected) {
+            // onSubagentStarted 的异常向上传播——符合原设计（start 事件失败不吞）
+        }
+        assertEquals(0, runner.inFlightCount(), "onSubagentStarted 抛出也必须退出在飞（否则 busy 闸门永久卡死）");
+    }
+
+    @Test
+    void cancelTurn_unknownTurn_isNoOp() {
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel("ok", false))));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), new StubListener(), "", 4);
+        runner.cancelTurn(12345L);   // 无该 turn 的池：静默无操作、不抛
+        assertEquals(0, runner.inFlightCount());
+    }
+
+    @Test
     void runAll_whenCallingThreadInterrupted_throwsWrappedInterrupt() throws InterruptedException {
         // 假模型：call 阻塞一会儿，确保主调线程停在 invokeAll 上，可被中断
         ChatModel blocking = new ChatModel() {

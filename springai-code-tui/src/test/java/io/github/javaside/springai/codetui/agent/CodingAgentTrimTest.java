@@ -140,6 +140,25 @@ class CodingAgentTrimTest {
     }
 
     @Test
+    void submit_sanitizesOutboundSession_beforeSending() {
+        // 层①：上一回合被取消后，迟到的子 agent 写入可能给会话留下坏数据（此处用孤儿 tool 结果模拟）。
+        // 活进程会话常驻内存永不重载，若出站不净化，下一条请求（含 /continue）必 400。验证 submit 顶部先净化。
+        String sid = "outbound-1";
+        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        SessionService svc = session(repo, sid);
+        svc.appendMessage(sid, new UserMessage("q1"));
+        svc.appendMessage(sid, new AssistantMessage("a1"));
+        svc.appendMessage(sid, toolResults("orphan"));   // 孤儿 tool 结果：其 id 之前并无对应 assistant(tool_calls)
+        assertEquals(3, svc.getEvents(sid).size());
+
+        // chatClient=null → submit 会在「顶部净化」之后才因 client.prompt() NPE 被内部 catch（onError→disposed），
+        // 不影响我们要验证的「发送前会话已净化」。
+        agent(svc, repo, sid).submit("继续");
+
+        assertEquals(List.of("q1", "a1"), texts(svc, sid), "孤儿 tool 结果在出站前被净化剔除，避免下条请求 400");
+    }
+
+    @Test
     void trim_nullRepository_isNoOpAndDoesNotCrash() {
         String sid = "trim-5";
         InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
