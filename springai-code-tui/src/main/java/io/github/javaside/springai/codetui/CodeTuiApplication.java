@@ -67,7 +67,17 @@ public class CodeTuiApplication {
         }
 
         CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
-        view.run();
+        try {
+            view.run();
+        } catch (Throwable t) {
+            t.printStackTrace();
+            System.exit(1);   // 交互期崩溃：打印后同样强制退出（否则也会卡在下方 60s 非 daemon 线程上）
+        }
+        // /exit 后立即终止 JVM。HTTP 客户端会留下非 daemon 线程——实测 OkHttp（OpenAI/智谱/Anthropic
+        // 走这条）的 "OkHttp Dispatcher" 线程 keep-alive 达 60s，若不强制退出，进程会在 /exit 后卡 ~60s 才自然
+        // 消亡（用户报错后立即 /exit 恰落在这 60s 窗口内，故"报过错就卡很久"）。TUI 退出语义即"立即终止"：
+        // 会话已按事件原子落盘、无待刷新状态，quit() 也已在 run() 返回前恢复终端，故 System.exit 安全。
+        System.exit(0);
     }
 
     /** 是否带续跑启动选项（仿 Claude Code 的 -c / --continue）。 */
