@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.javaside</groupId>
         <artifactId>springai-agentdemo</artifactId>
-        <version>1.2.0</version>
+        <version>1.2.1</version>
     </parent>
 
     <artifactId>springai-code-tui</artifactId>
