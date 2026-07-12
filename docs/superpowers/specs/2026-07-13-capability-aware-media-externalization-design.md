@@ -106,6 +106,11 @@ interface ToolResultMediaHandler {
   - **幂等安全网**：判断「已是引用则跳过」；即便水位线记错也不漏改/重复改。
   - **无新全文 → 纯 no-op**：不调 `replaceEvents`、不写盘。
   - **只碰过往事件**：本回合 `submit()` 开头时尚无本回合工具结果，天然不动本回合的读。
+  - **怎么认出「要改的文件内容」（id 反查 + 阈值 + 来源分流，不盲猜字符串）**：一条 `ToolResponseMessage` 含 `List<ToolResponse>(id, name, responseData)`——`responseData` 是那坨串，但**不含「读的是哪个文件」**（路径在发起调用的 `AssistantMessage.tool_call.arguments` 里）。故一趟前向遍历：
+    1. 边走边建 `id → tool_call(name, arguments)` 映射（`AssistantMessage.getToolCalls()`；同 batch assistant 恒在其 ToolResponse 之前）。
+    2. 每个 `ToolResponse`：`responseData` 已是 `[file reference]` 标记 → **幂等跳过**；长度 `<` 阈值（默认 32KB）→ 不动（小结果不值得外置）；超阈值 → 要外置，用 `id` 反查来源。
+    3. **来源分流**：来源是 `Read` 且参数路径能安全解析进 root → **`EXISTING_FILE`**（指原文件、sniff 磁盘真文件拿 kind/mime/size/dim、**不复制**）；无路径/不可解（Bash 长输出、MCP 文本、越界）→ **`MATERIALIZED`**（文本存 artifact、引用指 artifact）。
+    4. 把该 `ToolResponse.responseData` 换成引用块。有任一被换 → `replaceEvents` 写回、推进水位线；否则 no-op。
 
 **结构化引用（稳定、可再解析、语言无关）**：
 
@@ -136,6 +141,9 @@ MCP 同数组的 `text` 块（如「Took a screenshot」）保留。UI 可把引
 - MCP 契约：两形/`type:"image"`/`mimeType`&`mime_type`/text+多 image 混合/未知块保留/单块失败隔离/data+mimeType 文本不误判。
 - 路径①媒体：MCP 图像块 → 外置+引用（返回串无 base64、产物 magic 有效、`text` 块保留）；Read 二进制 → `EXISTING_FILE` 就地引用（sha/size/dim 基于原文件、不复制）；路径不可解 → 告示、无产物。
 - 路径②文本：`SessionFileExternalizer` 把历史里携带文件全文的 tool 结果换成引用、`replaceEvents` 写回；**幂等**（二次调用 no-op）；**只动过往、不动本回合**（构造「尾部即当前回合」的用例断言尾部全文保留）。
+  - **来源分流**：`id` 反查命中 `Read`+root 内路径 → `EXISTING_FILE` 引用指原路径；反查不到/越界 → `MATERIALIZED` 存 artifact。
+  - **阈值边界**：`responseData` 小于阈值不动；超阈值才换。
+  - **幂等**：对已含 `[file reference]` 的结果二次跑 → 不重复外置、不写盘。
 - 能力快照：`ToolContext` `supportsImageInput=false`→引用；`true`+无注入器→`canDeliver=false` 仍引用；`true`+模拟注入器→vision 桩（证扩展位通）。
 - `MediaArtifactStore`：完整 sha 文件名 / magic 优先 / 原子写 / 惰性建目录；`ImageDimensions` PNG/JPEG。
 - delegate 抛错 → 传播（`assertThrows`）。
