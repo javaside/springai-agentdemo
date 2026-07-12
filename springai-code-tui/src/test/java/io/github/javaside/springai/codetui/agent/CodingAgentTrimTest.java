@@ -159,6 +159,38 @@ class CodingAgentTrimTest {
     }
 
     @Test
+    void submit_foldsTrailingStoredUser_soBeforeAppendCannotMakeConsecutiveUsers() {
+        // 坏会话自愈的关键一环：gpt 回合失败后 after() 未落盘 assistant，历史尾部残留一条 user。
+        // 下一回合 SessionMemoryAdvisor.before 会无条件再追加新 user → 两条连续 user → DeepSeek 400（模型都没跑）。
+        // 故 submit 在发送前把「尾部残留 user」折进出站消息并从会话删除，断开这个 400 循环。
+        String sid = "fold-1";
+        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        SessionService svc = session(repo, sid);
+        svc.appendMessage(sid, new UserMessage("q1"));
+        svc.appendMessage(sid, new AssistantMessage("a1"));
+        svc.appendMessage(sid, new UserMessage("older"));   // ← 上个失败回合残留的尾部 user
+        assertEquals(3, svc.getEvents(sid).size());
+
+        agent(svc, repo, sid).submit("newer");   // chatClient=null → 折叠之后才 NPE 被内部 catch
+
+        // 尾部残留 user 被折出会话；剩下的历史以 assistant 结尾，故 before 追加新 user 不会造成连续 user。
+        assertEquals(List.of("q1", "a1"), texts(svc, sid), "尾部残留 user 被折进出站消息并从会话删除");
+    }
+
+    @Test
+    void submit_noTrailingUser_foldIsNoOp() {
+        String sid = "fold-2";
+        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        SessionService svc = session(repo, sid);
+        svc.appendMessage(sid, new UserMessage("q1"));
+        svc.appendMessage(sid, new AssistantMessage("done"));   // 尾部是 assistant → 折叠应无操作
+
+        agent(svc, repo, sid).submit("newer");
+
+        assertEquals(List.of("q1", "done"), texts(svc, sid), "尾部非 user 时折叠 no-op，会话不变");
+    }
+
+    @Test
     void trim_nullRepository_isNoOpAndDoesNotCrash() {
         String sid = "trim-5";
         InMemorySessionRepository repo = InMemorySessionRepository.builder().build();

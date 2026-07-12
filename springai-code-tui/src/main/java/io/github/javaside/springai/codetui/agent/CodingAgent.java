@@ -7,6 +7,7 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -166,6 +167,11 @@ public final class CodingAgent implements SubmitHandler {
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
         listener.onUserMessage(turnId, text);  // UI 展示用户原文（注入只影响发给模型的文本）
         String effectiveText = injectSkill(text, skillName, turnId);
+        // 出站净化（层①补丁）：若历史尾部残留一条 user（gpt 回合 after() 抛 No session ID 致 assistant 未落盘，
+        // 见 SessionMemoryAdvisor 与 SessionEvents.collapseConsecutiveSameRole），advisor.before 会在其后再追加本回合
+        // 新 user → 两条连续 user → DeepSeek 400（模型都没跑，出站 sanitize 与流式守卫都够不到）。此处把尾部残留 user
+        // 折进出站消息、并从会话删除，断开该 400 循环。sanitize 已把任何尾部连续 user 折成一条，故最多折一次即净。
+        effectiveText = foldTrailingUserIntoOutbound(sessionId, effectiveText);
         // 中断（Esc 取消 / 报错）时只裁掉「悬空尾巴」——末尾带 tool_calls 却无配对 tool 结果的消息——
         // 而保留已完成任务与计划（见 trimDanglingToolCalls）。否则中途取消会留下「带 tool_calls 无结果」的
         // 悬空 assistant，下一次请求发给 DeepSeek 会 400（insufficient tool messages following tool_calls）；
@@ -279,10 +285,40 @@ public final class CodingAgent implements SubmitHandler {
         String sid = sessionId;   // 快照：本方法可能在 reactive/后台线程运行，clearContext 会在 UI 线程换掉 volatile sessionId；
                                    // 两次读之间被换会把「旧会话净化后的事件」写进新会话 id（污染新会话 + 旧会话悬空 tool_calls 漏净化）。
         List<SessionEvent> events = sessionService.getEvents(sid);   // 时序、oldest-first
-        List<SessionEvent> clean = SessionEvents.sanitize(events);         // 裁尾部悬空 tool_calls + 丢孤儿 tool 结果
+        List<SessionEvent> clean = SessionEvents.sanitize(events);         // 裁尾部悬空 tool_calls + 丢孤儿 tool 结果 + 折连续同角色
         if (clean != events) {   // sanitize 无改动时返回同一引用；引用不同即有裁剪/重建
             sessionRepository.replaceEvents(sid, List.copyOf(clean));
         }
+    }
+
+    /**
+     * 若会话历史尾部残留一条 {@link UserMessage}（上个回合的 {@code after()} 未落盘 assistant 所致），把它的文本折进
+     * 本回合的出站消息、并从会话事件里删除，返回合并后的出站文本；否则原样返回 {@code outbound}。
+     *
+     * <p>为何必须在此处而非靠 {@link #trimDanglingToolCalls} / 流式守卫：{@code SessionMemoryAdvisor.before} 会<b>无条件</b>
+     * 把本回合 user 追加到历史，若历史已以 user 结尾即成两条连续 user，被 DeepSeek 以 {@code 400} 拒收——且这发生在
+     * <b>模型调用之前</b>，出站 sanitize（只改会话、不改本回合待发 user）与空流守卫都够不到。故在发送前就把尾部残留 user
+     * 折进待发文本（只影响发给模型的内容，不动 {@code onUserMessage} 的 UI 展示，与 {@link #injectSkill} 同纪律）。
+     *
+     * <p>{@code sid} 由调用方快照传入（与 {@link #trimDanglingToolCalls} 同纪律，避免与 {@code /clear} 换 volatile 交错）。
+     * service/仓库缺失（测试桩）时静默跳过。因 {@link SessionEvents#collapseConsecutiveSameRole} 已把尾部连续 user 折成一条，
+     * 这里最多折一次即可清空边界。
+     */
+    private String foldTrailingUserIntoOutbound(String sid, String outbound) {
+        if (sessionService == null || sessionRepository == null) {
+            return outbound;
+        }
+        List<SessionEvent> events = sessionService.getEvents(sid);
+        if (events.isEmpty()) {
+            return outbound;
+        }
+        SessionEvent last = events.get(events.size() - 1);
+        if (!(last.getMessage() instanceof UserMessage prevUser)) {
+            return outbound;
+        }
+        String prevText = prevUser.getText();
+        sessionRepository.replaceEvents(sid, List.copyOf(events.subList(0, events.size() - 1)));
+        return (prevText == null || prevText.isBlank()) ? outbound : prevText + "\n\n" + outbound;
     }
 
     @Override

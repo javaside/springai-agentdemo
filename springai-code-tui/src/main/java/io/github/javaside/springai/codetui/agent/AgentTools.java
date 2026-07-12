@@ -315,7 +315,10 @@ public final class AgentTools {
                             .param(AUTO_MEMORY_KEY, autoMemoryPrompt)
                             .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions))
                     .defaultTools(toolsWithTask)
-                    .defaultAdvisors(memoryAdvisor)
+                    // memoryAdvisor（会话记忆）+ 空流守卫（order +1001，紧邻 memoryAdvisor 内侧）：修复切 gpt 时
+                    // SessionMemoryAdvisor.after() 因模型空流拿不到 session id 而抛 No session ID（见 SessionIdStreamGuardAdvisor）。
+                    // 排列顺序不决定执行序（由 getOrder 决定）；守卫在 DeepSeek 上流非空即永不触发、零回归。
+                    .defaultAdvisors(memoryAdvisor, new SessionIdStreamGuardAdvisor())
                     .build();
             clients.put(provider.id(), c);
         }
