@@ -18,6 +18,12 @@ class McpClientManagerTest {
     }
 
     @Test
+    void prefixedNameStripsIllegalChars() {
+        // 空格/点等非法字符被 strip，'-' 归一为 '_'
+        assertEquals("mcp__abc__do_it", McpClientManager.prefixedName("a b.c", "do-it"));
+    }
+
+    @Test
     void bogusServerDegradesToEmptyNeverThrows() {
         // command 指向不存在的可执行文件：连接/初始化必失败，但 connectAll 不抛、降级为 0 工具。
         McpServerConfig.StdioServerConfig bogus = new McpServerConfig.StdioServerConfig(

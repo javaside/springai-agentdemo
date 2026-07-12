@@ -107,4 +107,16 @@ class McpConfigLoaderTest {
         assertEquals(1, configs.size());
         assertEquals("on", configs.get(0).name());
     }
+
+    @Test
+    void wrongTypedCommandFieldIsSkippedNeverThrows(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "p.json", """
+                { "mcpServers": {
+                    "bad":  { "command": ["npx"] },
+                    "good": { "command": "ok" }
+                }}""");
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("none.json"), project);
+        assertEquals(1, configs.size());          // 类型非法条被跳过，好的保留
+        assertEquals("good", configs.get(0).name());
+    }
 }

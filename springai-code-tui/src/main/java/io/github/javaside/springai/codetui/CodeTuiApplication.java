@@ -63,36 +63,40 @@ public class CodeTuiApplication {
             state.pushInfo("（MCP：已发现 " + mcpTools.size() + " 个工具。）");
         }
 
-        AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state, mcpTools);
-        CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
-                runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
-                runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
-                runtime.reloadableSkill(), runtime.subagentRunner());
-
-        // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
-        // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
-        if (resumed) {
-            state.replayHistory(runtime.sessionService().getMessages(sessionId));
-        } else if (wantContinue) {
-            state.pushInfo("（没有可恢复的会话，已开始新会话。）");
-        } else if (latest.isPresent()) {
-            state.pushInfo("（提示：存在上次会话，加 -c / --continue 启动可恢复。）");
-        }
-
-        CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
+        // 从此处起装配 runtime/agent/view 直至 view.run() 全程 try/finally 关 MCP：
+        // connectAll() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
+        int exitCode = 0;
         try {
+            AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state, mcpTools);
+            CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
+                    runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
+                    runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
+                    runtime.reloadableSkill(), runtime.subagentRunner());
+
+            // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
+            // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
+            if (resumed) {
+                state.replayHistory(runtime.sessionService().getMessages(sessionId));
+            } else if (wantContinue) {
+                state.pushInfo("（没有可恢复的会话，已开始新会话。）");
+            } else if (latest.isPresent()) {
+                state.pushInfo("（提示：存在上次会话，加 -c / --continue 启动可恢复。）");
+            }
+
+            CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
             view.run();
         } catch (Throwable t) {
             t.printStackTrace();
-            mcpManager.close();   // 关闭 MCP 子进程（有界 2s），避免孤儿进程
-            System.exit(1);   // 交互期崩溃：打印后同样强制退出（否则也会卡在下方 60s 非 daemon 线程上）
+            exitCode = 1;
+        } finally {
+            // 保证任何路径（含装配期抛异常）都关闭 MCP 子进程（有界 2s），避免孤儿进程
+            mcpManager.close();
         }
         // /exit 后立即终止 JVM。HTTP 客户端会留下非 daemon 线程——实测 OkHttp（OpenAI/智谱/Anthropic
         // 走这条）的 "OkHttp Dispatcher" 线程 keep-alive 达 60s，若不强制退出，进程会在 /exit 后卡 ~60s 才自然
         // 消亡（用户报错后立即 /exit 恰落在这 60s 窗口内，故"报过错就卡很久"）。TUI 退出语义即"立即终止"：
         // 会话已按事件原子落盘、无待刷新状态，quit() 也已在 run() 返回前恢复终端，故 System.exit 安全。
-        mcpManager.close();       // 优雅关闭 MCP 子进程（有界 2s）后再强制退出
-        System.exit(0);
+        System.exit(exitCode);
     }
 
     /** 是否带续跑启动选项（仿 Claude Code 的 -c / --continue）。 */

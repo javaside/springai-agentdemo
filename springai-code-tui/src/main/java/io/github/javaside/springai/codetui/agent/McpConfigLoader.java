@@ -65,7 +65,15 @@ public final class McpConfigLoader {
         }
         List<McpServerConfig> out = new ArrayList<>();
         servers.properties().forEach(entry -> {
-            McpServerConfig cfg = parseEntry(entry.getKey(), entry.getValue());
+            McpServerConfig cfg;
+            try {
+                cfg = parseEntry(entry.getKey(), entry.getValue());
+            } catch (RuntimeException e) {
+                // Jackson 3 asString()/asBoolean()/asLong() throw on wrong-shaped nodes;
+                // a bad single entry must degrade to skip, never crash startup.
+                log.warn("MCP server '{}' 配置字段类型非法，跳过：{}", entry.getKey(), e.getMessage());
+                cfg = null;
+            }
             if (cfg != null && cfg.enabled()) {
                 out.add(cfg);
             }

@@ -157,12 +157,20 @@ public final class McpClientManager {
         }
     }
 
-    /** 工具名前缀：mcp__<server>__<tool>，把 '-' 归一为 '_' 以符合工具名字符集，避免与内置工具/多 server 重名。 */
+    /**
+     * 工具名前缀：mcp__<server>__<tool>，段内经 McpToolUtils.format 归一
+     * （strip 非法字符 + '-'→'_'），避免与内置工具/多 server 重名，并防止个别非法字符
+     * 导致 provider 拒整个请求。
+     *
+     * <p>已知限制（本期可接受）：未做长度截断（OpenAI 64 字符上限）与跨 server 碰撞去重——
+     * 本期仅 stdio、默认 DeepSeek（无 64 限制），实测工具名远短于 64 且碰撞需刻意构造；
+     * 如接入更多 provider 或遇到碰撞，再引入库的 DefaultMcpToolNamePrefixGenerator。
+     */
     static String prefixedName(String server, String tool) {
         return "mcp__" + sanitize(server) + "__" + sanitize(tool);
     }
 
     private static String sanitize(String s) {
-        return s.replace('-', '_');
+        return org.springframework.ai.mcp.McpToolUtils.format(s);
     }
 }
