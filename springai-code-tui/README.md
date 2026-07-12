@@ -11,6 +11,7 @@
 - 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task` 委派单个子 agent + `ParallelTasks` 并发派多个独立子 agent）、`AutoMemoryTools`（`Memory*` 六件套：跨会话长期记忆的读写/增删/改名，仅主 agent）。
 - **子 agent（Task / ParallelTasks）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`）。`Task` 委派单个子 agent 前台阻塞执行；`ParallelTasks` 一次并发派多个独立子 agent（有界线程池，`CODETUI_SUBAGENT_CONCURRENCY` 默认 4、范围 [1,32]；失败隔离、按序汇总）。内部工具活动带 taskId 内联嵌套显示。
 - **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
+- **MCP（接入外部工具）**：启动时读 `.codetui/mcp.json`（两层：用户 `~/.codetui/mcp.json` + 项目 `<项目根>/.codetui/mcp.json`，项目级同名覆盖用户级）连接外部 [MCP](https://modelcontextprotocol.io/) server（本期仅 **stdio**，即 `npx`/`uvx` 一类本地子进程 server，如 `chrome-devtools-mcp`、官方 filesystem server），把其工具注入**主 agent 与子 agent**。工具名带 `mcp__<server>__<工具>` 前缀避免撞名。连不上的 server **静默降级**（记 WARN、不崩启动）；退出时**有界清理**子进程（≤2s，绝不拖慢 `/exit`）。配置见下方「MCP 配置」。
 - **上下文管理**：窗口记忆多轮会话，token 用量估算（`/context` 查看），超阈值自动压缩 + `/compact` 手动压缩。把 cwd / git 状态 / 模型名注入系统提示做 grounding。
 - **长期记忆（跨会话）**：基于 `spring-ai-agent-utils` 的 `AutoMemoryTools`（Anthropic Claude Code 那套：`MEMORY.md` 索引 + 分型 Markdown 文件 + 两步保存）。记忆落盘 `<项目根>/.codetui/memory/`（**按项目隔离**，已被 `.gitignore`）；agent 会主动记住用户偏好、项目上下文与反馈，并在后续会话（含 `/clear` 开新会话后）读 `MEMORY.md` 召回。仅主 agent 具备，子 agent 不写长期记忆。与会话记忆互补：会话记忆是当前对话的内存态窗口，长期记忆是跨会话的磁盘态精选事实。
 - **项目指令（AGENTS.md）**：启动时读取用户级 `~/.codetui/AGENTS.md` + 项目级 `<项目根>/AGENTS.md`（跨工具生态标准，Codex/Cursor/Aider 等通用；项目里已有的 `AGENTS.md` 直接被读到），把团队约定（构建/测试命令、代码风格、架构约定）注入**主 agent 与子 agent** 的系统提示（顺序 user→project，项目级优先级更高）。人手写、提交入库、启动全量注入、**只读**（编辑文件即改约定，改动需重启生效）。这是与 agent 自写的长期记忆正交的一套「instructions」：前者人写团队约定，后者 agent 自记学到的东西。
@@ -84,6 +85,38 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 - **直接 `java -jar` 或 `mvn` 运行**：写到 `~/.codetui/logs/`。
 - 机制：启动脚本经 `-Dcodetui.log.dir=<dir>` 把目录交给 logback（见 `logback.xml`）；未设置时默认 `~/.codetui/logs`。滚动策略：单文件 10MB、保留 7 天、总量上限 100MB。
 
+## MCP 配置（接入外部工具）
+
+在**项目根**放 `.codetui/mcp.json`（或用户级 `~/.codetui/mcp.json`，两者按 server 名合并、项目级优先），列出要连接的 MCP server。启动时自动连接并把其工具交给智能体；**无此文件则不启用 MCP，一切照常**。
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["chrome-devtools-mcp@latest"],
+      "env": { "FOO": "bar" },
+      "enabled": true,
+      "timeoutMs": 20000
+    }
+  }
+}
+```
+
+字段：`command`（必填，可执行命令）、`args`（可选，参数数组）、`env`（可选，追加环境变量）、`enabled`（可选，默认 `true`；设 `false` 临时停用该条）、`timeoutMs`（可选，连接/初始化超时，默认 20000）。
+
+- **仅 stdio 传输**：即以子进程方式启动的本地 server（`npx` / `uvx` 一类）。`type` 字段省略即 `"stdio"`；`sse` / `streamable-http` 等远程传输本期不支持（配了会记 WARN 并跳过）。
+- **工具命名**：发现的工具以 `mcp__<server>__<工具名>` 注入（如 `mcp__filesystem__read_file`），既避免与内置工具/多 server 间撞名，也便于在工具活动行一眼看出出处。段内非法字符会被归一。
+- **优雅降级**：某个 server 连不上（命令不存在、启动失败、超时）只记一条 WARN 并跳过，**不影响其他 server、不崩启动**；`mcp.json` 缺失或 JSON 非法同样视为「未启用 MCP」。
+- **可用范围**：MCP 工具对**主 agent 与子 agent**（`Task` / `ParallelTasks`）都可用。
+- **生命周期**：启动时一次性连接（无运行期热重连/热管理）；`/exit` 时有界清理子进程（≤2s，绝不拖慢退出，见「已知限制」的残留说明）。
+- **前置**：stdio server 多为 Node 包，需本机有 `node` / `npx`（或对应运行时）。
+- **安全**：MCP server 是你在 `mcp.json` 里显式声明的外部子进程，拥有该进程自身的权限（如 filesystem server 能读写你授权的目录）。它与下方「安全声明」同理**非沙箱**——只连接你信任的 server，别把敏感信息交给来路不明的 server。
+
 ## 发布打包（可分发、解压即运行）
 
 打一个自包含发布包（含启动脚本 + 主 jar + 全部运行期依赖），需 JDK 17+：
@@ -155,3 +188,4 @@ cd /path/to/some/disposable/project
 - **无程序内会话选择器**：会话已持久化并按项目隔离（见上「会话持久化与恢复」），但程序内不能浏览/切换历史会话；`-c` 只恢复**最近一次**会话（按 mtime），要挑更早的需手动操作会话文件。
 - **子 agent 无后台模式**：`Task` 单个前台阻塞、`ParallelTasks` 一批并发前台执行（有界并发，全部 join 后返回）；暂不支持后台任务（`run_in_background` + 轮询回收）与 `/tasks` 详情面板（列为后续增强）。
 - **长期记忆无「自动整理」**：跨会话长期记忆已具备（见上「长期记忆」），但暂未接入定期 consolidation（自动汇总/去重冗余记忆）触发器；记忆的增删改全由模型按需驱动。
+- **MCP 仅 stdio、无运行期热管理**：本期只支持 stdio 传输（`sse`/`streamable-http` 远程 server 已预留传输接缝但未实现，配了会跳过）；连接仅在启动时建立一次，运行中改 `mcp.json` 需重启生效（无 `/mcp` 热重连）。工具名未做长度截断与跨 server 碰撞去重——默认 DeepSeek 无 64 字符上限、实测工具名远短于此且碰撞需刻意构造，故本期可接受。**退出清理为「有界优先」**：`/exit` 时关闭子进程硬限 2s，若某 server 恰在 2s 内未优雅关完，进程会被 JVM 退出带走、可能短暂残留由 OS 回收——这是「不卡退出」优先于「保证优雅清理」的有意取舍。

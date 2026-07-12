@@ -47,7 +47,7 @@ springai-agentdemo                  父工程（聚合 + 版本管理，packagin
 │
 └── springai-code-tui              【综合应用】命令行编码智能体（TUI）
     └── 多 provider（DeepSeek/智谱/Anthropic/OpenAI）+ 子 agent（Task + ParallelTasks 并行）+ 技能
-        + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ 计划/任务面板 + 会话压缩
+        + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ MCP（接入外部工具）+ 计划/任务面板 + 会话压缩
         + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
 ```
 
