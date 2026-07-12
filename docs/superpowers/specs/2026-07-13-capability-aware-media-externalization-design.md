@@ -1,50 +1,65 @@
-# 设计文档：能力感知的媒体与二进制外置（非文本内容不入会话）
+# 设计文档：文件内容不入会话记忆（媒体即时外置 + 文本回合间外置）
 
-- 日期：2026-07-13（2026-07-13 修订：纳入外部评审）
+- 日期：2026-07-13（三次修订：纳入外部评审 + 更正工具循环时序）
 - 模块：`springai-code-tui`
 - 类型：设计（brainstorming spec）
 - 分支：`feat/tool-output-limit`
 
-> 范围声明：本设计只解决**媒体与二进制**工具结果外置，**不是**「工具输出撑爆上下文」的总修复。纯大文本（Bash 长输出 / 大 UTF-8 文件 / 海量 grep）不在本期范围（见非目标）。
+> 核心原则：**文件内容不驻留会话记忆**。会话历史里存的是引用（文件名/路径 + 元信息），不是字节/全文。内容只在「产生它的那一回合」出现在模型上下文里，回合结束后塌成引用；下次要用，模型重读。
 
 ## 1. 背景与目标
 
-工具结果里的**非文本内容**（chrome-devtools 截图的 base64、`Read` 读出的二进制、将来的视频等）被原样存进 `ToolResponseMessage.responseData`、每轮随历史重发给模型 → 撑爆上下文（DeepSeek 400 上下文超长 / OpenAI 中转 404）。根因详见 `2026-07-12-tool-output-context-overflow.md`。
+工具结果里的文件内容（chrome-devtools 截图 base64、`Read` 的文件全文/二进制、将来视频）被原样存进 `ToolResponseMessage.responseData`、**每轮随历史全量重发** → 撑爆上下文（DeepSeek 400 上下文超长 / OpenAI 中转 404）。根因见 `2026-07-12-tool-output-context-overflow.md`。
 
-**本期目标（聚焦、只做这一件）**：非文本内容（图片/视频/二进制）**不再以字节形式进入会话**。当前模型**无视觉能力 → 不发送这些非文本数据**，会话里只留紧凑引用。
+**目标**：任何文件的内容都不进持久会话历史，只留紧凑引用。当前模型无视觉能力 → 图片/二进制字节根本不发。留扩展位，后续接视觉模型时同一张图改走原生 image 块。
 
-**核心原则——能力感知**：「这个媒体发不发、怎么发」由**发起该工具调用的那次请求的模型能力快照**决定（不是工具完成时的实时模型）。现在全是文本模型 → 一律外置 + 引用；以后接入视觉模型且链路支持注入 → 同一张图改走原生 image 块。设计必须**留好扩展位**，接视觉时零架构改动。
+### 非目标（本期不做，均已记录为有意识取舍）
 
-### 非目标（本期不做）
+- **大纯文本的全局字符硬上限**（评审建议的 `ToolOutputLimiter` 64–128K 兜底）——与「按回合边界外置文件内容」是两条线；先前已定「不做全局截段」，本期不加、备查可反悔。
+- **视觉 image 块真注入**（Spring AI 工具结果是 String、需绕开）——留桩，Path B。
+- **旧坏会话自愈**（已落盘的巨型 base64 历史）——不自动迁移，须删/新建；`FileSessionRepository` 不改。
+- **单回合内预算**：一条消息里读太多大文件，那一回合在途仍可能超限（罕见，真出事的是单张图）——Path B。
+- 视频抽帧/OCR——更后续。
 
-- 大**文本**（纯文本大文件 / Bash 长输出 / 海量 grep）截断——与「非文本」无关。评审建议加一个 64–128K 的全局兜底上限（`ToolOutputLimiter`）以兜住媒体漏判与巨型文本；因先前已明确「不做全局截段」，**本期不加**，记录在此备查、可后续反悔。
-- 视觉 image 块的**真注入**（Spring AI 工具结果是 String、需绕开）——留扩展位、留桩，视觉模型落地时做（Path B）。
-- **旧坏会话自愈**：已落盘含 246 万字符 base64 的历史会话，本期**不自动迁移**。这类会话须删除 / 新建；本设计只拦截未来工具调用，`FileSessionRepository` 不改。
-- 视频转写 / 抽帧、OCR 摘要——更后续。
+## 2. 关键时序：为什么拦截点是「回合之间」，不是「落库处」（务必先读）
 
-## 2. 设计总览
+已用字节码核实 spring-ai 2.0 的工具循环：
+
+- `ToolCallingAdvisor`（order **+300**，外层）驱动工具循环——每步 `internalStream → chain.nextStream(下一请求)`，**反复重进内层 advisor 链**。
+- `SessionMemoryAdvisor`（order **+1000**，内层）因此**每个工具迭代都跑一次 `before()`**；`before()` 内 `SessionService.getEvents()` **无条件从存储重载历史**，`merged = 存储历史 + 本请求消息`，并 `appendMessage` 把最新一条 tool/user 消息**当场写回存储**。
+
+**推论**：若在「工具结果写入存储那一刻」就外置成引用，则读完 A、递归去读 B 时，`before()` 重载到的 A 已是引用 → **任务没跑完 A 就丢了**。故**「落库处/mid-loop 外置」是错误方案**，本文档留档防再犯。
+
+**正确时机 = 回合与回合之间，只动过往事件：**
+
+| 拦截点 | 处理 | 安全性 |
+|---|---|---|
+| **`submit()` 开头**（发请求前，`CodingAgent.java:166` 已有 `sanitize`/`trimDangling` 批次） | 遍历**已存在历史事件**（全属**过往回合**），把文件/文本内容换成引用 | 此刻本回合尚无任何工具结果；被外置的都是上一回合及更早，碰不到本回合的读 |
+| **本回合工具循环内**（读 A→B→C…） | **完全不碰**，全文一路留在在途上下文 | 本回合的读要到**下一次** `submit()` 开头才外置 |
+| **装饰器（媒体专用）** | 图片/视频/二进制**当场**抽引用 | 单张图光当回合就能撑爆、且文本模型对图字节没用，必须即时；经 `appendMessage` 落成引用、后续重载也是引用 |
+
+**净效果**：文件内容在产生它的那一回合全程可见（读 A 后读 B，A 还在）→ 任务正常跑完；下一条用户消息进来，上一回合文件内容塌成引用，要用再重读。
+
+## 3. 两类内容、两条外置路径
 
 ```
-工具结果（单一装饰点：AgentTools 装饰循环拦截）
-  → 读取本次调用的【能力快照】：ToolContext 优先 > ProviderRegistry 兜底 > TEXT_ONLY
-  → 检测非文本内容：
-       ├─ MCP：结果 JSON 内容块含 image/binary（顶层数组 或 {content:[...]}）
-       └─ Read：结果疑似二进制 → 用 toolInput 里的原路径回读原始字节（不复制、就地引用）
-  → 外置 / 引用：
-       ├─ 已在项目内的文件（Read 命中）：不复制，直接结构化引用其相对路径
-       └─ MCP 内联字节：存 <root>/.codetui/artifacts/<full-sha>.<ext>（内容寻址）
-  → ToolResultMediaHandler.canDeliver(kind, caps) ?
-       ├─ 否（本期全部）：结果里换成【结构化文本引用】，字节永不进会话   ← 本期实现
-       └─ 是（以后，注入器就绪）：登记为待注入的原生 image 块          ← 扩展位，留桩
+① 媒体（图片/视频/二进制）——即时、连当回合都不进模型
+   工具装饰点（AgentTools 装饰循环，ToolEventCallback 内层）
+     → 检测：MCP 内容块 image/binary、Read 疑似二进制
+     → 外置：MCP 内联字节存 artifact；Read 用 toolInput 原路径就地引用（不复制）
+     → 结果串换成结构化引用 → appendMessage 落成引用 → 永不进模型
+
+② 文本文件内容——回合间、当回合保留全文
+   submit() 开头，遍历已存在历史事件（过往回合）
+     → 找到携带文件全文的 ToolResponseMessage（Read 大文本等）
+     → 外置：优先引用原文件路径（Read 场景，文件在项目内，不复制）；无源则存 artifact
+     → 用结构化引用替换该事件的内容，replaceEvents 写回
+   本回合工具循环内的读：不动，全文在途
 ```
 
-会话里存的是**结构化引用**（类型 / 尺寸 / 大小 / 路径 / artifactId），不是字节。原始文件在 `.codetui/artifacts/`（已 gitignore）或项目内原位。
+## 4. 两个扩展位（接视觉零架构改动）
 
-## 3. 两个扩展位（关键）
-
-### 扩展位 ①：`ModelCapabilities` —— 能力快照（按模型、随请求冻结）
-
-`/model` 按模型切换、视觉能力常是模型级，故**按模型**判定。图与视频分离（支持图不代表支持视频）：
+### 扩展位 ①：`ModelCapabilities`——能力快照（按模型、随请求冻结）
 
 ```java
 public record ModelCapabilities(boolean supportsImageInput, boolean supportsVideoInput) {
@@ -52,105 +67,83 @@ public record ModelCapabilities(boolean supportsImageInput, boolean supportsVide
 }
 ```
 
-`LlmProvider` 增默认方法（现在全部返回 `TEXT_ONLY`，零行为变化）：
+`LlmProvider` 增默认方法（现全返 `TEXT_ONLY`，零行为变化）：`default ModelCapabilities capabilities(String modelId){ return TEXT_ONLY; }`。
+
+**能力绑定「发起调用的模型」**：`submit()` 冻结快照进 `toolContext`（规避工具执行期间切模型的时序错配，子 agent/并行工具尤甚）：
 
 ```java
-default ModelCapabilities capabilities(String modelId) { return ModelCapabilities.TEXT_ONLY; }
+.toolContext(Map.of("turnId", turnId, "providerId", active.id(),
+                    "modelId", activeModelId, "capabilities", capabilities))
 ```
 
-**能力必须绑定「发起调用的模型」，在 submit 时冻结快照进 `ToolContext`**（规避「工具慢→期间切模型→完成时读到新模型」的时序错配，子 agent / 并行工具尤甚）：
+装饰器读能力优先级：**`ToolContext` 快照 > `ProviderRegistry` 兜底 > `TEXT_ONLY`**。
 
-```java
-.toolContext(Map.of(
-    "turnId", turnId,
-    "providerId", active.id(),
-    "modelId", activeModelId,
-    "capabilities", capabilities   // 快照，非引用
-))
-```
-
-装饰器读能力的优先级：**`ToolContext` 快照 > `ProviderRegistry` 兜底 > `TEXT_ONLY`**。子 agent 在自己的 toolContext 里同样带快照。接视觉模型时，只需对应 provider 覆写 `capabilities()`。
-
-### 扩展位 ②：`ToolResultMediaHandler` —— 能否投递 + 表示策略
+### 扩展位 ②：`ToolResultMediaHandler`——能否投递 + 表示
 
 ```java
 interface ToolResultMediaHandler {
-    /** 当前模型能力下能否把该类媒体真正投递给模型（模型能力 && 注入器已实现）。 */
-    boolean canDeliver(MediaKind kind, ModelCapabilities caps);
-    /** 产出该媒体在工具结果里的表示（引用 或 登记原生块）。 */
-    String represent(MediaArtifact media, ModelCapabilities caps);
+    boolean canDeliver(MediaKind kind, ModelCapabilities caps); // 模型能力 && 注入器已实现
+    String  represent(MediaArtifact media, ModelCapabilities caps);
 }
 ```
 
-- 「投递模式」不单看 `caps`，而是 `canDeliver = 模型支持该类输入 && 本链路已接注入器`。本期**没有注入器**，故 `canDeliver` 恒 `false` → 全部走 REFERENCE_ONLY。避免「`supportsImageInput=true` 就以为图已真进模型」的误解。
-- 本期只实现 `TextReferenceMediaHandler`：`canDeliver`→恒 false；`represent`→结构化文本引用。vision 分支仅注释留桩。
-- 视觉注入（Path B）：将来 `canDeliver=true` 时，`represent` 登记一条待注入 `Media`，由消息装配处注入本回合 user 消息——**本期不实现，仅接口 / 注释预留**。
+- 投递模式 = `模型支持该类输入 && 本链路已接注入器`。本期**无注入器** → `canDeliver` 恒 false → 全走 REFERENCE_ONLY（避免「`supportsImageInput=true` 就以为图已真进模型」误解）。
+- 本期只实现 `TextReferenceMediaHandler`：`canDeliver`→false；`represent`→结构化引用。vision 分支仅注释留桩（Path B）。
 
-## 4. 组件（本期实现）
+## 5. 组件（本期实现）
 
-- **`MediaArtifact`**（record）：`id, path, relativePath, mimeType, declaredMimeType?, kind{IMAGE|VIDEO|BINARY}, size, width?, height?, source{EXISTING_FILE|MATERIALIZED}, ownedByStore`。
-  - `source=EXISTING_FILE`：Read 命中的项目内原文件，`ownedByStore=false`，`path` 指原位，不复制。
-  - `source=MATERIALIZED`：MCP 内联字节落进 artifact store，`ownedByStore=true`。
-  - `relativePath` 根相对、短、落在 `FileSystemTools` 沙箱内，模型真需要时可 `Read`。
-- **`MediaArtifactStore`**：`put(byte[], declaredMimeType) → MediaArtifact`。
-  - **内容寻址**：`full-sha = SHA-256(bytes)`；**文件名用完整 sha**，`id` = 前 16 位仅作显示（规避 64bit 碰撞担忧）。
-  - **MIME 不可信**：magic-byte sniff 实际类型，与声明冲突时**信 magic**、引用里两值都记、未知→`.bin`。至少识别 PNG/JPEG/GIF/WebP/PDF/ZIP/MP4/WebM。
-  - **原子写**：temp + move 或 `CREATE_NEW`，防并发部分写；owner-only 权限；不跟不可信符号链接；惰性建目录。
-  - IO 失败走 slf4j 降级、**日志不含 base64**、**绝不 stdout**（撕 TUI）。
-  - **生命周期**：本期随项目保留、不自动 GC；后续按引用扫描 / 最后访问做 GC（记于 §8）。
-- **`ImageDimensions`**：只解 PNG / JPEG 头拿宽高（不解码），越界 / 未知返回空。
-- **媒体检测（在装饰器内）**：
-  - **MCP**：结果解析为 JSON 内容块——**容顶层数组与 `{content:[...]}` 两形**；块 `type:"image"` 或含 `data`(base64)+`mimeType`/`mime_type` → 图像 / 视频媒体；未知块原样保留；单块 base64 解码失败只替该块、不毁其余 text。防「JSON 里恰好有 data+mimeType 文本」误判（需 base64 可解 + magic 命中）。
-  - **`Read` 二进制**：结果疑似二进制（空字节 / 大量非法 UTF-8）→ **解析 toolInput 里的文件路径**，按 root 安全解析并回读**原始文件字节**做 sniff/hash/dimensions，`source=EXISTING_FILE` 就地引用；**拿不到 / 越界路径 → 只返回文本告示、绝不造伪文件**（见 §7）。
-  - 非媒体（普通文本、含合法 JSON 文本）→ 原样放行（本期不碰）。
-- **`MediaExternalizingCallback`**（`ToolCallback` 装饰器）：`delegate.call` 在 guard 外（工具自身异常照常传播）；仅「检测 + 外置 + represent」被 guard，抛错降级为**简短占位**（不得退回原始字节，见 §7）。装在 `ToolEventCallback` 内层（保 `CURRENT_TURN` ThreadLocal 与 `reloadableSkill` 身份判断不变）。
+- **`MediaArtifact`**（record）：`id, path, relativePath, mimeType, declaredMimeType?, kind{IMAGE|VIDEO|BINARY|TEXT}, size, width?, height?, lineCount?, source{EXISTING_FILE|MATERIALIZED}, ownedByStore`。
+  - `EXISTING_FILE`：Read 命中的项目内文件，`ownedByStore=false`，`path` 指原位，不复制。
+  - `MATERIALIZED`：MCP 内联字节 / 无源文本 → 落 artifact store，`ownedByStore=true`。
+- **`MediaArtifactStore`**：`put(byte[], declaredMimeType) → MediaArtifact`。内容寻址：**文件名用完整 SHA-256**，`id`=前 16 位仅显示。**MIME 不可信**：magic-byte sniff，与声明冲突信 magic、两值都记、未知→`.bin`；至少识别 PNG/JPEG/GIF/WebP/PDF/ZIP/MP4/WebM。**原子写**（temp+move / `CREATE_NEW`）、owner-only、不跟不可信符号链接、惰性建目录。IO 失败走 slf4j、**日志不含 base64**、**绝不 stdout**（撕 TUI）。**生命周期**：本期随项目留、不自动 GC（Path B 做按引用扫描 GC）。
+- **`ImageDimensions`**：只解 PNG/JPEG 头拿宽高，越界/未知返回空。
+- **媒体检测器（装饰器内，路径①）**：
+  - **MCP**：结果解析为 JSON 内容块——**容顶层数组与 `{content:[...]}` 两形**；块 `type:"image"` 或 `data`(base64)+`mimeType`/`mime_type` → 媒体；未知块原样留；单块解码失败只替该块；防「JSON 恰好含 data+mimeType 文本」误判（需 base64 可解 + magic 命中）。
+  - **`Read` 二进制**：疑似二进制（空字节/大量非法 UTF-8）→ 解析 toolInput 路径、按 root 安全解析、回读**原文件字节**做 sniff/hash/dim，`EXISTING_FILE` 就地引用；**拿不到/越界路径 → 只返回文本告示、绝不造伪文件**。
+- **`MediaExternalizingCallback`**（`ToolCallback` 装饰器，路径①）：`delegate.call` 在 guard 外（工具异常照传）；仅「检测+外置+represent」被 guard，抛错降级为**简短占位**（不得退回原始字节，见 §7）。装在 `ToolEventCallback` 内层（保 `CURRENT_TURN` ThreadLocal 与 `reloadableSkill` 身份判断不变）。
+- **`SessionFileExternalizer`**（路径②，`submit()` 开头调用）：遍历 `sessionService.getEvents(sid)`，对携带文件全文的 `ToolResponseMessage` 外置为引用，`replaceEvents` 写回。与既有 `SessionEvents.sanitize` / `trimDanglingToolCalls` 同批次、幂等（已是引用则 no-op）。**只处理过往事件**（本回合尚未产生工具结果，天然不受影响）。
 
 **结构化引用（稳定、可再解析、语言无关）**：
 
 ```
-[media artifact]
+[file reference]
 id: sha256:<16hex>
-kind: image
+kind: image            # image | video | binary | text
 mime_type: image/png
-declared_mime_type: image/png
 size_bytes: 519531
-dimensions: 2400x1632
-path: .codetui/artifacts/<full-sha>.png
+dimensions: 2400x1632   # 图；文本用 lines: 8900
+path: src/main/java/Foo.java   # EXISTING_FILE 指原路径；MATERIALIZED 指 .codetui/artifacts/<sha>.<ext>
 delivery: reference_only
-reason: active model pipeline has no native image delivery
-[/media artifact]
+reason: content externalized from session memory; re-read to view
+[/file reference]
 ```
 
-Read 拿不到原路径时的告示：`[Read 返回疑似二进制内容，已从会话移除；无法恢复原始字节]`。
-MCP 同数组的 `text` 块（如「Took a screenshot」）保留，模型仍有语义上下文。UI 可把引用块渲成中文短句。
+MCP 同数组的 `text` 块（如「Took a screenshot」）保留。UI 可把引用块渲成中文短句。
 
-## 5. 装配接线
+## 6. 装配接线
 
-`AgentTools.build`：装饰循环前构造一次 `MediaArtifactStore`（`root.resolve(".codetui").resolve("artifacts")`）+ handler；循环内 `decorated[i] = new ToolEventCallback(new MediaExternalizingCallback(all.get(i), store, handler), listener)`——能力快照由装饰器从 `ToolContext` 读，不再向装饰器注入 registry supplier。子 agent 走 `decoratedList` 自动继承。`CodingAgent.submit` 侧新增：把 `ModelCapabilities` 快照放进本回合 `toolContext`（主 + 子 agent）。**不改** `AgentRuntime` / `ToolEventCallback` / `McpClientManager` / `FileSessionRepository` 公共行为。
+- `AgentTools.build`：装饰循环前构造一次 `MediaArtifactStore` + handler；循环内 `decorated[i] = new ToolEventCallback(new MediaExternalizingCallback(all.get(i), store, handler), listener)`。能力快照由装饰器从 `ToolContext` 读。子 agent 走 `decoratedList` 自动继承。
+- `CodingAgent.submit`：①开头调 `SessionFileExternalizer.externalize(sid)`（路径②，紧邻现有 sanitize）；②`toolContext` 加 `ModelCapabilities` 快照（主+子 agent）。
+- **不改** `AgentRuntime` / `ToolEventCallback` / `McpClientManager` / `FileSessionRepository` 公共行为。
 
-## 6. 测试（离线、模块作用域）
+## 7. 测试（离线、模块作用域）
 
-- **前置调查（第一步）**：接本地假 MCP server（返回 text+image 混合），抓 `McpClientManager.toolCallbacks()` 的**真实序列化串**建 fixture——不靠手写 JSON 定协议。
-- MCP 契约：顶层数组 / `{content:[...]}` / `type:"image"` / `mimeType`&`mime_type` / text+多 image 混合 / 未知块保留 / 单块解码失败隔离 / data+mimeType 文本不误判。
-- MCP 图像块 → 外置 + 结构化引用（返回串无 base64、产物文件存在且 magic 有效、引用含尺寸 / 大小 / 路径、`text` 块保留）。
-- Read 二进制（真 PNG）→ `source=EXISTING_FILE` 就地引用（sha/size/dim 基于**原文件**、不复制、无乱码长串）；路径不可解 → 文本告示、**无产物文件**。
-- 普通文本 → 原样放行、无产物。
-- 畸形 JSON / 非内容块数组 `[1,2,3]` → 不误判、不崩。
+- **前置调查（第一步）**：接本地假 MCP server（返回 text+image 混合），抓 `McpClientManager.toolCallbacks()` **真实序列化串**建 fixture——不靠手写 JSON 定协议。
+- MCP 契约：两形/`type:"image"`/`mimeType`&`mime_type`/text+多 image 混合/未知块保留/单块失败隔离/data+mimeType 文本不误判。
+- 路径①媒体：MCP 图像块 → 外置+引用（返回串无 base64、产物 magic 有效、`text` 块保留）；Read 二进制 → `EXISTING_FILE` 就地引用（sha/size/dim 基于原文件、不复制）；路径不可解 → 告示、无产物。
+- 路径②文本：`SessionFileExternalizer` 把历史里携带文件全文的 tool 结果换成引用、`replaceEvents` 写回；**幂等**（二次调用 no-op）；**只动过往、不动本回合**（构造「尾部即当前回合」的用例断言尾部全文保留）。
+- 能力快照：`ToolContext` `supportsImageInput=false`→引用；`true`+无注入器→`canDeliver=false` 仍引用；`true`+模拟注入器→vision 桩（证扩展位通）。
+- `MediaArtifactStore`：完整 sha 文件名 / magic 优先 / 原子写 / 惰性建目录；`ImageDimensions` PNG/JPEG。
 - delegate 抛错 → 传播（`assertThrows`）。
-- 能力快照：`ToolContext` 带 `supportsImageInput=false` 走引用；`true` + 无注入器 → `canDeliver=false` 仍走引用（证 §3 收敛正确）；`true` + 模拟注入器 → 走 vision 桩（证扩展位通）。
-- `MediaArtifactStore`：完整 sha 文件名 / magic 优先于声明 MIME / 原子写 / 惰性建目录；`ImageDimensions` PNG / JPEG 解析。
 
-## 7. 风险与取舍
+## 8. 风险与取舍
 
-- **降级不能又灌字节**：`represent` 抛错时，兜底返回「简短占位」而非原始媒体串（否则退回撑爆）。
-- **不造伪 artifact**：Read 的乱码 String 重编码 ≠ 原文件，是无效图片且 hash/size 全错、诱导再 Read 死循环。故只走 toolInput 原路径回读原字节；不可得则文本告示，**绝不落假文件**。
-- **能力快照按模型冻结**：绑定发起调用的请求，规避工具执行期间切模型的时序错配。
-- **旧坏会话不自愈**：本期只拦未来调用；已落盘的巨型历史须删 / 新建（评审列为阻断项，此处按项目决策接受）。
-- **全局文本上限缺席**：媒体漏判或巨型纯文本仍可能撑爆；因「不做全局截段」先前决策，本期不加兜底，风险已知。
+- **降级不灌字节**：`represent`/外置抛错兜底返回简短占位，绝不退回原始媒体串。
+- **不造伪 artifact**：Read 乱码 String 重编码 ≠ 原文件；只走 toolInput 原路径回读，不可得则文本告示。
+- **落库处外置是错的**（§2）：`before()` 每迭代重读存储会撕掉本回合的读；必须回合间、只动过往。
+- **跨消息重读**：上一回合读的文件到下一回合变引用，要用重读一次（cheap、可命中缓存）；想更顺可加「近 K 次读保留全文」的按新近度分级（接既有 `RecursiveSummarizationCompactionStrategy`）——Path B。
+- **旧坏会话不自愈**、**单回合内预算缺席**、**全局文本上限缺席**：均已知、归 Path B / 备查。
 
-## 8. 扩展路线（Path B / 后续）
+## 9. 扩展路线（Path B）
 
-- **视觉注入**：`capabilities().supportsImageInput=true` 且注入器就绪 → `canDeliver=true` → `ToolResultMediaHandler` vision 分支把 artifact 作原生 `Media` / image 块注入本回合消息（有界视觉 token）；配 token 感知压缩老化旧媒体。
-- **旧会话迁移**：`LegacySessionMediaSanitizer`（`FileSessionRepository` load / `CodingAgent` submit 前调用），识别内联 base64、外置、替稳定引用；不依赖动态能力。
-- **全局兜底上限** / **artifact GC** / **视频抽帧 OCR**。
-- 本设计的 `ModelCapabilities` + `ToolResultMediaHandler` + `MediaArtifactStore` 即以上地基。
+视觉真注入（`canDeliver=true` → vision 分支注入原生 `Media`/image 块，有界视觉 token）、旧会话 `LegacySessionMediaSanitizer`、按新近度分级保全文、artifact GC、单回合预算、全局文本兜底。地基即本设计的 `ModelCapabilities` + `ToolResultMediaHandler` + `MediaArtifactStore` + 两条外置路径。
