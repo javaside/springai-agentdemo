@@ -53,6 +53,12 @@
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-session-management</artifactId>
         </dependency>
+        <!-- MCP 客户端：只用其 SyncMcpToolCallback 适配层（Tool→ToolCallback）；
+             传递带入 io.modelcontextprotocol.sdk:mcp-core（含 stdio/SSE/Streamable 传输）。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-mcp</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>dev.tamboui</groupId>
