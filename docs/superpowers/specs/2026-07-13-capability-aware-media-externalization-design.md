@@ -101,7 +101,11 @@ interface ToolResultMediaHandler {
   - **MCP**：结果解析为 JSON 内容块——**容顶层数组与 `{content:[...]}` 两形**；块 `type:"image"` 或 `data`(base64)+`mimeType`/`mime_type` → 媒体；未知块原样留；单块解码失败只替该块；防「JSON 恰好含 data+mimeType 文本」误判（需 base64 可解 + magic 命中）。
   - **`Read` 二进制**：疑似二进制（空字节/大量非法 UTF-8）→ 解析 toolInput 路径、按 root 安全解析、回读**原文件字节**做 sniff/hash/dim，`EXISTING_FILE` 就地引用；**拿不到/越界路径 → 只返回文本告示、绝不造伪文件**。
 - **`MediaExternalizingCallback`**（`ToolCallback` 装饰器，路径①）：`delegate.call` 在 guard 外（工具异常照传）；仅「检测+外置+represent」被 guard，抛错降级为**简短占位**（不得退回原始字节，见 §7）。装在 `ToolEventCallback` 内层（保 `CURRENT_TURN` ThreadLocal 与 `reloadableSkill` 身份判断不变）。
-- **`SessionFileExternalizer`**（路径②，`submit()` 开头调用）：遍历 `sessionService.getEvents(sid)`，对携带文件全文的 `ToolResponseMessage` 外置为引用，`replaceEvents` 写回。与既有 `SessionEvents.sanitize` / `trimDanglingToolCalls` 同批次、幂等（已是引用则 no-op）。**只处理过往事件**（本回合尚未产生工具结果，天然不受影响）。
+- **`SessionFileExternalizer`**（路径②，`submit()` 开头调用）：对携带文件全文的 `ToolResponseMessage` 外置为引用，`replaceEvents` 写回。与既有 `SessionEvents.sanitize` / `trimDanglingToolCalls` **同批次、搭同一趟遍历**（不新增 O(n) 扫描）。**增量而非全量**：
+  - **水位线**：记「已外置到的事件版本号」（用 `getEventVersion` 的版本/事件 id，**不用下标**——`trimDanglingToolCalls`/`replaceEvents` 会删事件致下标错位）。每回合只处理**水位线之后的新事件**（≈上一回合新增的读，一条或几条），处理完推进水位线 → **O(上回合新增)，非 O(全历史)**。
+  - **幂等安全网**：判断「已是引用则跳过」；即便水位线记错也不漏改/重复改。
+  - **无新全文 → 纯 no-op**：不调 `replaceEvents`、不写盘。
+  - **只碰过往事件**：本回合 `submit()` 开头时尚无本回合工具结果，天然不动本回合的读。
 
 **结构化引用（稳定、可再解析、语言无关）**：
 
