@@ -151,8 +151,13 @@ public final class AgentTools {
      * @param listener 工具 / Todo 事件出口
      *                 <p>注：conversationId（会话记忆）由 {@code CodingAgent.submit} 每次请求传入，
      *                 不在装配期绑定，故此处不需要 sessionId 参数。
+     * @param mcpTools 启动期已连接并发现的 MCP 工具（可能为空列表）。并入下方共享 {@code all} 列表后，
+     *                 随同一循环被 {@link ToolEventCallback} 装饰，从而同时进入主 agent 的 {@code decorated[]}
+     *                 与子 agent 复用的 {@code decoratedList}——主 + 子 agent 都能用。
+     *                 MCP 未启用或连接失败时，调用方传空列表即可，无需特殊处理。
      */
-    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener) {
+    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
+                                      List<ToolCallback> mcpTools) {
         FileSystemTools fs = FileSystemTools.builder().allowedDirectory(root).build();
         ShellTools sh = ShellTools.builder().build();
         GrepTool grep = GrepTool.builder().workingDirectory(root).build();
@@ -203,6 +208,11 @@ public final class AgentTools {
                 ToolCallbacks.from(fs, sh, grep, glob, webFetch, askTool)));
         all.add(todoCallback);      // 薄适配器版 TodoWrite（名仍为 "TodoWrite"）
         all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
+
+        // MCP 工具（启动期已连接+发现）：并入共享列表，随下方循环被 ToolEventCallback 装饰，
+        // 从而同时流入 decorated[]（主 agent）与 decoratedList（子 agent）。空列表则无副作用。
+        all.addAll(mcpTools);
+
         ToolCallback[] decorated = new ToolCallback[all.size()];
         ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
         for (int i = 0; i < all.size(); i++) {
@@ -313,6 +323,11 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner);
+    }
+
+    /** 向后兼容：无 MCP 工具（等价空列表）。现有测试与旧调用走这条。 */
+    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener) {
+        return build(registry, root, listener, java.util.List.of());
     }
 
     /** 子 agent 并行并发度：环境变量 CODETUI_SUBAGENT_CONCURRENCY，非法/缺失回退 4，钳制到 [1, 32]。 */
