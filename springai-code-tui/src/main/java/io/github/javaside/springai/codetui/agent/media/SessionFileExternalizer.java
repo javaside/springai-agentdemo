@@ -126,14 +126,16 @@ public final class SessionFileExternalizer {
      *  无魔数（源码/纯文本）→ TEXT/text/plain（附行数）。修此前一律强标 text/plain 致 PNG 误标。 */
     private MediaArtifact referenceExistingFile(Path file, String data) {
         try {
-            byte[] head = readHead(file, 64);
+            byte[] head = readHead(file, 512);
             MagicSniffer.Sniffed s = MagicSniffer.sniff(head);
             long size = Files.size(file);
             String sha = sha256Hex(file.toAbsolutePath().normalize().toString());
             String rel = PathContainment.relativeToRoot(file, root);
 
-            if (s.kind() == MediaKind.BINARY && "application/octet-stream".equals(s.mimeType())) {
-                // 无已知魔数：当文本文件，标 text/plain + 行数。
+            boolean textLike = s.kind() == MediaKind.TEXT
+                    || (s.kind() == MediaKind.BINARY && "application/octet-stream".equals(s.mimeType()));
+            if (textLike) {
+                // 文本/未知：当文本文件，标 text/plain + 行数（保留内容真实行数，非 Tika 的细分子型）。
                 int lines = (int) data.chars().filter(c -> c == '\n').count() + 1;
                 return new MediaArtifact(sha, file, rel, "text/plain", null, MediaKind.TEXT,
                         size, null, null, lines, ArtifactSource.EXISTING_FILE, false);

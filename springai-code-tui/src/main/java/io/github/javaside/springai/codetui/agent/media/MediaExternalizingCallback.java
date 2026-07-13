@@ -106,13 +106,16 @@ public final class MediaExternalizingCallback implements ToolCallback {
         return PathContainment.resolveInRoot(raw, root);
     }
 
-    /** 按文件魔数判断是否文本：识别到已知媒体/二进制魔数 → 非文本；否则（含无魔数的源码/文本）→ 文本。 */
+    /** 按文件内容（Tika 魔数）判断是否文本。仅「明确识别为文本」与「无法识别（未知二进制串，
+     *  可能是纯文本/源码）」当文本放行——由路径②回合间处理；「明确识别为 image/video/pdf/zip 等
+     *  非文本媒体」才当媒体即时外置。 */
     private static boolean isTextFile(Path file) {
         try {
-            byte[] head = readHead(file, 64);
+            byte[] head = readHead(file, 512);   // Tika 文本判定需要多看几字节
             MagicSniffer.Sniffed s = MagicSniffer.sniff(head);
-            // 无已知魔数 → application/octet-stream → 当文本；识别出 image/video/pdf/zip 等 → 非文本。
-            return s.kind() == MediaKind.BINARY && "application/octet-stream".equals(s.mimeType());
+            if (s.kind() == MediaKind.TEXT) return true;                    // 明确文本
+            return s.kind() == MediaKind.BINARY
+                    && "application/octet-stream".equals(s.mimeType());     // 未知 → 保守当文本
         } catch (RuntimeException | java.io.IOException e) {
             return true;   // 读不到就别误判成媒体
         }
