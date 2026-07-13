@@ -9,6 +9,7 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 
 import java.nio.file.*;
 import java.util.Base64;
+import java.util.Map;
 import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -92,5 +93,16 @@ class MediaExternalizingCallbackTest {
             @Override public String call(String in, ToolContext ctx) { throw new RuntimeException("boom"); }
         };
         assertThrows(RuntimeException.class, () -> wrap(boom, root).call("i", null));
+    }
+
+    @Test
+    void capabilitiesInContext_imageTrue_stillReferenceOnly_noInjector(@TempDir Path root) {
+        String b64 = java.util.Base64.getEncoder().encodeToString(png());
+        String mcpOut = "[{\"type\":\"image\",\"data\":\"" + b64 + "\",\"mimeType\":\"image/png\"}]";
+        ToolContext ctx = new ToolContext(Map.of(
+                MediaExternalizingCallback.CAPABILITIES_KEY, new ModelCapabilities(true, true)));
+        String result = wrap(delegate("shot", mcpOut), root).call("{}", ctx);
+        assertTrue(FileReference.isReference(result));
+        assertTrue(result.contains("delivery: reference_only"), "无注入器 → 即便能力开也只引用");
     }
 }

@@ -21,6 +21,8 @@ import reactor.core.Disposable;
 import reactor.core.Disposables;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
+import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
+import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -201,7 +203,9 @@ public final class CodingAgent implements SubmitHandler {
                     .options(perRequestOptions.mutate())   // 每次请求按当前所选模型覆盖（mutate 回 native builder，保留 maxTokens 等）
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
                     .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, modelGrounding))
-                    .toolContext(Map.of("turnId", turnId))
+                    .toolContext(Map.of(
+                            "turnId", turnId,
+                            MediaExternalizingCallback.CAPABILITIES_KEY, capabilitiesSnapshot()))   // 冻结「发起本回合的模型」能力
                     // 会话记忆键：SessionMemoryAdvisor 按此解析/自动创建会话（值即 chat_memory_conversation_id）
                     .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
                     .stream().chatClientResponse()
@@ -319,6 +323,13 @@ public final class CodingAgent implements SubmitHandler {
         String prevText = prevUser.getText();
         sessionRepository.replaceEvents(sid, List.copyOf(events.subList(0, events.size() - 1)));
         return (prevText == null || prevText.isBlank()) ? outbound : prevText + "\n\n" + outbound;
+    }
+
+    /** 冻结当前激活模型的能力快照进 toolContext（规避工具执行期间切模型的时序错配）。
+     *  registry 缺失（旧单-client 测试路径）→ TEXT_ONLY。 */
+    private ModelCapabilities capabilitiesSnapshot() {
+        if (registry == null) return ModelCapabilities.TEXT_ONLY;
+        return registry.active().capabilities(registry.activeModelId());
     }
 
     @Override
