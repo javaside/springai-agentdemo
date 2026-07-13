@@ -78,14 +78,14 @@
 ## 🔐 校验（SHA-256）
 
 ```
-7d819a5d2169e401d351018c38f6533b3b200c13548fb85b9c804230ea2a7fba  springai-code-tui-1.3.0-dist.tar.gz
-1120d570b9ca79774e1b9a9dc2cf299641205a561e6632570b23aeb24bf37877  springai-code-tui-1.3.0-dist.zip
+0d3c596fe11cfc96147bff62205d4c2608e0d06c4d945f48afce5924a1e8a075  springai-code-tui-1.3.0-dist.tar.gz
+5dfa709cc9ea5d5c02e5bc0b9914190f85cd9771efa17ef79bf68a53476f1ead  springai-code-tui-1.3.0-dist.zip
 ```
 
 ```bash
 shasum -a 256 -c <<'EOF'
-7d819a5d2169e401d351018c38f6533b3b200c13548fb85b9c804230ea2a7fba  springai-code-tui-1.3.0-dist.tar.gz
-1120d570b9ca79774e1b9a9dc2cf299641205a561e6632570b23aeb24bf37877  springai-code-tui-1.3.0-dist.zip
+0d3c596fe11cfc96147bff62205d4c2608e0d06c4d945f48afce5924a1e8a075  springai-code-tui-1.3.0-dist.tar.gz
+5dfa709cc9ea5d5c02e5bc0b9914190f85cd9771efa17ef79bf68a53476f1ead  springai-code-tui-1.3.0-dist.zip
 EOF
 ```
 

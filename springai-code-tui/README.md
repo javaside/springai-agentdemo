@@ -21,8 +21,9 @@
 
 **本工具不是安全沙箱。** 它给智能体开放了对本机文件系统和 shell 的实质性访问能力，具体边界如下：
 
-- **只有 `FileSystemTools` 受工作区 root 目录沙箱限制**——读写越界路径（绝对路径逃出 root，或 `../` 穿越）会被拒绝。这是底层依赖 `spring-ai-agent-utils` 实测确认的真实、强制的边界。
-- **`ShellTools` / `GrepTool` / `GlobTool` 不受任何 root 限制。** 它们原生就没有目录沙箱：
+- **所有工具都不受工作区 root 目录限制，没有任何技术强制的边界。** `FileSystemTools` 底层依赖 `spring-ai-agent-utils` *支持*可选的 `allowedDirectory` 沙箱，但本工具**刻意不启用**——因为 `ShellTools`/`GrepTool`/`GlobTool` 本就能越界，单给文件读写工具设边界形同虚设、反而制造「有沙箱」的假象。故全线一致、统一靠自律约束。
+- **`FileSystemTools` / `ShellTools` / `GrepTool` / `GlobTool` 均不受 root 限制：**
+  - `FileSystemTools` 的 read/write/edit 可直接用绝对路径读写 root 之外的任意文件（未配置 `allowedDirectory`，库对空配置直接放行）。
   - `ShellTools.bash(...)` 直接 `new ProcessBuilder(...).start()`，没有设置工作目录约束，模型可以执行任意 shell 命令（包括 `cd /`、绝对路径操作、`rm -rf`、`curl | bash` 等）。
   - `GrepTool` / `GlobTool` 的 `workingDirectory` 只是**默认基准目录**，不是强制边界——只要参数传绝对路径或 `../`，照样能读到/列出 root 之外的任意文件。
 - 也就是说：**智能体（在被越权提示注入或自身犯错的情况下）可以读写磁盘上任意它有权限触及的位置、执行任意命令**，不局限于当前工作目录。
@@ -255,7 +256,7 @@ cd /path/to/some/disposable/project
 
 - **滚动区不可翻页**：对话滚动区依赖终端自身的 scrollback，程序内不支持翻页控件（输入框 ↑↓ 回溯的是「已提交的历史消息」，与滚动区翻页无关；历史仅内存态，退出不保留）。
 - **宽字符光标对齐**：输入框光标位置按显示宽度（东亚宽字符计 2 列）对齐，但极端的 grapheme 组合（如某些 emoji ZWJ 序列、组合字符）可能出现轻微偏移。
-- **工具沙箱不完整**：见上方安全声明——只有文件系统工具受 root 约束，Shell/Grep/Glob 不受限。自写的真沙箱（`SandboxedShellTool` 等，方案 A）列为 v1 之后的增强项，本版本未实现。
+- **无工具沙箱**：见上方安全声明——所有工具（含文件系统工具）都不受 root 约束。自写的真沙箱（`SandboxedShellTool` 等校验所有工具路径参数）列为 v1 之后的增强项，本版本未实现。
 - **无程序内会话选择器**：会话已持久化并按项目隔离（见上「会话持久化与恢复」），但程序内不能浏览/切换历史会话；`-c` 只恢复**最近一次**会话（按 mtime），要挑更早的需手动操作会话文件。
 - **子 agent 无后台模式**：`Task` 单个前台阻塞、`ParallelTasks` 一批并发前台执行（有界并发，全部 join 后返回）；暂不支持后台任务（`run_in_background` + 轮询回收）与 `/tasks` 详情面板（列为后续增强）。
 - **长期记忆无「自动整理」**：跨会话长期记忆已具备（见上「长期记忆」），但暂未接入定期 consolidation（自动汇总/去重冗余记忆）触发器；记忆的增删改全由模型按需驱动。
