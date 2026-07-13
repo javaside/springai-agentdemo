@@ -4,12 +4,15 @@ import org.apache.tika.config.TikaConfig;
 import org.apache.tika.io.TikaInputStream;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.mime.MediaType;
+import org.apache.tika.mime.MediaTypeRegistry;
 import org.apache.tika.mime.MimeType;
 import org.apache.tika.mime.MimeTypes;
 
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 
 /** 按文件内容魔数判类型——声明的 MIME（如 MCP 的 mimeType）是外部输入不可信，一律以实际字节为准。
  *  底层用 Apache Tika（tika-core）的内容检测，覆盖上千种格式；只做<b>类型检测</b>，不引 parser。
@@ -23,9 +26,12 @@ public final class MagicSniffer {
             new Sniffed(MediaKind.BINARY, "application/octet-stream", "bin");
 
     private static final MimeTypes MIME_TYPES;
+    private static final MediaTypeRegistry TYPE_REGISTRY;
     static {
         // 用默认 TikaConfig 的 MimeTypes 仓库（含全部 magic 定义）；构造一次复用，线程安全。
-        MIME_TYPES = TikaConfig.getDefaultConfig().getMimeRepository();
+        TikaConfig cfg = TikaConfig.getDefaultConfig();
+        MIME_TYPES = cfg.getMimeRepository();
+        TYPE_REGISTRY = cfg.getMediaTypeRegistry();
     }
 
     /** 按字节内容嗅探类型。null/空/无法确定 → UNKNOWN（BINARY, application/octet-stream, bin）。 */
@@ -42,18 +48,42 @@ public final class MagicSniffer {
         }
     }
 
-    /** 磁盘文件是否为文本：明确识别为文本、或无法识别（未知字节，可能是纯文本/源码）都当文本。
-     *  仅「明确识别为 image/video/pdf/zip 等非文本媒体」才判 false。读不到当文本（宁可留会话不误引用）。 */
+    /** 磁盘文件是否为文本：明确识别为文本、其 MIME 的 Tika 父类型链含 text/*、或无法识别（未知字节，
+     *  可能是纯文本/源码）——都当文本。仅「明确识别为 image/video/pdf/zip 等非文本媒体」才判 false。
+     *  读不到当文本（宁可留会话不误引用）。
+     *  <p>用父类型链而非仅顶层 type 是关键：Tika 对带强 magic 的文本格式给出 application/* 子型
+     *  （pom.xml→application/xml、shebang 脚本→application/x-sh、json→text/javascript…），顶层是
+     *  application 而非 text，但它们在 Tika 注册表里的父链最终归到 text/plain。只看顶层会把 pom.xml 之类
+     *  误判成二进制而错误外置（违背修正 #9「文本文件正文永不外置」）；查父链一次覆盖，且随 Tika 升级自动跟进。 */
     public static boolean isTextFile(Path file) {
         try {
             byte[] head = readHead(file, 512);   // Tika 文本判定需多看几字节
             Sniffed s = sniff(head);
-            if (s.kind() == MediaKind.TEXT) return true;                     // 明确文本
-            return s.kind() == MediaKind.BINARY
-                    && "application/octet-stream".equals(s.mimeType());      // 未知 → 保守当文本
+            if (s.kind() == MediaKind.TEXT) return true;                     // 明确文本（text/*）
+            if (s.kind() == MediaKind.BINARY
+                    && "application/octet-stream".equals(s.mimeType())) {    // 未知 → 保守当文本
+                return true;
+            }
+            return hasTextSupertype(s.mimeType());                           // application/xml、x-sh 等经父链归 text
         } catch (Exception e) {
             return true;
         }
+    }
+
+    /** MIME 的 Tika 父类型链里是否出现 text/*（到 octet-stream 或成环即止）。 */
+    private static boolean hasTextSupertype(String mimeStr) {
+        try {
+            MediaType t = MediaType.parse(mimeStr);
+            Set<MediaType> seen = new HashSet<>();
+            while (t != null && seen.add(t)) {
+                if ("text".equals(t.getType())) return true;
+                if (MediaType.OCTET_STREAM.equals(t)) return false;
+                t = TYPE_REGISTRY.getSupertype(t);
+            }
+        } catch (Exception ignore) {
+            // 解析/查询失败：落到 false，交由调用方保守处理
+        }
+        return false;
     }
 
     private static byte[] readHead(Path file, int n) throws java.io.IOException {
