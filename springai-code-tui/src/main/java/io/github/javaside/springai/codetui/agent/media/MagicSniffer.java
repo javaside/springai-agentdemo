@@ -8,6 +8,8 @@ import org.apache.tika.mime.MimeType;
 import org.apache.tika.mime.MimeTypes;
 
 import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /** 按文件内容魔数判类型——声明的 MIME（如 MCP 的 mimeType）是外部输入不可信，一律以实际字节为准。
  *  底层用 Apache Tika（tika-core）的内容检测，覆盖上千种格式；只做<b>类型检测</b>，不引 parser。
@@ -37,6 +39,31 @@ public final class MagicSniffer {
             return new Sniffed(kindOf(mime), mime, extOf(mime));
         } catch (Exception e) {
             return UNKNOWN;   // 检测失败绝不误判/不崩，退回未知二进制
+        }
+    }
+
+    /** 磁盘文件是否为文本：明确识别为文本、或无法识别（未知字节，可能是纯文本/源码）都当文本。
+     *  仅「明确识别为 image/video/pdf/zip 等非文本媒体」才判 false。读不到当文本（宁可留会话不误引用）。 */
+    public static boolean isTextFile(Path file) {
+        try {
+            byte[] head = readHead(file, 512);   // Tika 文本判定需多看几字节
+            Sniffed s = sniff(head);
+            if (s.kind() == MediaKind.TEXT) return true;                     // 明确文本
+            return s.kind() == MediaKind.BINARY
+                    && "application/octet-stream".equals(s.mimeType());      // 未知 → 保守当文本
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private static byte[] readHead(Path file, int n) throws java.io.IOException {
+        try (var in = Files.newInputStream(file)) {
+            byte[] buf = new byte[n];
+            int read = in.readNBytes(buf, 0, n);
+            if (read == n) return buf;
+            byte[] head = new byte[read];
+            System.arraycopy(buf, 0, head, 0, read);
+            return head;
         }
     }
 

@@ -222,8 +222,8 @@ public final class AgentTools {
         MediaArtifactStore mediaStore =
                 new MediaArtifactStore(root.resolve(".codetui").resolve("artifacts"), root);
         ToolResultMediaHandler mediaHandler = new TextReferenceMediaHandler();
-        // 媒体外置（路径②）：回合间（CodingAgent.submit 开头）把过往大文本 tool 结果换成引用，与路径①共用 store/root。
-        SessionFileExternalizer fileExternalizer = new SessionFileExternalizer(mediaStore, root);
+        // 媒体外置（路径②）：回合间（CodingAgent.submit 开头）把过往「非文本文件」读取结果换成引用（文本文件不动）。
+        SessionFileExternalizer fileExternalizer = new SessionFileExternalizer(root);
 
         ToolCallback[] decorated = new ToolCallback[all.size()];
         ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
