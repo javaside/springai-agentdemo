@@ -31,4 +31,39 @@ class ImageDimensionsTest {
     void tooShort_empty() {
         assertTrue(ImageDimensions.of(new byte[]{1,2,3}).isEmpty());
     }
+
+    /** 构造最小 JPEG：SOI + SOF0 marker + 数据段。 */
+    private static byte[] jpeg(int w, int h) {
+        byte[] b = new byte[20];
+        // SOI
+        b[0] = (byte) 0xFF; b[1] = (byte) 0xD8;
+        // SOF0 marker at i=2
+        b[2] = (byte) 0xFF; b[3] = (byte) 0xC0;
+        // Segment length (unimportant)
+        b[4] = (byte) 0x00; b[5] = (byte) 0x11;
+        // Precision
+        b[6] = (byte) 0x08;
+        // Height at i+5 (i=2, so offset 7): big-endian 2 bytes
+        b[7] = (byte)(h >>> 8); b[8] = (byte) h;
+        // Width at i+7 (i=2, so offset 9): big-endian 2 bytes
+        b[9] = (byte)(w >>> 8); b[10] = (byte) w;
+        // Pad indices 11..19 with 0 (already initialized)
+        return b;
+    }
+
+    @Test
+    void jpegWidthHeight() {
+        Optional<int[]> d = ImageDimensions.of(jpeg(640, 320));
+        assertTrue(d.isPresent());
+        assertArrayEquals(new int[]{640, 320}, d.get());
+    }
+
+    @Test
+    void jpegNoSof_empty() {
+        // JPEG with SOI but no SOF marker: no 0xFF,0xC0 sequence
+        byte[] b = new byte[14];
+        b[0] = (byte) 0xFF; b[1] = (byte) 0xD8;
+        // Rest is 0x00 or other non-SOF bytes; loop never finds SOF0
+        assertTrue(ImageDimensions.of(b).isEmpty());
+    }
 }
