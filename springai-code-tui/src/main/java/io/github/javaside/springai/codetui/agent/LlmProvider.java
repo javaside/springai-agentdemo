@@ -4,6 +4,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 
 import java.util.List;
+import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 
 /**
  * 一家大模型 provider 的抽象。主 agent 与子 agent 共用。
@@ -34,4 +35,9 @@ public interface LlmProvider {
 
     /** 该家默认模型 id（激活该家时的初始模型）。 */
     String defaultModel();
+
+    /** 该模型的能力（视觉等）。现全部返回 TEXT_ONLY（零行为变化）；接视觉模型时对应 provider 覆写此方法。 */
+    default ModelCapabilities capabilities(String modelId) {
+        return ModelCapabilities.TEXT_ONLY;
+    }
 }
