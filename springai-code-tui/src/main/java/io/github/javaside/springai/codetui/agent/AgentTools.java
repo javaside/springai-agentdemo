@@ -68,9 +68,10 @@ import java.util.List;
  * {@link ToolEventCallback#currentTurnId()}（当前正在执行工具的回合），不读实时 activeTurnId，
  * 取消/并发下不会串轮。因此 {@link #build} <b>没有</b> activeTurnId 参数。
  *
- * <p><b>安全边界（设计方案 B）</b>：只有 FileSystemTools 有强制的目录边界；Shell/Grep/Glob 在技术上
- * <b>不</b>受 root 限制（见 {@code AgentToolsSecurityTest}）。这里靠系统提示要求模型自律约束在 root 内，
- * 而非承诺技术强制。
+ * <p><b>安全边界</b>：<b>没有</b>任何工具做强制目录边界——FileSystemTools/Shell/Grep/Glob 在技术上
+ * 都<b>不</b>受 root 限制（见 {@code AgentToolsSecurityTest}）。曾给 FS 单设 allowedDirectory，
+ * 但其余工具都能越界、这层边界形同虚设、反而制造「有沙箱」的假象，遂去掉；全线靠系统提示要求
+ * 模型自律约束在 root 内，而非承诺技术强制。
  */
 public final class AgentTools {
 
@@ -109,7 +110,7 @@ public final class AgentTools {
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
      * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
-     * 不注入知识截止——DeepSeek 无精确公开值，编一个只会误导模型自述。诚实声明只有 FileSystemTools 有强制边界。
+     * 不注入知识截止——DeepSeek 无精确公开值，编一个只会误导模型自述。诚实声明全线工具都无强制目录边界。
      */
     private static final String SYSTEM_TEMPLATE = """
             你是一个运行在终端里的中文编码助手（coding agent），帮助用户在当前项目里读写代码、排查问题、完成开发任务。
@@ -128,8 +129,7 @@ public final class AgentTools {
             - 回答简洁，聚焦用户的目标本身。
 
             关于工作边界（请务必遵守）：
-            - 只有文件读写工具（FileSystemTools）有被强制限定的目录边界；
-              Shell / Grep / Glob 在技术上并未被限制在项目根目录内。
+            - 所有工具（文件读写 / Shell / Grep / Glob）在技术上都未被限制在项目根目录内，没有强制沙箱。
             - 因此请自我约束：所有操作都应发生在当前项目根目录之内，不要用绝对路径或 ../ 去访问项目之外的文件，
               也不要执行会影响项目之外的命令。
 
@@ -152,7 +152,7 @@ public final class AgentTools {
      * 组装编码 Agent 的 ChatClient。仅做装配，不发起任何网络请求，也不要求有效的 API key。
      *
      * @param registry provider 注册表（每个可用 provider 各建一个 ChatClient；auxClient 与系统提示的模型名取激活 provider）
-     * @param root     项目根目录（FileSystemTools 的强制边界 + Grep/Glob 的默认工作目录）
+     * @param root     项目根目录（Grep/Glob 的默认工作目录 + 会话/记忆/技能等落盘基准；<b>非</b>任何工具的强制边界）
      * @param listener 工具 / Todo 事件出口
      *                 <p>注：conversationId（会话记忆）由 {@code CodingAgent.submit} 每次请求传入，
      *                 不在装配期绑定，故此处不需要 sessionId 参数。
@@ -163,7 +163,11 @@ public final class AgentTools {
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
                                       List<ToolCallback> mcpTools) {
-        FileSystemTools fs = FileSystemTools.builder().allowedDirectory(root).build();
+        // 不设 allowedDirectory：沙箱是库的 opt-in 特性，空列表即放行任何路径
+        // （见 FileSystemTools.validateAllowedAccess：allowedDirectories.isEmpty() → 直接返回放行）。
+        // 全线工具（Shell/Grep/Glob）本就不受 root 强制限制，单给 FS 设边界并无实际安全意义，
+        // 反而制造「FS 有沙箱」的假象；遂与其余工具一致，统一靠系统提示自律约束。
+        FileSystemTools fs = FileSystemTools.builder().build();
         ShellTools sh = ShellTools.builder().build();
         GrepTool grep = GrepTool.builder().workingDirectory(root).build();
         GlobTool glob = GlobTool.builder().workingDirectory(root).build();

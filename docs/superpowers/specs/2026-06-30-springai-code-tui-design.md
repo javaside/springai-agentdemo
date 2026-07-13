@@ -178,7 +178,14 @@ ChatClient client = ChatClient.builder(deepSeekModel)
 
 ## 9. 安全（按 0.10.0 实测能力重写）
 
-**实测结论（不是臆测）**：`spring-ai-agent-utils:0.10.0` 里**只有 `FileSystemTools.allowedDirectory(root)` 是真沙箱**。
+> **更正（2026-07-13）：`FileSystemTools` 的 `allowedDirectory(root)` 已去掉，全线工具都不设强制边界。**
+> 理由：`Shell/Grep/Glob` 本就能越界，单给 FS 设沙箱形同虚设，反而制造「有沙箱」的假象。
+> 现状 = `FileSystemTools.builder().build()`（空 `allowedDirectories` → 库直接放行任何路径），
+> 与 §2 修正一致：**没有任何工具做技术强制边界，全靠系统提示自律 + 启动确认门**。
+> 本节下文「只有 FileSystemTools 是真沙箱 / 方案 B」描述的是当时决策，现已被本更正取代；
+> 「诚实声明」「启动确认门」「使用约束」等其余处置仍然有效（诚实声明措辞相应改为「全线无强制边界」）。
+
+**实测结论（不是臆测）**：`spring-ai-agent-utils:0.10.0` 里**只有 `FileSystemTools.allowedDirectory(root)` 是真沙箱**（库能力，本应用已选择不启用，见上方更正）。
 - `ShellTools.bash(...)` 字节码：`new ProcessBuilder([/bin/bash,-c,cmd]).start()`，**无 `.directory()`**，builder 也无 cwd 选项 → 命令在 JVM cwd 跑，且模型可 `cd /`、用绝对路径、`rm -rf`、`curl|bash` 等任意越界/破坏。
 - `GrepTool/GlobTool.workingDirectory(root)` 只是**默认**目录；search/path 参数传绝对路径或 `../` 仍可越界读盘。
 
