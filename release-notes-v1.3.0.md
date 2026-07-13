@@ -1,0 +1,98 @@
+# springai-agentdemo v1.3.0
+
+在 [v1.2.1](release-notes-v1.2.1.md) 基础上的**功能版**（minor）。核心交付物仍是终端编码智能体 **`springai-code-tui`**。本版带来两项大功能——**MCP 客户端接入**（让智能体接入外部工具生态）与**能力感知的媒体外置**（图片/视频/二进制不再以字节形式撑爆会话上下文）——外加一处会话流式稳定性修复与一次安全模型简化。向后兼容、无破坏性变更，建议所有 v1.2.x 用户升级。
+
+**下载物仍是两个自包含运行包（解压即用，无需构建）：**
+
+- `springai-code-tui-1.3.0-dist.tar.gz`（macOS / Linux 首选）
+- `springai-code-tui-1.3.0-dist.zip`（Windows 首选）
+
+两者内容一致：启动脚本（`bin/`）+ 主 jar + 全部运行期依赖（`lib/`）+ `LICENSE`/`NOTICE`/`README`。运行时界面版本标识为 **`v1.3.0`**。
+
+> 完整功能全景与⚠️安全声明见 [v1.2.0 发布说明](release-notes-v1.2.0.md) 与 [v1.0.0 发布说明](release-notes-v1.0.0.md)；本文只列出相对 v1.2.1 的变化。
+
+---
+
+## ✨ 新功能
+
+### MCP 客户端接入（接入外部工具生态）
+
+`springai-code-tui` 现在可作为 **MCP（Model Context Protocol）客户端**，把外部 MCP server 暴露的工具接入智能体——主 agent 与子 agent 共享同一批 MCP 工具。
+
+- **本期传输**：仅 **stdio**（本地子进程 server）。传输层已抽出 `McpTransportFactory` 接缝，后续可扩展 SSE/HTTP。
+- **配置**：两层加载合并（用户级 + 项目级），逐条 server 独立解析、失败隔离——某个 server 配置坏了只跳过它、不拖垮启动。
+- **优雅降级**：连接/发现失败按 server 隔离，不影响其余工具与内置能力；未配置 MCP 时零影响。
+- **生命周期**：启动期静态加载并连接、发现工具；退出前有界清理子进程，避免遗留僵尸进程。
+- **工具名净化**：外部工具名统一净化，避免与内置工具冲突或非法字符。
+
+配置格式、示例与限制见 `README` 的 MCP 章节。
+
+### 能力感知的媒体外置：非文本内容不再进会话
+
+工具结果里的**非文本内容**（截图的 base64、`Read` 读到的二进制、将来的视频等）过去被原样存进会话历史、每轮随上下文重发，极易撑爆窗口（上下文超长 400 / 中转 404）。本版按**当前激活模型的能力**决定这些内容怎么进会话：
+
+- **当前全是文本模型 → 一律外置**：原始字节落到 `<root>/.codetui/artifacts/`（内容寻址、已 gitignore），会话里只留一条**紧凑结构化引用**（类型 / 尺寸 / 大小 / 路径 / artifactId），字节永不进会话。模型真需要时可按路径重新 `Read`。
+- **文本文件永不外置**：只清图片 / 视频 / 二进制字节，**文本文件正文始终留在会话**——它是模型的工作材料，外置会破坏精确编辑。
+- **两条外置路径**：路径①在工具调用装饰器内**即时**处理（MCP 媒体块 / `Read` 二进制）；路径②在回合开头对**过往**遗漏的非文本结果**兜底**外置。
+- **文件类型判定换用 Apache Tika**（`tika-core`）：替换原手写魔数白名单，按内容而非扩展名判类型，并按 Tika 超类型链正确识别带 magic 的文本（如 `pom.xml`、shell 脚本）。
+- **能力扩展位已就位**：`ModelCapabilities` + `ToolResultMediaHandler` 为将来接入**视觉模型**（改走原生 image 块注入）预留了零架构改动的接口，本期不启用。
+
+---
+
+## 🐛 修复
+
+### 切换 OpenAI 流式后的会话记忆错乱
+
+修复切到某些流式 provider 时可能出现的 **No session ID** 报错与随后的 DeepSeek `400`。根因是**空流仍触发 `after()` 回调**、以及会话里出现连续同角色消息。三处收敛：空流守卫、折叠连续同角色、折出站尾部多余 user 消息。
+
+---
+
+## 🔧 工程
+
+### 去掉 FileSystemTools 沙箱，全线工具统一无强制边界
+
+`FileSystemTools` 的 `allowedDirectory(root)` 沙箱已去掉。理由：`Shell`/`Grep`/`Glob` 本就能用绝对路径越界，单给文件读写工具设边界形同虚设、反而制造「有沙箱」的假象。现改为全线工具一致——**没有任何技术强制的目录边界，靠系统提示自律约束 + 启动确认门**（`README` 与启动横幅的诚实声明相应更新）。安全模型更简单、更诚实。
+
+### 其它
+
+- 全模块版本号 1.2.1 → **1.3.0**。
+- 全量测试：`springai-code-tui` **384 用例通过**（5 项网络门跳过；新增 MCP 配置/连接/清理、媒体检测/外置/引用、Tika 类型判定、去沙箱安全现实等大量回归）；`-Pdist` 产出 1.3.0 运行包。
+- 订正历史 plan 文档技术栈标注（Java 21 → Java 17，项目一直是 17 基线）。
+
+---
+
+## 📦 仓库模块
+
+| 模块 | 说明 |
+| --- | --- |
+| **springai-code-tui** ⭐ | 终端编码智能体（**本次发布的可下载运行物**）。 |
+| springai-core-demo | Spring AI 原始 API 教学。 |
+| springai-agent-demo | 智能体教学：工具调用、多步 agent、会话记忆等。 |
+| springai-boot-demo | Spring Boot 自动装配版对照。 |
+| springai-jline-demo | JLine 终端交互基础示例。 |
+
+> demo 模块请 clone 源码后 `mvn` 运行，见各模块 README；下载包只含 `springai-code-tui`。
+
+---
+
+## 🔐 校验（SHA-256）
+
+```
+7d819a5d2169e401d351018c38f6533b3b200c13548fb85b9c804230ea2a7fba  springai-code-tui-1.3.0-dist.tar.gz
+1120d570b9ca79774e1b9a9dc2cf299641205a561e6632570b23aeb24bf37877  springai-code-tui-1.3.0-dist.zip
+```
+
+```bash
+shasum -a 256 -c <<'EOF'
+7d819a5d2169e401d351018c38f6533b3b200c13548fb85b9c804230ea2a7fba  springai-code-tui-1.3.0-dist.tar.gz
+1120d570b9ca79774e1b9a9dc2cf299641205a561e6632570b23aeb24bf37877  springai-code-tui-1.3.0-dist.zip
+EOF
+```
+
+---
+
+## 📄 许可
+
+[Apache License 2.0](LICENSE)。发布包内随附 `LICENSE` 与 `NOTICE`（含所分发第三方库：Spring AI / Spring Boot / spring-ai-community 为 Apache 2.0，TamboUI 为 MIT，Apache Tika 为 Apache 2.0）。
+
+**环境**：JDK 17+，macOS / Linux / Windows。
