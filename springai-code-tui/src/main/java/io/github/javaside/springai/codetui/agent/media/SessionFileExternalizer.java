@@ -1,6 +1,8 @@
 // SessionFileExternalizer.java
 package io.github.javaside.springai.codetui.agent.media;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -21,6 +23,7 @@ import java.util.Map;
 /** 路径②：回合之间（submit 开头）把过往事件里「携带文件全文的 ToolResponse」换成引用。
  *  只碰过往事件——本回合尚无工具结果，天然不动本回合的读。无改动返回<b>同一引用</b>（同 SessionEvents 纪律）。 */
 public final class SessionFileExternalizer {
+    private static final Logger log = LoggerFactory.getLogger(SessionFileExternalizer.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     static final int THRESHOLD = 32 * 1024;
 
@@ -72,10 +75,15 @@ public final class SessionFileExternalizer {
                         "content externalized from session memory; re-read to view");
             }
         }
-        // 无源（Bash 长输出 / 路径不可解）→ 文本存 artifact
-        MediaArtifact a = store.put(data.getBytes(java.nio.charset.StandardCharsets.UTF_8), "text/plain");
-        return FileReference.render(a, "reference_only",
-                "content externalized from session memory; re-read to view");
+        // 无源（Bash 长输出 / 路径不可解）→ 文本存 artifact；store.put IO 失败时保守降级，不炸掉整回合
+        try {
+            MediaArtifact a = store.put(data.getBytes(java.nio.charset.StandardCharsets.UTF_8), "text/plain");
+            return FileReference.render(a, "reference_only",
+                    "content externalized from session memory; re-read to view");
+        } catch (RuntimeException e) {
+            log.warn("externalize fallback (MATERIALIZED) failed, leaving response unchanged: {}", e.toString());
+            return null;
+        }
     }
 
     private Map<String, String> collectToolCallArgs(List<SessionEvent> events) {

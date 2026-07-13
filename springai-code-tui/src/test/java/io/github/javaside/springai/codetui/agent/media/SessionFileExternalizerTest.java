@@ -28,6 +28,17 @@ class SessionFileExternalizerTest {
         return ev(sid, ToolResponseMessage.builder()
                 .responses(List.of(new ToolResponseMessage.ToolResponse(callId, "Read", body))).build());
     }
+    private static SessionEvent bashCall(String sid, String callId, String command) {
+        return ev(sid, AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(callId, "function", "Bash",
+                        "{\"command\":\"" + command + "\"}")))
+                .build());
+    }
+    private static SessionEvent bashResult(String sid, String callId, String body) {
+        return ev(sid, ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(callId, "Bash", body))).build());
+    }
 
     @Test
     void largeReadResult_replacedByReference_pointingOriginalPath(@TempDir Path root) throws Exception {
@@ -60,6 +71,28 @@ class SessionFileExternalizerTest {
         SessionFileExternalizer ext = new SessionFileExternalizer(
                 new MediaArtifactStore(root.resolve(".codetui/artifacts"), root), root);
         assertSame(events, ext.externalize(events), "无改动返回同一引用");
+    }
+
+    @Test
+    void noResolvableSource_materializedIntoArtifactStore(@TempDir Path root) {
+        String sid = "s1";
+        String big = "z".repeat(40_000);
+        List<SessionEvent> events = new java.util.ArrayList<>(List.of(
+                ev(sid, new UserMessage("run it")),
+                bashCall(sid, "c1", "find / -name '*.log'"),
+                bashResult(sid, "c1", big)));
+
+        SessionFileExternalizer ext = new SessionFileExternalizer(
+                new MediaArtifactStore(root.resolve(".codetui/artifacts"), root), root);
+        List<SessionEvent> out = ext.externalize(events);
+
+        assertNotSame(events, out, "有改动应返回新列表");
+        String body = ((ToolResponseMessage) out.get(2).getMessage()).getResponses().get(0).responseData();
+        assertTrue(FileReference.isReference(body), "应变为引用");
+        assertFalse(body.contains("z".repeat(100)), "全文不得留在会话");
+        assertFalse(body.contains("find / -name"), "不得指向 Bash 命令这个伪路径");
+        assertTrue(body.contains(".codetui/artifacts") || body.contains(".codetui\\artifacts"),
+                "MATERIALIZED 应指向 artifact store 路径而非不存在的原路径");
     }
 
     @Test
