@@ -96,6 +96,32 @@ class MediaExternalizingCallbackTest {
     }
 
     @Test
+    void mcpImageBlock_storePutFails_degradesToPlaceholder_noBase64Leak(@TempDir Path root) throws Exception {
+        // artifactsDir 的父段是个普通文件 -> Files.createDirectories 必炸 IOException -> store.put 抛 IllegalStateException
+        Path blocker = root.resolve("blocker.txt");
+        Files.writeString(blocker, "not a directory");
+        Path unwritableArtifactsDir = blocker.resolve("artifacts");
+        MediaArtifactStore brokenStore = new MediaArtifactStore(unwritableArtifactsDir, root);
+
+        String b64 = Base64.getEncoder().encodeToString(png());
+        String mcpOut = "[{\"type\":\"text\",\"text\":\"Took a screenshot\"},"
+                + "{\"type\":\"image\",\"data\":\"" + b64 + "\",\"mimeType\":\"image/png\"}]";
+        ToolCallback d = new ToolCallback() {
+            @Override public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("browser_screenshot").description("d").inputSchema("{}").build();
+            }
+            @Override public String call(String in) { return call(in, null); }
+            @Override public String call(String in, ToolContext ctx) { return mcpOut; }
+        };
+        String result = new MediaExternalizingCallback(d, brokenStore, new TextReferenceMediaHandler(), root)
+                .call("{}", null);
+
+        assertFalse(result.contains(b64), "store.put 失败也绝不得泄露 base64");
+        assertTrue(result.contains("Took a screenshot"), "text 块仍保留");
+        assertTrue(result.contains("failed"), "失败块须降级为占位文案");
+    }
+
+    @Test
     void capabilitiesInContext_imageTrue_stillReferenceOnly_noInjector(@TempDir Path root) {
         String b64 = java.util.Base64.getEncoder().encodeToString(png());
         String mcpOut = "[{\"type\":\"image\",\"data\":\"" + b64 + "\",\"mimeType\":\"image/png\"}]";

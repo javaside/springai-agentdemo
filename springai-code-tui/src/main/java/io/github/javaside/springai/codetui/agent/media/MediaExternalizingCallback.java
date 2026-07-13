@@ -60,8 +60,13 @@ public final class MediaExternalizingCallback implements ToolCallback {
             StringBuilder out = new StringBuilder();
             for (String t : p.textBlocks()) out.append(t).append('\n');
             for (McpMediaParser.MediaBlock mb : p.mediaBlocks()) {
-                MediaArtifact a = store.put(mb.bytes(), mb.declaredMimeType());
-                out.append(handler.represent(a, caps)).append('\n');
+                try {
+                    MediaArtifact a = store.put(mb.bytes(), mb.declaredMimeType());
+                    out.append(handler.represent(a, caps)).append('\n');
+                } catch (RuntimeException e) {
+                    log.warn("媒体块外置失败，已降级为占位（未泄露字节）：{}", e.toString());  // 不打印内容
+                    out.append("[media externalization failed; content omitted]").append('\n');
+                }
             }
             return out.toString().stripTrailing();
         }
