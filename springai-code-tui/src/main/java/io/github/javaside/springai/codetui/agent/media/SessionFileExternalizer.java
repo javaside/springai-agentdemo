@@ -130,7 +130,7 @@ public final class SessionFileExternalizer {
             MagicSniffer.Sniffed s = MagicSniffer.sniff(head);
             long size = Files.size(file);
             String sha = sha256Hex(file.toAbsolutePath().normalize().toString());
-            String rel = root.toAbsolutePath().normalize().relativize(file).toString();
+            String rel = PathContainment.relativeToRoot(file, root);
 
             if (s.kind() == MediaKind.BINARY && "application/octet-stream".equals(s.mimeType())) {
                 // 无已知魔数：当文本文件，标 text/plain + 行数。

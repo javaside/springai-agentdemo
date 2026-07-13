@@ -128,7 +128,7 @@ public final class MediaExternalizingCallback implements ToolCallback {
             String sha = sha256Hex(file.toAbsolutePath().normalize().toString());
             return new MediaArtifact(
                     sha, file,
-                    root.toAbsolutePath().normalize().relativize(file).toString(),
+                    PathContainment.relativeToRoot(file, root),
                     s.mimeType(), null, s.kind(), size,
                     dim.map(d -> d[0]).orElse(null), dim.map(d -> d[1]).orElse(null), null,
                     ArtifactSource.EXISTING_FILE, false);

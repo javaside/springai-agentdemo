@@ -59,4 +59,33 @@ class PathContainmentTest {
         assertNotNull(PathContainment.resolveInRoot(viaLink.toString(), real),
                 "经链路径的文件也应解析进真实 root");
     }
+
+    @Test
+    void relativeToRoot_inRoot_isCleanRelative(@TempDir Path root) throws Exception {
+        Path f = root.resolve("sub/shot.png");
+        Files.createDirectories(f.getParent());
+        Files.writeString(f, "x");
+        String rel = PathContainment.relativeToRoot(f, root);
+        assertEquals("sub/shot.png".replace('/', java.io.File.separatorChar), rel);
+        assertFalse(rel.startsWith(".."), "不得是跨越式相对路径");
+    }
+
+    /** root 带符号链接、file 已解链时，relativize 不能算出 `../../private/...`——两边解链后应得干净相对路径。 */
+    @Test
+    void relativeToRoot_symlinkedRoot_noEscape(@TempDir Path real) throws Exception {
+        Path realTarget = real.resolve("realdir");
+        Files.createDirectory(realTarget);
+        Path f = realTarget.resolve("shot.png");
+        Files.writeString(f, "x");
+        Path linkRoot = real.resolve("linkdir");
+        try {
+            Files.createSymbolicLink(linkRoot, realTarget);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            return;
+        }
+        // root 带链、file 给解链后的真实路径
+        String rel = PathContainment.relativeToRoot(f.toRealPath(), linkRoot);
+        assertEquals("shot.png", rel, "解链后应得干净相对名，而非 ../../ 跨越式路径");
+        assertFalse(rel.contains(".."), "不得含 ..");
+    }
 }

@@ -24,6 +24,15 @@ final class PathContainment {
         }
     }
 
+    /** 相对 root 的短路径（给模型看/可再 Read）。两边都<b>解符号链接</b>后 relativize，
+     *  避免 root 带链（/tmp）而 file 已解链（/private/tmp）时算出 `../../private/tmp/...` 这种
+     *  跨越式路径。若仍越界（file 真的不在 root 下）→ 回退文件名，不泄漏绝对结构。 */
+    static String relativeToRoot(Path file, Path root) {
+        Path rf = real(file), rr = real(root);
+        if (rf.startsWith(rr)) return rr.relativize(rf).toString();
+        return rf.getFileName().toString();
+    }
+
     /** toRealPath 解符号链接；文件不存在等异常时回退 absolute+normalize（不解链，尽力而为）。 */
     private static Path real(Path p) {
         try {
