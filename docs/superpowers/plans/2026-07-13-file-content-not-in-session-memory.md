@@ -10,7 +10,7 @@
 
 **Architecture:** 两条外置路径共用一套 artifact/引用设施。①**媒体即时外置**：`MediaExternalizingCallback` 装饰每个工具（嵌在 `ToolEventCallback` 内层），检测 MCP 图像块/Read 二进制/通用二进制，当场换引用（字节从不进模型）。②**文本回合间外置**：`SessionFileExternalizer` 在 `CodingAgent.submit()` 开头（搭现有 sanitize 那趟）把过往回合携带文件全文的 `ToolResponseMessage` 换引用；本回合的读全程保留全文。能力开关 `ModelCapabilities`（现恒 `TEXT_ONLY`）+ 策略 `ToolResultMediaHandler` 是接视觉模型的两个扩展位。
 
-**Tech Stack:** Java 21、Spring AI 2.0（`ToolCallback`/`SessionEvent`/`ToolResponseMessage`）、Jackson 3（`tools.jackson.databind.ObjectMapper`）、JUnit 5（手写桩、无 mock 框架）、Maven 模块 `springai-code-tui`。
+**Tech Stack:** Java 17、Spring AI 2.0（`ToolCallback`/`SessionEvent`/`ToolResponseMessage`）、Jackson 3（`tools.jackson.databind.ObjectMapper`）、JUnit 5（手写桩、无 mock 框架）、Maven 模块 `springai-code-tui`。
 
 **Spec:** `docs/superpowers/specs/2026-07-13-capability-aware-media-externalization-design.md`
 
