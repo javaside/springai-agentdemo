@@ -7,6 +7,25 @@
 
 > 核心原则：**文件内容不驻留会话记忆**。会话历史里存的是引用（文件名/路径 + 元信息），不是字节/全文。内容只在「产生它的那一回合」出现在模型上下文里，回合结束后塌成引用；下次要用，模型重读。
 
+---
+
+## ⚠️ 实现修正（首版上线后据真实 session 修，务必先读）
+
+本文其余部分是**首版设计**，已按线上实测更正。若与代码冲突，**以代码 + 下表为准**。权威架构记忆见长期记忆 `file-content-not-in-session-memory`。
+
+| # | 首版设计（本文下方） | 真实情况 / 修正 |
+|---|---|---|
+| 1 | §5「S0 已核实：MCP 每块必带 `type` 判别符，检测以 `type` 为准」 | **错。** 真实 `@modelcontextprotocol/server-filesystem` 的 `read_media_file` 返回**无 `type`** 的块 `[{"data":..,"mimeType":"image/png"}]`。字节码只证明了 `SyncMcpToolCallback` 一条路径，不代表全体 server。`McpMediaParser` 已加兜底：**无 `type` 且 string `data`+非空 `mimeType` → 认作媒体**。教训：外部线格式以**真实抓包**为 ground truth，别信单条路径的字节码推断。 |
+| 2 | §5/§7「路径②超 **32KB 阈值**才外置文件读取」 | **违背总目标。** 小文件正文会长留会话。改为：**能反查到 in-root 文件 → 一律外置，不看大小**；仅非文件（Bash 长输出、无可反查路径）保留阈值。 |
+| 3 | 路径②引用一律标 `text/plain` | PNG 被误标 `kind:text`。改为**按文件魔数标真实 kind/mime**。 |
+| 4 | 路径①分支2先 `BinarySniff.looksBinary(返回串)` 才处理 | `Read` 把 PNG 读成 hexdump 文本（替换符仅~21%，判不出）→ 漏检。改为**先反查磁盘文件、按文件魔数判**：非文本就引用，与返回串长相无关；`BinarySniff` 降级为「无源二进制串」兜底。 |
+| 5 | 手写魔数白名单（PNG/JPEG/GIF/WebP/PDF/ZIP/MP4/WebM 8 种） | 漏判 tiff/ico/mp3/wav/gzip 等。已换 **Apache Tika（`tika-core` 3.3.1，零传递依赖 780KB，仅内容检测）**；`MagicSniffer` 对外 API 不变。 |
+| 6 | `EXISTING_FILE` 的 `id` 用 `"existing-"+hexHashCode` | 小 hashCode <16 字符致 `shortId().substring(0,16)` 抛异常 → guard 吞 → **原始字节回流**。改用**文件绝对路径的完整 SHA-256（64 hex）**。 |
+| 7 | 路径解析 `normalize()` + `startsWith(root)` | macOS `/tmp`→`/private/tmp` 符号链接致 in-root 文件被误判越界拒绝。抽 `PathContainment`，两边 `toRealPath()` 解链后再判；相对路径也解链后 `relativize` 避免 `../../` 跨越式。 |
+| 8 | 路径①MCP 分支 `store.put` 失败外层 `catch→return raw` | `raw` 仍含 base64 → 泄漏。改为**媒体块循环内逐块 try/catch**，失败出占位，绝不 return raw。 |
+
+（评审流程扎实但**输入的 MCP 契约是假的**，害得全部下游射偏；根因是手写带 `type` 的 fixture 骗过了所有单测。修复时所有回归用例改用**线上真实无 type 串**，并验证「修复前必红」。）
+
 ## 1. 背景与目标
 
 工具结果里的文件内容（chrome-devtools 截图 base64、`Read` 的文件全文/二进制、将来视频）被原样存进 `ToolResponseMessage.responseData`、**每轮随历史全量重发** → 撑爆上下文（DeepSeek 400 上下文超长 / OpenAI 中转 404）。根因见 `2026-07-12-tool-output-context-overflow.md`。

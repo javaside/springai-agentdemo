@@ -1,5 +1,7 @@
 # 文件内容不入会话记忆（媒体即时外置 + 文本回合间外置）Implementation Plan
 
+> **⚠️ 本计划已实现并上线，随后据真实 session 修了 8 处缺陷。** 下面 13 步是**首版计划原文**，其中若干 Task 的示例代码有 bug（假 MCP 契约、32KB 阈值、`existing-`+hashCode 伪 sha、手写魔数表、normalize 路径判断等）。**不要照抄本计划重新实现**——真实实现见代码，修正清单见 spec 顶部「⚠️ 实现修正」表与长期记忆 `file-content-not-in-session-memory`。本文保留作历史。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让任何文件的内容（图片/视频/二进制、大文本）都不再驻留会话记忆——会话历史只存紧凑引用，非视觉模型永不收到媒体字节。
