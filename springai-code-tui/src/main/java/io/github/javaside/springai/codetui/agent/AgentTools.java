@@ -1,5 +1,9 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
+import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
+import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;
+import io.github.javaside.springai.codetui.agent.media.ToolResultMediaHandler;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
 import org.springaicommunity.agent.tools.AutoMemoryTools;
 import org.springaicommunity.agent.tools.FileSystemTools;
@@ -213,10 +217,16 @@ public final class AgentTools {
         // 从而同时流入 decorated[]（主 agent）与 decoratedList（子 agent）。空列表则无副作用。
         all.addAll(mcpTools);
 
+        // 媒体外置（路径①）：装饰循环前构造一次 store + handler，供每个工具的装饰器共享。
+        MediaArtifactStore mediaStore =
+                new MediaArtifactStore(root.resolve(".codetui").resolve("artifacts"), root);
+        ToolResultMediaHandler mediaHandler = new TextReferenceMediaHandler();
+
         ToolCallback[] decorated = new ToolCallback[all.size()];
         ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
         for (int i = 0; i < all.size(); i++) {
-            decorated[i] = new ToolEventCallback(all.get(i), listener);
+            decorated[i] = new ToolEventCallback(
+                    new MediaExternalizingCallback(all.get(i), mediaStore, mediaHandler, root), listener);
             if (all.get(i) == reloadableSkill) {
                 decoratedSkillTool = decorated[i];   // 记住 Skill 代理装饰后的实例（供手动 /skill 复用）
             }
