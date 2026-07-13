@@ -23,6 +23,7 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
+import io.github.javaside.springai.codetui.agent.media.SessionFileExternalizer;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -69,6 +70,7 @@ public final class CodingAgent implements SubmitHandler {
     private final ReloadableSkillTool reloadableSkill;   // 可空：生产路径的可重载技能源（/reload 命令触发重扫）
     private final SessionRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel）
     private final SubagentRunner subagentRunner;   // 可空（测试桩）：取消回合时 shutdownNow 在飞并行子 agent + 供 busy 闸门查在飞数
+    private final SessionFileExternalizer fileExternalizer;   // 可空（测试桩）：路径②，submit 开头把过往大文本 tool 结果外置为引用
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -111,6 +113,7 @@ public final class CodingAgent implements SubmitHandler {
         this.reloadableSkill = null;   // 单-client 桩路径：无可重载源，skills() 用固定 skills、reloadSkills() 无操作
         this.sessionRepository = sessionRepository;
         this.subagentRunner = null;    // 单-client 桩路径：无子 agent 执行器
+        this.fileExternalizer = null;  // 单-client 桩路径：无路径②外置器
     }
 
     /**
@@ -130,13 +133,25 @@ public final class CodingAgent implements SubmitHandler {
                 tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, null);
     }
 
-    /** 多 provider 生产构造（全参）：{@code subagentRunner} 取消回合时拆在飞并行子 agent、并供 busy 闸门查在飞数（可空）；其余同上。 */
+    /** 向后兼容重载（无路径②外置器：测试桩用）。等价 fileExternalizer=null（submit 开头 no-op）。 */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
                        ToolCallback skillTool, SessionRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner, null);
+    }
+
+    /** 多 provider 生产构造（全参）：{@code fileExternalizer} 路径②回合间外置大文本 tool 结果（可空）；其余同上。 */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -151,6 +166,7 @@ public final class CodingAgent implements SubmitHandler {
         this.reloadableSkill = reloadableSkill;
         this.sessionRepository = sessionRepository;
         this.subagentRunner = subagentRunner;
+        this.fileExternalizer = fileExternalizer;
     }
 
     @Override
@@ -166,6 +182,7 @@ public final class CodingAgent implements SubmitHandler {
         // 活进程会话常驻内存永不重载 → 坏数据会一直发出去、每条请求都 400。这里在每个回合出站前再净化一次兜底，
         // 使 /continue 等后续请求自愈；会话本就干净时为 no-op（sanitize 返回同引用、不写回）。
         trimDanglingToolCalls();
+        externalizeSessionFiles();   // 路径②：回合间把过往文件全文换引用（搭 sanitize 那趟）
         listener.onTurnStarted(turnId);        // 同步：先锁定 acceptingTurnId，消除取消竞态
         listener.onUserMessage(turnId, text);  // UI 展示用户原文（注入只影响发给模型的文本）
         String effectiveText = injectSkill(text, skillName, turnId);
@@ -292,6 +309,19 @@ public final class CodingAgent implements SubmitHandler {
         List<SessionEvent> clean = SessionEvents.sanitize(events);         // 裁尾部悬空 tool_calls + 丢孤儿 tool 结果 + 折连续同角色
         if (clean != events) {   // sanitize 无改动时返回同一引用；引用不同即有裁剪/重建
             sessionRepository.replaceEvents(sid, List.copyOf(clean));
+        }
+    }
+
+    /** 路径②：submit 开头把过往回合里携带文件全文的 tool 结果外置为引用。无改动 no-op。 */
+    private void externalizeSessionFiles() {
+        if (fileExternalizer == null || sessionService == null || sessionRepository == null) {
+            return;
+        }
+        String sid = sessionId;
+        List<SessionEvent> events = sessionService.getEvents(sid);
+        List<SessionEvent> ext = fileExternalizer.externalize(events);
+        if (ext != events) {
+            sessionRepository.replaceEvents(sid, List.copyOf(ext));
         }
     }
 

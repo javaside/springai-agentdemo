@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
+import io.github.javaside.springai.codetui.agent.media.SessionFileExternalizer;
 import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;
 import io.github.javaside.springai.codetui.agent.media.ToolResultMediaHandler;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
@@ -221,6 +222,8 @@ public final class AgentTools {
         MediaArtifactStore mediaStore =
                 new MediaArtifactStore(root.resolve(".codetui").resolve("artifacts"), root);
         ToolResultMediaHandler mediaHandler = new TextReferenceMediaHandler();
+        // 媒体外置（路径②）：回合间（CodingAgent.submit 开头）把过往大文本 tool 结果换成引用，与路径①共用 store/root。
+        SessionFileExternalizer fileExternalizer = new SessionFileExternalizer(mediaStore, root);
 
         ToolCallback[] decorated = new ToolCallback[all.size()];
         ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
@@ -335,7 +338,7 @@ public final class AgentTools {
 
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
-                reloadableSkill, subagentRunner);
+                reloadableSkill, subagentRunner, fileExternalizer);
     }
 
     /** 向后兼容：无 MCP 工具（等价空列表）。现有测试与旧调用走这条。 */
@@ -369,6 +372,7 @@ public final class AgentTools {
      * @param skillTool           被 ToolEventCallback 装饰的 Skill 代理（供手动 /skill 复用）；始终非 null
      * @param reloadableSkill     可重载 Skill 代理（{@code /reload} 触发重扫 + {@code skills()} 实时数据源）
      * @param subagentRunner      子 agent 执行器；当前主要供测试观测「记忆工具不泄漏给子 agent」的边界（生产暂无消费方）
+     * @param fileExternalizer    路径②：回合间（{@code CodingAgent.submit} 开头）把过往大文本 tool 结果外置为引用，与路径①共用 store/root
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -379,7 +383,8 @@ public final class AgentTools {
                                List<SkillInfo> skills,
                                ToolCallback skillTool,
                                ReloadableSkillTool reloadableSkill,
-                               SubagentRunner subagentRunner) {
+                               SubagentRunner subagentRunner,
+                               SessionFileExternalizer fileExternalizer) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
