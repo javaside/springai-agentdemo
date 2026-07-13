@@ -12,8 +12,8 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 
 /** 路径①：装饰每个工具，把非文本内容（MCP 图像块/Read 二进制/通用二进制）当场换成引用，字节永不进模型。
  *  装在 ToolEventCallback 内层（保 CURRENT_TURN 与 reloadableSkill 身份判断不变）。
@@ -112,14 +112,24 @@ public final class MediaExternalizingCallback implements ToolCallback {
             MagicSniffer.Sniffed s = MagicSniffer.sniff(head);
             long size = Files.size(file);
             var dim = ImageDimensions.of(head);
+            String sha = sha256Hex(file.toAbsolutePath().normalize().toString());
             return new MediaArtifact(
-                    "existing-" + Integer.toHexString(file.hashCode()), file,
+                    sha, file,
                     root.toAbsolutePath().normalize().relativize(file).toString(),
                     s.mimeType(), null, s.kind(), size,
                     dim.map(d -> d[0]).orElse(null), dim.map(d -> d[1]).orElse(null), null,
                     ArtifactSource.EXISTING_FILE, false);
         } catch (RuntimeException | java.io.IOException e) {
             return null;
+        }
+    }
+
+    private static String sha256Hex(String s) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
         }
     }
 

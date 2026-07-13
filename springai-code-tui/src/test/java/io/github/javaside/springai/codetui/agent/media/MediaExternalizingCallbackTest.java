@@ -9,7 +9,7 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 
 import java.nio.file.*;
 import java.util.Base64;
-import java.util.Map;
+import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MediaExternalizingCallbackTest {
@@ -66,6 +66,20 @@ class MediaExternalizingCallbackTest {
         assertTrue(FileReference.isReference(result));
         assertTrue(result.contains("shot.png"), "引用应指原文件路径");
         assertFalse(result.contains("rubbish"), "乱码内容不得留在会话");
+    }
+
+    @Test
+    void readBinaryFile_shortIdWellFormed_noRawBytesLeak(@TempDir Path root) throws Exception {
+        Path img = root.resolve("shot2.png");
+        Files.write(img, png());
+        String toolInput = "{\"filePath\":\"" + img.toAbsolutePath() + "\"}";
+        String garbled = "\uFFFD\uFFFDPNG\u0000\u0000rubbish2";
+        String result = wrap(delegate("Read", garbled), root).call(toolInput, null);
+        assertTrue(FileReference.isReference(result));
+        assertTrue(result.contains("shot2.png"), "引用应指原文件路径");
+        assertFalse(result.contains("rubbish"), "乱码内容不得留在会话");
+        assertTrue(Pattern.compile("id: sha256:[0-9a-f]{16}").matcher(result).find(),
+                "shortId 必须是合法的 16 位十六进制，不得因越界异常回退");
     }
 
     @Test
