@@ -95,6 +95,59 @@ class SessionFileExternalizerTest {
                 "MATERIALIZED 应指向 artifact store 路径而非不存在的原路径");
     }
 
+    /** 修复核心①：能反查到 in-root 文件的读取结果，即便远小于 32KB 也必须外置
+     *  （用户约束「任何文件内容都不驻留会话记忆」）。修此前 8737 字符的 cat markdown 长留会话。 */
+    @Test
+    void smallFileRead_stillExternalized_noThreshold(@TempDir Path root) throws Exception {
+        Path file = root.resolve("notes.md");
+        String body = "# 标题\n" + "小正文行\n".repeat(50);   // 远小于 32KB
+        Files.writeString(file, body);
+        String sid = "s1";
+        List<SessionEvent> events = new java.util.ArrayList<>(List.of(
+                readCall(sid, "c1", file.toAbsolutePath().toString()),
+                readResult(sid, "c1", body)));
+
+        SessionFileExternalizer ext = new SessionFileExternalizer(
+                new MediaArtifactStore(root.resolve(".codetui/artifacts"), root), root);
+        List<SessionEvent> out = ext.externalize(events);
+
+        assertNotSame(events, out, "小文件读取也应被外置");
+        String ref = ((ToolResponseMessage) out.get(1).getMessage()).getResponses().get(0).responseData();
+        assertTrue(FileReference.isReference(ref));
+        assertTrue(ref.contains("notes.md"), "引用指原文件");
+        assertFalse(ref.contains("小正文行"), "文件正文不得留在会话");
+    }
+
+    /** 修复核心②：读取的是 PNG 文件 → 引用必须标 kind: image / image/png，不能一律 text/plain。
+     *  修此前 referenceExistingText 强标 text，正是 session 里两条 PNG 引用误标 kind:text 的主因。 */
+    @Test
+    void pngFileRead_referenceLabeledImage_notText(@TempDir Path root) throws Exception {
+        // 最小 PNG 头（含 IHDR 宽高 10x20），足够 MagicSniffer + ImageDimensions 识别
+        byte[] png = new byte[33];
+        int[] sig = {0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A};
+        for (int i = 0; i < 8; i++) png[i] = (byte) sig[i];
+        png[16]=0;png[17]=0;png[18]=0;png[19]=10; png[20]=0;png[21]=0;png[22]=0;png[23]=20;
+        Path file = root.resolve("shot.png");
+        Files.write(file, png);
+        // 模拟工具把二进制读成一段大文本（本测直接给一段 >0 的正文即可触发外置；关键看引用类型）
+        String sid = "s1";
+        String body = "PNG binary read as text placeholder body";
+        List<SessionEvent> events = new java.util.ArrayList<>(List.of(
+                readCall(sid, "c1", file.toAbsolutePath().toString()),
+                readResult(sid, "c1", body)));
+
+        SessionFileExternalizer ext = new SessionFileExternalizer(
+                new MediaArtifactStore(root.resolve(".codetui/artifacts"), root), root);
+        List<SessionEvent> out = ext.externalize(events);
+
+        String ref = ((ToolResponseMessage) out.get(1).getMessage()).getResponses().get(0).responseData();
+        assertTrue(FileReference.isReference(ref));
+        assertTrue(ref.contains("kind: image"), "PNG 应标 kind: image，实际:\n" + ref);
+        assertTrue(ref.contains("mime_type: image/png"), "PNG 应标 image/png，实际:\n" + ref);
+        assertTrue(ref.contains("dimensions: 10x20"), "应带宽高");
+        assertFalse(ref.contains("kind: text"), "不得误标 text");
+    }
+
     @Test
     void idempotent_secondRunNoOp(@TempDir Path root) throws Exception {
         Path file = root.resolve("Big.java");

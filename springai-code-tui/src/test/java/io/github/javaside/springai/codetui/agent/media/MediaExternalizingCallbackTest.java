@@ -44,6 +44,19 @@ class MediaExternalizingCallbackTest {
         assertTrue(result.contains("kind: image"));
     }
 
+    /** 真实 read_media_file 线格式：无 type，只有 data+mimeType（session 20260713T060836 抓到的形态）。
+     *  修此前 parser 认 type → mediaBlocks=0 → base64 当回合原样进模型。这是唯一真正复现线上 bug 的用例。 */
+    @Test
+    void realReadMediaFile_noType_externalized_noBase64Leak(@TempDir Path root) {
+        String b64 = Base64.getEncoder().encodeToString(png());
+        String mcpOut = "[{\"data\":\"" + b64 + "\",\"mimeType\":\"image/png\"}]";   // 无 type
+        String result = wrap(delegate("mcp__filesystem__read_media_file", mcpOut), root).call("{}", null);
+        assertFalse(result.contains(b64), "返回串绝不得含 base64——非视觉模型永不收到媒体字节");
+        assertTrue(FileReference.isReference(result));
+        assertTrue(result.contains("kind: image"), "应标 image，实际:\n" + result);
+        assertTrue(result.contains("mime_type: image/png"));
+    }
+
     @Test
     void plainText_passThrough(@TempDir Path root) {
         String out = "normal tool output\nline2";

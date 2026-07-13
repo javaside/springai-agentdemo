@@ -8,8 +8,12 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
-/** 解析 MCP 工具结果串（S0 核实：内容块 List 的 JSON 顶层数组，每块靠 type 判别符）。
- *  检测以 type 为准（image/audio/resource-blob = 媒体），不靠「碰巧含 data/mimeType」启发式。 */
+/** 解析 MCP 工具结果串（内容块 List 的 JSON 顶层数组）。
+ *  优先靠 type 判别符（image/audio/resource-blob = 媒体）；但真实 server（如
+ *  @modelcontextprotocol/server-filesystem 的 read_media_file）返回的块<b>不带 type</b>，
+ *  形如 {"data":"&lt;base64&gt;","mimeType":"image/png"}——对无 type 块用严格
+ *  「string data + 非空 mimeType」兜底认作媒体。带 type 时仍以 type 为准（type=text 即便
+ *  碰巧含 data/mimeType 也不当媒体），避免误判。 */
 public final class McpMediaParser {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -40,7 +44,14 @@ public final class McpMediaParser {
             if (!block.isObject()) continue;              // 标量元素（[1,2,3]）跳过
             JsonNode typeNode = block.get("type");
             String type = typeNode != null ? typeNode.asString() : null;
-            if ("text".equals(type)) {
+            if (type == null) {
+                // 无 type：真实 read_media_file 形态。严格兜底——必须 string data + 非空 mimeType 才当媒体。
+                JsonNode data = block.get("data");
+                String declared = mime(block);
+                if (data != null && data.isString() && declared != null && !declared.isBlank()) {
+                    addMedia(media, data, declared);
+                }
+            } else if ("text".equals(type)) {
                 JsonNode txt = block.get("text");
                 if (txt != null) texts.add(txt.asString());
             } else if ("image".equals(type) || "audio".equals(type)) {
@@ -49,7 +60,7 @@ public final class McpMediaParser {
                 JsonNode res = block.get("resource");
                 if (res != null && res.isObject()) addMedia(media, res.get("blob"), mime(res));
             }
-            // 未知 type：原样忽略（既不当媒体也不当文本）
+            // 已知但非媒体的 type（如 text 已处理）/ 其它未知 type：不当媒体
         }
         return new Parsed(true, media, texts);
     }

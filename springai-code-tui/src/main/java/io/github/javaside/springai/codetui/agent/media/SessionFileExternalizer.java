@@ -64,18 +64,29 @@ public final class SessionFileExternalizer {
     /** @return 新的 responseData（引用），或 null 表示不改。 */
     private String maybeExternalize(ToolResponseMessage.ToolResponse tr, String argsJson) {
         String data = tr.responseData();
-        if (data == null || data.length() < THRESHOLD) return null;   // 小结果不动
+        if (data == null || data.isEmpty()) return null;
         if (FileReference.isReference(data)) return null;              // 幂等：已是引用
 
+        // 能反查到 in-root 文件 → 这是一次「文件读取」，内容一律外置，<b>不看大小</b>
+        // （用户约束：任何文件内容都不驻留会话记忆）。引用按文件魔数标真实类型。
         Path original = resolvePath(argsJson);
         if (original != null) {
-            MediaArtifact a = referenceExistingText(original, data);
+            MediaArtifact a = referenceExistingFile(original, data);
             if (a != null) {
                 return FileReference.render(a, "reference_only",
                         "content externalized from session memory; re-read to view");
             }
+            // 文件在、但读头/取元信息失败：落 artifact 兜底（仍不看大小，绝不把文件正文留在会话）
+            return materialize(data);
         }
-        // 无源（Bash 长输出 / 路径不可解）→ 文本存 artifact；store.put IO 失败时保守降级，不炸掉整回合
+
+        // 非文件（Bash 长输出 / 路径不可解）：非文件输出保留大小门槛，避免把每条短命令结果也搬走
+        if (data.length() < THRESHOLD) return null;
+        return materialize(data);
+    }
+
+    /** 无源/兜底：把内容存进 artifact store（MATERIALIZED）。store.put IO 失败时保守降级，不炸掉整回合。 */
+    private String materialize(String data) {
         try {
             MediaArtifact a = store.put(data.getBytes(java.nio.charset.StandardCharsets.UTF_8), "text/plain");
             return FileReference.render(a, "reference_only",
@@ -113,18 +124,40 @@ public final class SessionFileExternalizer {
         }
     }
 
-    private MediaArtifact referenceExistingText(Path file, String data) {
+    /** 引用项目内既有文件（不复制、指原路径）。<b>按文件魔数标真实类型</b>：
+     *  PNG/JPEG/... → IMAGE/image_mime（附宽高）；MP4/WebM → VIDEO；PDF/ZIP/未知魔数 → BINARY；
+     *  无魔数（源码/纯文本）→ TEXT/text/plain（附行数）。修此前一律强标 text/plain 致 PNG 误标。 */
+    private MediaArtifact referenceExistingFile(Path file, String data) {
         try {
+            byte[] head = readHead(file, 64);
+            MagicSniffer.Sniffed s = MagicSniffer.sniff(head);
             long size = Files.size(file);
-            int lines = (int) data.chars().filter(c -> c == '\n').count() + 1;
             String sha = sha256Hex(file.toAbsolutePath().normalize().toString());
-            return new MediaArtifact(
-                    sha, file,
-                    root.toAbsolutePath().normalize().relativize(file).toString(),
-                    "text/plain", null, MediaKind.TEXT, size, null, null, lines,
+            String rel = root.toAbsolutePath().normalize().relativize(file).toString();
+
+            if (s.kind() == MediaKind.BINARY && "application/octet-stream".equals(s.mimeType())) {
+                // 无已知魔数：当文本文件，标 text/plain + 行数。
+                int lines = (int) data.chars().filter(c -> c == '\n').count() + 1;
+                return new MediaArtifact(sha, file, rel, "text/plain", null, MediaKind.TEXT,
+                        size, null, null, lines, ArtifactSource.EXISTING_FILE, false);
+            }
+            var dim = ImageDimensions.of(head);
+            return new MediaArtifact(sha, file, rel, s.mimeType(), null, s.kind(), size,
+                    dim.map(d -> d[0]).orElse(null), dim.map(d -> d[1]).orElse(null), null,
                     ArtifactSource.EXISTING_FILE, false);
-        } catch (Exception e) {
+        } catch (RuntimeException | java.io.IOException e) {
             return null;
+        }
+    }
+
+    private static byte[] readHead(Path file, int n) throws java.io.IOException {
+        try (var in = Files.newInputStream(file)) {
+            byte[] buf = new byte[n];
+            int read = in.readNBytes(buf, 0, n);
+            if (read == n) return buf;
+            byte[] head = new byte[read];
+            System.arraycopy(buf, 0, head, 0, read);
+            return head;
         }
     }
 
