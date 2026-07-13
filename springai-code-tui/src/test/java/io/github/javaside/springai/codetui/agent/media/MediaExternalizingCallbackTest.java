@@ -96,6 +96,39 @@ class MediaExternalizingCallbackTest {
                 "shortId 必须是合法的 16 位十六进制，不得因越界异常回退");
     }
 
+    /** 修复核心：Read 把 PNG 读成带行号的 hexdump 文本（替换符仅 ~21%，BinarySniff 判不出二进制），
+     *  但磁盘文件是 PNG。判据须看「磁盘文件按魔数是不是文本」，非文本 → 引用。这是线上真实漏检
+     *  （session 20260713T070248 的 75835 字符 Read 结果未被外置）。 */
+    @Test
+    void readPngAsHexdumpText_stillExternalizedAsImage(@TempDir Path root) throws Exception {
+        Path img = root.resolve("15_user_developer.png");
+        Files.write(img, png());
+        String toolInput = "{\"filePath\":\"" + img.toAbsolutePath() + "\"}";
+        // 模拟内置 Read 的 hexdump 文本：大部分可打印，替换符占比远低于 30%（BinarySniff 判不出）
+        StringBuilder hex = new StringBuilder("File: 15_user_developer.png\nShowing lines 1-3\n");
+        for (int i = 0; i < 500; i++) hex.append("     ").append(i).append("\t").append("IHDR data bytes here ").append('\n');
+        hex.append("�PNG marker\n");   // 个别替换符，占比 <1%
+        String hexdump = hex.toString();
+        assertFalse(BinarySniff.looksBinary(hexdump), "前提：这段 hexdump 文本 BinarySniff 判不出二进制");
+
+        String result = wrap(delegate("Read", hexdump), root).call(toolInput, null);
+        assertTrue(FileReference.isReference(result), "PNG 的 hexdump 必须被外置为引用");
+        assertTrue(result.contains("kind: image"), "应按磁盘魔数标 image，实际:\n" + result);
+        assertTrue(result.contains("mime_type: image/png"));
+        assertFalse(result.contains("IHDR data bytes here"), "hexdump 正文不得留在会话");
+    }
+
+    /** 修复核心：文本文件读取（磁盘文件无魔数）→ 这一回合原样放行（交路径②回合间处理），不被误当媒体。 */
+    @Test
+    void readTextFile_passThrough_notMislabeledMedia(@TempDir Path root) throws Exception {
+        Path src = root.resolve("Main.java");
+        Files.writeString(src, "public class Main {}\n");
+        String toolInput = "{\"filePath\":\"" + src.toAbsolutePath() + "\"}";
+        String body = "File: Main.java\npublic class Main {}\n";
+        String result = wrap(delegate("Read", body), root).call(toolInput, null);
+        assertEquals(body, result, "文本文件读取这一回合原样放行");
+    }
+
     @Test
     void delegateThrows_propagates(@TempDir Path root) {
         ToolCallback boom = new ToolCallback() {

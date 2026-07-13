@@ -71,18 +71,21 @@ public final class MediaExternalizingCallback implements ToolCallback {
             return out.toString().stripTrailing();
         }
 
-        // 2) 二进制工具结果（Read/Bash/其它）
-        if (BinarySniff.looksBinary(raw)) {
-            Path original = resolveReadPath(toolInput);
-            if (original != null) {
-                MediaArtifact a = referenceExistingFile(original);
-                if (a != null) return handler.represent(a, caps);
-            }
-            // 无磁盘原件 / 路径不可解：绝不造伪文件，只留告示
-            return "[Read 返回疑似二进制内容，已从会话移除；无法恢复原始字节]";
+        // 2) 文件读取：能反查到磁盘真实文件，且文件本身非文本（按魔数）→ 引用。
+        //    判据看「磁盘文件是不是文本」，不看返回串像不像二进制——Read 把 PNG 读成
+        //    带行号的 hexdump 文本（替换符仅 ~21%），BinarySniff 判不出，但它读的就是图片。
+        Path original = resolveReadPath(toolInput);
+        if (original != null && !isTextFile(original)) {
+            MediaArtifact a = referenceExistingFile(original);
+            if (a != null) return handler.represent(a, caps);
         }
 
-        // 3) 普通文本：原样放行（大文本由路径②在回合间处理）
+        // 3) 无源的疑似二进制串（如某些 Bash 二进制输出，无可反查文件）→ 兜底告示，绝不造伪文件。
+        if (original == null && BinarySniff.looksBinary(raw)) {
+            return "[工具返回疑似二进制内容，已从会话移除；无法恢复原始字节]";
+        }
+
+        // 4) 普通文本 / 文本文件读取：原样放行（文本文件由路径②在回合间换引用）。
         return raw;
     }
 
@@ -100,13 +103,18 @@ public final class MediaExternalizingCallback implements ToolCallback {
         } catch (RuntimeException e) {
             return null;
         }
+        return PathContainment.resolveInRoot(raw, root);
+    }
+
+    /** 按文件魔数判断是否文本：识别到已知媒体/二进制魔数 → 非文本；否则（含无魔数的源码/文本）→ 文本。 */
+    private static boolean isTextFile(Path file) {
         try {
-            Path p = Path.of(raw).toAbsolutePath().normalize();
-            Path rootNorm = root.toAbsolutePath().normalize();
-            if (!p.startsWith(rootNorm)) return null;   // 越界不处理
-            return Files.isRegularFile(p) ? p : null;
-        } catch (RuntimeException e) {
-            return null;
+            byte[] head = readHead(file, 64);
+            MagicSniffer.Sniffed s = MagicSniffer.sniff(head);
+            // 无已知魔数 → application/octet-stream → 当文本；识别出 image/video/pdf/zip 等 → 非文本。
+            return s.kind() == MediaKind.BINARY && "application/octet-stream".equals(s.mimeType());
+        } catch (RuntimeException | java.io.IOException e) {
+            return true;   // 读不到就别误判成媒体
         }
     }
 

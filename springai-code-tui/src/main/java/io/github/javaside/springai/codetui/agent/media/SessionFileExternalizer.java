@@ -115,10 +115,7 @@ public final class SessionFileExternalizer {
             if (f == null) f = n.get("file_path");
             if (f == null) f = n.get("path");
             if (f == null || !f.isString()) return null;
-            Path p = Path.of(f.asString()).toAbsolutePath().normalize();
-            Path rootNorm = root.toAbsolutePath().normalize();
-            if (!p.startsWith(rootNorm)) return null;
-            return Files.isRegularFile(p) ? p : null;
+            return PathContainment.resolveInRoot(f.asString(), root);   // 解符号链接后判包含
         } catch (RuntimeException e) {
             return null;
         }
