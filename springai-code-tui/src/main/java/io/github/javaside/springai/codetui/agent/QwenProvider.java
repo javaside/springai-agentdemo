@@ -58,16 +58,22 @@ public final class QwenProvider implements LlmProvider {
         }
         ChatModel m = chatModel;
         if (m == null) {
-            // 超时设在 SDK client 的 ClientOptions（见 OpenAiTimeouts）；千问 baseUrl 恒非空（/compatible-mode/v1）。
-            // async client 供主 agent 流式、sync client 供子 agent 阻塞——两个都带超时。
+            // 与智谱不同：千问不能直接用 OpenAIOkHttpClient.builder()——须在 HTTP 层插一个 SSE 归一化装饰器
+            // 修流式 tool_calls 空串 id 分片（见 QwenSseNormalizingHttpClient javadoc），而该 builder 不暴露
+            // httpClient 钩子，故走 ClientOptions + OpenAIClient(Async)Impl 手工装配（SDK 公开 API）。
+            // 超时同样两处都设：OkHttpClient（真正生效的 socket 超时）与 ClientOptions（SDK 记账）。
             com.openai.core.Timeout timeout = OpenAiTimeouts.of(TIMEOUTS);
-            var syncClient = com.openai.client.okhttp.OpenAIOkHttpClient.builder()
-                    .apiKey(apiKey).baseUrl(baseUrl).timeout(timeout).build();
-            var asyncClient = com.openai.client.okhttp.OpenAIOkHttpClientAsync.builder()
-                    .apiKey(apiKey).baseUrl(baseUrl).timeout(timeout).build();
+            com.openai.core.http.HttpClient http = new QwenSseNormalizingHttpClient(
+                    com.openai.client.okhttp.OkHttpClient.builder().timeout(timeout).build());
+            com.openai.core.ClientOptions options = com.openai.core.ClientOptions.builder()
+                    .httpClient(http)
+                    .apiKey(apiKey)
+                    .baseUrl(baseUrl)
+                    .timeout(timeout)
+                    .build();
             m = OpenAiChatModel.builder()
-                    .openAiClient(syncClient)
-                    .openAiClientAsync(asyncClient)
+                    .openAiClient(new com.openai.client.OpenAIClientImpl(options))
+                    .openAiClientAsync(new com.openai.client.OpenAIClientAsyncImpl(options))
                     .options(OpenAiChatOptions.builder().model(DEFAULT_MODEL).build())
                     .build();
             chatModel = m;
