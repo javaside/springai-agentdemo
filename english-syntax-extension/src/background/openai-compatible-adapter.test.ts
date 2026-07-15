@@ -147,6 +147,56 @@ describe("OpenAI-compatible chat completions adapter", () => {
     vi.useRealTimers();
   });
 
+  it("keeps caller cancellation when fetch rejects only after the later timeout callback", async () => {
+    vi.useFakeTimers();
+    let rejectFetch!: (reason: Error) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFetch = reject;
+        }),
+    );
+    const adapter = new OpenAiCompatibleAdapter({ fetch });
+    const caller = new AbortController();
+    const result = adapter.completeJson(profile, messages, schema, caller.signal);
+    const assertion = expect(result).rejects.toMatchObject({
+      code: "REQUEST_CANCELLED",
+      retryable: false,
+    });
+
+    caller.abort();
+    await vi.advanceTimersByTimeAsync(profile.timeoutMs);
+    rejectFetch(new DOMException("Aborted", "AbortError"));
+
+    await assertion;
+    vi.useRealTimers();
+  });
+
+  it("keeps timeout when caller cancellation happens after timeout wins", async () => {
+    vi.useFakeTimers();
+    let rejectFetch!: (reason: Error) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFetch = reject;
+        }),
+    );
+    const adapter = new OpenAiCompatibleAdapter({ fetch });
+    const caller = new AbortController();
+    const result = adapter.completeJson(profile, messages, schema, caller.signal);
+    const assertion = expect(result).rejects.toMatchObject({
+      code: "REQUEST_TIMEOUT",
+      retryable: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(profile.timeoutMs);
+    caller.abort();
+    rejectFetch(new DOMException("Aborted", "AbortError"));
+
+    await assertion;
+    vi.useRealTimers();
+  });
+
   it.each([
     ["malformed envelope", {}, "INVALID_MODEL_OUTPUT"],
     ["missing content", { choices: [{ message: {} }] }, "INVALID_MODEL_OUTPUT"],

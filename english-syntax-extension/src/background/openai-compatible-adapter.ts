@@ -124,12 +124,15 @@ export class OpenAiCompatibleAdapter {
     useSchema: boolean,
   ): Promise<unknown> {
     const controller = new AbortController();
-    let timedOut = false;
-    const onCallerAbort = () => controller.abort(callerSignal.reason);
+    let abortCause: "caller" | "timeout" | undefined;
+    const onCallerAbort = () => {
+      abortCause ??= "caller";
+      controller.abort(callerSignal.reason);
+    };
     callerSignal.addEventListener("abort", onCallerAbort, { once: true });
     if (callerSignal.aborted) onCallerAbort();
     const timeout = setTimeout(() => {
-      timedOut = true;
+      abortCause ??= "timeout";
       controller.abort(new DOMException("Request timed out", "TimeoutError"));
     }, profile.timeoutMs);
 
@@ -181,10 +184,10 @@ export class OpenAiCompatibleAdapter {
       if (error instanceof ModelRequestError || error instanceof UnsupportedResponseFormatError) {
         throw error;
       }
-      if (timedOut) {
+      if (abortCause === "timeout") {
         throw new ModelRequestError("REQUEST_TIMEOUT", "Model request timed out", true);
       }
-      if (callerSignal.aborted) {
+      if (abortCause === "caller") {
         throw new ModelRequestError("REQUEST_CANCELLED", "Model request was cancelled", false);
       }
       throw new ModelRequestError(
