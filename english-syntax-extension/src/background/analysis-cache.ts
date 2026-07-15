@@ -167,6 +167,14 @@ export class AnalysisCache {
     await this.put("detail", key, profileId, value);
   }
 
+  getCorrection<T>(key: string): Promise<T | undefined> {
+    return this.get<T>("correction", key);
+  }
+
+  async putCorrection<T>(key: string, profileId: string, value: T): Promise<void> {
+    await this.put("correction", key, profileId, value);
+  }
+
   async stats(): Promise<CacheStats> {
     const transaction = this.database.transaction(STORE_NAMES, "readonly");
     const done = transactionDone(transaction);

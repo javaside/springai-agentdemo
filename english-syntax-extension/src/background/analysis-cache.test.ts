@@ -88,6 +88,17 @@ describe("AnalysisCache", () => {
     });
   });
 
+  it("round-trips correction values through the isolated correction store", async () => {
+    const cache = await emptyCache();
+    const correctionValue = { sentenceId: "corrected-sentence", components: ["subject"] };
+
+    await cache.putCorrection("correction-key", "profile-a", correctionValue);
+
+    expect(await cache.getCorrection("correction-key")).toEqual(correctionValue);
+    expect(await cache.getCore("correction-key")).toBeUndefined();
+    expect(await cache.getDetail("correction-key")).toBeUndefined();
+  });
+
   it("updates read recency before evicting the least recently used known-size record", async () => {
     let timestamp = 0;
     const value = "x";
