@@ -24,19 +24,29 @@ export class BlockReplacement {
   #original: HTMLElement | null = null;
   #block: HTMLElement | null = null;
   #observer: MutationObserver | null = null;
+  #addedHiddenClass = false;
 
   get active(): boolean {
     return this.#original !== null && this.#block !== null;
   }
 
-  show(original: HTMLElement, block: HTMLElement): void {
+  show(original: HTMLElement, block: SyntaxLearningBlock): void {
+    if (!(block instanceof SyntaxLearningBlock)) {
+      throw new TypeError("BlockReplacement requires a SyntaxLearningBlock");
+    }
+    if (!block.isReadyToReplace()) {
+      return;
+    }
     this.restore();
     if (original.parentNode === null) {
       return;
     }
     ensureHideStyle(original.ownerDocument);
     original.after(block);
-    original.classList.add(BlockReplacement.hiddenClass);
+    this.#addedHiddenClass = !original.classList.contains(BlockReplacement.hiddenClass);
+    if (this.#addedHiddenClass) {
+      original.classList.add(BlockReplacement.hiddenClass);
+    }
     this.#original = original;
     this.#block = block;
     this.#observePageRemoval(original.ownerDocument);
@@ -59,10 +69,13 @@ export class BlockReplacement {
   restore(): void {
     this.#observer?.disconnect();
     this.#observer = null;
-    this.#original?.classList.remove(BlockReplacement.hiddenClass);
+    if (this.#addedHiddenClass) {
+      this.#original?.classList.remove(BlockReplacement.hiddenClass);
+    }
     this.#block?.remove();
     this.#original = null;
     this.#block = null;
+    this.#addedHiddenClass = false;
   }
 
   #observePageRemoval(document: Document): void {

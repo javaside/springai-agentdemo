@@ -34,6 +34,23 @@ describe("SyntaxLearningBlock", () => {
     document.body.replaceChildren();
   });
 
+  it("tracks a nonempty unique expected sentence set until every sentence resolves", () => {
+    const element = block();
+
+    expect(() => element.setExpectedSentenceIds([])).toThrow(/nonempty/u);
+    expect(() => element.setExpectedSentenceIds(["sentence-1", "sentence-1"])).toThrow(
+      /duplicate/u,
+    );
+    expect(element.isReadyToReplace()).toBe(false);
+
+    element.setExpectedSentenceIds(["sentence-1", "sentence-2"]);
+    element.renderCore(sentence, tokens, analysis);
+    expect(element.isReadyToReplace()).toBe(false);
+
+    element.renderFailure("sentence-2", "A failed original sentence.", "解析失败");
+    expect(element.isReadyToReplace()).toBe(true);
+  });
+
   it("renders role, underlined English, then component Chinese without a sentence translation", () => {
     const element = block();
     document.body.append(element);
@@ -117,6 +134,44 @@ describe("SyntaxLearningBlock", () => {
     expect(
       [...sentenceRow.querySelectorAll(".punctuation")].map((node) => node.textContent),
     ).toEqual(['"', ",", "."]);
+  });
+
+  it.each([
+    [
+      "overlapping ranges",
+      [
+        { startToken: 0, endToken: 1, role: GrammarRole.SUBJECT, translation: "学习者阅读" },
+        { startToken: 1, endToken: 3, role: GrammarRole.PREDICATE, translation: "阅读书籍" },
+      ],
+    ],
+    [
+      "out-of-order ranges",
+      [
+        { startToken: 2, endToken: 3, role: GrammarRole.OBJECT, translation: "书籍" },
+        { startToken: 0, endToken: 1, role: GrammarRole.SUBJECT, translation: "学习者阅读" },
+      ],
+    ],
+  ])("rejects %s atomically so punctuation cannot duplicate", (_description, components) => {
+    const element = block();
+    document.body.append(element);
+
+    expect(() => element.renderCore(sentence, tokens, { ...analysis, components })).toThrow(
+      /ordered and non-overlapping/u,
+    );
+    expect(element.shadowRoot!.querySelector(".sentence")).toBeNull();
+    expect(element.shadowRoot!.querySelector(".punctuation")).toBeNull();
+  });
+
+  it("rejects a sentence/token mismatch before changing an existing render", () => {
+    const element = block();
+    document.body.append(element);
+    element.renderCore(sentence, tokens, analysis);
+    const existing = element.shadowRoot!.querySelector(".sentence");
+
+    expect(() => element.renderCore("Different sentence.", tokens, analysis)).toThrow(
+      /sentence and tokens/u,
+    );
+    expect(element.shadowRoot!.querySelector(".sentence")).toBe(existing);
   });
 
   it("requests detail with sentence and focus IDs through a composed keyboard-accessible event", () => {

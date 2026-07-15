@@ -130,6 +130,8 @@ function eventDetail(sentenceId: string, focus: TokenRange): SyntaxFocusEventDet
 
 export class SyntaxLearningBlock extends HTMLElement {
   readonly #sentences: HTMLElement;
+  #expectedSentenceIds = new Set<string>();
+  #resolvedSentenceIds = new Set<string>();
 
   constructor() {
     super();
@@ -139,7 +141,30 @@ export class SyntaxLearningBlock extends HTMLElement {
     root.append(style, this.#sentences);
   }
 
+  setExpectedSentenceIds(ids: readonly string[]): void {
+    if (ids.length === 0) {
+      throw new Error("Expected sentence IDs must be nonempty");
+    }
+    const expected = new Set(ids);
+    if (expected.size !== ids.length) {
+      throw new Error("Expected sentence IDs must not contain duplicate IDs");
+    }
+    if ([...expected].some((id) => id.length === 0)) {
+      throw new Error("Expected sentence IDs must be nonempty strings");
+    }
+    this.#expectedSentenceIds = expected;
+    this.#resolvedSentenceIds = new Set();
+  }
+
+  isReadyToReplace(): boolean {
+    return (
+      this.#expectedSentenceIds.size > 0 &&
+      [...this.#expectedSentenceIds].every((id) => this.#resolvedSentenceIds.has(id))
+    );
+  }
+
   renderCore(sentence: string, tokens: readonly Token[], analysis: CoreAnalysis): void {
+    this.#validateCoreInput(sentence, tokens, analysis);
     this.#sentence(analysis.sentenceId)?.remove();
     const sentenceElement = createElement("section", "sentence");
     sentenceElement.dataset.sentenceId = analysis.sentenceId;
@@ -201,6 +226,7 @@ export class SyntaxLearningBlock extends HTMLElement {
     }
     this.#appendPunctuation(sentenceElement, tokens, nextToken, tokens.length - 1);
     this.#sentences.append(sentenceElement);
+    this.#resolvedSentenceIds.add(analysis.sentenceId);
   }
 
   setDetailLoading(sentenceId: string, focus: TokenRange): void {
@@ -235,6 +261,7 @@ export class SyntaxLearningBlock extends HTMLElement {
   }
 
   renderError(sentenceId: string, focus: TokenRange, message: string): void {
+    this.#assertExpected(sentenceId);
     const detail = this.#detailContainer(sentenceId, focus);
     detail.className = "detail detail-error";
     detail.removeAttribute("aria-busy");
@@ -251,9 +278,11 @@ export class SyntaxLearningBlock extends HTMLElement {
       );
     });
     detail.append(retry);
+    this.#resolvedSentenceIds.add(sentenceId);
   }
 
   renderFailure(sentenceId: string, sentence: string, message: string): void {
+    this.#assertExpected(sentenceId);
     this.#sentence(sentenceId)?.remove();
     const failure = createElement("section", "sentence-failure");
     failure.dataset.sentenceId = sentenceId;
@@ -274,6 +303,7 @@ export class SyntaxLearningBlock extends HTMLElement {
     });
     failure.append(retry);
     this.#sentences.append(failure);
+    this.#resolvedSentenceIds.add(sentenceId);
   }
 
   #sentence(sentenceId: string): HTMLElement | null {
@@ -296,6 +326,48 @@ export class SyntaxLearningBlock extends HTMLElement {
       if (token?.punctuation === true) {
         sentence.append(createElement("span", "punctuation", token.leadingWhitespace + token.text));
       }
+    }
+  }
+
+  #validateCoreInput(sentence: string, tokens: readonly Token[], analysis: CoreAnalysis): void {
+    this.#assertExpected(analysis.sentenceId);
+    let offset = 0;
+    let reconstructed = "";
+    for (const [index, token] of tokens.entries()) {
+      reconstructed += token.leadingWhitespace + token.text;
+      const expectedStart = offset + token.leadingWhitespace.length;
+      if (
+        token.id !== index ||
+        token.start !== expectedStart ||
+        token.end !== expectedStart + token.text.length
+      ) {
+        throw new Error("Original sentence and tokens do not match");
+      }
+      offset = token.end;
+    }
+    if (reconstructed !== sentence) {
+      throw new Error("Original sentence and tokens do not match");
+    }
+
+    let previousEnd = -1;
+    for (const component of analysis.components) {
+      if (
+        !Number.isInteger(component.startToken) ||
+        !Number.isInteger(component.endToken) ||
+        component.startToken < 0 ||
+        component.endToken < component.startToken ||
+        component.endToken >= tokens.length ||
+        component.startToken <= previousEnd
+      ) {
+        throw new Error("Core component ranges must be ordered and non-overlapping");
+      }
+      previousEnd = component.endToken;
+    }
+  }
+
+  #assertExpected(sentenceId: string): void {
+    if (this.#expectedSentenceIds.size > 0 && !this.#expectedSentenceIds.has(sentenceId)) {
+      throw new Error(`Unexpected sentence ID: ${sentenceId}`);
     }
   }
 
