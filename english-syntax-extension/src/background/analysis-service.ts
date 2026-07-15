@@ -12,7 +12,12 @@ import { createCoreCacheKey, createCorrectionCacheKey } from "./analysis-cache";
 import type { ModelProfile } from "./config-repository";
 import { ModelRequestError } from "./openai-compatible-adapter";
 import type { ChatMessage, JsonSchemaSpec } from "./openai-compatible-adapter";
-import { buildCorePrompt, buildDetailPrompt, buildRepairPrompt } from "./prompts";
+import {
+  buildCorePrompt,
+  buildDetailPrompt,
+  buildRepairPrompt,
+  CORE_OUTPUT_SHAPE,
+} from "./prompts";
 import type { ScheduledRequest, SchedulerPriority } from "./request-scheduler";
 
 export interface AnalysisCachePort {
@@ -288,6 +293,7 @@ function correctionPrompt(input: CorrectionInput): string {
   return [
     "Reanalyze the supplied sentence using the reader's correction feedback.",
     "Keep the sentence ID and Tokens unchanged. Return core-analysis JSON only.",
+    CORE_OUTPUT_SHAPE,
     `Sentence and Tokens:\n${JSON.stringify(input.sentence, null, 2)}`,
     `Previously verified core analysis:\n${JSON.stringify(input.core, null, 2)}`,
     `Reader feedback:\n${input.feedback}`,

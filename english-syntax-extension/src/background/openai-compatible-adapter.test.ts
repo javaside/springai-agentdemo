@@ -382,6 +382,31 @@ describe("syntax prompts", () => {
     expect(prompt).toMatch(/JSON only/i);
   });
 
+  it("spells out the exact output envelope so schema-free models cannot guess", () => {
+    // Compatibility mode sends no response_format, so the JSON shape must be
+    // stated in the prompt itself; a real model returned a top-level array
+    // and punctuation-only components without it.
+    const core = buildCorePrompt([sentence]);
+    expect(core).toContain('{"sentences":');
+    expect(core).toContain('"components":');
+    expect(core).toMatch(/not.*top-level.*array|never.*top-level.*array/i);
+    expect(core).toMatch(/never.*only punctuation|must not.*only punctuation/i);
+
+    const repair = buildRepairPrompt([sentence], [], {});
+    expect(repair).toContain('{"sentences":');
+
+    const verifiedCore = {
+      schemaVersion: 1 as const,
+      sentenceId: "s-1",
+      components: [],
+      modelProfileId: "profile-1",
+    };
+    const detail = buildDetailPrompt(sentence, verifiedCore, { startToken: 0, endToken: 1 });
+    expect(detail).toContain('"structures":');
+    expect(detail).toContain('"grammarPoints":');
+    expect(detail).toContain('"explanation":');
+  });
+
   it("keeps immutable sentence identity and tokens in repair instructions", () => {
     const prompt = buildRepairPrompt([sentence], [{ path: "sentences[0]", message: "gap" }], {
       broken: true,
