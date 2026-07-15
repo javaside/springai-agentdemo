@@ -1,13 +1,13 @@
 # springai-code-tui
 
-基于 Spring AI 2.0 的编码智能体 + [TamboUI](https://github.com/quanticc/tambo-ui)（`0.4.0`，纯 Java 原始 API）单栏终端界面的命令行编码助手。**多 provider**：按环境变量激活 DeepSeek / 智谱 GLM / Anthropic / OpenAI，`/model` 可运行时切换。
+基于 Spring AI 2.0 的编码智能体 + [TamboUI](https://github.com/quanticc/tambo-ui)（`0.4.0`，纯 Java 原始 API）单栏终端界面的命令行编码助手。**多 provider**：按环境变量激活 DeepSeek / 智谱 GLM / 通义千问 / Anthropic / OpenAI，`/model` 可运行时切换。
 
 > 说明：DeepSeek 旧模型名 `deepseek-chat` / `deepseek-reasoner` 将于 2026-07-24 15:59 UTC 停用（期间被透明路由到 V4-Flash），现役模型为 `deepseek-v4-flash`（非思考）与 `deepseek-v4-pro`（强推理）。
 
 ## 模块用途
 
 - 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、输入框、底部状态栏。
-- **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `ZhipuProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。智谱走 OpenAI 兼容通路（复用 `spring-ai-openai`，`ZHIPU_BASE_URL` 默认 `.../api/paas/v4`）。四家统一 read 超时（`CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300s）。
+- **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `ZhipuProvider` / `QwenProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。智谱与千问走 OpenAI 兼容通路（复用 `spring-ai-openai`，`ZHIPU_BASE_URL` 默认 `.../api/paas/v4`、`DASHSCOPE_BASE_URL` 默认 `.../compatible-mode/v1`）。五家统一 read 超时（`CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300s）。
 - 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task` 委派单个子 agent + `ParallelTasks` 并发派多个独立子 agent）、`AutoMemoryTools`（`Memory*` 六件套：跨会话长期记忆的读写/增删/改名，仅主 agent）。
 - **子 agent（Task / ParallelTasks）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`）。`Task` 委派单个子 agent 前台阻塞执行；`ParallelTasks` 一次并发派多个独立子 agent（有界线程池，`CODETUI_SUBAGENT_CONCURRENCY` 默认 4、范围 [1,32]；失败隔离、按序汇总）。内部工具活动带 taskId 内联嵌套显示。
 - **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
@@ -54,9 +54,10 @@ mvn -pl springai-code-tui -am package
 # 至少配置一个 provider 的 key（首个可用者激活；可同时配多个，用 /model 切换）
 export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役，默认 deepseek-v4-pro，另有 v4-flash 非思考款）
 # export ZHIPU_API_KEY=你的key           # 智谱 GLM（默认 glm-5.2，另有 glm-5.1/glm-5-turbo；OpenAI 兼容通路）
+# export DASHSCOPE_API_KEY=你的key       # 通义千问（默认 qwen3.7-max，另有 3.7-plus/3.6-flash/qwen3-coder-next；OpenAI 兼容通路）
 # export ANTHROPIC_API_KEY=你的key       # Anthropic（默认 claude-opus-4-8，另有 fable-5/sonnet-5/haiku-4-5）
 # export OPENAI_API_KEY=你的key          # OpenAI（默认 gpt-5.6-sol，另有 terra/luna）
-# 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ZHIPU_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
+# 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ZHIPU_BASE_URL / DASHSCOPE_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
 # 可选调优：CODETUI_LLM_READ_TIMEOUT_SECONDS（默认 300）、CODETUI_SUBAGENT_CONCURRENCY（默认 4）
 
 # 切到一个可以随意丢弃、且被版本控制干净纳管的目录再运行

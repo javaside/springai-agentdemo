@@ -83,12 +83,31 @@ class LlmProviderTest {
         assertThrows(IllegalStateException.class, p::chatModel);
     }
 
+    @Test
+    void qwen_withKey_availableAndOptionsCarryModel() {
+        QwenProvider p = new QwenProvider("fake-key");
+        assertEquals("qwen", p.id());
+        assertTrue(p.available());
+        assertEquals("qwen3.7-max", p.defaultModel());
+        assertFalse(p.models().isEmpty());
+        assertTrue(p.chatModel() != null);   // 复用 OpenAiChatModel：build() 从 options 派生 client，网络无关
+        assertEquals("qwen3-coder-next", p.options("qwen3-coder-next").getModel());
+    }
+
+    @Test
+    void qwen_withoutKey_isUnavailable() {
+        QwenProvider p = new QwenProvider(null);
+        assertFalse(p.available());
+        assertThrows(IllegalStateException.class, p::chatModel);
+    }
+
     /** 自定义 base-url：非空即覆盖，仍网络无关地建出 model。 */
     @Test
     void customBaseUrl_isAcceptedAndModelStillBuilds() {
         assertTrue(new DeepSeekProvider("fake-key", "https://proxy.example/ds").chatModel() != null);
         assertTrue(new AnthropicProvider("fake-key", "https://proxy.example/an").chatModel() != null);
         assertTrue(new OpenAiProvider("fake-key", "https://proxy.example/oa").chatModel() != null);
+        assertTrue(new QwenProvider("fake-key", "https://proxy.example/qw").chatModel() != null);
     }
 
     /** 空/null base-url：回落各家内置默认，仍能建出 model。 */
@@ -97,5 +116,6 @@ class LlmProviderTest {
         assertTrue(new DeepSeekProvider("fake-key", "   ").chatModel() != null);
         assertTrue(new AnthropicProvider("fake-key", null).chatModel() != null);
         assertTrue(new OpenAiProvider("fake-key", "").chatModel() != null);
+        assertTrue(new QwenProvider("fake-key", "").chatModel() != null);
     }
 }
