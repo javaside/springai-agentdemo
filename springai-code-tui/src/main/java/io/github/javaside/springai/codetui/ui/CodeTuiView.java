@@ -242,6 +242,13 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：构造一帧 UI 树（等价渲染线程每帧调用的 render）。用于回归「每帧构造子面板」类空指针。 */
     Element renderForTest() { return render(); }
 
+    /** 测试专用：读取输入框当前文本 / 光标（行、列），断言编辑快捷键的落点。 */
+    String inputTextForTest() { return inputState.text(); }
+    int cursorRowForTest() { return inputState.cursorRow(); }
+    int cursorColForTest() { return inputState.cursorCol(); }
+    /** 测试专用：预置输入文本（光标落到文末），免逐字符敲入。 */
+    void setInputForTest(String text) { inputState.setText(text); inputState.moveCursorToEnd(); }
+
     /** 终端列数；拿不到时退化为 80。 */
     private int terminalWidth() {
         try {
@@ -373,7 +380,9 @@ public final class CodeTuiView extends InlineApp {
      *   <li>Ctrl+C / quit → 退出；</li>
      *   <li>Esc / cancel → 取消当前回合（返回 HANDLED 以免 Esc 被路由器用去清焦点）；</li>
      *   <li>Enter（无 Shift/Alt）→ 提交并拦截，textArea 不再插入换行；</li>
-     *   <li>Shift/Alt+Enter → 放行（UNHANDLED），交给 textArea 插入换行（能否区分取决于终端）。</li>
+     *   <li>Shift/Alt+Enter → 放行（UNHANDLED），交给 textArea 插入换行（能否区分取决于终端）；</li>
+     *   <li>readline 编辑键（{@link #onEditShortcut}）：Ctrl+A/E 行首尾、Ctrl/Alt+←→ 与 Alt+B/F 按词跳、
+     *       Ctrl+W / Alt+Backspace 删上一词、Ctrl+U/K 删至行首/行尾。</li>
      * </ul>
      */
     private EventResult onInputKey(KeyEvent k) {
@@ -436,6 +445,15 @@ public final class CodeTuiView extends InlineApp {
             submitInput();
             return EventResult.HANDLED;   // 普通 Enter → 发送（不让编辑器当作换行）
         }
+        // readline 式编辑快捷键（长文本内快速移动/删除）。命中即拦截，并与「其余按键」同样复位
+        // 补全/回溯状态（HANDLED 提前返回走不到方法尾部的公共复位，这里补上）。
+        EventResult edit = onEditShortcut(k);
+        if (edit.isHandled()) {
+            slashDismissed = false;
+            slashIndex = 0;
+            histIndex = history.size();
+            return edit;
+        }
         // ↑ 在首行 → 回溯更早的历史；↓ 在末行 → 回溯更晚（越过最新恢复草稿）。非边界行则放行给编辑器移动光标。
         if (k.code() == KeyCode.UP && inputState.cursorRow() == 0) {
             EventResult r = recallPrev();
@@ -449,6 +467,116 @@ public final class CodeTuiView extends InlineApp {
         slashIndex = 0;
         histIndex = history.size();       // 非 ↑↓ 的按键（含左右移动/编辑）退出回溯态
         return EventResult.UNHANDLED;
+    }
+
+    /**
+     * readline 式编辑快捷键（bash/zsh 肌肉记忆，长文本内不必按住 ←→ 一格格挪）：
+     * <ul>
+     *   <li>Ctrl+A / Ctrl+E → 行首 / 行尾（终端吃掉了 Home/End 时的替身）；</li>
+     *   <li>Ctrl+← / Alt+← / Alt+B → 上一词词首；Ctrl+→ / Alt+→ / Alt+F → 下一词词尾；</li>
+     *   <li>Ctrl+W / Alt+Backspace → 删除光标前一个词；</li>
+     *   <li>Ctrl+U / Ctrl+K → 删到行首 / 删到行尾。</li>
+     * </ul>
+     * 词边界基于逻辑行 + Java code point（中文每字一个词元，见 {@link #prevWordStart}），软折行不影响语义。
+     * ⚠ 控制字节歧义：终端把 Ctrl+A..Z 发成字节 1..26，解析器映射为 CTRL+字母——其中 Ctrl+H/I/J/M
+     * 与 Backspace/Tab/Enter 字节相同、已被映射为独立 KeyCode，故本表只用不冲突的字母。未命中返回
+     * UNHANDLED，交回 {@link #onInputKey} 的后续分支与 textArea 兜底。
+     */
+    private EventResult onEditShortcut(KeyEvent k) {
+        boolean ctrl = k.hasCtrl(), alt = k.hasAlt();
+        if (ctrl && k.isChar('a')) { inputState.moveCursorToLineStart(); return EventResult.HANDLED; }
+        if (ctrl && k.isChar('e')) { inputState.moveCursorToLineEnd();   return EventResult.HANDLED; }
+        if ((ctrl || alt) && k.code() == KeyCode.LEFT)  { moveWordLeft();  return EventResult.HANDLED; }
+        if ((ctrl || alt) && k.code() == KeyCode.RIGHT) { moveWordRight(); return EventResult.HANDLED; }
+        if (alt && (k.isChar('b') || k.isChar('B'))) { moveWordLeft();  return EventResult.HANDLED; }
+        if (alt && (k.isChar('f') || k.isChar('F'))) { moveWordRight(); return EventResult.HANDLED; }
+        // Alt+Backspace 的两种到达形态都认：ESC+DEL 可能被解析成 ALT+char(127)，而非 ALT+BACKSPACE
+        if ((ctrl && k.isChar('w')) || (alt && (k.code() == KeyCode.BACKSPACE || k.isChar(127)))) { deleteWordBackward(); return EventResult.HANDLED; }
+        if (ctrl && k.isChar('u')) { deleteToLineStart(); return EventResult.HANDLED; }
+        if (ctrl && k.isChar('k')) { deleteToLineEnd();   return EventResult.HANDLED; }
+        return EventResult.UNHANDLED;
+    }
+
+    /** 光标移到上一词词首；已在行首则跨到上一行行尾（TextAreaState 无按词/整段删改 API，全部经既有单步原语组合实现）。 */
+    private void moveWordLeft() {
+        int cr = inputState.cursorRow(), cc = inputState.cursorCol();
+        if (cc == 0) { inputState.moveCursorLeft(); return; }         // 行首：借单步左移跨行到上一行行尾
+        int target = prevWordStart(inputState.getLine(cr), cc);
+        while (inputState.cursorCol() > target) inputState.moveCursorLeft();
+    }
+
+    /** 光标移到下一词词尾；已在行尾则跨到下一行行首。 */
+    private void moveWordRight() {
+        int cr = inputState.cursorRow(), cc = inputState.cursorCol();
+        String line = inputState.getLine(cr);
+        if (cc >= line.length()) { inputState.moveCursorRight(); return; }   // 行尾：单步右移跨行
+        int target = nextWordEnd(line, cc);
+        while (inputState.cursorCol() < target) inputState.moveCursorRight();
+    }
+
+    /** 删除光标前一个词（Ctrl+W，readline unix-word-rubout：空白为界，"-m" 这类带标点的词元整个删）；行首则退格并行。 */
+    private void deleteWordBackward() {
+        int cr = inputState.cursorRow(), cc = inputState.cursorCol();
+        if (cc == 0) { inputState.deleteBackward(); return; }
+        int target = prevWordStartForDelete(inputState.getLine(cr), cc);
+        while (inputState.cursorCol() > target) inputState.deleteBackward();
+    }
+
+    /** 删到行首（Ctrl+U）。行首无操作（不并行，同 readline unix-line-discard 语义按行为界）。 */
+    private void deleteToLineStart() {
+        while (inputState.cursorCol() > 0) inputState.deleteBackward();
+    }
+
+    /** 删到行尾（Ctrl+K）。行尾无操作（不吞换行，删完当前行内容为止）。 */
+    private void deleteToLineEnd() {
+        int cr = inputState.cursorRow();
+        while (inputState.cursorCol() < inputState.getLine(cr).length()) inputState.deleteForward();
+    }
+
+    /**
+     * 上一词词首（返回目标列，均为 char 下标）：先吃掉紧邻的空白/标点，再吃一段同类词元。
+     * 词元分两类：{@code 字母数字下划线} 连成一词；CJK 每个字符自成一词（中文无空格，
+     * 整段吞掉会退化成 Ctrl+U，按单字跳与主流终端/IDE 的 CJK 处理一致）。纯函数便于单测。
+     */
+    static int prevWordStart(String line, int col) {
+        int i = Math.min(col, line.length());
+        while (i > 0 && !isWordChar(line.codePointBefore(i))) i -= Character.charCount(line.codePointBefore(i));
+        if (i > 0 && isCjk(line.codePointBefore(i))) return i - Character.charCount(line.codePointBefore(i));
+        while (i > 0 && isWordChar(line.codePointBefore(i)) && !isCjk(line.codePointBefore(i)))
+            i -= Character.charCount(line.codePointBefore(i));
+        return i;
+    }
+
+    /** 下一词词尾（返回目标列）：先吃掉紧邻的空白/标点，再吃一段同类词元。CJK 按单字跳。 */
+    static int nextWordEnd(String line, int col) {
+        int i = Math.max(0, Math.min(col, line.length()));
+        while (i < line.length() && !isWordChar(line.codePointAt(i))) i += Character.charCount(line.codePointAt(i));
+        if (i < line.length() && isCjk(line.codePointAt(i))) return i + Character.charCount(line.codePointAt(i));
+        while (i < line.length() && isWordChar(line.codePointAt(i)) && !isCjk(line.codePointAt(i)))
+            i += Character.charCount(line.codePointAt(i));
+        return i;
+    }
+
+    /**
+     * Ctrl+W 的删除边界（readline unix-word-rubout 语义）：以<b>空白</b>为界——先吃空白、
+     * 再吃一段非空白（{@code "-m"}、{@code "a.b"} 这类带标点的词元整个删）。CJK 仍按单字删，
+     * 中文长句一记 Ctrl+W 清光太危险。与移动用的 {@link #prevWordStart}（字母数字为词）刻意不同。
+     */
+    static int prevWordStartForDelete(String line, int col) {
+        int i = Math.min(col, line.length());
+        while (i > 0 && Character.isWhitespace(line.codePointBefore(i))) i -= Character.charCount(line.codePointBefore(i));
+        if (i > 0 && isCjk(line.codePointBefore(i))) return i - Character.charCount(line.codePointBefore(i));
+        while (i > 0 && !Character.isWhitespace(line.codePointBefore(i)) && !isCjk(line.codePointBefore(i)))
+            i -= Character.charCount(line.codePointBefore(i));
+        return i;
+    }
+
+    private static boolean isWordChar(int cp) { return Character.isLetterOrDigit(cp) || cp == '_'; }
+
+    private static boolean isCjk(int cp) {
+        Character.UnicodeScript s = Character.UnicodeScript.of(cp);
+        return s == Character.UnicodeScript.HAN || s == Character.UnicodeScript.HIRAGANA
+                || s == Character.UnicodeScript.KATAKANA || s == Character.UnicodeScript.HANGUL;
     }
 
     /** ↑：回溯到更早的一条历史。历史为空则不拦截（UNHANDLED）。 */
@@ -904,6 +1032,7 @@ public final class CodeTuiView extends InlineApp {
         state.pushInfo("可用命令：");
         for (SlashCommand c : COMMANDS) state.pushInfo("  " + c.name() + "   " + c.desc());
         state.pushInfo("快捷键：Enter 发送 · \\+Enter 换行 · Esc 取消 · Ctrl+C 退出");
+        state.pushInfo("编辑：Ctrl+A/E 行首尾 · Ctrl/Alt+←→ 按词跳 · Ctrl+W 删前词 · Ctrl+U/K 删至行首/尾");
     }
 
     /** /reload：重扫两层技能目录后打一行结果 + 复用 {@link #printSkills} 展示最新清单（运行中增删 SKILL.md 即时生效，无需重启）。 */

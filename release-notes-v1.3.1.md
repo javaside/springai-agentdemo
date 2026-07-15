@@ -1,0 +1,88 @@
+# springai-agentdemo v1.3.1
+
+在 [v1.3.0](release-notes-v1.3.0.md) 基础上的**缺陷修复 + 体验改进版**（patch）。核心交付物仍是终端编码智能体 **`springai-code-tui`**。本版修复**子 agent 经代理网关时高概率「Error reading response」**的传输层问题，并为输入框补齐 **readline 式编辑快捷键**。无破坏性变更，建议所有 v1.3.0 用户升级。
+
+**下载物仍是两个自包含运行包（解压即用，无需构建）：**
+
+- `springai-code-tui-1.3.1-dist.tar.gz`（macOS / Linux 首选）
+- `springai-code-tui-1.3.1-dist.zip`（Windows 首选）
+
+两者内容一致：启动脚本（`bin/`）+ 主 jar + 全部运行期依赖（`lib/`）+ `LICENSE`/`NOTICE`/`README`。运行时界面版本标识为 **`v1.3.1`**。
+
+> 完整功能全景与⚠️安全声明见 [v1.3.0 发布说明](release-notes-v1.3.0.md) 与 [v1.0.0 发布说明](release-notes-v1.0.0.md)；本文只列出相对 v1.3.0 的变化。
+
+---
+
+## 🐛 修复
+
+### 子 agent 改走流式传输，修复网关坏窗口致「Error reading response」
+
+根因（curl 实测实锤）：代理网关的**非流式端点存在分钟级坏窗口**，期间几乎 100% 请求返回 HTTP 200 + 空 body（一轮实测 8/8 全空），SDK 在 2xx 上直接反序列化即抛异常；同一窗口内**流式端点持续正常**（主 agent 走 `.stream()` 全天稳定）。`call()` 级重试无论退避多久都穿不过分钟级窗口——必须换传输路径。
+
+- **流式桥接**：`RetryingChatModel` 把子 agent 的阻塞 `call()` 桥接到 `delegate.stream()`，用框架 `MessageAggregator` 聚合回单个 `ChatResponse`（`ToolCallingAdvisor` 流式路径同款聚合器，`tool_calls` 完整保留）。在 ChatModel 层桥接对上层工具循环透明，重试保持单次 LLM call 粒度、不丢已完成的工具迭代。
+- **空流守卫**：聚合结果无文本且无工具调用视同瞬态失败重试，穷尽后抛出，绝不把空串静默交回主 agent。
+- **重试降级为二道防线**：按类名后缀 `*InvalidDataException`（provider 中立）+ Jackson「No content to map」匹配；cause 链上有 Interrupted/Cancellation 绝不重试（Esc 取消要立即退出）。
+- **失败诊断不再丢根因**：子 agent 失败时摊平整条 cause 链回给主 agent 模型，笼统顶层文本不再吞掉唯一有诊断价值的信息。
+
+完整决策记录见 ADR [`subagent-streaming-bridge`](springai-code-tui/docs/adr/subagent-streaming-bridge.md)。
+
+## ✨ 改进
+
+### 输入框 readline 式编辑快捷键
+
+长文本内光标不再一格格挪：
+
+| 快捷键 | 作用 |
+| --- | --- |
+| `Ctrl+A` / `Ctrl+E` | 跳到行首 / 行尾 |
+| `Ctrl+←` `Alt+←` / `Ctrl+→` `Alt+→`，`Alt+B` / `Alt+F` | 按词左跳 / 右跳 |
+| `Ctrl+W` / `Alt+Backspace` | 删除前一个词 |
+| `Ctrl+U` / `Ctrl+K` | 删至行首 / 行尾（逻辑行为界） |
+
+设计要点：移动按字母数字为词（可停标点两侧），删除按 readline unix-word-rubout 空白为界（`"-m"` 整个删）；CJK 按单字跳/删；刻意避开 `Ctrl+H/I/J/M`（控制字节与 Backspace/Tab/Enter 相同、终端下不可区分）。已知限制与操作键表见 `springai-code-tui/README.md`；设计决策见 ADR [`inline-input-editing`](springai-code-tui/docs/adr/inline-input-editing.md)。
+
+---
+
+## 🔧 工程
+
+- 全模块版本号 1.3.0 → **1.3.1**。
+- 全量测试：`springai-code-tui` **413 用例通过**（新增流式桥接聚合 / 空流重试 / 取消不重试 / `getOptions()` 转发 / 词边界与端到端合成键等回归）；pty 实机冒烟 `edit_shortcut_smoke.py` 四条路径通过；`-Pdist` 产出 1.3.1 运行包。
+- 新增两篇 ADR：`subagent-streaming-bridge`、`inline-input-editing`。
+
+---
+
+## 📦 仓库模块
+
+| 模块 | 说明 |
+| --- | --- |
+| **springai-code-tui** ⭐ | 终端编码智能体（**本次发布的可下载运行物**）。 |
+| springai-core-demo | Spring AI 原始 API 教学。 |
+| springai-agent-demo | 智能体教学：工具调用、多步 agent、会话记忆等。 |
+| springai-boot-demo | Spring Boot 自动装配版对照。 |
+| springai-jline-demo | JLine 终端交互基础示例。 |
+
+> demo 模块请 clone 源码后 `mvn` 运行，见各模块 README；下载包只含 `springai-code-tui`。
+
+---
+
+## 🔐 校验（SHA-256）
+
+```
+00071ba1928665d1228faf81dcb4156adbeca3ac96777b3405e6754815e5593c  springai-code-tui-1.3.1-dist.tar.gz
+eaeb6f72a0d5eee8b4c4056a3837993b3642903950f9239fba66a6c8bbdf5aab  springai-code-tui-1.3.1-dist.zip
+```
+
+```bash
+shasum -a 256 -c <<'EOF'
+00071ba1928665d1228faf81dcb4156adbeca3ac96777b3405e6754815e5593c  springai-code-tui-1.3.1-dist.tar.gz
+eaeb6f72a0d5eee8b4c4056a3837993b3642903950f9239fba66a6c8bbdf5aab  springai-code-tui-1.3.1-dist.zip
+EOF
+```
+
+---
+
+## 📄 许可
+
+[Apache License 2.0](LICENSE)。发布包内随附 `LICENSE` 与 `NOTICE`（含所分发第三方库：Spring AI / Spring Boot / spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）。
+
+**环境**：JDK 17+，macOS / Linux / Windows。

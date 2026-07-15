@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.tool.ToolCallback;
@@ -32,6 +34,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 工具循环交给自动注册的 advisor。
  */
 public final class SubagentRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(SubagentRunner.class);
 
     private final ProviderRegistry registry;
     private final List<ToolCallback> tools;   // 已被 ToolEventCallback 装饰、带 root 边界的主 agent 工具列表
@@ -80,7 +84,9 @@ public final class SubagentRunner {
         try {
             // Spring AI 2.0：defaultTools 取代已废弃的 defaultToolCallbacks；工具调用 advisor 由 ChatClient 自动注册，
             // 不再显式挂（见类注释）。传 Object[]（每个元素是 ToolCallback）——与主 agent 的 defaultTools(toolsWithTask) 同构。
-            ChatClient client = ChatClient.builder(registry.active().chatModel())
+            // RetryingChatModel：子 agent 走阻塞 call()，代理网关会间歇性回 200+空 body（SDK 抛
+            // *InvalidDataException、自带重试不覆盖），在 ChatModel 层按 LLM call 粒度重试（见该类注释）。
+            ChatClient client = ChatClient.builder(RetryingChatModel.wrap(registry.active().chatModel()))
                     .defaultTools(filterTools(tools, spec).toArray())
                     .build();
             ChatOptions options = resolveOptions(spec);
@@ -98,8 +104,14 @@ public final class SubagentRunner {
             listener.onSubagentFinished(parentTurnId, taskId, finalText, true);
             return finalText;
         } catch (RuntimeException ex) {
-            listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + ex.getMessage(), false);
-            throw ex;
+            // 摊平 cause 链——SDK 常把根因（如 Jackson 的 end-of-input）包在笼统的
+            // "Error reading response" 里，只取顶层 message 会丢掉唯一有诊断价值的信息。
+            // 重抛换成带摊平文本的 SubagentFailedException：工具异常处理器回给模型的就是 getMessage()，
+            // 原样重抛模型只能看到笼统顶层文本。cause 保留原异常，日志有全栈。
+            log.error("子 agent 执行失败：spec={} taskId={} description={}", spec.name(), taskId, description, ex);
+            String detail = describe(ex);
+            listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + detail, false);
+            throw new SubagentFailedException(detail, ex);
         } finally {
             inFlight.decrementAndGet();   // 无论成功/失败/被中断（shutdownNow → interrupt → 网络调用抛出）都退出在飞
         }
@@ -139,6 +151,8 @@ public final class SubagentRunner {
                     try {
                         return run(d.spec(), d.prompt(), d.description(), parentTurnId);
                     } catch (RuntimeException ex) {
+                        // run() 已包成 SubagentFailedException（message=摊平文本），直接取 message 即可，
+                        // 再 describe 会把摊平文本和原 cause 链重复拼接。
                         return "失败：" + ex.getMessage();
                     }
                 });
@@ -149,7 +163,7 @@ public final class SubagentRunner {
                 try {
                     results.add(f.get());
                 } catch (Exception ex) {
-                    results.add("失败：" + ex.getMessage());
+                    results.add("失败：" + describe(ex));
                 }
             }
             return results;
@@ -193,6 +207,31 @@ public final class SubagentRunner {
             return spec.systemPrompt();
         }
         return spec.systemPrompt() + "\n\n" + projectInstructions;
+    }
+
+    /**
+     * 摊平异常 cause 链为一行诊断文本：{@code Msg ← CauseType: causeMsg ← ...}（去重相邻重复 message，
+     * 封顶 5 层防环）。给回主 agent 的失败文本用——SDK 顶层 message 往往是笼统的
+     * "Error reading response"，真正根因（Jackson end-of-input、连接被重置等）在 cause 里。纯函数，便于单测。
+     */
+    static String describe(Throwable ex) {
+        StringBuilder sb = new StringBuilder();
+        String prev = null;
+        Throwable t = ex;
+        for (int depth = 0; t != null && depth < 5; t = t.getCause(), depth++) {
+            String msg = t.getMessage() == null || t.getMessage().isBlank()
+                    ? t.getClass().getSimpleName()
+                    : t.getMessage();
+            if (msg.equals(prev)) {
+                continue;   // 相邻 wrapper 复读同一 message（如 CompletionException）——跳过不重复
+            }
+            if (sb.length() > 0) {
+                sb.append(" ← ").append(t.getClass().getSimpleName()).append(": ");
+            }
+            sb.append(msg);
+            prev = msg;
+        }
+        return sb.toString();
     }
 
     /** 测试钩子：子 agent 可见工具（未经 spec 过滤）的注册名——校验主 agent 独有工具（如记忆工具）不泄漏给子 agent。 */

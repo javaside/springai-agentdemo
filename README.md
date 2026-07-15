@@ -110,7 +110,7 @@ java -jar springai-core-demo/target/springai-core-demo.jar
 java -jar springai-agent-demo/target/springai-agent-demo.jar
 
 # 自动装配模块（Spring Boot，可执行 fat jar；也可用 mvn -pl springai-boot-demo spring-boot:run）
-java -jar springai-boot-demo/target/springai-boot-demo-1.3.0.jar
+java -jar springai-boot-demo/target/springai-boot-demo-1.3.1.jar
 
 # 终端基础示例（JLine 3）
 java -jar springai-jline-demo/target/springai-jline-demo.jar
