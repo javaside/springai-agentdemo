@@ -157,6 +157,43 @@ describe("Options page", () => {
     }
   });
 
+  it("shows the provider status and detail when the failure carries them", async () => {
+    const subject = dependencies({
+      testProfile: vi.fn(() =>
+        Promise.resolve({
+          success: false,
+          error: "NETWORK_ERROR" as ExtensionErrorCode,
+          status: 400,
+          detail: '{"error":{"message":"messages: field required"}}',
+        }),
+      ),
+    });
+    await createOptionsPage(root(), subject);
+    fillRequiredProfile();
+    document.querySelector<HTMLButtonElement>("[data-action='test-profile']")!.click();
+
+    await vi.waitFor(() => {
+      const text = document.querySelector("[data-connection-result]")?.textContent ?? "";
+      expect(text).toContain("HTTP 400");
+      expect(text).toContain("messages: field required");
+    });
+  });
+
+  it("explains that a saved API key is kept when the field is left empty", async () => {
+    const subject = dependencies();
+    await createOptionsPage(root(), subject);
+    const apiKey = inputByLabel("API Key");
+    expect(apiKey.placeholder).toContain("必填");
+    fillRequiredProfile();
+
+    document.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    await vi.waitFor(() => expect(subject.saveProfile).toHaveBeenCalledOnce());
+
+    expect(apiKey.value).toBe("");
+    expect(apiKey.placeholder).toContain("已保存");
+    expect(apiKey.placeholder).toContain("留空");
+  });
+
   it("offers the four cache limits and requires a button-triggered clear confirmation", async () => {
     const subject = dependencies({ confirm: vi.fn(() => false) });
     await createOptionsPage(root(), subject);

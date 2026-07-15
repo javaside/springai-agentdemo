@@ -72,7 +72,12 @@ function mapHttpError(status: number, retryAfter: string | null, body: string): 
   if (status === 401 || status === 403) {
     return new ModelRequestError("AUTH_FAILED", message, false, { status });
   }
-  if (status === 404) {
+  // Some providers (e.g. DeepSeek) reject an unknown model with 400 "Model
+  // Not Exist" instead of 404, so sniff the body as well.
+  if (
+    status === 404 ||
+    (status === 400 && /model[\s\S]{0,40}?(?:not exist|not found)/i.test(body))
+  ) {
     return new ModelRequestError("MODEL_NOT_FOUND", message, false, { status });
   }
   if (status === 429) {
@@ -200,10 +205,15 @@ export class OpenAiCompatibleAdapter {
       });
       const text = await response.text();
       if (!response.ok) {
+        // Providers phrase the rejection differently: "response_format is not
+        // supported", DeepSeek's serde error "response_format: unknown variant
+        // `json_schema`", etc. Any 4xx validation error that names the field
+        // is treated as a capability downgrade — the schema-free retry either
+        // succeeds or surfaces the real error.
         if (
           useSchema &&
-          response.status === 400 &&
-          /response[_ ]format[\s\S]*(?:not supported|unsupported)/i.test(text)
+          (response.status === 400 || response.status === 422) &&
+          /response[_ ]?format|json[_ ]?schema/i.test(text)
         ) {
           throw new UnsupportedResponseFormatError();
         }

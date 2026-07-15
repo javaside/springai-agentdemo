@@ -79,6 +79,69 @@ describe("OpenAI-compatible chat completions adapter", () => {
     expect(persistJsonSchemaSupport).toHaveBeenCalledWith("profile-1", "unsupported");
   });
 
+  it("treats a DeepSeek-style serde rejection of response_format as a capability downgrade", async () => {
+    // DeepSeek rejects json_schema with a Rust serde message that never says
+    // "not supported": Failed to deserialize the JSON body into the target
+    // type: response_format: unknown variant `json_schema`, expected `text`
+    // or `json_object`.
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        response(
+          '{"error":{"message":"Failed to deserialize the JSON body into the target type: ' +
+            "response_format: unknown variant `json_schema`, expected `text` or `json_object` " +
+            'at line 1 column 123","type":"invalid_request_error"}}',
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(completion('{"ok":true}'));
+    const persistJsonSchemaSupport = vi.fn().mockResolvedValue(undefined);
+    const adapter = new OpenAiCompatibleAdapter({ fetch, persistJsonSchemaSupport });
+
+    await expect(adapter.probeJsonCapability(profile, new AbortController().signal)).resolves.toBe(
+      "unsupported",
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(requestBody(fetch, 1)).not.toHaveProperty("response_format");
+    expect(persistJsonSchemaSupport).toHaveBeenCalledWith("profile-1", "unsupported");
+  });
+
+  it("maps a DeepSeek-style 400 Model Not Exist to MODEL_NOT_FOUND", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      response('{"error":{"message":"Model Not Exist","type":"invalid_request_error"}}', {
+        status: 400,
+      }),
+    );
+    const adapter = new OpenAiCompatibleAdapter({ fetch });
+
+    await expect(
+      adapter.completeJson(profile, messages, schema, new AbortController().signal),
+    ).rejects.toMatchObject({ code: "MODEL_NOT_FOUND" });
+  });
+
+  it("keeps an unrecognized 400 as a non-retryable NETWORK_ERROR carrying the status", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(
+        response('{"error":{"message":"messages: field required"}}', { status: 400 }),
+      );
+    const adapter = new OpenAiCompatibleAdapter({ fetch });
+
+    await expect(
+      adapter.completeJson(
+        { ...profile, jsonSchemaSupport: "unsupported" },
+        messages,
+        schema,
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+      retryable: false,
+      details: { status: 400 },
+    });
+  });
+
   it("invokes the default global fetch with the correct receiver", async () => {
     const call = new Response(
       JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }),

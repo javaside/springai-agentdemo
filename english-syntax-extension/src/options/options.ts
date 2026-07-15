@@ -21,6 +21,10 @@ export interface ProfileTestResult {
   success: boolean;
   jsonSchemaSupport?: "supported" | "unsupported";
   error?: ExtensionErrorCode;
+  /** HTTP status returned by the provider, when the failure carried one. */
+  status?: number;
+  /** Short provider error detail for display; never contains credentials. */
+  detail?: string;
 }
 
 export interface OptionsDependencies {
@@ -72,19 +76,28 @@ function connectionMessage(result: ProfileTestResult): string {
       ? "连接成功，但模型不支持 JSON Schema；分析时将使用兼容模式。"
       : "连接成功，模型支持 JSON Schema。";
   }
+  const providerDetail = (): string => {
+    const parts = [
+      ...(result.status === undefined ? [] : [`HTTP ${result.status}`]),
+      ...(result.detail === undefined ? [] : [result.detail.slice(0, 200)]),
+    ];
+    return parts.length === 0 ? "" : `（${parts.join("：")}）`;
+  };
   switch (result.error) {
     case "HOST_PERMISSION_DENIED":
       return "未获得模型地址访问权限，请允许后重试。";
     case "AUTH_FAILED":
       return "鉴权失败，请检查 API Key。";
     case "MODEL_NOT_FOUND":
-      return "未找到指定模型，请检查 Model 名称。";
+      return `未找到指定模型，请检查 Model 名称。${providerDetail()}`;
     case "INVALID_MODEL_OUTPUT":
       return "模型未能返回有效 JSON，请更换模型或兼容服务。";
     case "REQUEST_TIMEOUT":
       return "连接超时，请检查地址或增大超时时间。";
     default:
-      return "网络连接失败，请检查 Base URL 和网络。";
+      return result.status === undefined
+        ? `网络连接失败，请检查 Base URL 和网络。${providerDetail()}`
+        : `服务返回错误${providerDetail()}，请检查 Base URL、Model 和请求头。`;
   }
 }
 
@@ -133,6 +146,11 @@ export async function createOptionsPage(
   baseUrlInput.placeholder = "https://api.example.com/v1";
   const apiKeyInput = input("options-api-key", "password");
   apiKeyInput.autocomplete = "off";
+  // The key is never redisplayed after saving; the placeholder explains that
+  // leaving the field empty keeps the stored key.
+  const API_KEY_REQUIRED_HINT = "必填";
+  const API_KEY_SAVED_HINT = "已保存（出于安全不回显），留空表示沿用原 Key";
+  apiKeyInput.placeholder = API_KEY_REQUIRED_HINT;
   const modelInput = input("options-model");
   modelInput.required = true;
   const timeoutInput = input("options-timeout", "number");
@@ -285,6 +303,7 @@ export async function createOptionsPage(
   const loadProfile = async (profileId: string): Promise<void> => {
     idInput.value = profileId;
     apiKeyInput.value = "";
+    apiKeyInput.placeholder = profileId === "" ? API_KEY_REQUIRED_HINT : API_KEY_SAVED_HINT;
     headerRows.textContent = "";
     if (profileId === "") {
       nameInput.value = "";
@@ -320,6 +339,7 @@ export async function createOptionsPage(
         await dependencies.saveProfile(profile);
         idInput.value = profile.id;
         apiKeyInput.value = "";
+        apiKeyInput.placeholder = API_KEY_SAVED_HINT;
         result.textContent = "配置已保存。";
         await loadProfiles(profile.id);
       } catch {
@@ -342,6 +362,7 @@ export async function createOptionsPage(
         await dependencies.saveProfile(profile);
         idInput.value = profile.id;
         apiKeyInput.value = "";
+        apiKeyInput.placeholder = API_KEY_SAVED_HINT;
         result.textContent = connectionMessage(await dependencies.testProfile(profile.id));
         await loadProfiles(profile.id);
       } catch {
@@ -387,12 +408,15 @@ function runtimeDependencies(): OptionsDependencies {
         profileId,
       });
       if (response.type === "PROFILE_TEST_RESULT") {
+        const details = response.error?.details;
         return {
           success: response.success,
           ...(response.error === undefined ? {} : { error: response.error.code }),
           ...(response.jsonSchemaSupport === undefined
             ? {}
             : { jsonSchemaSupport: response.jsonSchemaSupport }),
+          ...(typeof details?.status === "number" ? { status: details.status } : {}),
+          ...(typeof details?.detail === "string" ? { detail: details.detail } : {}),
         };
       }
       return {

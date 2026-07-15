@@ -14,7 +14,7 @@ import type { AnalysisModelWork, AnalysisService } from "./analysis-service";
 import { hostPermissionPattern } from "./base-url";
 import { ConfigRepository } from "./config-repository";
 import type { ModelProfile } from "./config-repository";
-import { OpenAiCompatibleAdapter } from "./openai-compatible-adapter";
+import { ModelRequestError, OpenAiCompatibleAdapter } from "./openai-compatible-adapter";
 import { RequestScheduler } from "./request-scheduler";
 
 const SELECTION_MENU_ID = "syntax-parse-selection";
@@ -526,6 +526,17 @@ export function registerServiceWorker(
           } catch (error) {
             const code = errorCode(error);
             if (code === "AUTH_FAILED") pauseProfile(profile);
+            // Surface the provider's status and message so the options page
+            // can show an actionable failure instead of a generic one.
+            const providerDetails =
+              error instanceof ModelRequestError
+                ? {
+                    ...(typeof error.details.status === "number"
+                      ? { status: error.details.status }
+                      : {}),
+                    detail: error.message.slice(0, 300),
+                  }
+                : undefined;
             return {
               version: MESSAGE_VERSION,
               requestId: request.requestId,
@@ -533,7 +544,7 @@ export function registerServiceWorker(
               profileId: request.profileId,
               success: false,
               latencyMs: Date.now() - startedAt,
-              error: errorResponse(request.requestId, code).error,
+              error: errorResponse(request.requestId, code, providerDetails).error,
             };
           }
         }
