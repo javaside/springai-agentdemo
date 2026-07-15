@@ -10,6 +10,10 @@ export function normalizeBaseUrl(baseUrl: string): string {
     throw new Error("Model base URL must not contain credentials");
   }
 
+  if (url.search || url.hash) {
+    throw new Error("Model base URL must not contain query strings or fragments");
+  }
+
   const isLocalHttp =
     url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
   if (url.protocol !== "https:" && !isLocalHttp) {

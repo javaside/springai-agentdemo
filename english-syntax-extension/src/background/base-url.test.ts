@@ -33,6 +33,22 @@ describe("model profile URL safety", () => {
     expect(() => normalizeBaseUrl("https://user:pass@example.com/v1")).toThrow("credentials");
   });
 
+  it.each([
+    "https://api.example.com/v1?tenant=syntax",
+    "https://api.example.com/v1/chat/completions?tenant=syntax",
+  ])("rejects a query string in model URL %s", (baseUrl) => {
+    expect(() => normalizeBaseUrl(baseUrl)).toThrow("query strings or fragments");
+    expect(() => chatCompletionsUrl(baseUrl)).toThrow("query strings or fragments");
+  });
+
+  it.each([
+    "https://api.example.com/v1#syntax",
+    "https://api.example.com/v1/chat/completions#syntax",
+  ])("rejects a fragment in model URL %s", (baseUrl) => {
+    expect(() => normalizeBaseUrl(baseUrl)).toThrow("query strings or fragments");
+    expect(() => chatCompletionsUrl(baseUrl)).toThrow("query strings or fragments");
+  });
+
   it("derives an exact-origin host permission", () => {
     expect(hostPermissionPattern("https://api.deepseek.com:8443/v1")).toBe(
       "https://api.deepseek.com:8443/*",
