@@ -1,4 +1,6 @@
 import type { ExtensionError } from "../shared/errors";
+import { ERROR_CODES } from "../shared/errors";
+import { GrammarRole } from "../shared/grammar";
 import { isRequestMessage } from "../shared/protocol";
 import type { RequestMessage, ResponseMessage, SessionStatus } from "../shared/protocol";
 import { MESSAGE_VERSION } from "../shared/versions";
@@ -52,26 +54,164 @@ function ack(request: RequestMessage): ResponseMessage {
   };
 }
 
-class ChromeRuntimeTransport implements RuntimeTransport {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isRange(
+  value: unknown,
+): value is Record<string, unknown> & { startToken: number; endToken: number } {
+  return (
+    isRecord(value) &&
+    isSafeInteger(value.startToken) &&
+    isSafeInteger(value.endToken) &&
+    value.startToken <= value.endToken
+  );
+}
+
+function isCoreAnalysis(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === 1 &&
+    typeof value.sentenceId === "string" &&
+    value.sentenceId.length > 0 &&
+    typeof value.modelProfileId === "string" &&
+    value.modelProfileId.length > 0 &&
+    Array.isArray(value.components) &&
+    value.components.every(
+      (component) =>
+        isRange(component) &&
+        typeof component.role === "string" &&
+        Object.values(GrammarRole).includes(component.role as GrammarRole) &&
+        typeof component.translation === "string",
+    )
+  );
+}
+
+function isDetailAnalysis(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.sentenceId === "string" &&
+    value.sentenceId.length > 0 &&
+    typeof value.modelProfileId === "string" &&
+    value.modelProfileId.length > 0 &&
+    isRange(value.focus) &&
+    Array.isArray(value.structures) &&
+    value.structures.every(
+      (structure) =>
+        isRange(structure) &&
+        isRecord(structure) &&
+        typeof structure.role === "string" &&
+        typeof structure.explanation === "string",
+    ) &&
+    Array.isArray(value.grammarPoints) &&
+    value.grammarPoints.every((point) => typeof point === "string") &&
+    typeof value.explanation === "string"
+  );
+}
+
+function isSessionStatus(value: unknown): value is SessionStatus {
+  return (
+    isRecord(value) &&
+    (value.state === "stopped" || value.state === "running" || value.state === "paused") &&
+    isSafeInteger(value.discovered) &&
+    isSafeInteger(value.queued) &&
+    isSafeInteger(value.ready) &&
+    isSafeInteger(value.failed) &&
+    (value.profileId === undefined || typeof value.profileId === "string")
+  );
+}
+
+function isExtensionError(value: unknown): value is ExtensionError {
+  return (
+    isRecord(value) &&
+    typeof value.code === "string" &&
+    ERROR_CODES.includes(value.code as ExtensionError["code"]) &&
+    typeof value.message === "string" &&
+    typeof value.retryable === "boolean" &&
+    (value.details === undefined || isRecord(value.details))
+  );
+}
+
+export function isRuntimeResponse(value: unknown, requestId: string): value is ResponseMessage {
+  if (
+    !isRecord(value) ||
+    value.version !== MESSAGE_VERSION ||
+    value.requestId !== requestId ||
+    typeof value.type !== "string"
+  ) {
+    return false;
+  }
+  switch (value.type) {
+    case "ACK":
+      return typeof value.acknowledgedType === "string";
+    case "SESSION_STATUS":
+      return isSessionStatus(value.status);
+    case "CORE_RESULT":
+      return Array.isArray(value.analyses) && value.analyses.every(isCoreAnalysis);
+    case "DETAIL_RESULT":
+      return isDetailAnalysis(value.analysis);
+    case "CACHE_STATS":
+      return (
+        isRecord(value.stats) &&
+        isSafeInteger(value.stats.entries) &&
+        isSafeInteger(value.stats.estimatedBytes) &&
+        isSafeInteger(value.stats.limitBytes)
+      );
+    case "PROFILE_TEST_RESULT":
+      return (
+        typeof value.profileId === "string" &&
+        typeof value.success === "boolean" &&
+        (value.latencyMs === undefined || isSafeInteger(value.latencyMs)) &&
+        (value.error === undefined || isExtensionError(value.error))
+      );
+    case "ERROR":
+      return isExtensionError(value.error);
+    default:
+      return false;
+  }
+}
+
+interface RuntimeWatchdogPort {
+  onDisconnect: { addListener(listener: () => void): void };
+  disconnect(): void;
+}
+
+export interface ContentRuntimeApi {
+  connect(connectInfo: { name: string }): RuntimeWatchdogPort;
+  sendMessage(message: unknown): Promise<unknown>;
+}
+
+function chromeRuntimeApi(): ContentRuntimeApi {
+  return {
+    connect: (connectInfo) => chrome.runtime.connect(connectInfo),
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  };
+}
+
+export class ChromeRuntimeTransport implements RuntimeTransport {
   private requestCounter = 0;
+  private readonly disconnectHandlers = new Set<() => void>();
+  private watchdog?: RuntimeWatchdogPort;
 
   constructor(
     private readonly tabId: number,
     private readonly documentId: string,
-  ) {}
+    private readonly runtime: ContentRuntimeApi = chromeRuntimeApi(),
+  ) {
+    this.connectWatchdog();
+  }
 
   async send(message: RequestMessage): Promise<ResponseMessage> {
-    const response: unknown = await chrome.runtime.sendMessage(message);
-    if (
-      typeof response !== "object" ||
-      response === null ||
-      (response as { version?: unknown }).version !== MESSAGE_VERSION ||
-      (response as { requestId?: unknown }).requestId !== message.requestId ||
-      typeof (response as { type?: unknown }).type !== "string"
-    ) {
+    const response = await this.runtime.sendMessage(message);
+    if (!isRuntimeResponse(response, message.requestId)) {
       return invalidMessage(message.requestId);
     }
-    return response as ResponseMessage;
+    return response;
   }
 
   cancelDocument(): void {
@@ -82,7 +222,33 @@ class ChromeRuntimeTransport implements RuntimeTransport {
       tabId: this.tabId,
       documentId: this.documentId,
     };
-    void chrome.runtime.sendMessage(message).catch(() => undefined);
+    void this.runtime.sendMessage(message).catch(() => undefined);
+  }
+
+  onDisconnect(handler: () => void): () => void {
+    this.disconnectHandlers.add(handler);
+    return () => this.disconnectHandlers.delete(handler);
+  }
+
+  reconnect(): void {
+    this.connectWatchdog();
+  }
+
+  dispose(): void {
+    const watchdog = this.watchdog;
+    this.watchdog = undefined;
+    this.disconnectHandlers.clear();
+    watchdog?.disconnect();
+  }
+
+  private connectWatchdog(): void {
+    const watchdog = this.runtime.connect({ name: `syntax-learning:${this.documentId}` });
+    this.watchdog = watchdog;
+    watchdog.onDisconnect.addListener(() => {
+      if (this.watchdog !== watchdog) return;
+      this.watchdog = undefined;
+      for (const handler of this.disconnectHandlers) handler();
+    });
   }
 }
 
@@ -154,6 +320,7 @@ export class ContentScriptRouter {
       documentId,
       transport,
       onStatus: (status) => this.options.relayStatus?.(documentId, status),
+      requestFeedback: () => window.prompt("请描述需要纠正的语法解析；取消则重试详细解析"),
     });
     this.controllers.set(documentId, controller);
     return controller;

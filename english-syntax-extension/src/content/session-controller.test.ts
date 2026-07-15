@@ -5,6 +5,7 @@ import { GrammarRole } from "../shared/grammar";
 import type { CoreAnalysis, DetailAnalysis, Token } from "../shared/grammar";
 import type { RequestMessage, ResponseMessage } from "../shared/protocol";
 import type { CandidateBlock } from "./document-scanner";
+import { scanDocument } from "./document-scanner";
 import type {
   ControllerBlock,
   ControllerReplacement,
@@ -14,7 +15,7 @@ import type {
   ViewportPort,
 } from "./session-controller";
 import { SessionController } from "./session-controller";
-import { ContentScriptRouter } from "./content-script";
+import { ChromeRuntimeTransport, ContentScriptRouter, isRuntimeResponse } from "./content-script";
 
 class FakeLearningBlock implements ControllerBlock {
   expected: string[] = [];
@@ -57,9 +58,11 @@ class FakeReplacement implements ControllerReplacement {
   shows = 0;
   partialShows = 0;
   restores = 0;
+  originals: HTMLElement[] = [];
 
-  show(): void {
+  show(original: HTMLElement): void {
     this.shows += 1;
+    this.originals.push(original);
   }
 
   showPartialFailure(
@@ -68,6 +71,7 @@ class FakeReplacement implements ControllerReplacement {
     failures: readonly { sentenceId: string; sentence: string; message: string }[],
   ): void {
     this.partialShows += 1;
+    this.originals.push(_original);
     for (const failure of failures) {
       block.renderFailure(failure.sentenceId, failure.sentence, failure.message);
     }
@@ -106,6 +110,7 @@ class FakeTransport implements RuntimeTransport {
   sent: RequestMessage[] = [];
   cancelled: string[] = [];
   reconnects = 0;
+  disposals = 0;
   reconnectHandler?: () => void | Promise<void>;
   handler: (message: RequestMessage) => Promise<ResponseMessage>;
   private disconnectHandler?: () => void;
@@ -148,6 +153,10 @@ class FakeTransport implements RuntimeTransport {
 
   disconnect(): void {
     this.disconnectHandler?.();
+  }
+
+  dispose(): void {
+    this.disposals += 1;
   }
 }
 
@@ -294,6 +303,7 @@ describe("SessionController", () => {
 
     expect(subject.controller.status.state).toBe("stopped");
     expect(subject.transport.cancelled).toEqual([subject.controller.documentId]);
+    expect(subject.transport.disposals).toBe(1);
     expect(subject.replacements[0]!.restores).toBeGreaterThan(0);
     expect(subject.viewport.disconnected).toBe(true);
   });
@@ -327,7 +337,7 @@ describe("SessionController", () => {
   it("batches character-data mutations for 100 ms, restores stale output, and rescans only the changed block", async () => {
     vi.useFakeTimers();
     const scan = vi.fn((root: ParentNode) => {
-      const element = root === document ? document.querySelector("p") : root;
+      const element = root instanceof Element && root.matches("p") ? root : root.querySelector("p");
       return element instanceof Element
         ? [{ id: "block-1", element, text: element.textContent ?? "" }]
         : [];
@@ -345,7 +355,116 @@ describe("SessionController", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(subject.replacements[0]!.restores).toBeGreaterThan(0);
-    expect(scan).toHaveBeenCalledWith(element);
+    expect(scan).toHaveBeenCalledTimes(2);
+    expect(subject.viewport.observed.at(-1)!.element).toBe(element);
+    vi.useRealTimers();
+  });
+
+  it("re-discovers a changed block through the real document scanner integration", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML =
+      "<main><p>Readers understand complex sentences in changing documents.</p></main>";
+    let viewport!: FakeViewport;
+    const controller = new SessionController({
+      tabId: 9,
+      document,
+      transport: new FakeTransport(),
+      scan: scanDocument,
+      createSentenceId: ({ order }) => Promise.resolve(`real-sentence-${order + 1}`),
+      viewportFactory: (callback) => (viewport = new FakeViewport(callback)),
+      learningBlockFactory: () => new FakeLearningBlock(),
+      replacementFactory: () => new FakeReplacement(),
+    });
+    await controller.start();
+    expect(viewport.observed).toHaveLength(1);
+    const element = document.querySelector("p")!;
+
+    element.firstChild!.textContent =
+      "Readers now understand complex sentences in dynamically changing documents.";
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(viewport.observed).toHaveLength(2);
+    expect(viewport.observed[1]!.element).toBe(element);
+    vi.useRealTimers();
+  });
+
+  it("discovers a newly inserted safe block from a child-list mutation", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML =
+      "<main><p>Readers understand the first complex sentence in this document.</p></main>";
+    let viewport!: FakeViewport;
+    const controller = new SessionController({
+      tabId: 9,
+      document,
+      transport: new FakeTransport(),
+      scan: scanDocument,
+      createSentenceId: ({ blockId, order }) => Promise.resolve(`${blockId}-sentence-${order + 1}`),
+      viewportFactory: (callback) => (viewport = new FakeViewport(callback)),
+      learningBlockFactory: () => new FakeLearningBlock(),
+      replacementFactory: () => new FakeReplacement(),
+    });
+    await controller.start();
+    const added = document.createElement("p");
+    added.textContent = "Writers dynamically add another sufficiently long English sentence.";
+    document.querySelector("main")!.append(added);
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(viewport.observed.some(({ element }) => element === added)).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("promotes an inside-block child-list mutation before automatic rescanning", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML =
+      "<main><p>Readers understand complex sentences with nested inline content.</p></main>";
+    let viewport!: FakeViewport;
+    const controller = new SessionController({
+      tabId: 9,
+      document,
+      transport: new FakeTransport(),
+      scan: scanDocument,
+      createSentenceId: ({ order }) => Promise.resolve(`inside-sentence-${order + 1}`),
+      viewportFactory: (callback) => (viewport = new FakeViewport(callback)),
+      learningBlockFactory: () => new FakeLearningBlock(),
+      replacementFactory: () => new FakeReplacement(),
+    });
+    await controller.start();
+    const element = document.querySelector("p")!;
+    const inline = document.createElement("span");
+    inline.textContent = " Additional words remain eligible.";
+    element.append(inline);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(viewport.observed.filter((candidate) => candidate.element === element)).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it("promotes nested inline character mutations from the matched candidate block", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML =
+      "<main><p>Readers understand <span>deeply nested syntax content</span> in documents.</p></main>";
+    let viewport!: FakeViewport;
+    const controller = new SessionController({
+      tabId: 9,
+      document,
+      transport: new FakeTransport(),
+      scan: scanDocument,
+      createSentenceId: ({ order }) => Promise.resolve(`nested-sentence-${order + 1}`),
+      viewportFactory: (callback) => (viewport = new FakeViewport(callback)),
+      learningBlockFactory: () => new FakeLearningBlock(),
+      replacementFactory: () => new FakeReplacement(),
+    });
+    await controller.start();
+    const element = document.querySelector("p")!;
+    document.querySelector("span")!.firstChild!.textContent = "new deeply nested syntax content";
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(viewport.observed.filter((candidate) => candidate.element === element)).toHaveLength(2);
     vi.useRealTimers();
   });
 
@@ -446,6 +565,119 @@ describe("SessionController", () => {
     await vi.waitFor(() => expect(subject.transport.sent.length).toBeGreaterThanOrEqual(1));
   });
 
+  it("uses a dedicated safe anchor when first-use selection has no recoverable DOM target", async () => {
+    const subject = harness();
+
+    await subject.controller.parseSelection("Readers select this sentence safely.");
+    await vi.waitFor(() => expect(subject.transport.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(subject.replacements.at(-1)!.shows).toBe(1));
+
+    expect(subject.replacements.at(-1)!.originals[0]).not.toBe(document.body);
+  });
+
+  it("routes detail retry and explicit correction component events", async () => {
+    const subject = harness();
+    await startAndEmit(subject);
+
+    document.dispatchEvent(
+      new CustomEvent("syntax-reanalyze-request", {
+        detail: { sentenceId: "sentence-1", focus: { startToken: 0, endToken: 1 } },
+      }),
+    );
+    document.dispatchEvent(
+      new CustomEvent("syntax-correction-request", {
+        detail: { sentenceId: "sentence-1", feedback: "Readers is the subject." },
+      }),
+    );
+
+    await vi.waitFor(() => expect(subject.transport.sent).toHaveLength(3));
+    expect(subject.transport.sent[0]!.type).toBe("ANALYZE_CORE");
+    expect(subject.transport.sent.slice(1).map(({ type }) => type)).toEqual(
+      expect.arrayContaining(["ANALYZE_DETAIL", "REANALYZE_WITH_FEEDBACK"]),
+    );
+  });
+
+  it("collects production correction feedback from the retry interaction", async () => {
+    const subject = harness(undefined, undefined, {
+      requestFeedback: () => "Readers is the subject.",
+    });
+    await startAndEmit(subject);
+
+    document.dispatchEvent(
+      new CustomEvent("syntax-reanalyze-request", {
+        detail: { sentenceId: "sentence-1", focus: { startToken: 0, endToken: 1 } },
+      }),
+    );
+
+    await vi.waitFor(() => expect(subject.transport.sent).toHaveLength(2));
+    expect(subject.transport.sent[1]).toMatchObject({
+      type: "REANALYZE_WITH_FEEDBACK",
+      feedback: "Readers is the subject.",
+    });
+  });
+
+  it("retries a failed sentence as core analysis without requiring prior core", async () => {
+    const subject = harness(
+      undefined,
+      new FakeTransport((message) =>
+        Promise.resolve({
+          version: 1,
+          requestId: message.requestId,
+          type: "CORE_RESULT",
+          analyses: [],
+        }),
+      ),
+    );
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.failed).toBe(1));
+
+    document.dispatchEvent(
+      new CustomEvent("syntax-reanalyze-request", {
+        detail: { sentenceId: "sentence-1", focus: { startToken: 0, endToken: 0 } },
+      }),
+    );
+
+    await vi.waitFor(() => expect(subject.transport.sent).toHaveLength(2));
+    expect(subject.transport.sent[1]).toMatchObject({ type: "ANALYZE_CORE" });
+  });
+
+  it("keeps a detail response valid while unrelated page analysis starts", async () => {
+    const detailPending = deferred<ResponseMessage>();
+    const transport = new FakeTransport((message) =>
+      message.type === "ANALYZE_DETAIL"
+        ? detailPending.promise
+        : Promise.resolve({
+            version: 1,
+            requestId: message.requestId,
+            type: "CORE_RESULT",
+            analyses:
+              message.type === "ANALYZE_CORE"
+                ? message.sentences.map(({ sentenceId }) => core(sentenceId))
+                : [],
+          }),
+    );
+    const subject = harness(undefined, transport);
+    await startAndEmit(subject);
+    const detailPromise = subject.controller.requestDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 1 },
+    });
+    await vi.waitFor(() => expect(transport.sent.at(-1)!.type).toBe("ANALYZE_DETAIL"));
+    await subject.controller.parseSelection("Unrelated readers analyze another sentence.");
+    const detailRequest = transport.sent.find(({ type }) => type === "ANALYZE_DETAIL")!;
+
+    detailPending.resolve({
+      version: 1,
+      requestId: detailRequest.requestId,
+      type: "DETAIL_RESULT",
+      analysis: detail("sentence-1"),
+    });
+    await detailPromise;
+
+    expect(subject.learningBlocks[0]!.details).toEqual([detail("sentence-1")]);
+  });
+
   it("reconnects immediately and resubmits only unfinished sentences", async () => {
     vi.useFakeTimers();
     const pending = deferred<ResponseMessage>();
@@ -500,9 +732,96 @@ describe("SessionController", () => {
 
     expect(delays).toEqual([250, 500, 1_000]);
   });
+
+  it("does not resubmit disconnected work while paused", async () => {
+    const pending = deferred<ResponseMessage>();
+    const transport = new FakeTransport(() => pending.promise);
+    const subject = harness(undefined, transport);
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(transport.sent).toHaveLength(1));
+    subject.controller.pause();
+
+    transport.disconnect();
+    await vi.waitFor(() => expect(transport.reconnects).toBe(1));
+
+    expect(transport.sent).toHaveLength(1);
+  });
+
+  it("cancels scheduled reconnect attempts when stopped", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ResponseMessage>();
+    const transport = new FakeTransport(() => pending.promise);
+    transport.reconnectHandler = vi.fn(() => Promise.reject(new Error("starting")));
+    const subject = harness(undefined, transport);
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(transport.sent).toHaveLength(1));
+    transport.disconnect();
+    await vi.waitFor(() => expect(transport.reconnects).toBe(1));
+
+    subject.controller.stop();
+    await vi.runAllTimersAsync();
+
+    expect(transport.reconnects).toBe(1);
+    vi.useRealTimers();
+  });
 });
 
 describe("ContentScriptRouter", () => {
+  it("deeply rejects malformed runtime results instead of trusting their type string", () => {
+    expect(
+      isRuntimeResponse(
+        { version: 1, requestId: "request-1", type: "CORE_RESULT", analyses: null },
+        "request-1",
+      ),
+    ).toBe(false);
+    expect(
+      isRuntimeResponse(
+        {
+          version: 1,
+          requestId: "request-1",
+          type: "CORE_RESULT",
+          analyses: [core("sentence-1")],
+        },
+        "request-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a production Port watchdog and reconnects it after disconnect", () => {
+    const disconnectListeners: Array<() => void> = [];
+    const port = {
+      disconnect: vi.fn(),
+      onDisconnect: {
+        addListener: (listener: () => void) => disconnectListeners.push(listener),
+      },
+    };
+    const runtime = {
+      connect: vi.fn(() => port),
+      sendMessage: vi.fn(() =>
+        Promise.resolve({
+          version: 1,
+          requestId: "request-1",
+          type: "ACK",
+          acknowledgedType: "START_SESSION",
+        }),
+      ),
+    };
+    const transport = new ChromeRuntimeTransport(3, "document-1", runtime);
+    const disconnected = vi.fn();
+    transport.onDisconnect(disconnected);
+
+    disconnectListeners[0]!();
+    transport.reconnect();
+
+    expect(disconnected).toHaveBeenCalledOnce();
+    expect(runtime.connect).toHaveBeenCalledTimes(2);
+
+    transport.dispose();
+    expect(port.disconnect).toHaveBeenCalledOnce();
+  });
+
   it("rejects malformed inbound messages and reuses one controller per document ID", async () => {
     const start = vi.fn(() => Promise.resolve());
     const controller = {
@@ -517,7 +836,10 @@ describe("ContentScriptRouter", () => {
       switchProfile: vi.fn(),
     };
     const factory = vi.fn(() => controller);
-    const router = new ContentScriptRouter({ controllerFactory: factory });
+    const router = new ContentScriptRouter({
+      controllerFactory: factory,
+      transportFactory: () => new FakeTransport(),
+    });
 
     const malformed = await router.route({ type: "START_SESSION" });
     const valid = {

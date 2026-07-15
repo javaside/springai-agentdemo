@@ -56,6 +56,7 @@ export interface RuntimeTransport {
   cancelDocument(documentId: string): void;
   onDisconnect?(handler: () => void): () => void;
   reconnect?(): void | Promise<void>;
+  dispose?(): void;
 }
 
 interface SentenceRecord {
@@ -134,6 +135,11 @@ export class SessionController {
   private readonly pendingRequestIds = new Map<string, number>();
   private readonly pausedBlocks = new Set<string>();
   private readonly changedBlockIds = new Set<string>();
+  private readonly mutationRoots = new Set<ParentNode>();
+  private readonly ephemeralSelectionAnchors = new Set<HTMLElement>();
+  private readonly detailVersions = new Map<string, number>();
+  private readonly correctionVersions = new Map<string, number>();
+  private readonly reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
   private state: SessionStatus["state"] = "stopped";
   private requestCounter = 0;
   private operationVersion = 0;
@@ -180,6 +186,7 @@ export class SessionController {
     this.document.addEventListener("contextmenu", this.recordContextTarget, true);
     this.document.addEventListener("syntax-detail-request", this.handleDetailEvent);
     this.document.addEventListener("syntax-reanalyze-request", this.handleCorrectionEvent);
+    this.document.addEventListener("syntax-correction-request", this.handleExplicitCorrectionEvent);
     this.installMutationObserver();
     this.removeDisconnectListener = this.options.transport.onDisconnect?.(
       this.handleTransportDisconnect,
@@ -217,11 +224,22 @@ export class SessionController {
     this.mutationTimer = undefined;
     this.removeDisconnectListener?.();
     this.removeDisconnectListener = undefined;
+    this.options.transport.dispose?.();
     this.document.removeEventListener("contextmenu", this.recordContextTarget, true);
     this.document.removeEventListener("syntax-detail-request", this.handleDetailEvent);
     this.document.removeEventListener("syntax-reanalyze-request", this.handleCorrectionEvent);
+    this.document.removeEventListener(
+      "syntax-correction-request",
+      this.handleExplicitCorrectionEvent,
+    );
+    for (const timer of this.reconnectTimers) this.cancelTimeout(timer);
+    this.reconnectTimers.clear();
     for (const block of this.blocks.values()) block.replacement.restore();
+    for (const anchor of this.ephemeralSelectionAnchors) anchor.remove();
+    this.ephemeralSelectionAnchors.clear();
     this.pendingRequestIds.clear();
+    this.detailVersions.clear();
+    this.correctionVersions.clear();
     this.pausedBlocks.clear();
     this.contextTarget = null;
     this.emitStatus();
@@ -233,7 +251,7 @@ export class SessionController {
     if (this.state === "stopped") await this.start();
     const target = this.selectionTarget() ?? this.contextTarget;
     const candidate = nearestSafeBlock(target, { selection: true });
-    const element = candidate?.element ?? this.document.body;
+    const element = candidate?.element ?? this.createSelectionAnchor(text);
     const id = `selection-${++this.operationVersion}`;
     const selectionCandidate: CandidateBlock = { id, element, text };
     await this.registerCandidates([selectionCandidate]);
@@ -262,6 +280,8 @@ export class SessionController {
     }
     located.block.learningBlock.setDetailLoading(detail.sentenceId, detail.focus);
     const version = ++this.operationVersion;
+    const detailKey = `${detail.sentenceId}:${detail.focus.startToken}:${detail.focus.endToken}`;
+    this.detailVersions.set(detailKey, version);
     const request = this.pageRequest({
       type: "ANALYZE_DETAIL",
       sentence: located.sentence.input,
@@ -269,7 +289,8 @@ export class SessionController {
       focus: detail.focus,
     });
     const response = await this.send(request, version);
-    if (response === undefined || version !== this.operationVersion) return;
+    if (response === undefined || this.detailVersions.get(detailKey) !== version) return;
+    this.detailVersions.delete(detailKey);
     if (response.type === "DETAIL_RESULT" && response.analysis.sentenceId === detail.sentenceId) {
       located.block.learningBlock.renderDetail(response.analysis);
     } else {
@@ -292,6 +313,7 @@ export class SessionController {
       return;
     }
     const version = ++this.operationVersion;
+    this.correctionVersions.set(sentenceId, version);
     const request = this.pageRequest({
       type: "REANALYZE_WITH_FEEDBACK",
       sentence: located.sentence.input,
@@ -299,7 +321,8 @@ export class SessionController {
       feedback: feedback.trim(),
     });
     const response = await this.send(request, version);
-    if (response === undefined || version !== this.operationVersion) return;
+    if (response === undefined || this.correctionVersions.get(sentenceId) !== version) return;
+    this.correctionVersions.delete(sentenceId);
     if (response.type === "CORE_RESULT") {
       const corrected = response.analyses.find(({ sentenceId: id }) => id === sentenceId);
       if (corrected !== undefined) {
@@ -410,7 +433,7 @@ export class SessionController {
       sentences: outgoing.map(({ input }) => input),
     });
     const response = await this.send(request, version);
-    if (response === undefined || block.operationVersion !== version || this.state === "stopped") {
+    if (response === undefined || block.operationVersion !== version || this.isStopped()) {
       return;
     }
     for (const sentence of outgoing) this.transition(sentence, "validating");
@@ -509,6 +532,15 @@ export class SessionController {
     return selection?.anchorNode ?? null;
   }
 
+  private createSelectionAnchor(text: string): HTMLElement {
+    const anchor = this.document.createElement("span");
+    anchor.dataset.syntaxLearningSelectionAnchor = "true";
+    anchor.textContent = text;
+    this.document.body.append(anchor);
+    this.ephemeralSelectionAnchors.add(anchor);
+    return anchor;
+  }
+
   private readonly recordContextTarget = (event: Event): void => {
     if (this.state !== "stopped") this.contextTarget = event.target;
   };
@@ -521,12 +553,62 @@ export class SessionController {
   private readonly handleCorrectionEvent = (event: Event): void => {
     if (!(event instanceof CustomEvent)) return;
     const detail = event.detail as SyntaxFocusEventDetail;
-    void Promise.resolve(this.options.requestFeedback?.(detail.sentenceId) ?? null).then(
-      (feedback) => {
-        if (feedback !== null) void this.submitCorrection(detail.sentenceId, feedback);
-      },
-    );
+    const located = this.locateSentence(detail.sentenceId);
+    if (located?.sentence.core === undefined) {
+      void this.retryCore(detail.sentenceId);
+    } else {
+      void this.resolveRetryInteraction(detail);
+    }
   };
+
+  private async resolveRetryInteraction(detail: SyntaxFocusEventDetail): Promise<void> {
+    const feedback = await Promise.resolve(
+      this.options.requestFeedback?.(detail.sentenceId) ?? null,
+    );
+    if (feedback !== null && feedback.trim().length > 0) {
+      await this.submitCorrection(detail.sentenceId, feedback);
+    } else {
+      await this.requestDetail(detail);
+    }
+  }
+
+  private readonly handleExplicitCorrectionEvent = (event: Event): void => {
+    if (!(event instanceof CustomEvent)) return;
+    const detail = event.detail as { sentenceId?: unknown; feedback?: unknown };
+    if (typeof detail.sentenceId !== "string" || typeof detail.feedback !== "string") return;
+    void this.submitCorrection(detail.sentenceId, detail.feedback);
+  };
+
+  private async retryCore(sentenceId: string): Promise<void> {
+    const located = this.locateSentence(sentenceId);
+    if (located === undefined || this.state !== "running") return;
+    const { block, sentence } = located;
+    const version = ++this.operationVersion;
+    block.operationVersion = version;
+    this.transition(sentence, "queued");
+    this.transition(sentence, "requesting");
+    const request = this.pageRequest({ type: "ANALYZE_CORE", sentences: [sentence.input] });
+    const response = await this.send(request, version);
+    if (response === undefined || block.operationVersion !== version || this.isStopped()) {
+      return;
+    }
+    this.transition(sentence, "validating");
+    const analysis =
+      response.type === "CORE_RESULT"
+        ? response.analyses.find(({ sentenceId: id }) => id === sentenceId)
+        : undefined;
+    if (analysis === undefined) {
+      this.transition(sentence, "failed");
+      this.finishBlock(block, [
+        { sentenceId, sentence: sentence.input.text, message: responseErrorMessage(response) },
+      ]);
+      return;
+    }
+    block.learningBlock.renderCore(sentence.input.text, sentence.input.tokens, analysis);
+    sentence.core = analysis;
+    this.transition(sentence, "ready");
+    this.finishBlock(block, []);
+  }
 
   private installMutationObserver(): void {
     this.mutationObserver = new MutationObserver((mutations) => {
@@ -534,13 +616,26 @@ export class SessionController {
         const target =
           mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
         if (target === null) continue;
+        let matchedBlockRoot: ParentNode | null = null;
         for (const [blockId, block] of this.blocks) {
           if (block.candidate.element === target || block.candidate.element.contains(target)) {
             this.changedBlockIds.add(blockId);
+            matchedBlockRoot = block.candidate.element.parentElement ?? block.candidate.element;
           }
         }
+        const root: ParentNode | null =
+          matchedBlockRoot ??
+          (mutation.type === "characterData"
+            ? (target.parentElement ?? target)
+            : (mutation.target as ParentNode));
+        if (root !== null) this.mutationRoots.add(root);
       }
-      if (this.changedBlockIds.size === 0 || this.mutationTimer !== undefined) return;
+      if (
+        (this.changedBlockIds.size === 0 && this.mutationRoots.size === 0) ||
+        this.mutationTimer !== undefined
+      ) {
+        return;
+      }
       this.mutationTimer = this.scheduleTimeout(() => {
         this.mutationTimer = undefined;
         void this.flushMutations();
@@ -555,16 +650,50 @@ export class SessionController {
 
   private async flushMutations(): Promise<void> {
     const changed = [...this.changedBlockIds];
+    const roots = [...this.mutationRoots];
     this.changedBlockIds.clear();
+    this.mutationRoots.clear();
     for (const blockId of changed) {
       const old = this.blocks.get(blockId);
       if (old === undefined) continue;
       this.invalidateBlock(blockId);
-      const rescanned = this.scan(old.candidate.element);
       for (const sentence of old.sentences) this.sentences.delete(sentence.input.sentenceId);
       this.blocks.delete(blockId);
-      await this.registerCandidates(rescanned);
-      this.viewport.observe(rescanned);
+    }
+    const discovered = new Map<string, CandidateBlock>();
+    for (const root of roots) {
+      for (const candidate of this.scan(root)) {
+        if (!this.blocks.has(candidate.id)) discovered.set(candidate.id, candidate);
+      }
+    }
+    const candidates = [...discovered.values()];
+    await this.registerCandidates(candidates);
+    this.viewport.observe(candidates);
+  }
+
+  private async reconnectDelay(delay: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const timer: { value?: ReturnType<typeof setTimeout> } = {};
+      timer.value = this.scheduleTimeout(() => {
+        if (timer.value !== undefined) this.reconnectTimers.delete(timer.value);
+        resolve();
+      }, delay);
+      this.reconnectTimers.add(timer.value);
+    });
+  }
+
+  private unfinishedBlockIds(): string[] {
+    return [...this.blocks.values()].flatMap((block) =>
+      block.sentences.some(({ phase }) => phase !== "ready" && phase !== "failed")
+        ? [block.candidate.id]
+        : [],
+    );
+  }
+
+  private resumeUnfinishedAfterReconnect(): void {
+    for (const blockId of this.unfinishedBlockIds()) {
+      if (this.state === "paused") this.pausedBlocks.add(blockId);
+      else if (this.state === "running") this.queueVisibleBlock(blockId);
     }
   }
 
@@ -573,19 +702,15 @@ export class SessionController {
   };
 
   private async reconnectAndResume(): Promise<void> {
-    if (this.state === "stopped" || this.options.transport.reconnect === undefined) return;
+    if (this.isStopped() || this.options.transport.reconnect === undefined) return;
     const delays = [0, 250, 500, 1_000];
     for (const delay of delays) {
-      if (delay > 0) {
-        await new Promise<void>((resolve) => this.scheduleTimeout(resolve, delay));
-      }
+      if (this.isStopped()) return;
+      if (delay > 0) await this.reconnectDelay(delay);
+      if (this.isStopped()) return;
       try {
         await this.options.transport.reconnect();
-        for (const block of this.blocks.values()) {
-          if (block.sentences.some(({ phase }) => phase !== "ready" && phase !== "failed")) {
-            this.queueVisibleBlock(block.candidate.id, true);
-          }
-        }
+        this.resumeUnfinishedAfterReconnect();
         return;
       } catch {
         // The bounded retry schedule handles transient worker startup races.
@@ -595,5 +720,9 @@ export class SessionController {
 
   private emitStatus(): void {
     this.options.onStatus?.(this.status);
+  }
+
+  private isStopped(): boolean {
+    return this.state === "stopped";
   }
 }
