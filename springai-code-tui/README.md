@@ -15,7 +15,7 @@
 - **上下文管理**：窗口记忆多轮会话，token 用量估算（`/context` 查看），超阈值自动压缩 + `/compact` 手动压缩。把 cwd / git 状态 / 模型名注入系统提示做 grounding。
 - **长期记忆（跨会话）**：基于 `spring-ai-agent-utils` 的 `AutoMemoryTools`（Anthropic Claude Code 那套：`MEMORY.md` 索引 + 分型 Markdown 文件 + 两步保存）。记忆落盘 `<项目根>/.codetui/memory/`（**按项目隔离**，已被 `.gitignore`）；agent 会主动记住用户偏好、项目上下文与反馈，并在后续会话（含 `/clear` 开新会话后）读 `MEMORY.md` 召回。仅主 agent 具备，子 agent 不写长期记忆。与会话记忆互补：会话记忆是当前对话的内存态窗口，长期记忆是跨会话的磁盘态精选事实。
 - **项目指令（AGENTS.md）**：启动时读取用户级 `~/.codetui/AGENTS.md` + 项目级 `<项目根>/AGENTS.md`（跨工具生态标准，Codex/Cursor/Aider 等通用；项目里已有的 `AGENTS.md` 直接被读到），把团队约定（构建/测试命令、代码风格、架构约定）注入**主 agent 与子 agent** 的系统提示（顺序 user→project，项目级优先级更高）。人手写、提交入库、启动全量注入、**只读**（编辑文件即改约定，改动需重启生效）。这是与 agent 自写的长期记忆正交的一套「instructions」：前者人写团队约定，后者 agent 自记学到的东西。
-- Esc 取消当前回合、Ctrl+C 退出。
+- Esc 取消当前回合、Ctrl+C 退出；输入框支持 readline 式编辑快捷键（Ctrl+A/E、Ctrl/Alt+←→ 按词跳、Ctrl+W 删前词、Ctrl+U/K，见「操作键」）。
 
 ## ⚠️ 安全声明（请务必阅读）
 
@@ -232,6 +232,11 @@ cd /path/to/some/disposable/project
 | Enter | 发送输入框中的消息 |
 | `\` + Enter | 在输入框内换行（终端无关） |
 | ↑ / ↓ | 回溯 / 前进已提交的历史消息（多行时先在行内移动光标） |
+| Ctrl+A / Ctrl+E | 光标跳到行首 / 行尾 |
+| Ctrl+← / Alt+← / Alt+B | 光标向左按词跳（中文按单字跳） |
+| Ctrl+→ / Alt+→ / Alt+F | 光标向右按词跳（中文按单字跳） |
+| Ctrl+W / Alt+Backspace | 删除光标前一个词（空白为界；中文按单字删） |
+| Ctrl+U / Ctrl+K | 删到行首 / 删到行尾（以当前逻辑行为界，不跨行） |
 | Esc | 取消当前正在进行的回合（工具调用/模型生成） |
 | Ctrl+C | 退出程序 |
 
@@ -256,6 +261,7 @@ cd /path/to/some/disposable/project
 
 - **滚动区不可翻页**：对话滚动区依赖终端自身的 scrollback，程序内不支持翻页控件（输入框 ↑↓ 回溯的是「已提交的历史消息」，与滚动区翻页无关；历史仅内存态，退出不保留）。
 - **宽字符光标对齐**：输入框光标位置按显示宽度（东亚宽字符计 2 列）对齐，但极端的 grapheme 组合（如某些 emoji ZWJ 序列、组合字符）可能出现轻微偏移。
+- **部分 Ctrl 组合键不可绑定**：终端把 `Ctrl+A..Z` 发成控制字节 1~26，其中 `Ctrl+H/I/J/M` 与 Backspace/Tab/Enter 字节相同、无法区分，故编辑快捷键避开了这几个字母；`Shift/Alt+Enter` 换行能否生效取决于终端能否区分修饰键（Apple Terminal 等区分不了），可靠换行请用 `\` + Enter。
 - **无工具沙箱**：见上方安全声明——所有工具（含文件系统工具）都不受 root 约束。自写的真沙箱（`SandboxedShellTool` 等校验所有工具路径参数）列为 v1 之后的增强项，本版本未实现。
 - **无程序内会话选择器**：会话已持久化并按项目隔离（见上「会话持久化与恢复」），但程序内不能浏览/切换历史会话；`-c` 只恢复**最近一次**会话（按 mtime），要挑更早的需手动操作会话文件。
 - **子 agent 无后台模式**：`Task` 单个前台阻塞、`ParallelTasks` 一批并发前台执行（有界并发，全部 join 后返回）；暂不支持后台任务（`run_in_background` + 轮询回收）与 `/tasks` 详情面板（列为后续增强）。
