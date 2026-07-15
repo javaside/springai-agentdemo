@@ -186,7 +186,7 @@ function relayDocumentId(relay: StatusRelay): string | undefined {
 }
 
 function generatedDocumentId(tabId: number): string {
-  return `tab-${tabId}`;
+  return `tab-${tabId}:${crypto.randomUUID()}`;
 }
 
 export function registerServiceWorker(
@@ -194,8 +194,28 @@ export function registerServiceWorker(
   chromeApi: typeof chrome = chrome,
 ): void {
   const activeTabs = new Map<number, ActiveDocument>();
-  const pausedProfiles = new Set<string>();
+  const pausedProfiles = new Map<string, string>();
   let commandCounter = 0;
+
+  const profileCredentialFingerprint = (profile: ModelProfile): string =>
+    JSON.stringify([
+      profile.baseUrl,
+      profile.apiKey,
+      profile.model,
+      Object.entries(profile.headers).sort(([left], [right]) => left.localeCompare(right)),
+    ]);
+
+  const pauseProfile = (profile: ModelProfile): void => {
+    pausedProfiles.set(profile.id, profileCredentialFingerprint(profile));
+  };
+
+  const isProfilePaused = (profile: ModelProfile): boolean => {
+    const pausedFingerprint = pausedProfiles.get(profile.id);
+    if (pausedFingerprint === undefined) return false;
+    if (pausedFingerprint === profileCredentialFingerprint(profile)) return true;
+    pausedProfiles.delete(profile.id);
+    return false;
+  };
 
   const cancelTab = (tabId: number): void => {
     const active = activeTabs.get(tabId);
@@ -263,8 +283,7 @@ export function registerServiceWorker(
         case "ANALYZE_CORE": {
           const profile = await profileFor(request.tabId);
           if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
-          if (pausedProfiles.has(profile.id))
-            return errorResponse(request.requestId, "AUTH_FAILED");
+          if (isProfilePaused(profile)) return errorResponse(request.requestId, "AUTH_FAILED");
           try {
             const outcome = await dependencies.analysisService.analyzeCore(
               {
@@ -278,7 +297,7 @@ export function registerServiceWorker(
               ({ error }) => error.code === "AUTH_FAILED",
             );
             if (authenticationFailure !== undefined) {
-              pausedProfiles.add(profile.id);
+              pauseProfile(profile);
               return errorResponse(request.requestId, "AUTH_FAILED");
             }
             return {
@@ -289,15 +308,14 @@ export function registerServiceWorker(
             };
           } catch (error) {
             const code = errorCode(error);
-            if (code === "AUTH_FAILED") pausedProfiles.add(profile.id);
+            if (code === "AUTH_FAILED") pauseProfile(profile);
             return errorResponse(request.requestId, code);
           }
         }
         case "ANALYZE_DETAIL": {
           const profile = await profileFor(request.tabId);
           if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
-          if (pausedProfiles.has(profile.id))
-            return errorResponse(request.requestId, "AUTH_FAILED");
+          if (isProfilePaused(profile)) return errorResponse(request.requestId, "AUTH_FAILED");
           try {
             const outcome = await dependencies.analysisService.analyzeDetail(
               {
@@ -317,15 +335,14 @@ export function registerServiceWorker(
             };
           } catch (error) {
             const code = errorCode(error);
-            if (code === "AUTH_FAILED") pausedProfiles.add(profile.id);
+            if (code === "AUTH_FAILED") pauseProfile(profile);
             return errorResponse(request.requestId, code);
           }
         }
         case "REANALYZE_WITH_FEEDBACK": {
           const profile = await profileFor(request.tabId);
           if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
-          if (pausedProfiles.has(profile.id))
-            return errorResponse(request.requestId, "AUTH_FAILED");
+          if (isProfilePaused(profile)) return errorResponse(request.requestId, "AUTH_FAILED");
           try {
             const outcome = await dependencies.analysisService.reanalyzeWithFeedback(
               {
@@ -347,7 +364,7 @@ export function registerServiceWorker(
             };
           } catch (error) {
             const code = errorCode(error);
-            if (code === "AUTH_FAILED") pausedProfiles.add(profile.id);
+            if (code === "AUTH_FAILED") pauseProfile(profile);
             return errorResponse(request.requestId, code);
           }
         }
@@ -444,10 +461,10 @@ export function registerServiceWorker(
             requestId: request.requestId,
             type: "PROFILE_TEST_RESULT",
             profileId: request.profileId,
-            success: profile !== undefined && !pausedProfiles.has(profile.id),
+            success: profile !== undefined && !isProfilePaused(profile),
             ...(profile === undefined
               ? { error: errorResponse(request.requestId, "CONFIG_MISSING").error }
-              : pausedProfiles.has(profile.id)
+              : isProfilePaused(profile)
                 ? { error: errorResponse(request.requestId, "AUTH_FAILED").error }
                 : {}),
           };
@@ -545,6 +562,10 @@ export function registerServiceWorker(
         if (tabId === undefined || sender.tab?.id !== tabId || documentId === undefined) {
           return errorResponse(value.requestId, "UNSUPPORTED_PAGE");
         }
+        const active = activeTabs.get(tabId);
+        if (active !== undefined && active.documentId !== documentId) {
+          return errorResponse(value.requestId, "REQUEST_CANCELLED");
+        }
         activeTabs.set(tabId, { documentId, status: value.status });
         return {
           version: MESSAGE_VERSION,
@@ -567,6 +588,7 @@ export function registerServiceWorker(
     const documentId = port.name.slice("syntax-learning:".length);
     if (documentId.length === 0) return;
     const existing = activeTabs.get(tabId);
+    if (existing !== undefined && existing.documentId !== documentId) return;
     activeTabs.set(tabId, {
       documentId,
       status: existing?.status ?? emptyStatus("stopped"),

@@ -52,7 +52,9 @@ function chromeMock() {
     tabs: {
       onRemoved,
       onUpdated,
-      sendMessage: vi.fn(() => Promise.resolve(undefined)),
+      sendMessage: vi.fn<(tabId: number, message: unknown) => Promise<unknown>>(() =>
+        Promise.resolve(undefined),
+      ),
     },
   };
   return { api: api as unknown as typeof chrome, events: api };
@@ -81,7 +83,10 @@ const profiles: ModelProfile[] = [
   },
 ];
 
-function dependencies(analysisOverrides: Partial<AnalysisService> = {}) {
+function dependencies(
+  analysisOverrides: Partial<AnalysisService> = {},
+  availableProfiles: ModelProfile[] = profiles,
+) {
   let activeProfileId = "profile-a";
   const defaultAnalyzeCore: AnalysisService["analyzeCore"] = ({ sentences, profile }) =>
     Promise.resolve({
@@ -110,10 +115,10 @@ function dependencies(analysisOverrides: Partial<AnalysisService> = {}) {
   const deps: ServiceWorkerDependencies = {
     configRepository: {
       getProfile: vi.fn((id: string) =>
-        Promise.resolve(profiles.find((profile) => profile.id === id)),
+        Promise.resolve(availableProfiles.find((profile) => profile.id === id)),
       ),
       getActiveProfile: vi.fn(() =>
-        Promise.resolve(profiles.find((profile) => profile.id === activeProfileId)),
+        Promise.resolve(availableProfiles.find((profile) => profile.id === activeProfileId)),
       ),
       setActiveProfile: vi.fn((id: string) => {
         activeProfileId = id;
@@ -238,6 +243,24 @@ describe("service worker orchestration", () => {
     );
   });
 
+  it("assigns a fresh background document ID after navigation in the same tab", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies(), subject.api);
+    const action = subject.events.action.onClicked.listeners[0]!;
+
+    action({ id: 7 } as chrome.tabs.Tab);
+    await vi.waitFor(() => expect(subject.events.tabs.sendMessage).toHaveBeenCalledTimes(1));
+    const first = subject.events.tabs.sendMessage.mock.calls[0]![1] as PageRequest;
+    subject.events.tabs.onUpdated.listeners[0]!(7, { status: "loading" }, {
+      id: 7,
+    } as chrome.tabs.Tab);
+    action({ id: 7 } as chrome.tabs.Tab);
+    await vi.waitFor(() => expect(subject.events.tabs.sendMessage).toHaveBeenCalledTimes(2));
+    const second = subject.events.tabs.sendMessage.mock.calls[1]![1] as PageRequest;
+
+    expect(second.documentId).not.toBe(first.documentId);
+  });
+
   it.each([
     ["malformed", { type: "ANALYZE_CORE", requestId: "bad" }],
     ["version-mismatched", { version: 2, type: "GET_CACHE_STATS", requestId: "bad" }],
@@ -282,6 +305,36 @@ describe("service worker orchestration", () => {
     );
 
     expect(response).toMatchObject({ type: "ERROR", error: { code: "REQUEST_CANCELLED" } });
+  });
+
+  it("rejects a stale status relay instead of replacing the current document", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies(), subject.api);
+    const listener = subject.events.runtime.onMessage.listeners[0]!;
+    await dispatch(listener, {
+      version: 1,
+      requestId: "status-current",
+      type: "SESSION_STATUS",
+      tabId: 7,
+      documentId: "document-current",
+      status: emptyRunningStatus,
+    });
+
+    const stale = await dispatch(listener, {
+      version: 1,
+      requestId: "status-stale",
+      type: "SESSION_STATUS",
+      tabId: 7,
+      documentId: "document-stale",
+      status: { ...emptyRunningStatus, discovered: 99 },
+    });
+    const current = await dispatch(
+      listener,
+      pageRequest({ type: "GET_SESSION_STATUS" }, "document-current"),
+    );
+
+    expect(stale).toMatchObject({ type: "ERROR", error: { code: "REQUEST_CANCELLED" } });
+    expect(current).toMatchObject({ type: "SESSION_STATUS", status: { discovered: 0 } });
   });
 
   it("never exposes profile keys, headers, or surplus service fields in core/detail responses", async () => {
@@ -520,5 +573,34 @@ describe("service worker orchestration", () => {
     expect(profileA).toMatchObject({ type: "ERROR", error: { code: "AUTH_FAILED" } });
     expect(analyzeCore).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(profileA)).not.toContain("SECRET-A");
+  });
+
+  it("resumes a paused profile after its credentials change", async () => {
+    const availableProfiles = profiles.map((profile) => structuredClone(profile));
+    const analyzeCore = vi.fn(({ profile }: Parameters<AnalysisService["analyzeCore"]>[0]) =>
+      profile.apiKey === "SECRET-A"
+        ? Promise.reject(
+            Object.assign(new Error("unauthorized"), {
+              code: "AUTH_FAILED",
+              retryable: false,
+              details: { status: 401 },
+            }),
+          )
+        : Promise.resolve({ result: [], failures: [], cacheHit: false }),
+    );
+    const deps = dependencies({ analyzeCore }, availableProfiles);
+    const subject = chromeMock();
+    registerServiceWorker(deps, subject.api);
+    const listener = subject.events.runtime.onMessage.listeners[0]!;
+
+    await dispatch(listener, pageRequest({ type: "ANALYZE_CORE", sentences: [sentence] }));
+    availableProfiles[0] = { ...availableProfiles[0]!, apiKey: "UPDATED-A" };
+    const retried = await dispatch(
+      listener,
+      pageRequest({ type: "ANALYZE_CORE", sentences: [sentence] }),
+    );
+
+    expect(retried.type).toBe("CORE_RESULT");
+    expect(analyzeCore).toHaveBeenCalledTimes(2);
   });
 });
