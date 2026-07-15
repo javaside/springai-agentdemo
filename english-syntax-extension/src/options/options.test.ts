@@ -131,7 +131,7 @@ describe("Options page", () => {
       ["AUTH_FAILED", "鉴权失败，请检查 API Key"],
       ["MODEL_NOT_FOUND", "未找到指定模型"],
       ["INVALID_MODEL_OUTPUT", "模型未能返回有效 JSON"],
-      ["JSON_UNSUPPORTED", "连接成功，但模型不支持 JSON Schema"],
+      ["JSON_UNSUPPORTED", "连接成功，配置可用"],
     ];
 
     for (const [error, expected] of cases) {

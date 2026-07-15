@@ -36,10 +36,10 @@ npm run build   # 类型检查 + 产出 dist/
 | 配置名称   | DeepSeek                      |
 | Base URL   | `https://api.deepseek.com/v1` |
 | API Key    | 你的 DeepSeek Key             |
-| 模型名     | `deepseek-chat`               |
-| 超时（秒） | 45                            |
+| 模型名     | `deepseek-v4-flash`           |
+| 超时（秒） | 120                           |
 
-> 建议用 `deepseek-chat`：`deepseek-reasoner` 也能用，但推理模型每个段落要先输出思维链，单块分析约 30 秒起、费用更高，阅读场景不划算（用它时建议把超时调到 120 秒）。
+> 模型名以 [DeepSeek 官方文档](https://api-docs.deepseek.com/zh-cn/) 为准：当前推荐 `deepseek-v4-flash`（更强但更贵可选 `deepseek-v4-pro`）；旧模型名 `deepseek-chat`、`deepseek-reasoner` 将于 2026-07-24 弃用。测试连接若提示「已自动采用兼容模式」属正常现象（DeepSeek 不提供 JSON Schema 严格模式），不影响任何功能。推理类模型每段分析需要先输出思维链，耗时约 20–60 秒，建议超时设 120 秒。
 
 **示例二：本地 Ollama**
 

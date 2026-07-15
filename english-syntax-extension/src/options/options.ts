@@ -73,7 +73,7 @@ function requestId(prefix: string): string {
 function connectionMessage(result: ProfileTestResult): string {
   if (result.success) {
     return result.jsonSchemaSupport === "unsupported"
-      ? "连接成功，但模型不支持 JSON Schema；分析时将使用兼容模式。"
+      ? "连接成功，配置可用。（该服务不提供 JSON Schema 严格模式，已自动采用兼容模式，属正常情况，不影响任何功能；DeepSeek 等多数服务均如此。）"
       : "连接成功，模型支持 JSON Schema。";
   }
   const providerDetail = (): string => {
