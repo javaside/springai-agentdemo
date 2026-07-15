@@ -77,7 +77,7 @@ function getBlockId(element: Element): string {
   return id;
 }
 
-function createCandidate(element: Element, automatic: boolean): CandidateBlock | null {
+function candidateText(element: Element, automatic: boolean): string | null {
   if (!isSafeElement(element)) return null;
   const text = normalizedText(element);
   if (
@@ -87,30 +87,74 @@ function createCandidate(element: Element, automatic: boolean): CandidateBlock |
   ) {
     return null;
   }
+  return text;
+}
+
+function createCandidate(element: Element, automatic: boolean): CandidateBlock | null {
+  const text = candidateText(element, automatic);
+  if (text === null) return null;
   return { id: getBlockId(element), element, text };
 }
 
-function semanticRoot(root: ParentNode): Element | null {
-  return (
-    queryElements(root, SEMANTIC_ROOT_SELECTOR).find(
-      (element) => element.closest(EXCLUSION_SELECTOR) === null && isLayoutVisible(element),
-    ) ?? null
+interface ScoredBlock {
+  element: Element;
+  text: string;
+}
+
+function eligibleBlocks(root: ParentNode): ScoredBlock[] {
+  return queryElements(root, BLOCK_SELECTOR).flatMap((element) => {
+    const text = candidateText(element, true);
+    return text === null ? [] : [{ element, text }];
+  });
+}
+
+function linkedTextLength(element: Element): number {
+  return Array.from(element.querySelectorAll("a")).reduce(
+    (total, link) => total + normalizedText(link).length,
+    0,
   );
 }
 
-function fallbackRoot(root: ParentNode): Element | null {
-  const safeBlocks = queryElements(root, BLOCK_SELECTOR).filter(
-    (element) => createCandidate(element, true) !== null,
+function contentScore(blocks: readonly ScoredBlock[]): number {
+  return blocks.reduce(
+    (score, block) => score + block.text.length - 2 * linkedTextLength(block.element),
+    0,
   );
+}
+
+function semanticRoot(root: ParentNode): Element | null {
+  const ranked = queryElements(root, SEMANTIC_ROOT_SELECTOR).flatMap((element, order) => {
+    if (element.closest(EXCLUSION_SELECTOR) !== null || !isLayoutVisible(element)) return [];
+    const blocks = eligibleBlocks(element);
+    if (blocks.length === 0) return [];
+    return [
+      {
+        element,
+        score: contentScore(blocks),
+        scopeSize: element.querySelectorAll("*").length,
+        order,
+      },
+    ];
+  });
+  ranked.sort(
+    (left, right) =>
+      right.score - left.score || left.scopeSize - right.scopeSize || left.order - right.order,
+  );
+  return ranked[0]?.element ?? null;
+}
+
+function fallbackRoot(root: ParentNode): Element | null {
+  const safeBlocks = eligibleBlocks(root);
   const scores = new Map<Element, { textLength: number; linkedTextLength: number }>();
 
   for (const block of safeBlocks) {
-    const length = normalizedText(block).length;
-    const linkedLength = Array.from(block.querySelectorAll("a")).reduce(
-      (total, link) => total + normalizedText(link).length,
-      0,
-    );
-    for (let ancestor = block.parentElement; ancestor !== null; ancestor = ancestor.parentElement) {
+    const length = block.text.length;
+    const linkedLength = linkedTextLength(block.element);
+    for (
+      let ancestor = block.element.parentElement;
+      ancestor !== null;
+      ancestor = ancestor.parentElement
+    ) {
       if (!root.contains(ancestor) && ancestor !== root) break;
       if (ancestor.closest(EXCLUSION_SELECTOR) !== null || !isLayoutVisible(ancestor)) continue;
       const score = scores.get(ancestor) ?? { textLength: 0, linkedTextLength: 0 };
@@ -134,8 +178,8 @@ function fallbackRoot(root: ParentNode): Element | null {
 }
 
 function ownerDocument(root: ParentNode): Document | null {
-  if (root instanceof Document) return root;
-  return root.ownerDocument;
+  if (root.ownerDocument !== null) return root.ownerDocument;
+  return root.nodeType === Node.DOCUMENT_NODE ? (root as Document) : null;
 }
 
 function selectPrincipalRoot(root: ParentNode): Element | null {

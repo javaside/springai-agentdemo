@@ -18,7 +18,7 @@ describe("scanDocument", () => {
     document.body.innerHTML = "";
   });
 
-  it("returns only safe English text blocks from semantic principal content", () => {
+  it("skips an incidental article without eligible content before the real main", () => {
     document.body.innerHTML = fixture("article");
 
     const blocks = scanDocument(document);
@@ -35,6 +35,34 @@ describe("scanDocument", () => {
     expect(blocks.map(({ text }) => text)).toContain(
       "This English paragraph contains a helpful reference link for readers.",
     );
+  });
+
+  it("chooses the only semantic root containing valid safe English candidates", () => {
+    document.body.innerHTML = `
+      <article>
+        <h2>Short note</h2>
+        <form><p>This otherwise eligible English text is unsafe form content.</p></form>
+        <p>This paragraph includes an unsafe <button>interactive control</button>.</p>
+      </article>
+      <div role="main">
+        <p id="qualified-root-copy">This safe English paragraph belongs to the qualified semantic root.</p>
+      </div>`;
+
+    expect(scanDocument(document).map(({ element }) => element.id)).toEqual([
+      "qualified-root-copy",
+    ]);
+  });
+
+  it("chooses the more specific nested semantic root when content scores tie", () => {
+    document.body.innerHTML = fixture("article");
+    document.querySelector("#incidental-article")!.remove();
+    scanDocument(document);
+    const laterMainCopy = document.createElement("p");
+    laterMainCopy.textContent =
+      "This later English paragraph is directly inside main but outside the nested article.";
+    document.querySelector("main")!.append(laterMainCopy);
+
+    expect(nearestSafeBlock(laterMainCopy)).toBeNull();
   });
 
   it("uses a text-density fallback and penalizes link-heavy navigation", () => {
