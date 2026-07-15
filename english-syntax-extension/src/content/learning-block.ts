@@ -17,6 +17,8 @@ const STYLES = `
   display: flex;
   flex-wrap: wrap;
   align-items: end;
+  column-gap: 0.7em;
+  row-gap: 0.55em;
   max-inline-size: 100%;
   overflow-wrap: anywhere;
 }
@@ -25,14 +27,16 @@ const STYLES = `
   appearance: none;
   display: inline-grid;
   grid-template-rows: repeat(3, auto);
+  justify-items: center;
   min-inline-size: 0;
   max-inline-size: 100%;
-  padding: 0;
+  padding: 0.15em 0.35em 0.2em;
   border: 0;
-  background: transparent;
+  border-radius: 0.4em;
+  background: color-mix(in srgb, currentColor 7%, transparent);
   font: inherit;
   color: inherit;
-  text-align: start;
+  text-align: center;
   cursor: pointer;
   overflow-wrap: anywhere;
   transition: opacity 120ms ease;
@@ -54,9 +58,12 @@ const STYLES = `
 
 .english {
   border-bottom: 2px solid currentColor;
+  justify-self: stretch;
+  text-align: center;
 }
 
 .translation {
+  font-size: max(12px, 0.8em);
   opacity: 0.84;
 }
 
@@ -215,15 +222,17 @@ export class SyntaxLearningBlock {
         if (token === undefined) {
           continue;
         }
+        // The gap between components comes from the sentence layout; keeping
+        // the first token's leading whitespace would stretch this component's
+        // underline into that gap and blur the component boundary.
+        const leadingWhitespace = index === component.startToken ? "" : token.leadingWhitespace;
         if (token.punctuation) {
           if (index === component.endToken) {
             continue;
           }
-          english.append(
-            createElement("span", "punctuation", token.leadingWhitespace + token.text),
-          );
+          english.append(createElement("span", "punctuation", leadingWhitespace + token.text));
         } else {
-          english.append(document.createTextNode(token.leadingWhitespace + token.text));
+          english.append(document.createTextNode(leadingWhitespace + token.text));
         }
       }
 

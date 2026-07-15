@@ -71,12 +71,15 @@ describe("SyntaxLearningBlock", () => {
       ],
       [
         ["role", "谓语"],
-        ["english", " read"],
+        // Leading whitespace of a component's first token is dropped: the
+        // spacing between components comes from the layout gap, and keeping
+        // it would extend this component's underline into the gap.
+        ["english", "read"],
         ["translation", "阅读"],
       ],
       [
         ["role", "宾语"],
-        ["english", " books"],
+        ["english", "books"],
         ["translation", "书籍"],
       ],
     ]);
