@@ -55,9 +55,11 @@ describe("OpenAI-compatible chat completions adapter", () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(requestBody(fetch, 0)).toMatchObject({
       model: "syntax-model",
-      max_tokens: 8,
       response_format: { type: "json_schema" },
     });
+    // Reasoning models spend the token budget on hidden chain-of-thought and
+    // return an empty message when capped, so the probe must not send one.
+    expect(requestBody(fetch, 0)).not.toHaveProperty("max_tokens");
     expect(persistJsonSchemaSupport).toHaveBeenCalledWith("profile-1", "supported");
   });
 
@@ -75,7 +77,7 @@ describe("OpenAI-compatible chat completions adapter", () => {
 
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(requestBody(fetch, 1)).not.toHaveProperty("response_format");
-    expect(requestBody(fetch, 1)).toHaveProperty("max_tokens", 8);
+    expect(requestBody(fetch, 1)).not.toHaveProperty("max_tokens");
     expect(persistJsonSchemaSupport).toHaveBeenCalledWith("profile-1", "unsupported");
   });
 

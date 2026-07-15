@@ -142,12 +142,12 @@ export class OpenAiCompatibleAdapter {
     let support: "supported" | "unsupported" = "supported";
     let value: unknown;
     try {
-      value = await this.request(profile, messages, schema, signal, true, 8);
+      value = await this.request(profile, messages, schema, signal, true);
     } catch (error) {
       if (!(error instanceof UnsupportedResponseFormatError) || signal.aborted) throw error;
       support = "unsupported";
       await this.persistJsonSchemaSupport(profile.id, "unsupported");
-      value = await this.request(profile, messages, schema, signal, false, 8);
+      value = await this.request(profile, messages, schema, signal, false);
     }
     if (
       typeof value !== "object" ||
@@ -170,7 +170,6 @@ export class OpenAiCompatibleAdapter {
     schema: JsonSchemaSpec,
     callerSignal: AbortSignal,
     useSchema: boolean,
-    maxTokens?: number,
   ): Promise<unknown> {
     const controller = new AbortController();
     let abortCause: "caller" | "timeout" | undefined;
@@ -192,7 +191,6 @@ export class OpenAiCompatibleAdapter {
         temperature: 0,
         stream: false,
       };
-      if (maxTokens !== undefined) body.max_tokens = maxTokens;
       if (useSchema) body.response_format = responseFormat(schema);
       const headers = new Headers(profile.headers);
       headers.set("Content-Type", "application/json");

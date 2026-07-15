@@ -39,6 +39,8 @@ npm run build   # 类型检查 + 产出 dist/
 | 模型名     | `deepseek-chat`               |
 | 超时（秒） | 45                            |
 
+> 建议用 `deepseek-chat`：`deepseek-reasoner` 也能用，但推理模型每个段落要先输出思维链，单块分析约 30 秒起、费用更高，阅读场景不划算（用它时建议把超时调到 120 秒）。
+
 **示例二：本地 Ollama**
 
 | 字段       | 值                                    |
