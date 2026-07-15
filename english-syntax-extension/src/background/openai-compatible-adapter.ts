@@ -94,7 +94,7 @@ export class OpenAiCompatibleAdapter {
   >;
 
   constructor(options: OpenAiCompatibleAdapterOptions = {}) {
-    this.fetchImplementation = options.fetch ?? globalThis.fetch;
+    this.fetchImplementation = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.persistJsonSchemaSupport = options.persistJsonSchemaSupport ?? (() => Promise.resolve());
   }
 

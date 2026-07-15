@@ -3,9 +3,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CORE_SCHEMA_VERSION } from "../shared/versions";
 import { GrammarRole } from "../shared/grammar";
-import type { SyntaxLearningBlock } from "./learning-block";
+import { SyntaxLearningBlock } from "./learning-block";
 import { BlockReplacement } from "./block-replacement";
-import "./learning-block";
 
 const sentence = "Learners read.";
 const tokens = [
@@ -15,7 +14,7 @@ const tokens = [
 ];
 
 function learningBlock(expectedIds: readonly string[]): SyntaxLearningBlock {
-  const block = document.createElement("syntax-learning-block");
+  const block = new SyntaxLearningBlock();
   if (expectedIds.length > 0) {
     block.setExpectedSentenceIds(expectedIds);
   }
@@ -52,7 +51,7 @@ describe("BlockReplacement", () => {
     const replacement = new BlockReplacement();
 
     replacement.show(original, block);
-    expect(original.nextElementSibling).toBe(block);
+    expect(original.nextElementSibling).toBe(block.host);
     expect(original.className).toContain("article-copy");
     expect(original.getAttribute("style")).toBe(originalStyle);
     expect(getComputedStyle(original).display).toBe("none");
@@ -103,7 +102,7 @@ describe("BlockReplacement", () => {
 
     replacement.show(original, block);
 
-    expect(original.nextElementSibling).toBe(block);
+    expect(original.nextElementSibling).toBe(block.host);
     expect(getComputedStyle(original).display).toBe("none");
     expect(original.classList).toHaveLength(originalClasses.length + 1);
   });
@@ -118,7 +117,7 @@ describe("BlockReplacement", () => {
       { sentenceId: "sentence-2", sentence: "This sentence stays original.", message: "解析失败" },
     ]);
 
-    const failure = block.shadowRoot!.querySelector(".sentence-failure")!;
+    const failure = block.host.shadowRoot!.querySelector(".sentence-failure")!;
     expect(failure.textContent).toContain("This sentence stays original.");
     expect(failure.textContent).toContain("解析失败");
     expect(getComputedStyle(original).display).toBe("none");
@@ -146,7 +145,7 @@ describe("BlockReplacement", () => {
       { sentenceId: "sentence-2", sentence: "Second failed.", message: "解析失败" },
     ]);
 
-    expect(block.shadowRoot!.querySelector("[data-sentence-id='sentence-2']")).not.toBeNull();
+    expect(block.host.shadowRoot!.querySelector("[data-sentence-id='sentence-2']")).not.toBeNull();
     expect(original.classList.contains(BlockReplacement.hiddenClass)).toBe(false);
     expect(block.isConnected).toBe(false);
   });

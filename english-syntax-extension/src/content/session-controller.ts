@@ -13,6 +13,7 @@ import type { SentenceFailure } from "./block-replacement";
 import { nearestSafeBlock, scanDocument } from "./document-scanner";
 import type { CandidateBlock } from "./document-scanner";
 import type { SyntaxFocusEventDetail } from "./learning-block";
+import { SyntaxLearningBlock } from "./learning-block";
 import { ViewportObserver } from "./viewport-observer";
 
 export type SentencePhase =
@@ -157,8 +158,10 @@ export class SessionController {
     this.sentenceIdFactory = options.createSentenceId ?? createSentenceId;
     this.now = options.now ?? performance.now.bind(performance);
     this.yieldNow = options.yieldNow ?? defaultYield;
-    this.scheduleTimeout = options.setTimeout ?? setTimeout;
-    this.cancelTimeout = options.clearTimeout ?? clearTimeout;
+    // Wrap the global timers: storing them and calling through `this` would
+    // throw "Illegal invocation" in a real Chrome content-script world.
+    this.scheduleTimeout = options.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
+    this.cancelTimeout = options.clearTimeout ?? ((timer) => clearTimeout(timer));
     this.documentId =
       options.documentId ?? (options.randomUUID ?? crypto.randomUUID.bind(crypto))();
     this.viewport = (options.viewportFactory ?? ((callback) => new ViewportObserver(callback)))(
@@ -391,8 +394,7 @@ export class SessionController {
       }
       if (sentences.length === 0) continue;
       const learningBlock = (
-        this.options.learningBlockFactory ??
-        (() => this.document.createElement("syntax-learning-block"))
+        this.options.learningBlockFactory ?? (() => new SyntaxLearningBlock(this.document))
       )();
       learningBlock.setExpectedSentenceIds(sentences.map(({ input }) => input.sentenceId));
       const replacement = (this.options.replacementFactory ?? (() => new BlockReplacement()))();

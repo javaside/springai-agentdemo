@@ -57,10 +57,10 @@ export class BlockReplacement {
     const hiddenClass = this.#reserveHiddenClass(original);
     const style = createHideStyle(original.ownerDocument, hiddenClass);
     original.ownerDocument.head.append(style);
-    original.after(block);
+    original.after(block.host);
     original.classList.add(hiddenClass);
     this.#original = original;
-    this.#block = block;
+    this.#block = block.host;
     this.#appliedHiddenClass = hiddenClass;
     this.#ownedStyle = style;
     this.#observePageRemoval(original.ownerDocument);

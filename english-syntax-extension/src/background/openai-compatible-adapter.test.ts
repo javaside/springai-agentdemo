@@ -79,6 +79,29 @@ describe("OpenAI-compatible chat completions adapter", () => {
     expect(persistJsonSchemaSupport).toHaveBeenCalledWith("profile-1", "unsupported");
   });
 
+  it("invokes the default global fetch with the correct receiver", async () => {
+    const call = new Response(
+      JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+    const globalFetch = vi.fn<typeof globalThis.fetch>(function (this: unknown) {
+      if (this !== undefined && this !== globalThis) {
+        throw new TypeError("Illegal invocation");
+      }
+      return Promise.resolve(call);
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(globalFetch);
+    const adapter = new OpenAiCompatibleAdapter();
+
+    await expect(
+      adapter.completeJson(profile, messages, schema, new AbortController().signal),
+    ).resolves.toEqual({ ok: true });
+    expect(globalFetch).toHaveBeenCalledOnce();
+  });
+
   it("rejects a probe response that does not follow the minimal JSON instruction", async () => {
     const persistJsonSchemaSupport = vi.fn().mockResolvedValue(undefined);
     const adapter = new OpenAiCompatibleAdapter({

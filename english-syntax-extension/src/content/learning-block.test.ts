@@ -4,8 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CORE_SCHEMA_VERSION } from "../shared/versions";
 import { GrammarRole } from "../shared/grammar";
 import type { CoreAnalysis, DetailAnalysis, Token } from "../shared/grammar";
-import type { SyntaxLearningBlock } from "./learning-block";
-import "./learning-block";
+import { SyntaxLearningBlock } from "./learning-block";
 
 const sentence = "Learners read books.";
 const tokens: Token[] = [
@@ -26,7 +25,7 @@ const analysis: CoreAnalysis = {
 };
 
 function block(): SyntaxLearningBlock {
-  return document.createElement("syntax-learning-block");
+  return new SyntaxLearningBlock();
 }
 
 describe("SyntaxLearningBlock", () => {
@@ -53,11 +52,11 @@ describe("SyntaxLearningBlock", () => {
 
   it("renders role, underlined English, then component Chinese without a sentence translation", () => {
     const element = block();
-    document.body.append(element);
+    document.body.append(element.host);
 
     element.renderCore(sentence, tokens, analysis);
 
-    const root = element.shadowRoot!;
+    const root = element.host.shadowRoot!;
     const components = [...root.querySelectorAll<HTMLElement>(".component")];
     expect(components).toHaveLength(3);
     expect(
@@ -90,7 +89,7 @@ describe("SyntaxLearningBlock", () => {
 
   it("keeps script-like model strings as inert text", () => {
     const element = block();
-    document.body.append(element);
+    document.body.append(element.host);
     const unsafe = "<img src=x onerror=alert(1)>";
 
     element.renderCore(sentence, tokens, {
@@ -98,8 +97,8 @@ describe("SyntaxLearningBlock", () => {
       components: [{ ...analysis.components[0]!, translation: unsafe }],
     });
 
-    expect(element.shadowRoot!.querySelector("img")).toBeNull();
-    expect(element.shadowRoot!.querySelector(".translation")?.textContent).toBe(unsafe);
+    expect(element.host.shadowRoot!.querySelector("img")).toBeNull();
+    expect(element.host.shadowRoot!.querySelector(".translation")?.textContent).toBe(unsafe);
   });
 
   it("keeps uncovered leading, inter-component, and trailing punctuation once in source order", () => {
@@ -112,7 +111,7 @@ describe("SyntaxLearningBlock", () => {
       { id: 5, text: ".", start: 20, end: 21, leadingWhitespace: "", punctuation: true },
     ];
     const element = block();
-    document.body.append(element);
+    document.body.append(element.host);
     element.renderCore('"Well, learners read.', punctuationTokens, {
       ...analysis,
       components: [
@@ -122,7 +121,7 @@ describe("SyntaxLearningBlock", () => {
       ],
     });
 
-    const sentenceRow = element.shadowRoot!.querySelector(".sentence")!;
+    const sentenceRow = element.host.shadowRoot!.querySelector(".sentence")!;
     expect([...sentenceRow.children].map((child) => child.className)).toEqual([
       "punctuation",
       "component",
@@ -153,35 +152,35 @@ describe("SyntaxLearningBlock", () => {
     ],
   ])("rejects %s atomically so punctuation cannot duplicate", (_description, components) => {
     const element = block();
-    document.body.append(element);
+    document.body.append(element.host);
 
     expect(() => element.renderCore(sentence, tokens, { ...analysis, components })).toThrow(
       /ordered and non-overlapping/u,
     );
-    expect(element.shadowRoot!.querySelector(".sentence")).toBeNull();
-    expect(element.shadowRoot!.querySelector(".punctuation")).toBeNull();
+    expect(element.host.shadowRoot!.querySelector(".sentence")).toBeNull();
+    expect(element.host.shadowRoot!.querySelector(".punctuation")).toBeNull();
   });
 
   it("rejects a sentence/token mismatch before changing an existing render", () => {
     const element = block();
-    document.body.append(element);
+    document.body.append(element.host);
     element.renderCore(sentence, tokens, analysis);
-    const existing = element.shadowRoot!.querySelector(".sentence");
+    const existing = element.host.shadowRoot!.querySelector(".sentence");
 
     expect(() => element.renderCore("Different sentence.", tokens, analysis)).toThrow(
       /sentence and tokens/u,
     );
-    expect(element.shadowRoot!.querySelector(".sentence")).toBe(existing);
+    expect(element.host.shadowRoot!.querySelector(".sentence")).toBe(existing);
   });
 
   it("requests detail with sentence and focus IDs through a composed keyboard-accessible event", () => {
     const element = block();
-    document.body.append(element);
+    document.body.append(element.host);
     element.renderCore(sentence, tokens, analysis);
     const listener = vi.fn();
     document.addEventListener("syntax-detail-request", listener, { once: true });
 
-    const component = element.shadowRoot!.querySelector<HTMLButtonElement>(".component")!;
+    const component = element.host.shadowRoot!.querySelector<HTMLButtonElement>(".component")!;
     component.focus();
     component.click();
 
@@ -197,10 +196,10 @@ describe("SyntaxLearningBlock", () => {
 
   it("shows lazy detail loading, detail text, and a retryable error without creating markup", () => {
     const element = block();
-    document.body.append(element);
+    document.body.append(element.host);
     element.renderCore(sentence, tokens, analysis);
     element.setDetailLoading("sentence-1", { startToken: 1, endToken: 1 });
-    expect(element.shadowRoot!.querySelector("[aria-busy='true']")?.textContent).toContain("加载");
+    expect(element.host.shadowRoot!.querySelector("[aria-busy='true']")?.textContent).toContain("加载");
 
     const detail: DetailAnalysis = {
       sentenceId: "sentence-1",
@@ -211,13 +210,13 @@ describe("SyntaxLearningBlock", () => {
       modelProfileId: "profile-1",
     };
     element.renderDetail(detail);
-    expect(element.shadowRoot!.querySelector(".detail")?.textContent).toContain("一般现在时");
-    expect(element.shadowRoot!.querySelector("img")).toBeNull();
+    expect(element.host.shadowRoot!.querySelector(".detail")?.textContent).toContain("一般现在时");
+    expect(element.host.shadowRoot!.querySelector("img")).toBeNull();
 
     const listener = vi.fn();
-    element.addEventListener("syntax-reanalyze-request", listener, { once: true });
+    element.host.addEventListener("syntax-reanalyze-request", listener, { once: true });
     element.renderError("sentence-1", { startToken: 1, endToken: 1 }, "暂时无法解析");
-    element.shadowRoot!.querySelector<HTMLButtonElement>(".retry")!.click();
+    element.host.shadowRoot!.querySelector<HTMLButtonElement>(".retry")!.click();
     expect(listener).toHaveBeenCalledOnce();
     expect((listener.mock.calls[0]![0] as CustomEvent).detail).toEqual({
       sentenceId: "sentence-1",
@@ -226,7 +225,7 @@ describe("SyntaxLearningBlock", () => {
   });
 
   it("includes the required isolated, wrapping, accessible and motion-safe CSS contract", () => {
-    const css = block().shadowRoot!.querySelector("style")!.textContent;
+    const css = block().host.shadowRoot!.querySelector("style")!.textContent;
 
     expect(css).toContain("inline-grid");
     expect(css).toContain("grid-template-rows: repeat(3");

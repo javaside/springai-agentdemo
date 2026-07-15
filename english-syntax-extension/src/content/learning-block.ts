@@ -1,8 +1,6 @@
 import { GRAMMAR_LABELS } from "../shared/grammar";
 import type { CoreAnalysis, DetailAnalysis, Token, TokenRange } from "../shared/grammar";
 
-const TAG_NAME = "syntax-learning-block";
-
 const STYLES = `
 :host {
   display: block;
@@ -128,17 +126,45 @@ function eventDetail(sentenceId: string, focus: TokenRange): SyntaxFocusEventDet
   };
 }
 
-export class SyntaxLearningBlock extends HTMLElement {
+export class SyntaxLearningBlock {
+  /**
+   * A content script runs in an isolated world where `window.customElements`
+   * is `null`, so this class cannot be registered as a custom element. It wraps
+   * a plain host element and owns its shadow root by composition instead. Use
+   * {@link host} wherever the surrounding DOM needs the actual element node.
+   */
+  readonly host: HTMLElement;
   readonly #sentences: HTMLElement;
   #expectedSentenceIds = new Set<string>();
   #resolvedSentenceIds = new Set<string>();
 
-  constructor() {
-    super();
-    const root = this.attachShadow({ mode: "open" });
+  constructor(ownerDocument: Document = document) {
+    this.host = ownerDocument.createElement("div");
+    this.host.dataset.syntaxLearningBlock = "";
+    const root = this.host.attachShadow({ mode: "open" });
     const style = createElement("style", undefined, STYLES);
     this.#sentences = createElement("div", "sentences");
     root.append(style, this.#sentences);
+  }
+
+  dispatchEvent(event: Event): boolean {
+    return this.host.dispatchEvent(event);
+  }
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    this.host.addEventListener(type, listener, options);
+  }
+
+  get isConnected(): boolean {
+    return this.host.isConnected;
+  }
+
+  remove(): void {
+    this.host.remove();
   }
 
   setExpectedSentenceIds(ids: readonly string[]): void {
@@ -390,15 +416,5 @@ export class SyntaxLearningBlock extends HTMLElement {
     detail.dataset.endToken = String(focus.endToken);
     sentence.append(detail);
     return detail;
-  }
-}
-
-if (!customElements.get(TAG_NAME)) {
-  customElements.define(TAG_NAME, SyntaxLearningBlock);
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "syntax-learning-block": SyntaxLearningBlock;
   }
 }
