@@ -236,6 +236,54 @@ function invalidRawSubset(raw: unknown, sentenceIds: ReadonlySet<string>): unkno
   };
 }
 
+function validateCachedCore(
+  cached: unknown,
+  sentence: SentenceInput,
+  modelProfileId: string,
+): CoreAnalysis | undefined {
+  const validation = validateCoreBatch(
+    {
+      sentences: [
+        {
+          sentenceId: sentence.sentenceId,
+          components: isRecord(cached) ? cached.components : undefined,
+        },
+      ],
+    },
+    [sentence],
+    modelProfileId,
+  );
+  return validation.ok ? validation.value[0] : undefined;
+}
+
+function isMatchingFocus(value: unknown, focus: TokenRange): boolean {
+  return (
+    isRecord(value) && value.startToken === focus.startToken && value.endToken === focus.endToken
+  );
+}
+
+function validateCachedDetail(
+  cached: unknown,
+  sentence: SentenceInput,
+  focus: TokenRange,
+  modelProfileId: string,
+): DetailAnalysis | undefined {
+  if (!isRecord(cached) || !isMatchingFocus(cached.focus, focus)) return undefined;
+  const validation = validateDetail(
+    {
+      sentenceId: sentence.sentenceId,
+      focus,
+      structures: cached.structures,
+      grammarPoints: cached.grammarPoints,
+      explanation: cached.explanation,
+    },
+    sentence,
+    focus,
+    modelProfileId,
+  );
+  return validation.ok ? validation.value : undefined;
+}
+
 function correctionPrompt(input: CorrectionInput): string {
   return [
     "Reanalyze the supplied sentence using the reader's correction feedback.",
@@ -243,6 +291,20 @@ function correctionPrompt(input: CorrectionInput): string {
     `Sentence and Tokens:\n${JSON.stringify(input.sentence, null, 2)}`,
     `Previously verified core analysis:\n${JSON.stringify(input.core, null, 2)}`,
     `Reader feedback:\n${input.feedback}`,
+  ].join("\n\n");
+}
+
+function correctionRepairPrompt(
+  input: CorrectionInput,
+  errors: readonly ValidationError[],
+  invalidJson: unknown,
+): string {
+  return [
+    "Repair only the structure of the invalid correction analysis while preserving the entire correction context below.",
+    correctionPrompt(input),
+    `Validation errors:\n${JSON.stringify(errors, null, 2)}`,
+    `Invalid JSON:\n${JSON.stringify(invalidJson, null, 2)}`,
+    "Return the repaired core-analysis JSON only. Do not add sentences or change sentence IDs or Tokens.",
   ].join("\n\n");
 }
 
@@ -278,14 +340,14 @@ export class CachedAnalysisService implements AnalysisService {
       })),
     );
     const cached = await Promise.all(
-      keyedSentences.map(({ key }) => this.options.cache.getCore<CoreAnalysis>(key)),
+      keyedSentences.map(({ key }) => this.options.cache.getCore<unknown>(key)),
     );
     if (signal.aborted) throw cancellationError();
 
     const resultsById = new Map<string, CoreAnalysis>();
     const missing: Array<{ sentence: SentenceInput; key: string }> = [];
     keyedSentences.forEach((entry, index) => {
-      const value = cached[index];
+      const value = validateCachedCore(cached[index], entry.sentence, input.profile.id);
       if (value === undefined) missing.push(entry);
       else resultsById.set(entry.sentence.sentenceId, value);
     });
@@ -366,7 +428,12 @@ export class CachedAnalysisService implements AnalysisService {
   async analyzeDetail(input: DetailInput, signal: AbortSignal): Promise<DetailOutcome> {
     if (signal.aborted) throw cancellationError();
     const key = await this.detailKey(input);
-    const cached = await this.options.cache.getDetail<DetailAnalysis>(key);
+    const cached = validateCachedDetail(
+      await this.options.cache.getDetail<unknown>(key),
+      input.sentence,
+      input.focus,
+      input.profile.id,
+    );
     if (signal.aborted) throw cancellationError();
     if (cached !== undefined) return { result: cached, cacheHit: true };
 
@@ -404,7 +471,11 @@ export class CachedAnalysisService implements AnalysisService {
   async reanalyzeWithFeedback(input: CorrectionInput, signal: AbortSignal): Promise<CoreOutcome> {
     if (signal.aborted) throw cancellationError();
     const key = await this.correctionKey(input);
-    const cached = await this.options.cache.getCorrection<CoreAnalysis>(key);
+    const cached = validateCachedCore(
+      await this.options.cache.getCorrection<unknown>(key),
+      input.sentence,
+      input.profile.id,
+    );
     if (signal.aborted) throw cancellationError();
     if (cached !== undefined) return { result: cached, cacheHit: true };
 
@@ -430,7 +501,7 @@ export class CachedAnalysisService implements AnalysisService {
         [
           {
             role: "user",
-            content: buildRepairPrompt([input.sentence], validation.errors, raw),
+            content: correctionRepairPrompt(input, validation.errors, raw),
           },
         ],
         CORE_SCHEMA,

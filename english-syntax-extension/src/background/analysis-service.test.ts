@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GrammarRole } from "../shared/grammar";
-import type { CoreAnalysis, DetailAnalysis, TokenRange } from "../shared/grammar";
+import type { CoreAnalysis, TokenRange } from "../shared/grammar";
 import type { SentenceInput } from "../shared/protocol";
 import { ModelRequestError } from "./openai-compatible-adapter";
 import type { ModelProfile } from "./config-repository";
@@ -76,16 +76,16 @@ function rawDetail(focus: TokenRange) {
 }
 
 class MemoryCache implements AnalysisCachePort {
-  readonly core = new Map<string, CoreAnalysis>();
-  readonly detail = new Map<string, DetailAnalysis>();
-  readonly correction = new Map<string, CoreAnalysis>();
+  readonly core = new Map<string, unknown>();
+  readonly detail = new Map<string, unknown>();
+  readonly correction = new Map<string, unknown>();
 
   getCore<T>(key: string): Promise<T | undefined> {
     return Promise.resolve(this.core.get(key) as T | undefined);
   }
 
   putCore<T>(key: string, _profileId: string, value: T): Promise<void> {
-    this.core.set(key, value as CoreAnalysis);
+    this.core.set(key, value);
     return Promise.resolve();
   }
 
@@ -94,7 +94,7 @@ class MemoryCache implements AnalysisCachePort {
   }
 
   putDetail<T>(key: string, _profileId: string, value: T): Promise<void> {
-    this.detail.set(key, value as DetailAnalysis);
+    this.detail.set(key, value);
     return Promise.resolve();
   }
 
@@ -103,7 +103,7 @@ class MemoryCache implements AnalysisCachePort {
   }
 
   putCorrection<T>(key: string, _profileId: string, value: T): Promise<void> {
-    this.correction.set(key, value as CoreAnalysis);
+    this.correction.set(key, value);
     return Promise.resolve();
   }
 }
@@ -173,6 +173,87 @@ describe("CachedAnalysisService core orchestration", () => {
     });
     expect(scheduler.schedule).not.toHaveBeenCalled();
     expect(adapter.completeJson).not.toHaveBeenCalled();
+  });
+
+  it("rebinds a same-text core cache hit to the current sentence ID and profile", async () => {
+    const reboundSentence = { ...sentenceOne, sentenceId: "sentence-rebound" };
+    const { adapter, cache, scheduler, service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
+    await service.analyzeCore(coreInput(), new AbortController().signal);
+    const key = cache.core.keys().next().value;
+    if (key === undefined) throw new Error("expected a core cache entry");
+    cache.core.set(key, { ...coreAnalysis(sentenceOne), modelProfileId: "stale-profile" });
+    adapter.completeJson.mockClear();
+    scheduler.schedule.mockClear();
+
+    const outcome = await service.analyzeCore(
+      coreInput([reboundSentence]),
+      new AbortController().signal,
+    );
+
+    expect(outcome).toEqual({
+      result: [coreAnalysis(reboundSentence)],
+      failures: [],
+      cacheHit: true,
+    });
+    expect(scheduler.schedule).not.toHaveBeenCalled();
+    expect(adapter.completeJson).not.toHaveBeenCalled();
+  });
+
+  it("treats a same-text cache entry with incompatible tokenization as a miss", async () => {
+    const retokenized: SentenceInput = {
+      ...sentenceOne,
+      sentenceId: "sentence-retokenized",
+      tokens: [
+        {
+          id: 0,
+          text: "Learners read",
+          start: 0,
+          end: 13,
+          leadingWhitespace: "",
+          punctuation: false,
+        },
+        { id: 1, text: ".", start: 13, end: 14, leadingWhitespace: "", punctuation: true },
+      ],
+    };
+    const retokenizedRaw = {
+      sentenceId: retokenized.sentenceId,
+      components: [{ startToken: 0, endToken: 1, role: "SUBJECT", translation: "学习者阅读" }],
+    };
+    const { adapter, service } = harness([
+      { sentences: [rawCore(sentenceOne)] },
+      { sentences: [retokenizedRaw] },
+    ]);
+    await service.analyzeCore(coreInput(), new AbortController().signal);
+
+    const outcome = await service.analyzeCore(
+      coreInput([retokenized]),
+      new AbortController().signal,
+    );
+
+    expect(outcome.cacheHit).toBe(false);
+    expect(outcome.result[0]).toMatchObject({
+      sentenceId: retokenized.sentenceId,
+      components: [{ startToken: 0, endToken: 1 }],
+      modelProfileId: profile.id,
+    });
+    expect(adapter.completeJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats malformed cached core fields as a miss", async () => {
+    const { adapter, cache, service } = harness([
+      { sentences: [rawCore(sentenceOne)] },
+      { sentences: [rawCore(sentenceOne)] },
+    ]);
+    await service.analyzeCore(coreInput(), new AbortController().signal);
+    const key = cache.core.keys().next().value;
+    if (key === undefined) throw new Error("expected a core cache entry");
+    cache.core.set(key, { components: "not-an-array" });
+
+    const outcome = await service.analyzeCore(coreInput(), new AbortController().signal);
+
+    expect(outcome.cacheHit).toBe(false);
+    expect(outcome.result).toEqual([coreAnalysis(sentenceOne)]);
+    expect(adapter.completeJson).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates concurrent identical misses into one model call", async () => {
@@ -349,6 +430,94 @@ describe("CachedAnalysisService isolated analysis modes", () => {
 
     expect(adapter.completeJson).toHaveBeenCalledTimes(2);
     expect(cache.detail.size).toBe(2);
+  });
+
+  it("treats stale detail focus as a miss and stamps the current profile", async () => {
+    const focus = { startToken: 1, endToken: 2 };
+    const { adapter, cache, service } = harness([rawDetail(focus), rawDetail(focus)]);
+    const input = {
+      profile,
+      documentId: "document-1",
+      sentence: sentenceOne,
+      core: coreAnalysis(sentenceOne),
+      focus,
+    };
+    await service.analyzeDetail(input, new AbortController().signal);
+    const key = cache.detail.keys().next().value;
+    if (key === undefined) throw new Error("expected a detail cache entry");
+    cache.detail.set(key, {
+      ...rawDetail({ startToken: 0, endToken: 0 }),
+      modelProfileId: "stale-profile",
+    });
+
+    const outcome = await service.analyzeDetail(input, new AbortController().signal);
+
+    expect(outcome.cacheHit).toBe(false);
+    expect(outcome.result).toEqual({ ...rawDetail(focus), modelProfileId: profile.id });
+    expect(adapter.completeJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebinds a same-text correction cache hit to the current sentence and profile", async () => {
+    const reboundSentence = { ...sentenceOne, sentenceId: "sentence-correction-rebound" };
+    const { adapter, cache, scheduler, service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
+    const base = {
+      profile,
+      documentId: "document-1",
+      sentence: sentenceOne,
+      core: coreAnalysis(sentenceOne),
+      pageUrl: "https://reader.example/article",
+      sentenceInstanceId: "instance-1",
+      feedback: "Treat read as the predicate.",
+    };
+    await service.reanalyzeWithFeedback(base, new AbortController().signal);
+    const key = cache.correction.keys().next().value;
+    if (key === undefined) throw new Error("expected a correction cache entry");
+    cache.correction.set(key, {
+      ...coreAnalysis(sentenceOne),
+      modelProfileId: "stale-profile",
+    });
+    adapter.completeJson.mockClear();
+    scheduler.schedule.mockClear();
+
+    const outcome = await service.reanalyzeWithFeedback(
+      {
+        ...base,
+        sentence: reboundSentence,
+        core: coreAnalysis(reboundSentence),
+      },
+      new AbortController().signal,
+    );
+
+    expect(outcome).toEqual({ result: coreAnalysis(reboundSentence), cacheHit: true });
+    expect(scheduler.schedule).not.toHaveBeenCalled();
+    expect(adapter.completeJson).not.toHaveBeenCalled();
+  });
+
+  it("retains feedback and prior verified core in the single correction repair", async () => {
+    const invalid = { sentences: [{ ...rawCore(sentenceOne), components: [] }] };
+    const { adapter, cache, service } = harness([invalid, { sentences: [rawCore(sentenceOne)] }]);
+    const input = {
+      profile,
+      documentId: "document-1",
+      sentence: sentenceOne,
+      core: coreAnalysis(sentenceOne),
+      pageUrl: "https://reader.example/article",
+      sentenceInstanceId: "instance-1",
+      feedback: "Treat read as the predicate, not a noun.",
+    };
+
+    const repaired = await service.reanalyzeWithFeedback(input, new AbortController().signal);
+    const cached = await service.reanalyzeWithFeedback(input, new AbortController().signal);
+
+    expect(repaired).toEqual({ result: coreAnalysis(sentenceOne), cacheHit: false });
+    expect(cached).toEqual({ result: coreAnalysis(sentenceOne), cacheHit: true });
+    expect(adapter.completeJson).toHaveBeenCalledTimes(2);
+    const repairMessages = adapter.completeJson.mock.calls[1]![1] as AnalysisModelWork["messages"];
+    expect(repairMessages[0]!.content).toContain(input.feedback);
+    expect(repairMessages[0]!.content).toContain("Previously verified core analysis");
+    expect(repairMessages[0]!.content).toContain('"modelProfileId": "profile-1"');
+    expect(repairMessages[0]!.content).toContain("must be a non-empty array");
+    expect(cache.correction.size).toBe(1);
   });
 
   it("isolates corrections by page, sentence instance, and feedback in the correction store", async () => {
