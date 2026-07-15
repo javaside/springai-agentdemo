@@ -67,6 +67,23 @@ describe("BlockReplacement", () => {
     expect(block.isConnected).toBe(false);
   });
 
+  it("leaves no empty class attribute behind on an element that never had one", () => {
+    document.body.replaceChildren();
+    const original = document.createElement("p");
+    original.textContent = "Original without class";
+    document.body.append(original);
+    expect(original.hasAttribute("class")).toBe(false);
+    const block = learningBlock(["sentence-1"]);
+    renderReady(block);
+    const replacement = new BlockReplacement();
+
+    replacement.show(original, block);
+    replacement.restore();
+
+    expect(original.hasAttribute("class")).toBe(false);
+    expect(original.outerHTML).toBe("<p>Original without class</p>");
+  });
+
   it("does not insert or hide an empty or partially resolved learning block", () => {
     const original = document.querySelector("p")!;
     const replacement = new BlockReplacement();

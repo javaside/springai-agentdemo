@@ -32,6 +32,7 @@ export class BlockReplacement {
   #block: HTMLElement | null = null;
   #observer: MutationObserver | null = null;
   #appliedHiddenClass: string | null = null;
+  #originalHadClassAttribute = false;
   #ownedStyle: HTMLStyleElement | null = null;
   readonly #hiddenClassSuffixFactory: HiddenClassSuffixFactory;
 
@@ -58,6 +59,7 @@ export class BlockReplacement {
     const style = createHideStyle(original.ownerDocument, hiddenClass);
     original.ownerDocument.head.append(style);
     original.after(block.host);
+    this.#originalHadClassAttribute = original.hasAttribute("class");
     original.classList.add(hiddenClass);
     this.#original = original;
     this.#block = block.host;
@@ -86,6 +88,11 @@ export class BlockReplacement {
     if (this.#appliedHiddenClass !== null) {
       this.#original?.classList.remove(this.#appliedHiddenClass);
       reservedHiddenClasses.delete(this.#appliedHiddenClass);
+      // classList.remove leaves an empty class="" attribute behind; drop it
+      // when the original element never had one so restoration is exact.
+      if (!this.#originalHadClassAttribute && this.#original?.getAttribute("class") === "") {
+        this.#original.removeAttribute("class");
+      }
     }
     this.#ownedStyle?.remove();
     this.#block?.remove();
