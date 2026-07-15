@@ -1,17 +1,18 @@
 export function normalizeBaseUrl(baseUrl: string): string {
+  const trimmedBaseUrl = baseUrl.trim();
+  if (trimmedBaseUrl.includes("?") || trimmedBaseUrl.includes("#")) {
+    throw new Error("Model base URL must not contain query strings or fragments");
+  }
+
   let url: URL;
   try {
-    url = new URL(baseUrl);
+    url = new URL(trimmedBaseUrl);
   } catch {
     throw new Error("Model base URL must be a valid URL");
   }
 
   if (url.username || url.password) {
     throw new Error("Model base URL must not contain credentials");
-  }
-
-  if (url.search || url.hash) {
-    throw new Error("Model base URL must not contain query strings or fragments");
   }
 
   const isLocalHttp =

@@ -34,6 +34,8 @@ describe("model profile URL safety", () => {
   });
 
   it.each([
+    "https://api.example.com/v1?",
+    "https://api.example.com/v1/chat/completions?",
     "https://api.example.com/v1?tenant=syntax",
     "https://api.example.com/v1/chat/completions?tenant=syntax",
   ])("rejects a query string in model URL %s", (baseUrl) => {
@@ -42,6 +44,8 @@ describe("model profile URL safety", () => {
   });
 
   it.each([
+    "https://api.example.com/v1#",
+    "https://api.example.com/v1/chat/completions#",
     "https://api.example.com/v1#syntax",
     "https://api.example.com/v1/chat/completions#syntax",
   ])("rejects a fragment in model URL %s", (baseUrl) => {
