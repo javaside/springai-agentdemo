@@ -6,7 +6,7 @@
 
 **Architecture:** 扩展作为独立的 `english-syntax-extension` npm 工程加入仓库，不进入 Maven `<modules>`。Content Script 只负责正文识别、分句分词和 Shadow DOM 学习块；Manifest V3 Service Worker 独占 API Key、模型请求、校验、队列和 IndexedDB 缓存；Popup 与 Options 通过带版本的判别联合消息访问后台。
 
-**Tech Stack:** Chrome Manifest V3、Chrome 120+、Node.js 22.20+、TypeScript 7.0.2、Vite 8.1.4、vite-plugin-web-extension 4.5.1、Vitest 4.1.10、Happy DOM 20.10.6、fake-indexeddb 6.2.5、Playwright 1.61.1、ESLint 10.7.0、Prettier 3.9.5。
+**Tech Stack:** Chrome Manifest V3、Chrome 120+、Node.js 22.20+、TypeScript 6.0.3、Vite 8.1.4、vite-plugin-web-extension 4.5.1、Vitest 4.1.10、Happy DOM 20.10.6、fake-indexeddb 6.2.5、Playwright 1.61.1、ESLint 10.7.0、Prettier 3.9.5。
 
 **设计文档：** `docs/superpowers/specs/2026-07-15-chrome-english-syntax-learning-extension-design.md`
 
@@ -153,7 +153,7 @@ Create `package.json` with exact versions:
     "fake-indexeddb": "6.2.5",
     "happy-dom": "20.10.6",
     "prettier": "3.9.5",
-    "typescript": "7.0.2",
+    "typescript": "6.0.3",
     "typescript-eslint": "8.64.0",
     "vite": "8.1.4",
     "vite-plugin-web-extension": "4.5.1",
