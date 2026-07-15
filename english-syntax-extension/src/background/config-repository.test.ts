@@ -53,6 +53,18 @@ describe("ConfigRepository", () => {
     });
   });
 
+  it("activates the first saved profile so a fresh install can analyze immediately", async () => {
+    const repository = new ConfigRepository(storageMock().area);
+
+    await repository.saveProfile(profile);
+    expect(await repository.getActiveProfileId()).toBe(profile.id);
+    expect((await repository.getActiveProfile())?.id).toBe(profile.id);
+
+    // A later save must not steal the active slot.
+    await repository.saveProfile({ ...profile, id: "another", name: "Another" });
+    expect(await repository.getActiveProfileId()).toBe(profile.id);
+  });
+
   it("selects and returns the active profile", async () => {
     const repository = new ConfigRepository(storageMock().area);
     await repository.saveProfile(profile);

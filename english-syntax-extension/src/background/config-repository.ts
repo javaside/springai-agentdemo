@@ -91,6 +91,11 @@ export class ConfigRepository {
       profiles[existingIndex] = validated;
     }
     await this.storage.set({ [PROFILES_KEY]: profiles });
+    // A fresh install has no active profile; activate the first one saved so
+    // the options page alone is enough to start analyzing.
+    if ((await this.getActiveProfileId()) === undefined) {
+      await this.storage.set({ [ACTIVE_PROFILE_ID_KEY]: validated.id });
+    }
   }
 
   async listProfiles(): Promise<ModelProfile[]> {

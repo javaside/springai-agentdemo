@@ -87,6 +87,15 @@ test("options page saves a localhost profile, holds the exact loopback grant and
     return (permissions.origins ?? []).sort();
   });
   expect(origins).toEqual(["http://127.0.0.1/*", "http://localhost/*"]);
+
+  // The first profile saved through the options page must become active, or
+  // a fresh install passes the connection test yet fails every analysis
+  // with CONFIG_MISSING.
+  const activeProfileId = await harness.serviceWorker.evaluate(async () => {
+    const stored = await chrome.storage.local.get("activeProfileId.v1");
+    return stored["activeProfileId.v1"];
+  });
+  expect(typeof activeProfileId).toBe("string");
 });
 
 test("the shipped manifest keeps model hosts optional", () => {
