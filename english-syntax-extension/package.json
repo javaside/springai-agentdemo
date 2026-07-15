@@ -19,6 +19,7 @@
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.61.1",
     "@types/chrome": "0.1.31",
+    "@types/node": "26.1.1",
     "eslint": "10.7.0",
     "fake-indexeddb": "6.2.5",
     "happy-dom": "20.10.6",

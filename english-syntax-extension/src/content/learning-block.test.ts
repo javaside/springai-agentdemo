@@ -199,7 +199,9 @@ describe("SyntaxLearningBlock", () => {
     document.body.append(element.host);
     element.renderCore(sentence, tokens, analysis);
     element.setDetailLoading("sentence-1", { startToken: 1, endToken: 1 });
-    expect(element.host.shadowRoot!.querySelector("[aria-busy='true']")?.textContent).toContain("加载");
+    expect(element.host.shadowRoot!.querySelector("[aria-busy='true']")?.textContent).toContain(
+      "加载",
+    );
 
     const detail: DetailAnalysis = {
       sentenceId: "sentence-1",
