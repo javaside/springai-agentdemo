@@ -1,6 +1,16 @@
 import { SyntaxLearningBlock } from "./learning-block";
 
 const STYLE_ATTRIBUTE = "data-syntax-learning-hide";
+const SAFE_SUFFIX = /^[A-Za-z0-9_-]+$/u;
+const reservedHiddenClasses = new Set<string>();
+let nextHiddenClassId = 0;
+
+export type HiddenClassSuffixFactory = (attempt: number) => string;
+
+function defaultHiddenClassSuffix(): string {
+  nextHiddenClassId += 1;
+  return String(nextHiddenClassId);
+}
 
 export interface SentenceFailure {
   sentenceId: string;
@@ -8,14 +18,11 @@ export interface SentenceFailure {
   message: string;
 }
 
-function ensureHideStyle(document: Document): void {
-  if (document.head.querySelector(`style[${STYLE_ATTRIBUTE}]`) !== null) {
-    return;
-  }
+function createHideStyle(document: Document, hiddenClass: string): HTMLStyleElement {
   const style = document.createElement("style");
-  style.setAttribute(STYLE_ATTRIBUTE, "");
-  style.textContent = `.${BlockReplacement.hiddenClass} { display: none !important; }`;
-  document.head.append(style);
+  style.setAttribute(STYLE_ATTRIBUTE, hiddenClass);
+  style.textContent = `.${hiddenClass} { display: none !important; }`;
+  return style;
 }
 
 export class BlockReplacement {
@@ -24,7 +31,13 @@ export class BlockReplacement {
   #original: HTMLElement | null = null;
   #block: HTMLElement | null = null;
   #observer: MutationObserver | null = null;
-  #addedHiddenClass = false;
+  #appliedHiddenClass: string | null = null;
+  #ownedStyle: HTMLStyleElement | null = null;
+  readonly #hiddenClassSuffixFactory: HiddenClassSuffixFactory;
+
+  constructor(hiddenClassSuffixFactory: HiddenClassSuffixFactory = defaultHiddenClassSuffix) {
+    this.#hiddenClassSuffixFactory = hiddenClassSuffixFactory;
+  }
 
   get active(): boolean {
     return this.#original !== null && this.#block !== null;
@@ -41,14 +54,15 @@ export class BlockReplacement {
     if (original.parentNode === null) {
       return;
     }
-    ensureHideStyle(original.ownerDocument);
+    const hiddenClass = this.#reserveHiddenClass(original);
+    const style = createHideStyle(original.ownerDocument, hiddenClass);
+    original.ownerDocument.head.append(style);
     original.after(block);
-    this.#addedHiddenClass = !original.classList.contains(BlockReplacement.hiddenClass);
-    if (this.#addedHiddenClass) {
-      original.classList.add(BlockReplacement.hiddenClass);
-    }
+    original.classList.add(hiddenClass);
     this.#original = original;
     this.#block = block;
+    this.#appliedHiddenClass = hiddenClass;
+    this.#ownedStyle = style;
     this.#observePageRemoval(original.ownerDocument);
   }
 
@@ -69,13 +83,16 @@ export class BlockReplacement {
   restore(): void {
     this.#observer?.disconnect();
     this.#observer = null;
-    if (this.#addedHiddenClass) {
-      this.#original?.classList.remove(BlockReplacement.hiddenClass);
+    if (this.#appliedHiddenClass !== null) {
+      this.#original?.classList.remove(this.#appliedHiddenClass);
+      reservedHiddenClasses.delete(this.#appliedHiddenClass);
     }
+    this.#ownedStyle?.remove();
     this.#block?.remove();
     this.#original = null;
     this.#block = null;
-    this.#addedHiddenClass = false;
+    this.#appliedHiddenClass = null;
+    this.#ownedStyle = null;
   }
 
   #observePageRemoval(document: Document): void {
@@ -85,5 +102,25 @@ export class BlockReplacement {
       }
     });
     this.#observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  #reserveHiddenClass(original: HTMLElement): string {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const suffix = this.#hiddenClassSuffixFactory(attempt);
+      if (!SAFE_SUFFIX.test(suffix)) {
+        throw new Error(
+          "Hidden-class suffix must contain only letters, numbers, underscores, or hyphens",
+        );
+      }
+      const candidate = `${BlockReplacement.hiddenClass}-${suffix}`;
+      if (
+        !reservedHiddenClasses.has(candidate) &&
+        original.ownerDocument.getElementsByClassName(candidate).length === 0
+      ) {
+        reservedHiddenClasses.add(candidate);
+        return candidate;
+      }
+    }
+    throw new Error("Unable to allocate a collision-free syntax-learning hide class");
   }
 }

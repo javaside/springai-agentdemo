@@ -96,6 +96,7 @@ describe("BlockReplacement", () => {
 
   it("inserts and hides a fully ready success block", () => {
     const original = document.querySelector("p")!;
+    const originalClasses = [...original.classList];
     const block = learningBlock(["sentence-1"]);
     renderReady(block);
     const replacement = new BlockReplacement();
@@ -103,7 +104,8 @@ describe("BlockReplacement", () => {
     replacement.show(original, block);
 
     expect(original.nextElementSibling).toBe(block);
-    expect(original.classList.contains(BlockReplacement.hiddenClass)).toBe(true);
+    expect(getComputedStyle(original).display).toBe("none");
+    expect(original.classList).toHaveLength(originalClasses.length + 1);
   });
 
   it("renders every failed sentence as original text before hiding a partially successful block", () => {
@@ -119,7 +121,7 @@ describe("BlockReplacement", () => {
     const failure = block.shadowRoot!.querySelector(".sentence-failure")!;
     expect(failure.textContent).toContain("This sentence stays original.");
     expect(failure.textContent).toContain("解析失败");
-    expect(original.classList.contains(BlockReplacement.hiddenClass)).toBe(true);
+    expect(getComputedStyle(original).display).toBe("none");
   });
 
   it("does not hide when a partial failure has not been represented", () => {
@@ -165,6 +167,7 @@ describe("BlockReplacement", () => {
 
   it("moves cleanly to a new pair and registers one important hiding rule", () => {
     const first = document.querySelector("p")!;
+    const firstClass = first.className;
     const firstBlock = learningBlock(["sentence-1"]);
     renderReady(firstBlock);
     const replacement = new BlockReplacement();
@@ -176,24 +179,76 @@ describe("BlockReplacement", () => {
 
     replacement.show(second, secondBlock);
 
-    expect(first.classList.contains(BlockReplacement.hiddenClass)).toBe(false);
+    expect(first.className).toBe(firstClass);
     expect(firstBlock.isConnected).toBe(false);
     expect(document.querySelectorAll(`style[data-syntax-learning-hide]`)).toHaveLength(1);
     expect(document.querySelector("style")!.textContent).toContain("display: none !important");
   });
 
-  it("preserves a pre-existing hide-class collision through show and restore", () => {
+  it("preserves display, visibility, and exact classes when the original has the default hide class", () => {
     const original = document.querySelector("p")!;
     original.classList.add(BlockReplacement.hiddenClass);
     const originalClass = original.className;
+    const display = getComputedStyle(original).display;
+    const visibility = getComputedStyle(original).visibility;
     const block = learningBlock(["sentence-1"]);
     renderReady(block);
     const replacement = new BlockReplacement();
 
     replacement.show(original, block);
+    expect(getComputedStyle(original).display).toBe("none");
+    expect(
+      [...document.querySelectorAll("style[data-syntax-learning-hide]")].every(
+        (style) => !style.textContent?.includes(`.${BlockReplacement.hiddenClass} {`),
+      ),
+    ).toBe(true);
     replacement.restore();
 
     expect(original.className).toBe(originalClass);
     expect(original.classList.contains(BlockReplacement.hiddenClass)).toBe(true);
+    expect(getComputedStyle(original).display).toBe(display);
+    expect(getComputedStyle(original).visibility).toBe(visibility);
+    expect(document.querySelector("style[data-syntax-learning-hide]")).toBeNull();
+  });
+
+  it("owns unique classes and styles so simultaneous replacements restore independently", () => {
+    const first = document.querySelector("p")!;
+    const second = document.createElement("p");
+    second.className = "second-copy";
+    second.textContent = "Second original";
+    document.body.append(second);
+    const firstClass = first.className;
+    const secondClass = second.className;
+    const firstClasses = new Set(first.classList);
+    const secondClasses = new Set(second.classList);
+    const firstDisplay = getComputedStyle(first).display;
+    const secondDisplay = getComputedStyle(second).display;
+    const firstBlock = learningBlock(["sentence-1"]);
+    const secondBlock = learningBlock(["sentence-2"]);
+    renderReady(firstBlock);
+    renderReady(secondBlock, "sentence-2");
+    const firstReplacement = new BlockReplacement();
+    const secondReplacement = new BlockReplacement();
+
+    firstReplacement.show(first, firstBlock);
+    secondReplacement.show(second, secondBlock);
+
+    const firstAddedClass = [...first.classList].find((name) => !firstClasses.has(name));
+    const secondAddedClass = [...second.classList].find((name) => !secondClasses.has(name));
+    expect(firstAddedClass).toBeDefined();
+    expect(secondAddedClass).toBeDefined();
+    expect(firstAddedClass).not.toBe(secondAddedClass);
+    expect(document.querySelectorAll("style[data-syntax-learning-hide]")).toHaveLength(2);
+
+    firstReplacement.restore();
+    expect(first.className).toBe(firstClass);
+    expect(getComputedStyle(first).display).toBe(firstDisplay);
+    expect(getComputedStyle(second).display).toBe("none");
+    expect(document.querySelectorAll("style[data-syntax-learning-hide]")).toHaveLength(1);
+
+    secondReplacement.restore();
+    expect(second.className).toBe(secondClass);
+    expect(getComputedStyle(second).display).toBe(secondDisplay);
+    expect(document.querySelector("style[data-syntax-learning-hide]")).toBeNull();
   });
 });
