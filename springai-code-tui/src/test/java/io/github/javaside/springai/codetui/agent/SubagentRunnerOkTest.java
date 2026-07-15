@@ -29,15 +29,15 @@ class SubagentRunnerOkTest {
         }
     }
 
-    /** 假 ChatModel：success 返回固定文本；否则 call 抛异常。ChatModel 抽象方法只有 call/stream。 */
+    /** 假 ChatModel：success 流式返回固定文本；否则流以异常终止。子 agent 的 call 已桥接到 stream（RetryingChatModel）。 */
     private static ChatModel chatModel(boolean success) {
         return new ChatModel() {
             @Override public ChatResponse call(Prompt prompt) {
-                if (!success) throw new RuntimeException("boom");
-                return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
+                throw new UnsupportedOperationException("subagent path bridges to stream()");
             }
             @Override public Flux<ChatResponse> stream(Prompt prompt) {
-                throw new UnsupportedOperationException("blocking path only");
+                if (!success) return Flux.error(new RuntimeException("boom"));
+                return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("done")))));
             }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };
@@ -78,6 +78,26 @@ class SubagentRunnerOkTest {
         assertEquals(Boolean.FALSE, lis.ok);
     }
 
+    /** 失败文本应摊平 cause 链——SDK 顶层 message 笼统（如 "Error reading response"），根因在 cause 里。 */
+    @Test
+    void failure_textCarriesCauseChain() {
+        ChatModel throwing = new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) {
+                // 带可重试特征（end-of-input）：穷尽重试后原样抛出，验证失败文本仍摊平 cause 链
+                return Flux.error(new RuntimeException("Error reading response",
+                        new java.io.IOException("No content to map due to end-of-input")));
+            }
+            @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
+        };
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(throwing)));
+        RecordingListener lis = new RecordingListener();
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), lis, "");
+        assertThrows(RuntimeException.class, () -> runner.run(spec(), "hi", "desc", 1L));
+        assertTrue(lis.finalText.contains("Error reading response"), "应含顶层 message");
+        assertTrue(lis.finalText.contains("No content to map due to end-of-input"), "应含 cause 根因");
+    }
+
     /**
      * 端到端 wiring：run() 应把 spec 系统提示 + 项目指令一并写进发给模型的 Prompt 的系统消息。
      * 用捕获式假 ChatModel 抓下真实 Prompt，断言系统消息文本两者兼含——覆盖 effectiveSystemPrompt 的纯函数单测够不着的「真的接进了 .system(...)」这一段。
@@ -86,12 +106,10 @@ class SubagentRunnerOkTest {
     void run_carriesProjectInstructionsIntoPromptSystemMessage() {
         AtomicReference<Prompt> captured = new AtomicReference<>();
         ChatModel capturing = new ChatModel() {
-            @Override public ChatResponse call(Prompt prompt) {
-                captured.set(prompt);
-                return new ChatResponse(List.of(new Generation(new AssistantMessage("done"))));
-            }
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
             @Override public Flux<ChatResponse> stream(Prompt prompt) {
-                throw new UnsupportedOperationException("blocking path only");
+                captured.set(prompt);
+                return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("done")))));
             }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };

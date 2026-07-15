@@ -26,12 +26,10 @@ class SubagentRunnerParallelTest {
 
     private static ChatModel chatModel(String replyText, boolean shouldThrow) {
         return new ChatModel() {
-            @Override public ChatResponse call(Prompt prompt) {
-                if (shouldThrow) throw new RuntimeException("boom");
-                return new ChatResponse(List.of(new Generation(new AssistantMessage(replyText))));
-            }
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
             @Override public Flux<ChatResponse> stream(Prompt prompt) {
-                throw new UnsupportedOperationException("blocking path only");
+                if (shouldThrow) return Flux.error(new RuntimeException("boom"));
+                return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage(replyText)))));
             }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };
@@ -56,10 +54,10 @@ class SubagentRunnerParallelTest {
     void runAll_returnsResultsInInputOrder() {
         // 回显 prompt 的假模型：结果可区分，才能真正验证「按入参顺序」
         ChatModel echo = new ChatModel() {
-            @Override public ChatResponse call(Prompt prompt) {
-                return new ChatResponse(List.of(new Generation(new AssistantMessage(prompt.getContents()))));
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) {
+                return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage(prompt.getContents())))));
             }
-            @Override public Flux<ChatResponse> stream(Prompt prompt) { throw new UnsupportedOperationException(); }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(echo)));
@@ -78,12 +76,10 @@ class SubagentRunnerParallelTest {
     @Test
     void runAll_isolatesFailures_othersStillSucceed() {
         ChatModel model = new ChatModel() {
-            @Override public ChatResponse call(Prompt prompt) {
-                if (prompt.getContents().contains("fail")) throw new RuntimeException("boom");
-                return new ChatResponse(List.of(new Generation(new AssistantMessage("ok"))));
-            }
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
             @Override public Flux<ChatResponse> stream(Prompt prompt) {
-                throw new UnsupportedOperationException("blocking path only");
+                if (prompt.getContents().contains("fail")) return Flux.error(new RuntimeException("boom"));
+                return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("ok")))));
             }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };
@@ -123,14 +119,16 @@ class SubagentRunnerParallelTest {
         AtomicInteger maxObserved = new AtomicInteger();
         CountDownLatch release = new CountDownLatch(1);
         ChatModel model = new ChatModel() {
-            @Override public ChatResponse call(Prompt prompt) {
-                int now = inFlight.incrementAndGet();
-                maxObserved.accumulateAndGet(now, Math::max);
-                try { release.await(2, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                inFlight.decrementAndGet();
-                return new ChatResponse(List.of(new Generation(new AssistantMessage("ok"))));
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) {
+                return Flux.defer(() -> {
+                    int now = inFlight.incrementAndGet();
+                    maxObserved.accumulateAndGet(now, Math::max);
+                    try { release.await(2, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    inFlight.decrementAndGet();
+                    return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("ok")))));
+                });
             }
-            @Override public Flux<ChatResponse> stream(Prompt prompt) { throw new UnsupportedOperationException(); }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(model)));
@@ -168,13 +166,15 @@ class SubagentRunnerParallelTest {
         CountDownLatch started = new CountDownLatch(1);
         // 阻塞到被中断的假模型：中断时以 RuntimeException 传播，使 run() 正常 unwind、finally 递减在飞计数。
         ChatModel blocking = new ChatModel() {
-            @Override public ChatResponse call(Prompt prompt) {
-                started.countDown();
-                try { Thread.sleep(5000); }
-                catch (InterruptedException e) { throw new RuntimeException("interrupted", e); }
-                return new ChatResponse(List.of(new Generation(new AssistantMessage("ok"))));
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) {
+                return Flux.defer(() -> {
+                    started.countDown();
+                    try { Thread.sleep(5000); }
+                    catch (InterruptedException e) { return Flux.error(new RuntimeException("interrupted", e)); }
+                    return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("ok")))));
+                });
             }
-            @Override public Flux<ChatResponse> stream(Prompt prompt) { throw new UnsupportedOperationException(); }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(blocking)));
@@ -227,13 +227,15 @@ class SubagentRunnerParallelTest {
 
     @Test
     void runAll_whenCallingThreadInterrupted_throwsWrappedInterrupt() throws InterruptedException {
-        // 假模型：call 阻塞一会儿，确保主调线程停在 invokeAll 上，可被中断
+        // 假模型：流阻塞一会儿，确保主调线程停在 invokeAll 上，可被中断
         ChatModel blocking = new ChatModel() {
-            @Override public ChatResponse call(Prompt prompt) {
-                try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                return new ChatResponse(List.of(new Generation(new AssistantMessage("ok"))));
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) {
+                return Flux.defer(() -> {
+                    try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("ok")))));
+                });
             }
-            @Override public Flux<ChatResponse> stream(Prompt prompt) { throw new UnsupportedOperationException(); }
             @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
         };
         ProviderRegistry reg = new ProviderRegistry(List.of(provider(blocking)));

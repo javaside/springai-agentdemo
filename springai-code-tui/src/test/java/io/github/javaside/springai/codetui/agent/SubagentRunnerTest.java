@@ -44,4 +44,39 @@ class SubagentRunnerTest {
         assertTrue(kept.contains("glob"));
         assertEquals(3, kept.size());   // write/shell 被 deny 剔除
     }
+
+    // ---- describe：cause 链摊平 ----
+
+    @Test
+    void describeFlattensCauseChain() {
+        // 模拟 openai-java 的典型形态：笼统顶层 message + Jackson 根因在 cause
+        RuntimeException ex = new RuntimeException("Error reading response",
+                new java.io.IOException("No content to map due to end-of-input"));
+        assertEquals("Error reading response ← IOException: No content to map due to end-of-input",
+                SubagentRunner.describe(ex));
+    }
+
+    @Test
+    void describeSkipsAdjacentDuplicateMessages() {
+        // CompletionException 等 wrapper 会复读 cause 的 message——不应重复出现
+        RuntimeException inner = new RuntimeException("connection reset");
+        RuntimeException wrapper = new RuntimeException("connection reset", inner);
+        assertEquals("connection reset", SubagentRunner.describe(wrapper));
+    }
+
+    @Test
+    void describeUsesClassNameWhenMessageBlank() {
+        RuntimeException ex = new RuntimeException("outer", new NullPointerException());
+        assertEquals("outer ← NullPointerException: NullPointerException", SubagentRunner.describe(ex));
+    }
+
+    @Test
+    void describeCapsDepthOnCyclicChain() {
+        RuntimeException a = new RuntimeException("a");
+        RuntimeException b = new RuntimeException("b", a);
+        a.initCause(b);   // 人为构环
+        // 封顶 5 层，不死循环即可；首层无前缀，后续带类型前缀
+        String s = SubagentRunner.describe(b);
+        assertTrue(s.startsWith("b ← RuntimeException: a"));
+    }
 }
