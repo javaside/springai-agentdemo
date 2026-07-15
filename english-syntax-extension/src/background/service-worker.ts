@@ -42,6 +42,10 @@ export interface ServiceWorkerDependencies {
   analysisService: AnalysisService;
   scheduler: SchedulerPort;
   cache: CachePort;
+  profileProbe: (
+    profile: ModelProfile,
+    signal: AbortSignal,
+  ) => Promise<"supported" | "unsupported">;
 }
 
 interface ActiveDocument {
@@ -264,6 +268,14 @@ export function registerServiceWorker(
       sender.tab === undefined &&
       sender.id === chromeApi.runtime.id &&
       sender.url?.startsWith(`chrome-extension://${chromeApi.runtime.id}/`) === true;
+    const trustedPageControl =
+      trustedExtensionUi &&
+      (request.type === "START_SESSION" ||
+        request.type === "PAUSE_SESSION" ||
+        request.type === "STOP_SESSION" ||
+        request.type === "GET_SESSION_STATUS" ||
+        request.type === "SWITCH_PROFILE" ||
+        request.type === "REANALYZE_VISIBLE");
     if ("tabId" in request) {
       if (sender.tab?.id !== request.tabId && !trustedExtensionUi) {
         return errorResponse(request.requestId, "UNSUPPORTED_PAGE");
@@ -272,7 +284,8 @@ export function registerServiceWorker(
       if (
         active !== undefined &&
         active.documentId !== request.documentId &&
-        request.type !== "START_SESSION"
+        request.type !== "START_SESSION" &&
+        !trustedPageControl
       ) {
         return errorResponse(request.requestId, "REQUEST_CANCELLED");
       }
@@ -374,7 +387,7 @@ export function registerServiceWorker(
           await dependencies.configRepository.setActiveProfile(profile.id);
           const active = activeTabs.get(request.tabId);
           activeTabs.set(request.tabId, {
-            documentId: request.documentId,
+            documentId: active?.documentId ?? request.documentId,
             status: { ...(active?.status ?? emptyStatus("stopped")), profileId: profile.id },
           });
           return {
@@ -394,14 +407,16 @@ export function registerServiceWorker(
         case "START_SESSION": {
           if (!trustedExtensionUi) return errorResponse(request.requestId, "UNSUPPORTED_PAGE");
           const previous = activeTabs.get(request.tabId);
-          if (previous !== undefined && previous.documentId !== request.documentId) {
+          const documentId =
+            trustedExtensionUi && previous !== undefined ? previous.documentId : request.documentId;
+          if (previous !== undefined && previous.documentId !== documentId) {
             dependencies.scheduler.cancelDocument(previous.documentId);
           }
           await inject(request.tabId);
           const profile = await dependencies.configRepository.getActiveProfile();
           const status = emptyStatus("running", profile?.id);
-          activeTabs.set(request.tabId, { documentId: request.documentId, status });
-          await sendPageCommand(request.tabId, request.documentId, { type: "START_SESSION" });
+          activeTabs.set(request.tabId, { documentId, status });
+          await sendPageCommand(request.tabId, documentId, { type: "START_SESSION" });
           return {
             version: MESSAGE_VERSION,
             requestId: request.requestId,
@@ -413,20 +428,37 @@ export function registerServiceWorker(
         case "STOP_SESSION": {
           if (!trustedExtensionUi) return errorResponse(request.requestId, "UNSUPPORTED_PAGE");
           await inject(request.tabId);
-          await chromeApi.tabs.sendMessage(request.tabId, request);
           const previous = activeTabs.get(request.tabId);
+          const documentId = previous?.documentId ?? request.documentId;
+          await chromeApi.tabs.sendMessage(request.tabId, { ...request, documentId });
           const status = {
             ...(previous?.status ?? emptyStatus("stopped")),
             state: request.type === "PAUSE_SESSION" ? "paused" : "stopped",
           } satisfies SessionStatus;
-          activeTabs.set(request.tabId, { documentId: request.documentId, status });
-          if (request.type === "STOP_SESSION")
-            dependencies.scheduler.cancelDocument(request.documentId);
+          activeTabs.set(request.tabId, { documentId, status });
+          if (request.type === "STOP_SESSION") dependencies.scheduler.cancelDocument(documentId);
           return {
             version: MESSAGE_VERSION,
             requestId: request.requestId,
             type: "SESSION_STATUS",
             status,
+          };
+        }
+        case "REANALYZE_VISIBLE": {
+          if (!trustedExtensionUi) return errorResponse(request.requestId, "UNSUPPORTED_PAGE");
+          const active = activeTabs.get(request.tabId);
+          if (active === undefined || active.status.state === "stopped") {
+            return errorResponse(request.requestId, "UNSAFE_CONTENT_BLOCK");
+          }
+          await chromeApi.tabs.sendMessage(request.tabId, {
+            ...request,
+            documentId: active.documentId,
+          });
+          return {
+            version: MESSAGE_VERSION,
+            requestId: request.requestId,
+            type: "SESSION_STATUS",
+            status: active.status,
           };
         }
         case "PARSE_SELECTION": {
@@ -456,18 +488,54 @@ export function registerServiceWorker(
         }
         case "TEST_PROFILE": {
           const profile = await dependencies.configRepository.getProfile(request.profileId);
-          return {
-            version: MESSAGE_VERSION,
-            requestId: request.requestId,
-            type: "PROFILE_TEST_RESULT",
-            profileId: request.profileId,
-            success: profile !== undefined && !isProfilePaused(profile),
-            ...(profile === undefined
-              ? { error: errorResponse(request.requestId, "CONFIG_MISSING").error }
-              : isProfilePaused(profile)
-                ? { error: errorResponse(request.requestId, "AUTH_FAILED").error }
-                : {}),
-          };
+          if (profile === undefined) {
+            return {
+              version: MESSAGE_VERSION,
+              requestId: request.requestId,
+              type: "PROFILE_TEST_RESULT",
+              profileId: request.profileId,
+              success: false,
+              error: errorResponse(request.requestId, "CONFIG_MISSING").error,
+            };
+          }
+          if (isProfilePaused(profile)) {
+            return {
+              version: MESSAGE_VERSION,
+              requestId: request.requestId,
+              type: "PROFILE_TEST_RESULT",
+              profileId: request.profileId,
+              success: false,
+              error: errorResponse(request.requestId, "AUTH_FAILED").error,
+            };
+          }
+          const startedAt = Date.now();
+          try {
+            const jsonSchemaSupport = await dependencies.profileProbe(
+              profile,
+              new AbortController().signal,
+            );
+            return {
+              version: MESSAGE_VERSION,
+              requestId: request.requestId,
+              type: "PROFILE_TEST_RESULT",
+              profileId: request.profileId,
+              success: true,
+              latencyMs: Date.now() - startedAt,
+              jsonSchemaSupport,
+            };
+          } catch (error) {
+            const code = errorCode(error);
+            if (code === "AUTH_FAILED") pauseProfile(profile);
+            return {
+              version: MESSAGE_VERSION,
+              requestId: request.requestId,
+              type: "PROFILE_TEST_RESULT",
+              profileId: request.profileId,
+              success: false,
+              latencyMs: Date.now() - startedAt,
+              error: errorResponse(request.requestId, code).error,
+            };
+          }
         }
         case "GET_CACHE_STATS":
           return {
@@ -613,10 +681,12 @@ export async function requestHostPermission(
 }
 
 async function createDefaultRuntime(): Promise<
-  Pick<ServiceWorkerDependencies, "analysisService" | "scheduler" | "cache">
+  Pick<ServiceWorkerDependencies, "analysisService" | "scheduler" | "cache" | "profileProbe">
 > {
   const configRepository = new ConfigRepository();
-  const cache = await AnalysisCache.open();
+  const cache = await AnalysisCache.open({
+    limitBytes: await configRepository.getCacheLimitBytes(),
+  });
   const adapter = new OpenAiCompatibleAdapter({
     persistJsonSchemaSupport: async (profileId, jsonSchemaSupport) => {
       const profile = await configRepository.getProfile(profileId);
@@ -631,6 +701,7 @@ async function createDefaultRuntime(): Promise<
     cache,
     scheduler,
     analysisService: new CachedAnalysisService({ cache, adapter, scheduler }),
+    profileProbe: (profile, signal) => adapter.probeJsonCapability(profile, signal),
   };
 }
 
@@ -657,6 +728,7 @@ function defaultDependencies(): ServiceWorkerDependencies {
       stats: async () => (await getRuntime()).cache.stats(),
       clear: async () => (await getRuntime()).cache.clear(),
     },
+    profileProbe: async (profile, signal) => (await getRuntime()).profileProbe(profile, signal),
   };
 }
 

@@ -20,6 +20,9 @@ interface StorageArea {
 
 const PROFILES_KEY = "profiles.v1";
 const ACTIVE_PROFILE_ID_KEY = "activeProfileId.v1";
+const CACHE_LIMIT_MB_KEY = "cacheLimitMb.v1";
+const DEFAULT_CACHE_LIMIT_MB = 50;
+const CACHE_LIMIT_CHOICES_MB = new Set([10, 50, 100, 200]);
 const FORBIDDEN_HEADERS = new Set([
   "authorization",
   "host",
@@ -132,5 +135,21 @@ export class ConfigRepository {
       timeoutMs: profile.timeoutMs,
       jsonSchemaSupport: profile.jsonSchemaSupport,
     }));
+  }
+
+  async getCacheLimitBytes(): Promise<number> {
+    const stored = (await this.storage.get(CACHE_LIMIT_MB_KEY))[CACHE_LIMIT_MB_KEY];
+    const limitMb =
+      typeof stored === "number" && CACHE_LIMIT_CHOICES_MB.has(stored)
+        ? stored
+        : DEFAULT_CACHE_LIMIT_MB;
+    return limitMb * 1024 * 1024;
+  }
+
+  async setCacheLimitMb(limitMb: number): Promise<void> {
+    if (!CACHE_LIMIT_CHOICES_MB.has(limitMb)) {
+      throw new Error("Analysis cache limit must be 10, 50, 100, or 200 MB");
+    }
+    await this.storage.set({ [CACHE_LIMIT_MB_KEY]: limitMb });
   }
 }

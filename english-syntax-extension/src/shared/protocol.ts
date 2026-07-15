@@ -24,6 +24,7 @@ export type RequestMessage =
   | (PageRequestBase & { type: "PAUSE_SESSION" })
   | (PageRequestBase & { type: "STOP_SESSION" })
   | (PageRequestBase & { type: "GET_SESSION_STATUS" })
+  | (PageRequestBase & { type: "REANALYZE_VISIBLE" })
   | (PageRequestBase & { type: "ANALYZE_CORE"; sentences: SentenceInput[] })
   | (PageRequestBase & {
       type: "ANALYZE_DETAIL";
@@ -72,6 +73,7 @@ export type ResponseMessage =
       profileId: string;
       success: boolean;
       latencyMs?: number;
+      jsonSchemaSupport?: "supported" | "unsupported";
       error?: ExtensionError;
     })
   | (MessageBase & { type: "ERROR"; error: ExtensionError });
@@ -175,6 +177,7 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
     case "PAUSE_SESSION":
     case "STOP_SESSION":
     case "GET_SESSION_STATUS":
+    case "REANALYZE_VISIBLE":
     case "PARSE_CONTEXT_BLOCK":
       return hasOnlyKeys(value, pageOnlyKeys) && hasPageContext(value);
     case "ANALYZE_CORE":

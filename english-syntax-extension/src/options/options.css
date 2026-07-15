@@ -1,0 +1,128 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  background: Canvas;
+  color: CanvasText;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 0;
+}
+
+.options-page {
+  width: min(100%, 52rem);
+  margin: 0 auto;
+  padding: clamp(1rem, 4vw, 2rem);
+  overflow-wrap: anywhere;
+}
+
+.options-page__title,
+.options-page__section-title {
+  line-height: 1.2;
+}
+
+.options-page__intro,
+.options-page__hint {
+  color: GrayText;
+}
+
+.options-page__warning,
+.options-page__panel {
+  border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.options-page__warning {
+  border-inline-start: 0.35rem solid #b66b00;
+}
+
+.options-page__panel {
+  margin-block: 1rem;
+}
+
+.options-page__form,
+.options-page__field,
+.options-page__headers {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.options-page__form {
+  gap: 0.9rem;
+  margin-block-start: 1rem;
+}
+
+.options-page__input,
+.options-page__select,
+.options-page button {
+  max-width: 100%;
+  min-height: 2.75rem;
+  border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  background: Canvas;
+  color: CanvasText;
+}
+
+.options-page__header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: start;
+  margin-block: 0.5rem;
+}
+
+.options-page__inline-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #b00020;
+}
+
+.options-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.options-page__primary {
+  background: #155eef !important;
+  color: white !important;
+}
+
+.options-page__danger {
+  border-color: #b00020 !important;
+}
+
+.options-page :is(button, input, select):focus-visible {
+  outline: 3px solid #ffbf47;
+  outline-offset: 3px;
+}
+
+@media (max-width: 24rem), (min-resolution: 1.8dppx) {
+  .options-page__header-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .options-page__inline-error {
+    grid-column: 1;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .options-page__primary {
+    background: #8ab4ff !important;
+    color: #07152f !important;
+  }
+
+  .options-page__inline-error {
+    color: #ffb4ab;
+  }
+}

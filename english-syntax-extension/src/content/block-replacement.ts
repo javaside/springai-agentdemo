@@ -95,6 +95,10 @@ export class BlockReplacement {
     this.#ownedStyle = null;
   }
 
+  currentElement(original: HTMLElement): Element {
+    return this.#block ?? original;
+  }
+
   #observePageRemoval(document: Document): void {
     this.#observer = new MutationObserver(() => {
       if (this.#original?.isConnected === false) {

@@ -1,0 +1,122 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.45;
+  background: Canvas;
+  color: CanvasText;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+}
+
+body {
+  width: 320px;
+}
+
+.popup-page {
+  width: 100%;
+  min-width: 0;
+  padding: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.popup-page__title {
+  margin-block: 0 1rem;
+  font-size: 1.2rem;
+  line-height: 1.25;
+}
+
+.popup-page__label {
+  display: block;
+  margin-block-end: 0.35rem;
+  font-weight: 650;
+}
+
+.popup-page__select,
+.popup-page button {
+  max-width: 100%;
+  min-height: 2.75rem;
+  border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  background: Canvas;
+  color: CanvasText;
+}
+
+.popup-page__select {
+  width: 100%;
+}
+
+.popup-page__notice,
+.popup-page__footer {
+  color: GrayText;
+}
+
+.popup-page__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-block: 1rem;
+}
+
+.popup-page__metric {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 0.55rem;
+  padding: 0.65rem;
+}
+
+.popup-page__metric-label,
+.popup-page__metric-value {
+  display: block;
+}
+
+.popup-page__metric-value {
+  margin-block-start: 0.15rem;
+  font-size: 1.15rem;
+}
+
+.popup-page__actions {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.popup-page__primary {
+  background: #155eef !important;
+  color: white !important;
+}
+
+.popup-page__danger {
+  border-color: #b00020 !important;
+}
+
+.popup-page :is(button, select):focus-visible {
+  outline: 3px solid #ffbf47;
+  outline-offset: 3px;
+}
+
+@media (max-width: 320px), (min-resolution: 1.8dppx) {
+  body {
+    width: 100%;
+  }
+
+  .popup-page__metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .popup-page__primary {
+    background: #8ab4ff !important;
+    color: #07152f !important;
+  }
+}

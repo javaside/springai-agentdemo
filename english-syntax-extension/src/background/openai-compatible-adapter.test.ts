@@ -43,6 +43,55 @@ function requestBody(fetch: ReturnType<typeof vi.fn<typeof globalThis.fetch>>, c
 }
 
 describe("OpenAI-compatible chat completions adapter", () => {
+  it("probes JSON capability with one low-cost schema request", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(completion('{"ok":true}'));
+    const persistJsonSchemaSupport = vi.fn().mockResolvedValue(undefined);
+    const adapter = new OpenAiCompatibleAdapter({ fetch, persistJsonSchemaSupport });
+
+    await expect(adapter.probeJsonCapability(profile, new AbortController().signal)).resolves.toBe(
+      "supported",
+    );
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(requestBody(fetch, 0)).toMatchObject({
+      model: "syntax-model",
+      max_tokens: 8,
+      response_format: { type: "json_schema" },
+    });
+    expect(persistJsonSchemaSupport).toHaveBeenCalledWith("profile-1", "supported");
+  });
+
+  it("uses one explainable fallback request only after an explicit schema-format rejection", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(response("response_format is not supported", { status: 400 }))
+      .mockResolvedValueOnce(completion('{"ok":true}'));
+    const persistJsonSchemaSupport = vi.fn().mockResolvedValue(undefined);
+    const adapter = new OpenAiCompatibleAdapter({ fetch, persistJsonSchemaSupport });
+
+    await expect(adapter.probeJsonCapability(profile, new AbortController().signal)).resolves.toBe(
+      "unsupported",
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(requestBody(fetch, 1)).not.toHaveProperty("response_format");
+    expect(requestBody(fetch, 1)).toHaveProperty("max_tokens", 8);
+    expect(persistJsonSchemaSupport).toHaveBeenCalledWith("profile-1", "unsupported");
+  });
+
+  it("rejects a probe response that does not follow the minimal JSON instruction", async () => {
+    const persistJsonSchemaSupport = vi.fn().mockResolvedValue(undefined);
+    const adapter = new OpenAiCompatibleAdapter({
+      fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValue(completion('{"ok":false}')),
+      persistJsonSchemaSupport,
+    });
+
+    await expect(
+      adapter.probeJsonCapability(profile, new AbortController().signal),
+    ).rejects.toMatchObject({ code: "INVALID_MODEL_OUTPUT" });
+    expect(persistJsonSchemaSupport).not.toHaveBeenCalledWith("profile-1", "supported");
+  });
+
   it.each(["unknown", "supported"] as const)(
     "sends a deterministic JSON-schema request for a %s profile",
     async (jsonSchemaSupport) => {

@@ -43,11 +43,13 @@ export interface ControllerReplacement {
     failures: readonly SentenceFailure[],
   ): void;
   restore(): void;
+  currentElement(original: HTMLElement): Element;
 }
 
 export interface ViewportPort {
   observe(blocks: readonly CandidateBlock[]): void;
   invalidate(blockId: string): void;
+  isVisible(element: Element): boolean;
   disconnect(): void;
 }
 
@@ -66,7 +68,7 @@ interface SentenceRecord {
 }
 
 interface BlockRecord {
-  candidate: CandidateBlock;
+  candidate: CandidateBlock & { element: HTMLElement };
   sentences: SentenceRecord[];
   learningBlock: ControllerBlock;
   replacement: ControllerReplacement;
@@ -273,6 +275,19 @@ export class SessionController {
     this.emitStatus();
   }
 
+  reanalyzeVisible(): void {
+    if (this.state === "stopped") return;
+    const visibleBlockIds = [...this.blocks.entries()]
+      .filter(([, block]) =>
+        this.viewport.isVisible(block.replacement.currentElement(block.candidate.element)),
+      )
+      .map(([blockId]) => blockId);
+    for (const blockId of visibleBlockIds) {
+      this.invalidateBlock(blockId);
+      this.queueVisibleBlock(blockId, true);
+    }
+  }
+
   async requestDetail(detail: SyntaxFocusEventDetail): Promise<void> {
     const located = this.locateSentence(detail.sentenceId);
     if (located === undefined || located.sentence.core === undefined || this.state !== "running") {
@@ -382,7 +397,7 @@ export class SessionController {
       learningBlock.setExpectedSentenceIds(sentences.map(({ input }) => input.sentenceId));
       const replacement = (this.options.replacementFactory ?? (() => new BlockReplacement()))();
       this.blocks.set(candidate.id, {
-        candidate,
+        candidate: { ...candidate, element: candidate.element },
         sentences,
         learningBlock,
         replacement,

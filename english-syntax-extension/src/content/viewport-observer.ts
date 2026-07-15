@@ -43,6 +43,12 @@ export class ViewportObserver {
     this.emitted.delete(blockId);
   }
 
+  isVisible(element: Element): boolean {
+    const viewportHeight = window.innerHeight;
+    const rectangle = element.getBoundingClientRect();
+    return rectangle.bottom >= 0 && rectangle.top <= viewportHeight;
+  }
+
   disconnect(): void {
     if (this.disconnected) return;
     this.disconnected = true;

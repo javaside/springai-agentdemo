@@ -131,6 +131,7 @@ function dependencies(
       stats: vi.fn(() => Promise.resolve({ entries: 0, estimatedBytes: 0, limitBytes: 1024 })),
       clear: vi.fn(() => Promise.resolve()),
     },
+    profileProbe: vi.fn(() => Promise.resolve("supported" as const)),
   };
   return deps;
 }
@@ -242,6 +243,110 @@ describe("service worker orchestration", () => {
       expect.objectContaining({ type: "START_SESSION", documentId: "document-1" }),
     );
   });
+
+  it("forwards an explicit popup visible-area reanalysis to the active document", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies(), subject.api);
+    const listener = subject.events.runtime.onMessage.listeners[0]!;
+    const popup = {
+      id: "extension-id",
+      url: "chrome-extension://extension-id/src/popup/popup.html",
+    };
+    await dispatch(listener, pageRequest({ type: "START_SESSION" }), popup);
+    subject.events.tabs.sendMessage.mockClear();
+
+    const response = await dispatch(listener, pageRequest({ type: "REANALYZE_VISIBLE" }), popup);
+
+    expect(response).toMatchObject({ type: "SESSION_STATUS" });
+    expect(subject.events.tabs.sendMessage).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ type: "REANALYZE_VISIBLE", documentId: "document-1" }),
+    );
+  });
+
+  it("binds trusted popup status and controls to the document started by another UI", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies(), subject.api);
+    subject.events.action.onClicked.listeners[0]!({ id: 7 } as chrome.tabs.Tab);
+    await vi.waitFor(() => expect(subject.events.tabs.sendMessage).toHaveBeenCalledOnce());
+    const activeRequest = subject.events.tabs.sendMessage.mock.calls[0]![1] as PageRequest;
+    subject.events.tabs.sendMessage.mockClear();
+    const popup = {
+      id: "extension-id",
+      url: "chrome-extension://extension-id/src/popup/popup.html",
+    };
+
+    const status = await dispatch(
+      subject.events.runtime.onMessage.listeners[0]!,
+      pageRequest({ type: "GET_SESSION_STATUS" }, "popup-tab-7"),
+      popup,
+    );
+    const reanalysis = await dispatch(
+      subject.events.runtime.onMessage.listeners[0]!,
+      pageRequest({ type: "REANALYZE_VISIBLE" }, "popup-tab-7"),
+      popup,
+    );
+
+    expect(status).toMatchObject({ type: "SESSION_STATUS", status: { state: "running" } });
+    expect(reanalysis).toMatchObject({ type: "SESSION_STATUS" });
+    expect(subject.events.tabs.sendMessage).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({
+        type: "REANALYZE_VISIBLE",
+        documentId: activeRequest.documentId,
+      }),
+    );
+  });
+
+  it("runs a real profile probe and returns its JSON capability without secrets", async () => {
+    const deps = dependencies();
+    const subject = chromeMock();
+    registerServiceWorker(deps, subject.api);
+
+    const response = await dispatch(subject.events.runtime.onMessage.listeners[0]!, {
+      version: 1,
+      requestId: "test-profile-1",
+      type: "TEST_PROFILE",
+      profileId: "profile-a",
+    });
+
+    expect(deps.profileProbe).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "profile-a", apiKey: "SECRET-A" }),
+      expect.any(AbortSignal),
+    );
+    expect(response).toMatchObject({
+      type: "PROFILE_TEST_RESULT",
+      success: true,
+      jsonSchemaSupport: "supported",
+    });
+    expect(JSON.stringify(response)).not.toMatch(/SECRET-A|HEADER-A|apiKey|Authorization/);
+  });
+
+  it.each(["NETWORK_ERROR", "AUTH_FAILED", "MODEL_NOT_FOUND", "INVALID_MODEL_OUTPUT"] as const)(
+    "maps a %s profile probe failure without leaking its message",
+    async (code) => {
+      const deps = dependencies();
+      vi.mocked(deps.profileProbe).mockRejectedValue(
+        Object.assign(new Error("SECRET-A HEADER-A"), { code }),
+      );
+      const subject = chromeMock();
+      registerServiceWorker(deps, subject.api);
+
+      const response = await dispatch(subject.events.runtime.onMessage.listeners[0]!, {
+        version: 1,
+        requestId: "test-profile-error",
+        type: "TEST_PROFILE",
+        profileId: "profile-a",
+      });
+
+      expect(response).toMatchObject({
+        type: "PROFILE_TEST_RESULT",
+        success: false,
+        error: { code },
+      });
+      expect(JSON.stringify(response)).not.toMatch(/SECRET-A|HEADER-A/);
+    },
+  );
 
   it("assigns a fresh background document ID after navigation in the same tab", async () => {
     const subject = chromeMock();

@@ -15,6 +15,7 @@ interface RoutedController {
   stop(): void;
   parseSelection(selectionText: string): Promise<ExtensionError | undefined>;
   parseContextBlock(): Promise<ExtensionError | undefined>;
+  reanalyzeVisible(): void;
   switchProfile(profileId: string): void;
 }
 
@@ -167,6 +168,9 @@ export function isRuntimeResponse(value: unknown, requestId: string): value is R
         typeof value.profileId === "string" &&
         typeof value.success === "boolean" &&
         (value.latencyMs === undefined || isSafeInteger(value.latencyMs)) &&
+        (value.jsonSchemaSupport === undefined ||
+          value.jsonSchemaSupport === "supported" ||
+          value.jsonSchemaSupport === "unsupported") &&
         (value.error === undefined || isExtensionError(value.error))
       );
     case "ERROR":
@@ -297,6 +301,9 @@ export class ContentScriptRouter {
         const error = await controller.parseContextBlock();
         return error === undefined ? ack(request) : errorResponse(request.requestId, error);
       }
+      case "REANALYZE_VISIBLE":
+        controller.reanalyzeVisible();
+        return statusResponse(request.requestId, controller.status);
       case "SWITCH_PROFILE":
         controller.switchProfile(request.profileId);
         return ack(request);

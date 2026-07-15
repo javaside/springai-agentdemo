@@ -113,6 +113,23 @@ describe("ConfigRepository", () => {
     expect(JSON.stringify(publicProfiles)).not.toContain(profile.apiKey);
     expect(JSON.stringify(publicProfiles)).not.toContain("syntax-team");
   });
+
+  it("defaults the analysis cache limit to 50 MB and persists an allowed choice", async () => {
+    const storage = storageMock();
+    const repository = new ConfigRepository(storage.area);
+
+    await expect(repository.getCacheLimitBytes()).resolves.toBe(50 * 1024 * 1024);
+    await repository.setCacheLimitMb(100);
+
+    expect(storage.values["cacheLimitMb.v1"]).toBe(100);
+    await expect(repository.getCacheLimitBytes()).resolves.toBe(100 * 1024 * 1024);
+  });
+
+  it.each([0, 20, 51, 500])("rejects unsupported cache limit %d MB", async (limitMb) => {
+    const repository = new ConfigRepository(storageMock().area);
+
+    await expect(repository.setCacheLimitMb(limitMb)).rejects.toThrow("cache limit");
+  });
 });
 
 describe("service worker security initialization", () => {

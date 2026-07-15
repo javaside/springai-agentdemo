@@ -59,6 +59,7 @@ class FakeReplacement implements ControllerReplacement {
   partialShows = 0;
   restores = 0;
   originals: HTMLElement[] = [];
+  readonly displayed = document.createElement("section");
 
   show(original: HTMLElement): void {
     this.shows += 1;
@@ -80,12 +81,17 @@ class FakeReplacement implements ControllerReplacement {
   restore(): void {
     this.restores += 1;
   }
+
+  currentElement(): Element {
+    return this.displayed;
+  }
 }
 
 class FakeViewport implements ViewportPort {
   observed: CandidateBlock[] = [];
   invalidated: string[] = [];
   disconnected = false;
+  checked: Element[] = [];
 
   constructor(private readonly callback: (candidate: CandidateBlock) => void) {}
 
@@ -99,6 +105,15 @@ class FakeViewport implements ViewportPort {
 
   disconnect(): void {
     this.disconnected = true;
+  }
+
+  visibleBlockIds(): string[] {
+    return this.observed.slice(0, 1).map(({ id }) => id);
+  }
+
+  isVisible(element: Element): boolean {
+    this.checked.push(element);
+    return true;
   }
 
   emit(index = 0): void {
@@ -332,6 +347,20 @@ describe("SessionController", () => {
 
     expect(subject.learningBlocks[0]!.cores).toHaveLength(0);
     expect(subject.replacements[0]!.restores).toBeGreaterThan(0);
+  });
+
+  it("restores and requeues only blocks currently reported visible", async () => {
+    const subject = harness();
+    await startAndEmit(subject);
+    expect(subject.transport.sent).toHaveLength(1);
+
+    subject.controller.reanalyzeVisible();
+
+    await vi.waitFor(() => expect(subject.transport.sent).toHaveLength(2));
+    expect(subject.viewport.checked).toContain(subject.replacements[0]!.displayed);
+    expect(subject.replacements[0]!.restores).toBeGreaterThan(0);
+    expect(subject.viewport.invalidated).toContain("block-1");
+    await vi.waitFor(() => expect(subject.controller.status.ready).toBe(1));
   });
 
   it("batches character-data mutations for 100 ms, restores stale output, and rescans only the changed block", async () => {
@@ -833,6 +862,7 @@ describe("ContentScriptRouter", () => {
       stop: vi.fn(),
       parseSelection: vi.fn(() => Promise.resolve(undefined)),
       parseContextBlock: vi.fn(() => Promise.resolve(undefined)),
+      reanalyzeVisible: vi.fn(),
       switchProfile: vi.fn(),
     };
     const factory = vi.fn(() => controller);
@@ -857,5 +887,35 @@ describe("ContentScriptRouter", () => {
     expect(second).toMatchObject({ type: "SESSION_STATUS" });
     expect(factory).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes a visible-area reanalysis request to the document controller", async () => {
+    const reanalyzeVisible = vi.fn();
+    const router = new ContentScriptRouter({
+      controllerFactory: () => ({
+        documentId: "document-1",
+        status: { state: "running", discovered: 1, queued: 0, ready: 1, failed: 0 },
+        start: vi.fn(() => Promise.resolve()),
+        pause: vi.fn(),
+        resume: vi.fn(),
+        stop: vi.fn(),
+        parseSelection: vi.fn(() => Promise.resolve(undefined)),
+        parseContextBlock: vi.fn(() => Promise.resolve(undefined)),
+        reanalyzeVisible,
+        switchProfile: vi.fn(),
+      }),
+      transportFactory: () => new FakeTransport(),
+    });
+
+    const response = await router.route({
+      version: 1,
+      requestId: "reanalyze-1",
+      type: "REANALYZE_VISIBLE",
+      tabId: 3,
+      documentId: "document-1",
+    });
+
+    expect(reanalyzeVisible).toHaveBeenCalledOnce();
+    expect(response).toMatchObject({ type: "SESSION_STATUS" });
   });
 });

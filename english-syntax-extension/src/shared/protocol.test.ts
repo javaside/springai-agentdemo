@@ -44,6 +44,7 @@ describe("request protocol guard", () => {
     ["PAUSE_SESSION", { ...page, type: "PAUSE_SESSION" }],
     ["STOP_SESSION", { ...page, type: "STOP_SESSION" }],
     ["GET_SESSION_STATUS", { ...page, type: "GET_SESSION_STATUS" }],
+    ["REANALYZE_VISIBLE", { ...page, type: "REANALYZE_VISIBLE" }],
     ["ANALYZE_CORE", { ...page, type: "ANALYZE_CORE", sentences: [sentence] }],
     [
       "ANALYZE_DETAIL",
@@ -102,6 +103,12 @@ describe("request protocol guard", () => {
         command: "DELETE_ALL_DATA",
       }),
     ).toBe(false);
+  });
+
+  it("rejects surplus reanalysis instructions instead of executing arbitrary scope", () => {
+    expect(isRequestMessage({ ...page, type: "REANALYZE_VISIBLE", scope: "whole-document" })).toBe(
+      false,
+    );
   });
 
   it.each([
