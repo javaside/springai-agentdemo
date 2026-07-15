@@ -1,6 +1,7 @@
 import type { ExtensionError } from "./errors";
-import type { CoreAnalysis, DetailAnalysis, Token, TokenRange } from "./grammar";
-import { MESSAGE_VERSION } from "./versions";
+import { GrammarRole } from "./grammar";
+import type { CoreAnalysis, CoreComponent, DetailAnalysis, Token, TokenRange } from "./grammar";
+import { CORE_SCHEMA_VERSION, MESSAGE_VERSION } from "./versions";
 
 interface MessageBase {
   version: typeof MESSAGE_VERSION;
@@ -81,8 +82,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
@@ -90,19 +95,30 @@ function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly strin
 }
 
 function hasPageContext(value: Record<string, unknown>): boolean {
-  return (
-    Number.isSafeInteger(value.tabId) &&
-    (value.tabId as number) >= 0 &&
-    isNonEmptyString(value.documentId)
-  );
+  return isNonNegativeSafeInteger(value.tabId) && isNonBlankString(value.documentId);
 }
 
 function isTokenRange(value: unknown): value is TokenRange {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, ["startToken", "endToken"]) &&
-    Number.isSafeInteger(value.startToken) &&
-    Number.isSafeInteger(value.endToken)
+    isNonNegativeSafeInteger(value.startToken) &&
+    isNonNegativeSafeInteger(value.endToken) &&
+    value.startToken <= value.endToken
+  );
+}
+
+function isToken(value: unknown): value is Token {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["id", "text", "start", "end", "leadingWhitespace", "punctuation"]) &&
+    isNonNegativeSafeInteger(value.id) &&
+    typeof value.text === "string" &&
+    isNonNegativeSafeInteger(value.start) &&
+    isNonNegativeSafeInteger(value.end) &&
+    value.start <= value.end &&
+    typeof value.leadingWhitespace === "string" &&
+    typeof value.punctuation === "boolean"
   );
 }
 
@@ -110,9 +126,37 @@ function isSentenceInput(value: unknown): value is SentenceInput {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, ["sentenceId", "text", "tokens"]) &&
-    isNonEmptyString(value.sentenceId) &&
+    isNonBlankString(value.sentenceId) &&
     typeof value.text === "string" &&
-    Array.isArray(value.tokens)
+    Array.isArray(value.tokens) &&
+    value.tokens.every(isToken)
+  );
+}
+
+const grammarRoles: ReadonlySet<string> = new Set(Object.values(GrammarRole));
+
+function isCoreComponent(value: unknown): value is CoreComponent {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["startToken", "endToken", "role", "translation"]) &&
+    isNonNegativeSafeInteger(value.startToken) &&
+    isNonNegativeSafeInteger(value.endToken) &&
+    value.startToken <= value.endToken &&
+    typeof value.role === "string" &&
+    grammarRoles.has(value.role) &&
+    typeof value.translation === "string"
+  );
+}
+
+function isCoreAnalysis(value: unknown): value is CoreAnalysis {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["schemaVersion", "sentenceId", "components", "modelProfileId"]) &&
+    value.schemaVersion === CORE_SCHEMA_VERSION &&
+    isNonBlankString(value.sentenceId) &&
+    Array.isArray(value.components) &&
+    value.components.every(isCoreComponent) &&
+    isNonBlankString(value.modelProfileId)
   );
 }
 
@@ -120,8 +164,8 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
   if (
     !isRecord(value) ||
     value.version !== MESSAGE_VERSION ||
-    !isNonEmptyString(value.requestId) ||
-    !isNonEmptyString(value.type)
+    !isNonBlankString(value.requestId) ||
+    !isNonBlankString(value.type)
   ) {
     return false;
   }
@@ -145,7 +189,7 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
         hasOnlyKeys(value, [...pageOnlyKeys, "sentence", "core", "focus"]) &&
         hasPageContext(value) &&
         isSentenceInput(value.sentence) &&
-        isRecord(value.core) &&
+        isCoreAnalysis(value.core) &&
         isTokenRange(value.focus)
       );
     case "REANALYZE_WITH_FEEDBACK":
@@ -153,19 +197,19 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
         hasOnlyKeys(value, [...pageOnlyKeys, "sentence", "core", "feedback"]) &&
         hasPageContext(value) &&
         isSentenceInput(value.sentence) &&
-        isRecord(value.core) &&
-        isNonEmptyString(value.feedback)
+        isCoreAnalysis(value.core) &&
+        isNonBlankString(value.feedback)
       );
     case "SWITCH_PROFILE":
       return (
         hasOnlyKeys(value, [...pageOnlyKeys, "profileId"]) &&
         hasPageContext(value) &&
-        isNonEmptyString(value.profileId)
+        isNonBlankString(value.profileId)
       );
     case "TEST_PROFILE":
       return (
         hasOnlyKeys(value, ["version", "requestId", "type", "profileId"]) &&
-        isNonEmptyString(value.profileId)
+        isNonBlankString(value.profileId)
       );
     case "GET_CACHE_STATS":
     case "CLEAR_CACHE":
@@ -174,7 +218,7 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
       return (
         hasOnlyKeys(value, [...pageOnlyKeys, "selectionText"]) &&
         hasPageContext(value) &&
-        isNonEmptyString(value.selectionText)
+        isNonBlankString(value.selectionText)
       );
     default:
       return false;
