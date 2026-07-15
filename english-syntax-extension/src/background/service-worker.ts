@@ -114,7 +114,14 @@ function errorCode(value: unknown): ExtensionErrorCode {
   return typeof code === "string" && code in ERROR_MESSAGES ? code : "NETWORK_ERROR";
 }
 
-function sanitizeCore(analysis: CoreAnalysis): CoreAnalysis {
+function redactProfileSecrets(value: string, profile: ModelProfile): string {
+  const secrets = [profile.apiKey, ...Object.values(profile.headers)].filter(
+    (secret) => secret.length > 0,
+  );
+  return secrets.reduce((redacted, secret) => redacted.split(secret).join("[redacted]"), value);
+}
+
+function sanitizeCore(analysis: CoreAnalysis, profile: ModelProfile): CoreAnalysis {
   return {
     schemaVersion: analysis.schemaVersion,
     sentenceId: analysis.sentenceId,
@@ -122,13 +129,13 @@ function sanitizeCore(analysis: CoreAnalysis): CoreAnalysis {
       startToken: component.startToken,
       endToken: component.endToken,
       role: component.role,
-      translation: component.translation,
+      translation: redactProfileSecrets(component.translation, profile),
     })),
     modelProfileId: analysis.modelProfileId,
   };
 }
 
-function sanitizeDetail(analysis: DetailAnalysis): DetailAnalysis {
+function sanitizeDetail(analysis: DetailAnalysis, profile: ModelProfile): DetailAnalysis {
   return {
     sentenceId: analysis.sentenceId,
     focus: {
@@ -138,11 +145,11 @@ function sanitizeDetail(analysis: DetailAnalysis): DetailAnalysis {
     structures: analysis.structures.map((structure) => ({
       startToken: structure.startToken,
       endToken: structure.endToken,
-      role: structure.role,
-      explanation: structure.explanation,
+      role: redactProfileSecrets(structure.role, profile),
+      explanation: redactProfileSecrets(structure.explanation, profile),
     })),
-    grammarPoints: [...analysis.grammarPoints],
-    explanation: analysis.explanation,
+    grammarPoints: analysis.grammarPoints.map((point) => redactProfileSecrets(point, profile)),
+    explanation: redactProfileSecrets(analysis.explanation, profile),
     modelProfileId: analysis.modelProfileId,
   };
 }
@@ -278,7 +285,7 @@ export function registerServiceWorker(
               version: MESSAGE_VERSION,
               requestId: request.requestId,
               type: "CORE_RESULT",
-              analyses: outcome.result.map(sanitizeCore),
+              analyses: outcome.result.map((analysis) => sanitizeCore(analysis, profile)),
             };
           } catch (error) {
             const code = errorCode(error);
@@ -306,7 +313,7 @@ export function registerServiceWorker(
               version: MESSAGE_VERSION,
               requestId: request.requestId,
               type: "DETAIL_RESULT",
-              analysis: sanitizeDetail(outcome.result),
+              analysis: sanitizeDetail(outcome.result, profile),
             };
           } catch (error) {
             const code = errorCode(error);
@@ -336,7 +343,7 @@ export function registerServiceWorker(
               version: MESSAGE_VERSION,
               requestId: request.requestId,
               type: "CORE_RESULT",
-              analyses: [sanitizeCore(outcome.result)],
+              analyses: [sanitizeCore(outcome.result, profile)],
             };
           } catch (error) {
             const code = errorCode(error);

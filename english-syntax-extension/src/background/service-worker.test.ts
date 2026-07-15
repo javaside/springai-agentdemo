@@ -293,12 +293,25 @@ describe("service worker orchestration", () => {
           startToken: 0,
           endToken: 0,
           role: GrammarRole.SUBJECT,
-          translation: "学习者",
+          translation: "学习者 SECRET-A HEADER-A",
           apiKey: "SECRET-A",
         },
       ],
       modelProfileId: "profile-a",
       headers: { Authorization: "SECRET-A" },
+    };
+    const requestCore = {
+      schemaVersion: 1 as const,
+      sentenceId: sentence.sentenceId,
+      components: [
+        {
+          startToken: 0,
+          endToken: 0,
+          role: GrammarRole.SUBJECT,
+          translation: "学习者",
+        },
+      ],
+      modelProfileId: "profile-a",
     };
     const leakyDetail = {
       sentenceId: sentence.sentenceId,
@@ -308,12 +321,12 @@ describe("service worker orchestration", () => {
           startToken: 0,
           endToken: 0,
           role: "subject",
-          explanation: "Subject",
+          explanation: "Subject SECRET-A",
           apiKey: "SECRET-A",
         },
       ],
       grammarPoints: ["subject"],
-      explanation: "Detail",
+      explanation: "Detail HEADER-A",
       modelProfileId: "profile-a",
       apiKey: "SECRET-A",
     };
@@ -340,7 +353,7 @@ describe("service worker orchestration", () => {
       pageRequest({
         type: "ANALYZE_DETAIL",
         sentence,
-        core: leakyCore,
+        core: requestCore,
         focus: { startToken: 0, endToken: 0 },
       }),
     );
