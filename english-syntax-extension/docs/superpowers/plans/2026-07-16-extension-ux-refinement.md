@@ -15,6 +15,7 @@
 ### Task 1: popup 重写(状态机主按钮 + 三元素布局)
 
 **Files:**
+
 - Modify: `src/popup/popup.ts`(整文件重写)
 - Modify: `src/popup/popup.test.ts`(整文件重写)
 - Modify: `src/popup/popup.css`(整文件重写,含删除 `min-resolution: 1.8dppx` bug)
@@ -210,9 +211,7 @@ describe("Popup", () => {
 
     primary().click();
 
-    await vi.waitFor(() =>
-      expect(subline().textContent).toContain("操作失败"),
-    );
+    await vi.waitFor(() => expect(subline().textContent).toContain("操作失败"));
   });
 });
 ```
@@ -533,6 +532,7 @@ git commit -m "feat(extension): minimal popup with a single state-machine button
 ### Task 2: 设置页「启用」配置
 
 **Files:**
+
 - Modify: `src/options/options.ts`
 - Modify: `src/options/options.test.ts`
 
@@ -546,63 +546,63 @@ git commit -m "feat(extension): minimal popup with a single state-machine button
 再在 `describe("Options page", ...)` 末尾追加测试:
 
 ```ts
-  it("marks the active profile and lets another profile take over", async () => {
-    const subject = dependencies({
-      listProfiles: vi.fn(() =>
-        Promise.resolve([
-          {
-            id: "p-1",
-            name: "DeepSeek",
-            baseUrl: "https://api.example.com/v1",
-            model: "deepseek-v4-flash",
-            timeoutMs: 45_000,
-            jsonSchemaSupport: "unknown" as const,
-          },
-          {
-            id: "p-2",
-            name: "Local",
-            baseUrl: "http://localhost:11434/v1",
-            model: "qwen",
-            timeoutMs: 45_000,
-            jsonSchemaSupport: "unknown" as const,
-          },
-        ]),
-      ),
-      getProfile: vi.fn((profileId: string) =>
-        Promise.resolve({
-          id: profileId,
+it("marks the active profile and lets another profile take over", async () => {
+  const subject = dependencies({
+    listProfiles: vi.fn(() =>
+      Promise.resolve([
+        {
+          id: "p-1",
           name: "DeepSeek",
           baseUrl: "https://api.example.com/v1",
-          apiKey: "secret",
           model: "deepseek-v4-flash",
-          headers: {},
           timeoutMs: 45_000,
           jsonSchemaSupport: "unknown" as const,
-        }),
-      ),
-      getActiveProfileId: vi.fn(() => Promise.resolve("p-1")),
-    });
-    await createOptionsPage(root(), subject);
-
-    const select = document.querySelector<HTMLSelectElement>("#options-saved-profile")!;
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "新建配置",
-      "DeepSeek · deepseek-v4-flash（启用中）",
-      "Local · qwen",
-    ]);
-
-    // 载入非启用配置 → 按钮可点,点击后设为启用
-    select.value = "p-2";
-    select.dispatchEvent(new Event("change"));
-    const activate = document.querySelector<HTMLButtonElement>("[data-action='activate-profile']")!;
-    await vi.waitFor(() => expect(activate.disabled).toBe(false));
-    expect(activate.textContent).toBe("设为启用");
-
-    activate.click();
-    await vi.waitFor(() => expect(subject.setActiveProfile).toHaveBeenCalledWith("p-2"));
-    expect(activate.textContent).toBe("已启用");
-    expect(activate.disabled).toBe(true);
+        },
+        {
+          id: "p-2",
+          name: "Local",
+          baseUrl: "http://localhost:11434/v1",
+          model: "qwen",
+          timeoutMs: 45_000,
+          jsonSchemaSupport: "unknown" as const,
+        },
+      ]),
+    ),
+    getProfile: vi.fn((profileId: string) =>
+      Promise.resolve({
+        id: profileId,
+        name: "DeepSeek",
+        baseUrl: "https://api.example.com/v1",
+        apiKey: "secret",
+        model: "deepseek-v4-flash",
+        headers: {},
+        timeoutMs: 45_000,
+        jsonSchemaSupport: "unknown" as const,
+      }),
+    ),
+    getActiveProfileId: vi.fn(() => Promise.resolve("p-1")),
   });
+  await createOptionsPage(root(), subject);
+
+  const select = document.querySelector<HTMLSelectElement>("#options-saved-profile")!;
+  expect([...select.options].map((option) => option.textContent)).toEqual([
+    "新建配置",
+    "DeepSeek · deepseek-v4-flash（启用中）",
+    "Local · qwen",
+  ]);
+
+  // 载入非启用配置 → 按钮可点,点击后设为启用
+  select.value = "p-2";
+  select.dispatchEvent(new Event("change"));
+  const activate = document.querySelector<HTMLButtonElement>("[data-action='activate-profile']")!;
+  await vi.waitFor(() => expect(activate.disabled).toBe(false));
+  expect(activate.textContent).toBe("设为启用");
+
+  activate.click();
+  await vi.waitFor(() => expect(subject.setActiveProfile).toHaveBeenCalledWith("p-2"));
+  expect(activate.textContent).toBe("已启用");
+  expect(activate.disabled).toBe(true);
+});
 ```
 
 - [ ] **Step 2: 跑测试确认失败** — `npx vitest run src/options/options.test.ts` → 预期 FAIL(deps 类型报错/按钮不存在)。
@@ -612,54 +612,54 @@ git commit -m "feat(extension): minimal popup with a single state-machine button
 ① `OptionsDependencies` 接口加:
 
 ```ts
-  getActiveProfileId: () => Promise<string | undefined>;
-  setActiveProfile: (profileId: string) => Promise<void>;
+getActiveProfileId: () => Promise<string | undefined>;
+setActiveProfile: (profileId: string) => Promise<void>;
 ```
 
 ② 表单 `actions` 一行(`actions.append(saveButton, testButton);` 处)加第三个按钮:
 
 ```ts
-  const activateButton = element("button", "options-page__secondary", "设为启用");
-  activateButton.type = "button";
-  activateButton.dataset.action = "activate-profile";
-  activateButton.disabled = true;
-  actions.append(saveButton, testButton, activateButton);
+const activateButton = element("button", "options-page__secondary", "设为启用");
+activateButton.type = "button";
+activateButton.dataset.action = "activate-profile";
+activateButton.disabled = true;
+actions.append(saveButton, testButton, activateButton);
 ```
 
 ③ `loadProfiles` 重写为(带启用标记;注意它现在要读 activeId):
 
 ```ts
-  const loadProfiles = async (selectedId = ""): Promise<void> => {
-    const [profiles, activeId] = await Promise.all([
-      dependencies.listProfiles(),
-      dependencies.getActiveProfileId(),
-    ]);
-    savedSelect.replaceChildren(element("option", undefined, "新建配置"));
-    savedSelect.options[0]!.value = "";
-    for (const profile of profiles) {
-      const suffix = profile.id === activeId ? "（启用中）" : "";
-      const option = element("option", undefined, `${profile.name} · ${profile.model}${suffix}`);
-      option.value = profile.id;
-      savedSelect.append(option);
-    }
-    savedSelect.value = selectedId;
-    await refreshActivateButton();
-  };
+const loadProfiles = async (selectedId = ""): Promise<void> => {
+  const [profiles, activeId] = await Promise.all([
+    dependencies.listProfiles(),
+    dependencies.getActiveProfileId(),
+  ]);
+  savedSelect.replaceChildren(element("option", undefined, "新建配置"));
+  savedSelect.options[0]!.value = "";
+  for (const profile of profiles) {
+    const suffix = profile.id === activeId ? "（启用中）" : "";
+    const option = element("option", undefined, `${profile.name} · ${profile.model}${suffix}`);
+    option.value = profile.id;
+    savedSelect.append(option);
+  }
+  savedSelect.value = selectedId;
+  await refreshActivateButton();
+};
 
-  const refreshActivateButton = async (): Promise<void> => {
-    const activeId = await dependencies.getActiveProfileId();
-    const selected = savedSelect.value;
-    if (selected === "") {
-      activateButton.disabled = true;
-      activateButton.textContent = "设为启用";
-    } else if (selected === activeId) {
-      activateButton.disabled = true;
-      activateButton.textContent = "已启用";
-    } else {
-      activateButton.disabled = false;
-      activateButton.textContent = "设为启用";
-    }
-  };
+const refreshActivateButton = async (): Promise<void> => {
+  const activeId = await dependencies.getActiveProfileId();
+  const selected = savedSelect.value;
+  if (selected === "") {
+    activateButton.disabled = true;
+    activateButton.textContent = "设为启用";
+  } else if (selected === activeId) {
+    activateButton.disabled = true;
+    activateButton.textContent = "已启用";
+  } else {
+    activateButton.disabled = false;
+    activateButton.textContent = "设为启用";
+  }
+};
 ```
 
 (把 `refreshActivateButton` 定义放在 `loadProfiles` 之前,避免使用前未定义。)
@@ -667,17 +667,17 @@ git commit -m "feat(extension): minimal popup with a single state-machine button
 ④ 事件与 runtime 依赖:`savedSelect` 的 change 监听改成同时刷新按钮,并新增 activate 监听:
 
 ```ts
-  savedSelect.addEventListener("change", () => {
-    void loadProfile(savedSelect.value);
-    void refreshActivateButton();
-  });
-  activateButton.addEventListener("click", () => {
-    void (async () => {
-      await dependencies.setActiveProfile(savedSelect.value);
-      await loadProfiles(savedSelect.value);
-      result.textContent = "已切换启用配置，随后的解析请求将使用它。";
-    })();
-  });
+savedSelect.addEventListener("change", () => {
+  void loadProfile(savedSelect.value);
+  void refreshActivateButton();
+});
+activateButton.addEventListener("click", () => {
+  void (async () => {
+    await dependencies.setActiveProfile(savedSelect.value);
+    await loadProfiles(savedSelect.value);
+    result.textContent = "已切换启用配置，随后的解析请求将使用它。";
+  })();
+});
 ```
 
 `runtimeDependencies()` 返回对象加:
@@ -702,30 +702,31 @@ git commit -m "feat(extension): activate a saved profile from the options page"
 ### Task 3: 彩色细下划线标注(去底色)
 
 **Files:**
+
 - Modify: `src/content/learning-block.ts`
 - Modify: `src/content/learning-block.test.ts`
 
 - [ ] **Step 1: 写失败测试** — 在 `src/content/learning-block.test.ts` 里追加(`analysis` 的三个成分 role 依次是 SUBJECT/PREDICATE/OBJECT,fixture 已存在):
 
 ```ts
-  it("colors each component underline by grammar role without any backdrop", () => {
-    const element = block();
-    document.body.append(element.host);
+it("colors each component underline by grammar role without any backdrop", () => {
+  const element = block();
+  document.body.append(element.host);
 
-    element.renderCore(sentence, tokens, analysis);
+  element.renderCore(sentence, tokens, analysis);
 
-    const root = element.host.shadowRoot!;
-    const colors = [...root.querySelectorAll<HTMLElement>(".component")].map((component) =>
-      component.style.getPropertyValue("--syntax-role-color"),
-    );
-    expect(colors).toEqual(["#2563eb", "#dc2626", "#059669"]); // 主语蓝、谓语红、宾语绿
+  const root = element.host.shadowRoot!;
+  const colors = [...root.querySelectorAll<HTMLElement>(".component")].map((component) =>
+    component.style.getPropertyValue("--syntax-role-color"),
+  );
+  expect(colors).toEqual(["#2563eb", "#dc2626", "#059669"]); // 主语蓝、谓语红、宾语绿
 
-    const styles = root.querySelector("style")!.textContent!;
-    expect(styles).toContain("border-bottom: 1.5px solid");
-    expect(styles).toContain("var(--syntax-role-color)");
-    // 成分不再有底色块
-    expect(styles).not.toMatch(/\.component\s*\{[^}]*background:\s*color-mix/u);
-  });
+  const styles = root.querySelector("style")!.textContent!;
+  expect(styles).toContain("border-bottom: 1.5px solid");
+  expect(styles).toContain("var(--syntax-role-color)");
+  // 成分不再有底色块
+  expect(styles).not.toMatch(/\.component\s*\{[^}]*background:\s*color-mix/u);
+});
 ```
 
 - [ ] **Step 2: 跑测试确认失败** — `npx vitest run src/content/learning-block.test.ts` → 预期 FAIL。
@@ -814,7 +815,7 @@ const ROLE_COLORS: Readonly<Record<GrammarRole, string>> = {
 ④ `renderCore` 里创建 `componentElement` 后(`componentElement.dataset.endToken = ...` 之后)加一行:
 
 ```ts
-      componentElement.style.setProperty("--syntax-role-color", ROLE_COLORS[component.role]);
+componentElement.style.setProperty("--syntax-role-color", ROLE_COLORS[component.role]);
 ```
 
 - [ ] **Step 4: 跑测试确认通过** — `npx vitest run src/content/learning-block.test.ts` → 预期全 PASS。
@@ -832,6 +833,7 @@ git commit -m "feat(extension): role-colored hairline underlines, no component b
 ### Task 4: 右下角进度胶囊
 
 **Files:**
+
 - Create: `src/content/progress-pill.ts`
 - Create: `src/content/progress-pill.test.ts`
 - Modify: `src/content/content-script.ts`(`installContentScript` 的 `relayStatus` 回调处接线)
@@ -1019,10 +1021,7 @@ export class SyntaxProgressPill {
       return;
     }
     if (isComplete(status)) {
-      this.#render(
-        status.failed > 0 ? `✓ 完成，${status.failed} 句失败` : "✓ 解析完成",
-        false,
-      );
+      this.#render(status.failed > 0 ? `✓ 完成，${status.failed} 句失败` : "✓ 解析完成", false);
       this.#fadeTimer = setTimeout(() => this.remove(), FADE_DELAY_MS);
       return;
     }
@@ -1071,19 +1070,19 @@ import { SyntaxProgressPill } from "./progress-pill";
 `installContentScript` 内 `let statusCounter = 0;` 后加一行,并在 `relayStatus` 回调里同步喂给胶囊:
 
 ```ts
-  const pill = new SyntaxProgressPill();
-  const router = new ContentScriptRouter({
-    relayStatus: (documentId, status) => {
-      pill.update(status);
-      const message: ResponseMessage = {
-        version: MESSAGE_VERSION,
-        requestId: `${documentId}:status:${++statusCounter}`,
-        type: "SESSION_STATUS",
-        status,
-      };
-      void chrome.runtime.sendMessage(message).catch(() => undefined);
-    },
-  });
+const pill = new SyntaxProgressPill();
+const router = new ContentScriptRouter({
+  relayStatus: (documentId, status) => {
+    pill.update(status);
+    const message: ResponseMessage = {
+      version: MESSAGE_VERSION,
+      requestId: `${documentId}:status:${++statusCounter}`,
+      type: "SESSION_STATUS",
+      status,
+    };
+    void chrome.runtime.sendMessage(message).catch(() => undefined);
+  },
+});
 ```
 
 - [ ] **Step 6: 全量单测 + 构建** — `npm test && npm run build` → 预期全绿。
@@ -1101,6 +1100,7 @@ git commit -m "feat(extension): corner progress pill driven by session status"
 ### Task 5: E2E 更新与新增
 
 **Files:**
+
 - Modify: `tests/e2e/extension.spec.ts`
 
 - [ ] **Step 1: 更新 popup 空配置测试** — 把 `test("the popup guides setup when no model profile exists", ...)` 整体替换为:
@@ -1121,9 +1121,7 @@ test("the popup guides setup when no model profile exists", async ({ harness }) 
 - [ ] **Step 2: 新增进度胶囊 E2E** — 在同文件末尾追加(参考同文件其他用例获取 `startSession`/页面装载的既有模式;若已有「start session → component visible」的用例,直接在其中插入胶囊断言也可,二选一,别重复建会话流程):
 
 ```ts
-test("a progress pill appears during analysis and fades after completion", async ({
-  harness,
-}) => {
+test("a progress pill appears during analysis and fades after completion", async ({ harness }) => {
   const { page, tabId } = await harness.openArticle("error-single.html");
   await harness.startSession(tabId);
 
@@ -1151,6 +1149,7 @@ git commit -m "test(extension): cover minimal popup and progress pill end to end
 ### Task 6: README 与真机验收
 
 **Files:**
+
 - Modify: `README.md`(若「使用」章节提到已删除的 popup 按钮/指标)
 
 - [ ] **Step 1: 核对 README** — `grep -n "重新解析\|停止并恢复\|指标\|下拉" README.md`;把提及已删 UI 的句子改为新交互描述(一个主按钮:开始学习→解析中可暂停→完成后恢复原文;模型切换在设置页「设为启用」;右下角胶囊显示进度)。
