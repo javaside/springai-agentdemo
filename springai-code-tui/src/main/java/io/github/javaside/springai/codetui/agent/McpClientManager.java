@@ -87,7 +87,7 @@ public final class McpClientManager {
             McpSyncClient client = McpClient.sync(transport)
                     .requestTimeout(cfg.timeoutMs())
                     .initializationTimeout(cfg.timeoutMs())
-                    // 把 server 逻辑名塞进 client Implementation 的 title，toolCallbacks() 再读回作前缀。
+                    // 把 server 逻辑名塞进 client Implementation 的 title，discoverTools() 再读回作前缀。
                     .clientInfo(McpSchema.Implementation.builder("code-tui", AppInfo.version())
                             .title(cfg.name()).build())
                     .build();
@@ -147,7 +147,7 @@ public final class McpClientManager {
      * 关闭给定的一组 client（优雅），总时长硬限 {@value #CLOSE_BUDGET_MS}ms；绝不阻塞退出。
      *
      * <p><b>残留风险（有意取舍）</b>：本方法硬限 2s 总时长以优先保证 {@code /exit} 不卡。若某 server 的
-     * {@code closeGracefully()} 在 2s 内未完成（SDK 内部最长 10s），close() 会放弃等待直接返回，其子进程
+     * {@code closeGracefully()} 在 2s 内未完成（SDK 内部最长 10s），本方法会放弃等待直接返回，其子进程
      * 可能在 JVM 退出瞬间未被优雅 destroy 而短暂残留，由 OS 在父进程消亡后回收——这是「不卡退出」优先于
      * 「保证优雅清理」的有意取舍。
      */

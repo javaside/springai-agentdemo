@@ -40,6 +40,8 @@ class McpConfigWriterTest {
         List<String> names = new java.util.ArrayList<>();
         root.get("mcpServers").properties().forEach(e -> names.add(e.getKey()));
         assertEquals(List.of("fs", "other"), names);
+        // 原子写收尾：成功回写后临时文件不残留
+        assertFalse(Files.exists(dir.resolve("mcp.json.tmp")));
     }
 
     @Test
