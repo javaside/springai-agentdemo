@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { PublicModelProfile } from "../background/config-repository";
 import type { SessionStatus } from "../shared/protocol";
 import type { PopupDependencies } from "./popup";
@@ -19,37 +19,24 @@ const profiles: PublicModelProfile[] = [
     id: "profile-a",
     name: "DeepSeek",
     baseUrl: "https://api.example.com/v1",
-    model: "deepseek-chat",
+    model: "deepseek-v4-flash",
     timeoutMs: 45_000,
-    jsonSchemaSupport: "supported",
-  },
-  {
-    id: "profile-b",
-    name: "Local Model",
-    baseUrl: "http://localhost:11434/v1",
-    model: "qwen",
-    timeoutMs: 45_000,
-    jsonSchemaSupport: "unknown",
+    jsonSchemaSupport: "unsupported",
   },
 ];
 
-const stopped: SessionStatus = {
-  state: "stopped",
-  discovered: 0,
-  queued: 0,
-  ready: 0,
-  failed: 0,
-};
+function status(partial: Partial<SessionStatus>): SessionStatus {
+  return { state: "stopped", discovered: 0, queued: 0, ready: 0, failed: 0, ...partial };
+}
 
 function dependencies(overrides: Partial<PopupDependencies> = {}): PopupDependencies {
   return {
     listProfiles: vi.fn(() => Promise.resolve(profiles)),
     getActiveProfileId: vi.fn(() => Promise.resolve("profile-a")),
     getActiveTab: vi.fn(() => Promise.resolve({ id: 7, url: "https://example.com/article" })),
-    getStatus: vi.fn(() => Promise.resolve(stopped)),
-    sendCommand: vi.fn(() => Promise.resolve(stopped)),
+    getStatus: vi.fn(() => Promise.resolve(status({}))),
+    sendCommand: vi.fn(() => Promise.resolve(status({}))),
     openOptions: vi.fn(),
-    confirm: vi.fn(() => true),
     ...overrides,
   };
 }
@@ -61,137 +48,144 @@ function root(): HTMLElement {
   return element;
 }
 
-describe("Popup page", () => {
-  beforeEach(() => vi.restoreAllMocks());
+const primary = (): HTMLButtonElement =>
+  document.querySelector<HTMLButtonElement>("[data-primary]")!;
+const subline = (): HTMLElement => document.querySelector<HTMLElement>("[data-subline]")!;
 
-  it("shows onboarding when there is no saved model profile", async () => {
+describe("Popup", () => {
+  it("shows only a title row, one primary button and a model subline", async () => {
+    await createPopupPage(root(), dependencies());
+
+    expect(document.querySelectorAll("button")).toHaveLength(2); // 主按钮 + 齿轮
+    expect(document.querySelector("select")).toBeNull();
+    expect(document.querySelector("[data-count]")).toBeNull();
+    expect(primary().textContent).toBe("开始学习");
+    expect(subline().textContent).toContain("DeepSeek · deepseek-v4-flash");
+  });
+
+  it("starts a session from the stopped state", async () => {
+    const subject = dependencies();
+    await createPopupPage(root(), subject);
+
+    primary().click();
+
+    await vi.waitFor(() =>
+      expect(subject.sendCommand).toHaveBeenCalledWith("START_SESSION", {
+        tabId: 7,
+        url: "https://example.com/article",
+      }),
+    );
+  });
+
+  it("shows live progress while running and pauses on click", async () => {
+    const subject = dependencies({
+      getStatus: vi.fn(() =>
+        Promise.resolve(status({ state: "running", discovered: 5, queued: 3, ready: 2 })),
+      ),
+      sendCommand: vi.fn(() =>
+        Promise.resolve(status({ state: "paused", discovered: 5, queued: 3, ready: 2 })),
+      ),
+    });
+    await createPopupPage(root(), subject);
+
+    expect(primary().textContent).toBe("解析中… 2/5（点击暂停）");
+    primary().click();
+
+    await vi.waitFor(() =>
+      expect(subject.sendCommand).toHaveBeenCalledWith("PAUSE_SESSION", expect.anything()),
+    );
+    expect(primary().textContent).toBe("继续学习");
+  });
+
+  it("resumes a paused session with START_SESSION", async () => {
+    const subject = dependencies({
+      getStatus: vi.fn(() =>
+        Promise.resolve(status({ state: "paused", discovered: 5, queued: 3, ready: 2 })),
+      ),
+    });
+    await createPopupPage(root(), subject);
+
+    expect(primary().textContent).toBe("继续学习");
+    primary().click();
+
+    await vi.waitFor(() =>
+      expect(subject.sendCommand).toHaveBeenCalledWith("START_SESSION", expect.anything()),
+    );
+  });
+
+  it("offers to restore the page once every sentence resolved", async () => {
+    const subject = dependencies({
+      getStatus: vi.fn(() =>
+        Promise.resolve(status({ state: "running", discovered: 5, ready: 4, failed: 1 })),
+      ),
+    });
+    await createPopupPage(root(), subject);
+
+    expect(primary().textContent).toBe("恢复网页原文");
+    primary().click();
+
+    await vi.waitFor(() =>
+      expect(subject.sendCommand).toHaveBeenCalledWith("STOP_SESSION", expect.anything()),
+    );
+  });
+
+  it("disables the button while a command is in flight", async () => {
+    let release: (value: SessionStatus) => void;
+    const subject = dependencies({
+      sendCommand: vi.fn(
+        () =>
+          new Promise<SessionStatus>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    });
+    await createPopupPage(root(), subject);
+
+    primary().click();
+    expect(primary().disabled).toBe(true);
+
+    release!(status({ state: "running", discovered: 1, queued: 1 }));
+    await vi.waitFor(() => expect(primary().disabled).toBe(false));
+  });
+
+  it("turns into a setup shortcut when no profile exists", async () => {
     const subject = dependencies({ listProfiles: vi.fn(() => Promise.resolve([])) });
     await createPopupPage(root(), subject);
 
-    expect(document.body.textContent).toContain("尚未配置模型");
-    const settings = document.querySelector<HTMLButtonElement>("[data-action='open-options']")!;
-    settings.click();
-    expect(subject.openOptions).toHaveBeenCalledOnce();
-    expect(document.querySelector<HTMLButtonElement>("[data-action='start']")?.disabled).toBe(true);
+    expect(primary().textContent).toBe("去配置模型");
+    expect(primary().disabled).toBe(false);
+    expect(subline().textContent).toContain("尚未配置模型");
+    primary().click();
+    expect(subject.openOptions).toHaveBeenCalled();
   });
 
-  it("switches the active profile without sending a reanalysis command", async () => {
+  it("disables the primary button on unsupported pages", async () => {
+    const subject = dependencies({
+      getActiveTab: vi.fn(() => Promise.resolve({ id: 7, url: "chrome://extensions" })),
+    });
+    await createPopupPage(root(), subject);
+
+    expect(primary().disabled).toBe(true);
+    expect(subline().textContent).toContain("此页面不支持句法解析");
+  });
+
+  it("opens the options page from the gear button", async () => {
     const subject = dependencies();
     await createPopupPage(root(), subject);
-    const select = document.querySelector<HTMLSelectElement>("#popup-profile")!;
 
-    select.value = "profile-b";
-    select.dispatchEvent(new Event("change"));
+    document.querySelector<HTMLButtonElement>("[data-action='open-options']")!.click();
 
-    await vi.waitFor(() =>
-      expect(subject.sendCommand).toHaveBeenCalledWith(
-        "SWITCH_PROFILE",
-        expect.objectContaining({ tabId: 7 }),
-        "profile-b",
-      ),
-    );
-    expect(subject.sendCommand).not.toHaveBeenCalledWith(
-      "REANALYZE_VISIBLE",
-      expect.anything(),
-      expect.anything(),
-    );
+    expect(subject.openOptions).toHaveBeenCalled();
   });
 
-  it("renders discovered, queued, completed and failed sentence counts exactly", async () => {
-    await createPopupPage(
-      root(),
-      dependencies({
-        getStatus: vi.fn((): Promise<SessionStatus> =>
-          Promise.resolve({
-            state: "running",
-            discovered: 23,
-            queued: 4,
-            ready: 18,
-            failed: 1,
-            profileId: "profile-a",
-          }),
-        ),
-      }),
-    );
-
-    expect(document.querySelector("[data-count='discovered']")?.textContent).toBe("23");
-    expect(document.querySelector("[data-count='queued']")?.textContent).toBe("4");
-    expect(document.querySelector("[data-count='ready']")?.textContent).toBe("18");
-    expect(document.querySelector("[data-count='failed']")?.textContent).toBe("1");
-    expect(document.body.textContent).toContain("失败句子");
-  });
-
-  it.each([
-    ["stopped", "开始学习", "START_SESSION"],
-    ["running", "暂停", "PAUSE_SESSION"],
-    ["paused", "继续学习", "START_SESSION"],
-  ] as const)("renders the %s primary control", async (state, label, command) => {
+  it("shows a one-line error on command failure", async () => {
     const subject = dependencies({
-      getStatus: vi.fn(() => Promise.resolve({ ...stopped, state })),
+      sendCommand: vi.fn(() => Promise.reject(new Error("boom"))),
     });
     await createPopupPage(root(), subject);
 
-    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (candidate) => candidate.textContent === label,
-    )!;
-    button.click();
+    primary().click();
 
-    await vi.waitFor(() =>
-      expect(subject.sendCommand).toHaveBeenCalledWith(command, expect.anything(), undefined),
-    );
-    expect(document.body.textContent).toContain("停止并恢复网页");
-  });
-
-  it("disables start and explains unsupported active tabs", async () => {
-    await createPopupPage(
-      root(),
-      dependencies({
-        getActiveTab: vi.fn(() => Promise.resolve({ id: 7, url: "chrome://settings" })),
-      }),
-    );
-
-    expect(document.querySelector<HTMLButtonElement>("[data-action='start']")?.disabled).toBe(true);
-    expect(document.querySelector("[role='alert']")?.textContent).toContain("此页面不支持");
-  });
-
-  it("confirms cost before sending an explicit visible-area reanalysis", async () => {
-    const subject = dependencies({
-      getStatus: vi.fn((): Promise<SessionStatus> =>
-        Promise.resolve({ ...stopped, state: "running" }),
-      ),
-      confirm: vi.fn(() => false),
-    });
-    await createPopupPage(root(), subject);
-    const button = document.querySelector<HTMLButtonElement>("[data-action='reanalyze']")!;
-
-    button.click();
-    expect(subject.confirm).toHaveBeenCalledWith(expect.stringContaining("新的模型费用"));
-    expect(subject.sendCommand).not.toHaveBeenCalledWith(
-      "REANALYZE_VISIBLE",
-      expect.anything(),
-      expect.anything(),
-    );
-
-    vi.mocked(subject.confirm).mockReturnValue(true);
-    button.click();
-    await vi.waitFor(() =>
-      expect(subject.sendCommand).toHaveBeenCalledWith(
-        "REANALYZE_VISIBLE",
-        expect.anything(),
-        undefined,
-      ),
-    );
-  });
-
-  it("uses native keyboard controls, a CSS namespace and a visible focus hook", async () => {
-    await createPopupPage(root(), dependencies());
-
-    expect(
-      [...document.querySelectorAll<HTMLElement>("button, select")].every(
-        (node) => node.tabIndex >= 0,
-      ),
-    ).toBe(true);
-    expect(document.querySelector(".popup-page")).not.toBeNull();
-    expect(document.querySelector("[data-focus-style='visible']")).not.toBeNull();
+    await vi.waitFor(() => expect(subline().textContent).toContain("操作失败"));
   });
 });
