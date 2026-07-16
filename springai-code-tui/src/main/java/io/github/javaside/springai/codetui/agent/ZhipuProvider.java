@@ -23,7 +23,6 @@ public final class ZhipuProvider implements LlmProvider {
 
     // 国内官方端点；海外/Coding Plan 可经 ZHIPU_BASE_URL 覆盖为 https://api.z.ai/api/paas/v4。
     private static final String DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
-    private static final String DEFAULT_MODEL = "glm-5.2";
     // 2026 在售 GLM-5 系：glm-5.2 旗舰（Agentic Coding，对标 Opus 4.8）/ glm-5.1 长任务 / glm-5-turbo 快档。
     private static final List<ModelOption> MODELS = List.of(
             new ModelOption("glm-5.2",     "glm-5.2",     "旗舰 · Agentic 编码/长上下文"),
@@ -34,6 +33,7 @@ public final class ZhipuProvider implements LlmProvider {
 
     private final String apiKey;
     private final String baseUrl;            // 空→智谱内置默认；配了→覆盖（走 z.ai / 代理）
+    private final List<ModelOption> models;   // ZHIPU_MODELS 解析结果；未配置=内置 MODELS
     private volatile ChatModel chatModel;   // 懒建，单例
 
     public ZhipuProvider(String apiKey) {
@@ -41,8 +41,13 @@ public final class ZhipuProvider implements LlmProvider {
     }
 
     public ZhipuProvider(String apiKey, String baseUrl) {
+        this(apiKey, baseUrl, null);
+    }
+
+    public ZhipuProvider(String apiKey, String baseUrl, String modelsEnv) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? DEFAULT_BASE_URL : baseUrl.trim();
+        this.models = ModelListEnv.parse(modelsEnv, MODELS);
     }
 
     @Override public String id() { return "zhipu"; }
@@ -66,7 +71,7 @@ public final class ZhipuProvider implements LlmProvider {
             m = OpenAiChatModel.builder()
                     .openAiClient(syncClient)
                     .openAiClientAsync(asyncClient)
-                    .options(OpenAiChatOptions.builder().model(DEFAULT_MODEL).build())
+                    .options(OpenAiChatOptions.builder().model(defaultModel()).build())
                     .build();
             chatModel = m;
         }
@@ -78,7 +83,7 @@ public final class ZhipuProvider implements LlmProvider {
         return OpenAiChatOptions.builder().model(modelId).build();
     }
 
-    @Override public List<ModelOption> models() { return MODELS; }
+    @Override public List<ModelOption> models() { return models; }
 
-    @Override public String defaultModel() { return DEFAULT_MODEL; }
+    @Override public String defaultModel() { return models.get(0).id(); }
 }

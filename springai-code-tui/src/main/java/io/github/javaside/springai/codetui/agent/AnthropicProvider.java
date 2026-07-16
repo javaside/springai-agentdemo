@@ -18,7 +18,6 @@ import java.util.List;
  */
 public final class AnthropicProvider implements LlmProvider {
 
-    private static final String DEFAULT_MODEL = "claude-opus-4-8";
     private static final int MAX_TOKENS = 8192;   // Anthropic 必填；可调
     // 2026-07 在售编号：fable-5 / sonnet-5 / opus-4-8 / haiku-4-5（旧 sonnet-4-5、opus-4-5 是不存在的跳号）。
     private static final List<ModelOption> MODELS = List.of(
@@ -31,6 +30,7 @@ public final class AnthropicProvider implements LlmProvider {
 
     private final String apiKey;
     private final String baseUrl;            // 空→框架内置默认；配了→覆盖
+    private final List<ModelOption> models;   // ANTHROPIC_MODELS 解析结果；未配置=内置 MODELS
     private volatile ChatModel chatModel;
 
     public AnthropicProvider(String apiKey) {
@@ -38,8 +38,13 @@ public final class AnthropicProvider implements LlmProvider {
     }
 
     public AnthropicProvider(String apiKey, String baseUrl) {
+        this(apiKey, baseUrl, null);
+    }
+
+    public AnthropicProvider(String apiKey, String baseUrl, String modelsEnv) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? "" : baseUrl.trim();
+        this.models = ModelListEnv.parse(modelsEnv, MODELS);
     }
 
     @Override public String id() { return "anthropic"; }
@@ -68,7 +73,7 @@ public final class AnthropicProvider implements LlmProvider {
                 asyncB.baseUrl(baseUrl);
             }
             AnthropicChatOptions opts = AnthropicChatOptions.builder()
-                    .model(Model.of(DEFAULT_MODEL))
+                    .model(Model.of(defaultModel()))
                     .maxTokens(MAX_TOKENS)
                     .build();
             m = AnthropicChatModel.builder()
@@ -89,7 +94,7 @@ public final class AnthropicProvider implements LlmProvider {
                 .build();
     }
 
-    @Override public List<ModelOption> models() { return MODELS; }
+    @Override public List<ModelOption> models() { return models; }
 
-    @Override public String defaultModel() { return DEFAULT_MODEL; }
+    @Override public String defaultModel() { return models.get(0).id(); }
 }

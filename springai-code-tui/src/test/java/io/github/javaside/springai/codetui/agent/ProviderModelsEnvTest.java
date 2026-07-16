@@ -22,4 +22,50 @@ class ProviderModelsEnvTest {
         assertEquals("deepseek-v4-pro", p.models().get(0).id());   // 内置清单首项 = 默认（本 Task 调序）
         assertEquals(2, p.models().size());
     }
+
+    @Test
+    void zhipu_modelsEnv_overridesList_firstIsDefault() {
+        ZhipuProvider p = new ZhipuProvider("key", null, "glm-x, glm-y");
+        assertEquals("glm-x", p.defaultModel());
+        assertEquals(2, p.models().size());
+    }
+
+    @Test
+    void zhipu_noEnv_builtInDefault() {
+        assertEquals("glm-5.2", new ZhipuProvider("key", null, null).defaultModel());
+    }
+
+    @Test
+    void qwen_modelsEnv_overridesList_firstIsDefault() {
+        QwenProvider p = new QwenProvider("key", null, "qwen-x");
+        assertEquals("qwen-x", p.defaultModel());
+        assertEquals(1, p.models().size());
+    }
+
+    @Test
+    void qwen_noEnv_builtInDefault() {
+        assertEquals("qwen3.7-max", new QwenProvider("key", null, null).defaultModel());
+    }
+
+    @Test
+    void anthropic_modelsEnv_overridesList_firstIsDefault() {
+        AnthropicProvider p = new AnthropicProvider("key", null, "claude-x, claude-y");
+        assertEquals("claude-x", p.defaultModel());
+    }
+
+    @Test
+    void anthropic_noEnv_builtInDefault() {
+        assertEquals("claude-opus-4-8", new AnthropicProvider("key", null, null).defaultModel());
+    }
+
+    @Test
+    void openai_modelsEnv_overridesList_firstIsDefault() {
+        OpenAiProvider p = new OpenAiProvider("key", null, "gpt-x");
+        assertEquals("gpt-x", p.defaultModel());
+    }
+
+    @Test
+    void openai_noEnv_builtInDefault() {
+        assertEquals("gpt-5.6-sol", new OpenAiProvider("key", null, null).defaultModel());
+    }
 }

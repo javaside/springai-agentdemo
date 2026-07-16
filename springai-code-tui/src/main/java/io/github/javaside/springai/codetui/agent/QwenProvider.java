@@ -23,7 +23,6 @@ public final class QwenProvider implements LlmProvider {
 
     // 国内百炼兼容模式端点；国际站/新加坡为 https://dashscope-intl.aliyuncs.com/compatible-mode/v1。
     private static final String DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
-    private static final String DEFAULT_MODEL = "qwen3.7-max";
     // 2026-07 百炼在售 Qwen3.7 系：qwen3.7-max 旗舰 / qwen3.7-plus 均衡 / qwen3.6-flash 快档；
     // qwen3-coder-next 为现役编码专项模型。
     private static final List<ModelOption> MODELS = List.of(
@@ -36,6 +35,7 @@ public final class QwenProvider implements LlmProvider {
 
     private final String apiKey;
     private final String baseUrl;            // 空→百炼内置默认；配了→覆盖（走国际站/Coding Plan/代理）
+    private final List<ModelOption> models;   // DASHSCOPE_MODELS 解析结果；未配置=内置 MODELS
     private volatile ChatModel chatModel;   // 懒建，单例
 
     public QwenProvider(String apiKey) {
@@ -43,8 +43,13 @@ public final class QwenProvider implements LlmProvider {
     }
 
     public QwenProvider(String apiKey, String baseUrl) {
+        this(apiKey, baseUrl, null);
+    }
+
+    public QwenProvider(String apiKey, String baseUrl, String modelsEnv) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? DEFAULT_BASE_URL : baseUrl.trim();
+        this.models = ModelListEnv.parse(modelsEnv, MODELS);
     }
 
     @Override public String id() { return "qwen"; }
@@ -74,7 +79,7 @@ public final class QwenProvider implements LlmProvider {
             m = OpenAiChatModel.builder()
                     .openAiClient(new com.openai.client.OpenAIClientImpl(options))
                     .openAiClientAsync(new com.openai.client.OpenAIClientAsyncImpl(options))
-                    .options(OpenAiChatOptions.builder().model(DEFAULT_MODEL).build())
+                    .options(OpenAiChatOptions.builder().model(defaultModel()).build())
                     .build();
             chatModel = m;
         }
@@ -86,7 +91,7 @@ public final class QwenProvider implements LlmProvider {
         return OpenAiChatOptions.builder().model(modelId).build();
     }
 
-    @Override public List<ModelOption> models() { return MODELS; }
+    @Override public List<ModelOption> models() { return models; }
 
-    @Override public String defaultModel() { return DEFAULT_MODEL; }
+    @Override public String defaultModel() { return models.get(0).id(); }
 }

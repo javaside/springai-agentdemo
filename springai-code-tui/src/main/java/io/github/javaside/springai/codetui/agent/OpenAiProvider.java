@@ -15,7 +15,6 @@ import java.util.List;
  */
 public final class OpenAiProvider implements LlmProvider {
 
-    private static final String DEFAULT_MODEL = "gpt-5.6-sol";
     // 2026-07-09 发布 GPT-5.6 家族（新命名：数字=代，Sol/Terra/Luna=能力档）。
     // 裸 gpt-5.6 别名路由到 Sol；要确定性路由用带后缀的显式 id。旧 gpt-5.5/5.4 保留作回退。
     private static final List<ModelOption> MODELS = List.of(
@@ -29,6 +28,7 @@ public final class OpenAiProvider implements LlmProvider {
 
     private final String apiKey;
     private final String baseUrl;            // 空→框架内置默认；配了→覆盖
+    private final List<ModelOption> models;   // OPENAI_MODELS 解析结果；未配置=内置 MODELS
     private volatile ChatModel chatModel;
 
     public OpenAiProvider(String apiKey) {
@@ -36,8 +36,13 @@ public final class OpenAiProvider implements LlmProvider {
     }
 
     public OpenAiProvider(String apiKey, String baseUrl) {
+        this(apiKey, baseUrl, null);
+    }
+
+    public OpenAiProvider(String apiKey, String baseUrl, String modelsEnv) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? "" : baseUrl.trim();
+        this.models = ModelListEnv.parse(modelsEnv, MODELS);
     }
 
     @Override public String id() { return "openai"; }
@@ -63,7 +68,7 @@ public final class OpenAiProvider implements LlmProvider {
             m = OpenAiChatModel.builder()
                     .openAiClient(syncB.build())
                     .openAiClientAsync(asyncB.build())
-                    .options(OpenAiChatOptions.builder().model(DEFAULT_MODEL).build())
+                    .options(OpenAiChatOptions.builder().model(defaultModel()).build())
                     .build();
             chatModel = m;
         }
@@ -75,7 +80,7 @@ public final class OpenAiProvider implements LlmProvider {
         return OpenAiChatOptions.builder().model(modelId).build();
     }
 
-    @Override public List<ModelOption> models() { return MODELS; }
+    @Override public List<ModelOption> models() { return models; }
 
-    @Override public String defaultModel() { return DEFAULT_MODEL; }
+    @Override public String defaultModel() { return models.get(0).id(); }
 }
