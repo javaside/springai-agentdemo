@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class CodingAgent implements SubmitHandler {
 
-    /** 可选模型（DeepSeek V4 现役）。第一个为默认。 */
+    /** 仅 registry==null 的旧单-client/测试桩回退路径用；真实模型清单走 ProviderRegistry（支持 *_MODELS 配置）。 */
     public static final List<ModelOption> MODELS = List.of(
             new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
             new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"));

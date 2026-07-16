@@ -2,7 +2,7 @@
 rem springai-code-tui 启动脚本（Windows）。解压后直接运行本脚本。
 rem 需求：JDK 21+。
 rem 配置：把 bin\config.env.example 复制为 bin\config.env 并填 API key（至少一家）；或直接用环境变量。
-rem   可配项：DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY（及各自 *_BASE_URL）、
+rem   可配项：DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY（及各自 *_BASE_URL、*_MODELS）、
 rem   CODETUI_LLM_READ_TIMEOUT_SECONDS、CODETUI_SUBAGENT_CONCURRENCY、JAVA_OPTS。
 setlocal
 set "APP_HOME=%~dp0.."

@@ -54,7 +54,8 @@ public final class ProviderRegistry {
 
     /**
      * 选中一个模型：在可用 provider 中找拥有该 modelId 的那家，切换激活 provider 与激活模型。
-     * modelId 三家全局唯一；找不到（未知/属于不可用家）则静默忽略、保持原激活。
+     * 内置清单的 modelId 全局唯一；*_MODELS 配置可能造成跨家重名，此时命中列表序靠前的可用家。
+     * 找不到（未知/属于不可用家）则静默忽略、保持原激活。
      */
     public void select(String modelId) {
         for (LlmProvider p : providers) {
