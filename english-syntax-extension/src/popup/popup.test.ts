@@ -1,17 +1,18 @@
 // @vitest-environment happy-dom
 
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PublicModelProfile } from "../background/config-repository";
-import type { SessionStatus } from "../shared/protocol";
+import { isRequestMessage, type SessionStatus } from "../shared/protocol";
 import type { PopupDependencies } from "./popup";
 
 let createPopupPage: typeof import("./popup").createPopupPage;
+let runtimeDependencies: typeof import("./popup").runtimeDependencies;
 
 beforeAll(async () => {
   const entryRoot = document.createElement("main");
   entryRoot.id = "app";
   document.body.append(entryRoot);
-  ({ createPopupPage } = await import("./popup"));
+  ({ createPopupPage, runtimeDependencies } = await import("./popup"));
 });
 
 const profiles: PublicModelProfile[] = [
@@ -187,5 +188,27 @@ describe("Popup", () => {
     primary().click();
 
     await vi.waitFor(() => expect(subline().textContent).toContain("操作失败"));
+  });
+});
+
+describe("runtimeDependencies", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends page-scoped runtime messages the service worker validator accepts", async () => {
+    const sendMessage = vi.fn(async (_message: unknown) => ({ type: "ACK" }) as never);
+    vi.stubGlobal("chrome", {
+      runtime: { sendMessage, openOptionsPage: vi.fn() },
+      tabs: { query: vi.fn() },
+      storage: { local: { get: vi.fn(async () => ({})), set: vi.fn(async () => undefined) } },
+    });
+
+    const deps = runtimeDependencies();
+    await deps.getStatus({ tabId: 7 });
+    await deps.sendCommand("START_SESSION", { tabId: 7 });
+
+    for (const [message] of sendMessage.mock.calls) {
+      expect((message as { documentId: string }).documentId).toBe("popup-tab-7");
+      expect(isRequestMessage(message)).toBe(true);
+    }
   });
 });

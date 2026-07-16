@@ -145,8 +145,6 @@ export async function createPopupPage(
       } catch {
         renderStatus();
         subline.textContent = "操作失败，请刷新页面或重新打开扩展后重试。";
-      } finally {
-        if (profile !== undefined && supported) primary.disabled = false;
       }
     })();
   });
@@ -154,7 +152,7 @@ export async function createPopupPage(
   renderStatus();
 }
 
-function runtimeDependencies(): PopupDependencies {
+export function runtimeDependencies(): PopupDependencies {
   const repository = new ConfigRepository();
   return {
     listProfiles: () => repository.listPublicProfiles(),
@@ -169,6 +167,7 @@ function runtimeDependencies(): PopupDependencies {
         requestId: `popup:status:${crypto.randomUUID()}`,
         type: "GET_SESSION_STATUS",
         tabId: context.tabId,
+        documentId: `popup-tab-${context.tabId}`,
       });
       return response.type === "SESSION_STATUS" ? response.status : EMPTY_STATUS;
     },
@@ -178,6 +177,7 @@ function runtimeDependencies(): PopupDependencies {
         requestId: `popup:${type}:${crypto.randomUUID()}`,
         type,
         tabId: context.tabId,
+        documentId: `popup-tab-${context.tabId}`,
       });
       if (response.type === "ERROR") throw new Error(response.error.message);
       return response.type === "SESSION_STATUS" ? response.status : undefined;

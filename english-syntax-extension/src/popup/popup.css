@@ -74,7 +74,7 @@ body {
   overflow-wrap: anywhere;
 }
 
-.popup-page :is(button):focus-visible {
+.popup-page button:focus-visible {
   outline: 3px solid #ffbf47;
   outline-offset: 2px;
 }
