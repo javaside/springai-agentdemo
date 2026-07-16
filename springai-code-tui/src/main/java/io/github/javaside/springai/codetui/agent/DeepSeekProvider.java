@@ -16,15 +16,16 @@ import java.util.List;
 public final class DeepSeekProvider implements LlmProvider {
 
     private static final String DEFAULT_BASE_URL = "https://api.deepseek.com";
-    private static final String DEFAULT_MODEL = "deepseek-v4-pro";
+    // 首项即默认模型（*_MODELS 未配置时的回退清单，约定第一项为默认）。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
-            new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"));
+            new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"),
+            new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"));
 
     private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
 
     private final String apiKey;
     private final String baseUrl;            // 空→内置默认；配了→覆盖
+    private final List<ModelOption> models;   // DEEPSEEK_MODELS 解析结果；未配置=内置 MODELS
     private volatile ChatModel chatModel;   // 懒建，单例
 
     public DeepSeekProvider(String apiKey) {
@@ -32,8 +33,13 @@ public final class DeepSeekProvider implements LlmProvider {
     }
 
     public DeepSeekProvider(String apiKey, String baseUrl) {
+        this(apiKey, baseUrl, null);
+    }
+
+    public DeepSeekProvider(String apiKey, String baseUrl, String modelsEnv) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.baseUrl = (baseUrl == null || baseUrl.isBlank()) ? DEFAULT_BASE_URL : baseUrl.trim();
+        this.models = ModelListEnv.parse(modelsEnv, MODELS);
     }
 
     @Override public String id() { return "deepseek"; }
@@ -73,7 +79,7 @@ public final class DeepSeekProvider implements LlmProvider {
                     .build();
             m = DeepSeekChatModel.builder()
                     .deepSeekApi(api)
-                    .options(DeepSeekChatOptions.builder().model(DEFAULT_MODEL).build())
+                    .options(DeepSeekChatOptions.builder().model(defaultModel()).build())
                     .build();
             chatModel = m;
         }
@@ -85,7 +91,7 @@ public final class DeepSeekProvider implements LlmProvider {
         return DeepSeekChatOptions.builder().model(modelId).build();
     }
 
-    @Override public List<ModelOption> models() { return MODELS; }
+    @Override public List<ModelOption> models() { return models; }
 
-    @Override public String defaultModel() { return DEFAULT_MODEL; }
+    @Override public String defaultModel() { return models.get(0).id(); }
 }
