@@ -181,7 +181,9 @@ test("reloading the same article renders from the cache with zero model calls", 
   expect(harness.fakeModel.recordedOfKind("core", "core-repair", "correction")).toEqual([]);
 });
 
-test("clicking a component lazily loads its detail exactly once", async ({ harness }) => {
+test("clicking a component lazily loads its detail once and re-clicking toggles it", async ({
+  harness,
+}) => {
   await seedLocalProfile(harness);
   const { page } = await startSession(harness, "error-single.html");
   await expect(learningBlocks(page)).toHaveCount(1, { timeout: 20_000 });
@@ -191,9 +193,84 @@ test("clicking a component lazily loads its detail exactly once", async ({ harne
   await expect(page.locator(".detail")).toContainText("详细语法解析", { timeout: 15_000 });
   expect(harness.fakeModel.recordedOfKind("detail")).toHaveLength(1);
 
+  // A second click on the same component folds the explanation away.
   await component.click();
-  await expect(page.locator(".detail")).toContainText("详细语法解析");
+  await expect(page.locator(".detail")).toHaveCount(0);
+
+  // Reopening is served from the extension cache, so the model is still
+  // consulted exactly once.
+  await component.click();
+  await expect(page.locator(".detail")).toContainText("详细语法解析", { timeout: 15_000 });
   expect(harness.fakeModel.recordedOfKind("detail")).toHaveLength(1);
+});
+
+test("a detail panel opens inside its own sentence, moves on other clicks, and restore leaves no artifacts", async ({
+  harness,
+}) => {
+  await seedLocalProfile(harness);
+  const page = await openArticle(harness, "dynamic-article.html");
+  const originalPair = await page.locator("#pair").evaluate((node) => node.outerHTML);
+  const tabId = await harness.tabIdFor(`${harness.pagesOrigin}/dynamic-article.html`);
+  const documentId = "e2e-doc-detail-cycle";
+  await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId }));
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+
+  // #pair holds two sentences in one block; open the first sentence's detail.
+  const pairBlock = learningBlocks(page).nth(3);
+  const firstComponent = pairBlock.locator(".sentence").first().locator(".component").first();
+  await firstComponent.click();
+  await expect(pairBlock.locator(".detail")).toContainText("详细语法解析", { timeout: 15_000 });
+
+  const placement = await pairBlock.evaluate((host) => {
+    const root = host.shadowRoot!;
+    const detail = root.querySelector(".detail")!;
+    const sentences = [...root.querySelectorAll(".sentence")];
+    return {
+      detailCount: root.querySelectorAll(".detail").length,
+      ownerIsFirstSentence: detail.closest(".sentence") === sentences[0],
+      detailBottom: detail.getBoundingClientRect().bottom,
+      secondSentenceTop: sentences[1]!.getBoundingClientRect().top,
+    };
+  });
+  expect(placement.detailCount).toBe(1);
+  expect(placement.ownerIsFirstSentence).toBe(true);
+  // The explanation sits directly under its own sentence, never below the
+  // sentences that follow it.
+  expect(placement.detailBottom).toBeLessThanOrEqual(placement.secondSentenceTop + 0.5);
+
+  // Clicking a component of the second sentence moves the single open panel.
+  await pairBlock.locator(".sentence").nth(1).locator(".component").first().click();
+  await expect
+    .poll(async () =>
+      pairBlock.evaluate((host) => {
+        const root = host.shadowRoot!;
+        const details = [...root.querySelectorAll(".detail")];
+        const sentences = [...root.querySelectorAll(".sentence")];
+        return {
+          count: details.length,
+          inSecondSentence: details[0] === undefined ? false : sentences[1]!.contains(details[0]),
+        };
+      }),
+    )
+    .toEqual({ count: 1, inSecondSentence: true });
+
+  // Clicking a component in another block closes this block's panel too:
+  // only one explanation stays open across the whole page.
+  const introComponent = learningBlocks(page).nth(1).locator(".component").first();
+  await introComponent.click();
+  await expect(pairBlock.locator(".detail")).toHaveCount(0);
+  await expect(page.locator(".detail")).toHaveCount(1);
+
+  // Stop the session while a panel is open: the page keeps zero extension
+  // nodes and the original paragraph returns byte-for-byte.
+  const stopped = await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
+  expect(stopped).toMatchObject({ type: "SESSION_STATUS", status: { state: "stopped" } });
+  await expect(learningBlocks(page)).toHaveCount(0);
+  await expect(page.locator(".detail")).toHaveCount(0);
+  await expect(page.locator("style[data-syntax-learning-hide]")).toHaveCount(0);
+  await expect(page.locator("[data-syntax-progress-pill]")).toHaveCount(0);
+  expect(await page.locator("#pair").evaluate((node) => node.outerHTML)).toBe(originalPair);
+  await expect(page.locator("#pair")).toBeVisible();
 });
 
 test("switching profiles keeps rendered provenance and routes only new work to the new model", async ({
