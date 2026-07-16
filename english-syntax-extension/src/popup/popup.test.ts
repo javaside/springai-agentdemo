@@ -195,7 +195,9 @@ describe("runtimeDependencies", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("sends page-scoped runtime messages the service worker validator accepts", async () => {
-    const sendMessage = vi.fn(() => Promise.resolve({ type: "ACK" } as never));
+    const sendMessage = vi.fn<(message: unknown) => Promise<never>>(() =>
+      Promise.resolve({ type: "ACK" } as never),
+    );
     vi.stubGlobal("chrome", {
       runtime: { sendMessage, openOptionsPage: vi.fn() },
       tabs: { query: vi.fn() },
