@@ -17,8 +17,9 @@ import java.util.Map;
  * 读取两层 {@code mcp.json}（用户级 {@code ~/.codetui/mcp.json} + 项目级 {@code <root>/.codetui/mcp.json}），
  * 合并为 {@link McpServerConfig} 列表。项目级同名项覆盖用户级。
  *
- * <p><b>降级契约</b>：文件缺失 / JSON 非法 / 单条缺必填字段 / 未知 {@code type} / 被 {@code enabled:false} 关闭
+ * <p><b>降级契约</b>：文件缺失 / JSON 非法 / 单条缺必填字段 / 未知 {@code type}
  * → 视为空或跳过该条，记 WARN，<b>绝不抛异常</b>（照 {@code SkillCatalog} 风格）。仅 stdio 传输本期落地。
+ * 「被 {@code enabled:false} 关闭 → 跳过」仅适用 {@link #load(Path)}；{@link #loadAll(Path)} 保留禁用项。
  */
 public final class McpConfigLoader {
 
@@ -48,7 +49,42 @@ public final class McpConfigLoader {
         return new ArrayList<>(merged.values());
     }
 
+    /** 配置来源层：决定 /mcp 面板标注与回写目标文件。 */
+    public enum ConfigSource { USER, PROJECT }
+
+    /** 全量加载的单条目：配置 + 来源层 + 所属文件（回写目标）。 */
+    public record LoadedServer(McpServerConfig config, ConfigSource source, Path file) { }
+
+    /** 生产入口（全量版）：与 {@link #load(Path)} 同源两文件，但保留 enabled:false 条目，供 /mcp 列出再启用。 */
+    public static List<LoadedServer> loadAll(Path root) {
+        Path userFile = Path.of(System.getProperty("user.home")).resolve(".codetui").resolve("mcp.json");
+        Path projectFile = root.resolve(".codetui").resolve("mcp.json");
+        return loadAll(userFile, projectFile);
+    }
+
+    /** 可测入口（全量版）：项目级覆盖用户级同名项（含来源层与回写目标一并换成项目级）。 */
+    public static List<LoadedServer> loadAll(Path userFile, Path projectFile) {
+        Map<String, LoadedServer> merged = new LinkedHashMap<>();
+        for (McpServerConfig c : parseFileAll(userFile)) {
+            merged.put(c.name(), new LoadedServer(c, ConfigSource.USER, userFile));
+        }
+        for (McpServerConfig c : parseFileAll(projectFile)) {
+            merged.put(c.name(), new LoadedServer(c, ConfigSource.PROJECT, projectFile));
+        }
+        return List.copyOf(merged.values());
+    }
+
     private static List<McpServerConfig> parseFile(Path file) {
+        List<McpServerConfig> out = new ArrayList<>();
+        for (McpServerConfig c : parseFileAll(file)) {
+            if (c.enabled()) {
+                out.add(c);
+            }
+        }
+        return out;
+    }
+
+    private static List<McpServerConfig> parseFileAll(Path file) {
         if (file == null || !Files.isRegularFile(file)) {
             return List.of();
         }
@@ -74,7 +110,7 @@ public final class McpConfigLoader {
                 log.warn("MCP server '{}' 配置字段类型非法，跳过：{}", entry.getKey(), e.getMessage());
                 cfg = null;
             }
-            if (cfg != null && cfg.enabled()) {
+            if (cfg != null) {
                 out.add(cfg);
             }
         });

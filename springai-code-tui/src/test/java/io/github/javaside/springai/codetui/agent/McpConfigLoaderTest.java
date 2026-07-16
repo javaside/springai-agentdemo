@@ -5,10 +5,12 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class McpConfigLoaderTest {
@@ -106,6 +108,45 @@ class McpConfigLoaderTest {
         List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("none.json"), project);
         assertEquals(1, configs.size());
         assertEquals("on", configs.get(0).name());
+    }
+
+    @Test
+    void loadAllKeepsDisabledEntriesAndTagsSource(@TempDir Path dir) throws Exception {
+        Path userFile = dir.resolve("user-mcp.json");
+        Path projectFile = dir.resolve("project-mcp.json");
+        Files.writeString(userFile, """
+                {"mcpServers":{
+                  "alpha":{"command":"echo","enabled":false},
+                  "beta":{"command":"echo"}
+                }}""");
+        Files.writeString(projectFile, """
+                {"mcpServers":{
+                  "beta":{"command":"echo2","enabled":false},
+                  "gamma":{"command":"echo"}
+                }}""");
+
+        List<McpConfigLoader.LoadedServer> all = McpConfigLoader.loadAll(userFile, projectFile);
+
+        assertEquals(3, all.size(), "disabled 条目也要保留");
+        Map<String, McpConfigLoader.LoadedServer> byName = new HashMap<>();
+        all.forEach(s -> byName.put(s.config().name(), s));
+
+        assertFalse(byName.get("alpha").config().enabled());
+        assertEquals(McpConfigLoader.ConfigSource.USER, byName.get("alpha").source());
+        assertEquals(userFile, byName.get("alpha").file());
+
+        // 项目级覆盖用户级同名项：取项目级配置、来源层与回写目标都是项目级
+        assertFalse(byName.get("beta").config().enabled());
+        assertEquals(McpConfigLoader.ConfigSource.PROJECT, byName.get("beta").source());
+        assertEquals(projectFile, byName.get("beta").file());
+        assertEquals("echo2", ((McpServerConfig.StdioServerConfig) byName.get("beta").config()).command());
+
+        assertEquals(McpConfigLoader.ConfigSource.PROJECT, byName.get("gamma").source());
+    }
+
+    @Test
+    void loadAllDegradesOnMissingFiles(@TempDir Path dir) {
+        assertTrue(McpConfigLoader.loadAll(dir.resolve("nope1.json"), dir.resolve("nope2.json")).isEmpty());
     }
 
     @Test
