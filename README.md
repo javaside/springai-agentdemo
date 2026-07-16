@@ -13,7 +13,7 @@
 
 **③ 综合应用层** —— `springai-code-tui`：把前两层综合成一个**真正能用的命令行编码智能体**（多 provider、子 agent、工具调用、技能、TUI 面板）。
 
-- **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 智谱 GLM / [通义千问](https://bailian.console.aliyun.com/)（百炼）/ Anthropic / OpenAI
+- **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 智谱 GLM / [通义千问](https://bailian.console.aliyun.com/)（百炼）/ Anthropic / OpenAI（各家模型清单可经 *_MODELS 环境变量配置，首项为默认模型）
 - **向量模型**：本地 ONNX 模型（无需 API Key，离线运行）—— 因为 DeepSeek 官方 API 只提供对话、不提供向量
 - **运行方式**：core/agent/boot 为控制台菜单（输入数字选示例）；jline/code-tui 为交互式终端程序
 

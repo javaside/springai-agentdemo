@@ -58,6 +58,9 @@ export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役，默认 de
 # export ANTHROPIC_API_KEY=你的key       # Anthropic（默认 claude-opus-4-8，另有 fable-5/sonnet-5/haiku-4-5）
 # export OPENAI_API_KEY=你的key          # OpenAI（默认 gpt-5.6-sol，另有 terra/luna）
 # 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ZHIPU_BASE_URL / DASHSCOPE_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
+# 各 provider 可选自定义模型清单（逗号分隔，首项为默认模型；不配则用内置清单）：
+#   DEEPSEEK_MODELS / ZHIPU_MODELS / DASHSCOPE_MODELS / ANTHROPIC_MODELS / OPENAI_MODELS
+#   例：export DEEPSEEK_MODELS=deepseek-v4-pro,deepseek-v4-flash
 # 可选调优：CODETUI_LLM_READ_TIMEOUT_SECONDS（默认 300）、CODETUI_SUBAGENT_CONCURRENCY（默认 4）
 
 # 切到一个可以随意丢弃、且被版本控制干净纳管的目录再运行
