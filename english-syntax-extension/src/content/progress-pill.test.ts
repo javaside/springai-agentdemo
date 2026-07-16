@@ -11,15 +11,17 @@ function status(partial: Partial<SessionStatus>): SessionStatus {
 describe("SyntaxProgressPill", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    document.body.replaceChildren();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    for (const host of document.documentElement.querySelectorAll("[data-syntax-progress-pill]")) {
+      host.remove();
+    }
   });
 
   const pillText = (pill: SyntaxProgressPill): string =>
-    pill.host.shadowRoot!.textContent!.replace(/\s+/gu, " ").trim();
+    pill.host.shadowRoot!.querySelector(".pill")!.textContent!.replace(/\s+/gu, " ").trim();
 
   it("appears with live counts while the session is running", () => {
     const pill = new SyntaxProgressPill();

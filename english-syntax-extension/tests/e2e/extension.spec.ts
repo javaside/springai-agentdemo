@@ -436,8 +436,24 @@ test("the popup guides setup when no model profile exists", async ({ harness }) 
   const page = await harness.context.newPage();
   await page.goto(harness.popupUrl);
 
-  await expect(page.locator("#popup-profile")).toBeDisabled();
-  await expect(page.locator("#popup-profile option")).toHaveText(["尚未配置模型"]);
-  await expect(page.locator(".popup-page__notice")).toContainText("此页面不支持句法解析");
-  await expect(page.locator("[data-action='start']")).toBeDisabled();
+  const primary = page.locator("[data-primary]");
+  await expect(primary).toHaveText("去配置模型");
+  await expect(primary).toBeEnabled();
+  await expect(page.locator("[data-subline]")).toContainText("尚未配置模型");
+  await expect(page.locator("select")).toHaveCount(0);
+});
+
+test("a progress pill appears during analysis and disappears after completion", async ({
+  harness,
+}) => {
+  await seedLocalProfile(harness);
+  const { page } = await startSession(harness, "error-single.html");
+
+  // The host div itself has zero size (its shadow pill is position: fixed),
+  // so visibility must be asserted on the shadow content, which Playwright's
+  // CSS engine reaches through the open shadow root.
+  const pill = page.locator("[data-syntax-progress-pill] .pill");
+  await expect(pill).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".component").first()).toBeVisible({ timeout: 15_000 });
+  await expect(pill).toBeHidden({ timeout: 15_000 });
 });
