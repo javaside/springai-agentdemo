@@ -443,6 +443,110 @@ test("the popup guides setup when no model profile exists", async ({ harness }) 
   await expect(page.locator("select")).toHaveCount(0);
 });
 
+test("the popup button walks 开始学习 → 解析中 → 继续学习 and finally restores the page", async ({
+  harness,
+}) => {
+  await seedLocalProfile(harness, "popup-flow-model");
+  // Hold the first core call back for a beat so the running state stays
+  // observable between clicks instead of racing straight to completion.
+  harness.fakeModel.script("popup-flow-model", [
+    { kind: "http", status: 429, body: '{"error":"slow down"}', retryAfter: "1" },
+  ]);
+  const articlePage = await openArticle(harness, "dynamic-article.html");
+  // A popup rendered in a normal tab carries sender.tab, which the service
+  // worker rightly distrusts, and Playwright cannot attach to the native
+  // toolbar popup window. Bridging sendMessage through dispatchFromUi keeps
+  // every click on the real popup DOM while messages arrive with the trusted
+  // popup sender the toolbar would provide.
+  const popupPage = await harness.context.newPage();
+  await popupPage.exposeFunction("__syntaxDispatchFromUi", (message: Record<string, unknown>) =>
+    harness.dispatchFromUi(message),
+  );
+  await popupPage.addInitScript(() => {
+    const bridge = window as unknown as {
+      __syntaxDispatchFromUi(message: unknown): Promise<unknown>;
+    };
+    chrome.runtime.sendMessage = (message: unknown) => bridge.__syntaxDispatchFromUi(message);
+  });
+  await popupPage.goto(harness.popupUrl);
+  // The popup resolves its target from the active tab at load time, so the
+  // article must hold focus while the popup renders in a background tab.
+  await articlePage.bringToFront();
+  await popupPage.reload();
+
+  const primary = popupPage.locator("[data-primary]");
+  await expect(primary).toHaveText("开始学习");
+  await expect(popupPage.locator("[data-subline]")).toContainText("popup-flow-model");
+
+  await primary.click();
+  await expect(primary).toContainText("解析中");
+  await expect(primary).toContainText("点击暂停");
+
+  await primary.click();
+  await expect(primary).toHaveText("继续学习");
+
+  await primary.click();
+  await expect(learningBlocks(articlePage)).toHaveCount(4, { timeout: 20_000 });
+  // The below-fold sentence stays queued until it scrolls into view, so bring
+  // it in to let the session finish. The pill only fades once every discovered
+  // sentence has resolved, so its disappearance marks the completed session
+  // the reopened popup must see.
+  await articlePage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await expect(learningBlocks(articlePage)).toHaveCount(5, { timeout: 20_000 });
+  await expect(articlePage.locator("[data-syntax-progress-pill] .pill")).toBeHidden({
+    timeout: 15_000,
+  });
+
+  await popupPage.reload();
+  await expect(primary).toHaveText("恢复网页原文");
+  await primary.click();
+  await expect(primary).toHaveText("开始学习");
+  await expect(learningBlocks(articlePage)).toHaveCount(0);
+  await expect(articlePage.locator("[data-syntax-progress-pill]")).toHaveCount(0);
+  await expect(articlePage.locator("#intro")).toBeVisible();
+});
+
+test("activating a saved profile from the options page routes new sessions to it", async ({
+  harness,
+}) => {
+  const page = await harness.context.newPage();
+  await page.goto(harness.optionsUrl);
+  const select = page.locator("#options-saved-profile");
+
+  const saveProfile = async (name: string, model: string, apiKey: string): Promise<void> => {
+    await select.selectOption("");
+    await page.locator("#options-profile-name").fill(name);
+    await page.locator("#options-base-url").fill(harness.fakeModel.baseUrl);
+    await page.locator("#options-api-key").fill(apiKey);
+    await page.locator("#options-model").fill(model);
+    await page.locator("#options-timeout").fill("30");
+    await page.locator("button[type='submit']").click();
+    await expect(select.locator("option", { hasText: `${name} · ${model}` })).toHaveCount(1);
+  };
+
+  await saveProfile("Model A", "model-a", "sk-a");
+  await saveProfile("Model B", "model-b", "sk-b");
+  await expect(select.locator("option", { hasText: "Model A · model-a（启用中）" })).toHaveCount(1);
+
+  const activate = page.locator("[data-action='activate-profile']");
+  await select.selectOption({ label: "Model B · model-b" });
+  await expect(activate).toHaveText("设为启用");
+  await expect(activate).toBeEnabled();
+  await activate.click();
+
+  await expect(page.locator("[data-connection-result]")).toContainText("已切换启用配置");
+  await expect(activate).toHaveText("已启用");
+  await expect(activate).toBeDisabled();
+  await expect(select.locator("option", { hasText: "Model B · model-b（启用中）" })).toHaveCount(1);
+  await expect(select.locator("option", { hasText: "Model A · model-a（启用中）" })).toHaveCount(0);
+
+  const { page: article } = await startSession(harness, "dynamic-article.html");
+  await expect(learningBlocks(article)).toHaveCount(4, { timeout: 20_000 });
+  expect(new Set(harness.fakeModel.recordedOfKind("core").map(({ model }) => model))).toEqual(
+    new Set(["model-b"]),
+  );
+});
+
 test("a progress pill appears during analysis and disappears after completion", async ({
   harness,
 }) => {
