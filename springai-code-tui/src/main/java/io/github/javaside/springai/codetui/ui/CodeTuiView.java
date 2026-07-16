@@ -1,6 +1,8 @@
 package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.AskRequest;
+import io.github.javaside.springai.codetui.agent.McpConfigLoader;
+import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModelOption;
 import io.github.javaside.springai.codetui.agent.OptionSpec;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
@@ -89,6 +91,9 @@ public final class CodeTuiView extends InlineApp {
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
     private boolean pickingSkill;                                    // /skill 选择器是否激活
+    private boolean pickingMcp;                                      // /mcp 管理面板是否激活
+    private boolean mcpExpanded;                                     // Tab 展开选中项工具清单
+    private volatile String mcpConnecting;                           // 非 null = 正在后台连接的 server 名（渲染线程读）
     private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
     private AskRequest activeAsk;                                     // 当前正在作答的问询（null=非作答态）
     private int askQ;                                                 // 当前问题下标
@@ -118,6 +123,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
             new SlashCommand("/reload",  "重新扫描技能目录（新增/删除的 SKILL.md 生效）"),
+            new SlashCommand("/mcp",     "管理 MCP 服务器（启用/禁用）"),
             new SlashCommand("/continue", "继续执行上一批未完成的计划"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
@@ -154,6 +160,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
+                scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
                 scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
                 scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
                 scope(pendingSkill != null, skillTag()),            // 已挂载技能标签：固定在输入框正上方，发送时随消息带走
@@ -400,6 +407,7 @@ public final class CodeTuiView extends InlineApp {
         if (activeAsk != null) return onAskKey(k);      // 作答模态：全部按键交给它，屏蔽文本编辑
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
+        if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
         // 正在浏览历史（histIndex<size）时 ↑↓ 始终翻历史——即使翻到的是一条 /命令、补全菜单也弹出来了，
         // 也不让菜单抢走 ↑↓（否则一遇到 /model 就卡住翻不动）。菜单的 Tab/Enter/Esc 仍照常处理。
         if (histIndex < history.size()) {
@@ -719,6 +727,12 @@ public final class CodeTuiView extends InlineApp {
             reloadSkills();
             return;
         }
+        if (cmd.equals("/mcp")) {                    // MCP 管理面板：仅空闲可开（回合中摘工具/关连接会撞在飞调用）
+            inputState.clear();
+            if (busy()) { state.setNotice("忙碌中，无法管理 MCP"); return; }
+            openMcpPicker();
+            return;
+        }
         if (cmd.equals("/continue")) {               // 续跑：上一批计划被 Esc/报错中断后，据会话里保留的 todo 从首个未完成项接着做
             inputState.clear();
             // 工具中立：别硬点 Task/串行——上一批若是 ParallelTasks 并行跑的，"逐个用 Task" 会把独立任务逼回串行、丢掉并行。
@@ -878,6 +892,107 @@ public final class CodeTuiView extends InlineApp {
     private Element skillTag() {
         return text("  🎯 " + pendingSkill + "   （发送时自动加载 · Esc 移除）").style(PICK_TITLE);
     }
+
+    // ── /mcp MCP 管理面板 ───────────────────────────────────────────────
+    /** 打开 MCP 面板；无 server 声明则提示不弹。 */
+    private void openMcpPicker() {
+        List<McpRegistry.ServerView> list = onSubmit.mcpServers();
+        if (list.isEmpty()) { state.setNotice("未配置 MCP server（.codetui/mcp.json）"); return; }
+        pickIndex = 0;
+        mcpExpanded = false;
+        pickingMcp = true;
+    }
+
+    /** MCP 面板按键：↑↓/kj 移动、数字快选、Enter/Space 切换、Tab 展开工具清单、Esc 关闭。始终 HANDLED。 */
+    private EventResult onMcpPickerKey(KeyEvent k) {
+        List<McpRegistry.ServerView> list = onSubmit.mcpServers();
+        int n = list.size();
+        if (n == 0) { pickingMcp = false; return EventResult.HANDLED; }
+        pickIndex = clampIndex(pickIndex, n);
+        if (k.isCancel()) { pickingMcp = false; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.UP || k.isChar('k'))   { pickIndex = (pickIndex - 1 + n) % n; mcpExpanded = false; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) { pickIndex = (pickIndex + 1) % n;     mcpExpanded = false; return EventResult.HANDLED; }
+        for (int i = 0; i < n && i < 9; i++) {
+            if (k.isChar((char) ('1' + i))) { pickIndex = i; mcpExpanded = false; return EventResult.HANDLED; }
+        }
+        if (k.code() == KeyCode.TAB || k.isChar('\t')) { mcpExpanded = !mcpExpanded; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n') || k.isChar(' ')) {
+            toggleMcp(list.get(pickIndex));
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;
+    }
+
+    /** 切换一项：CONNECTED→同步禁用；DISABLED/FAILED→后台线程启用（连接秒级，不冻结渲染循环）。 */
+    private void toggleMcp(McpRegistry.ServerView v) {
+        if (mcpConnecting != null) return;                       // 已有连接在飞：忽略（一次一个）
+        if (v.status() == McpRegistry.Status.CONNECTED) {
+            var r = onSubmit.disableMcp(v.name());
+            if (r != null && !r.persisted()) state.setNotice("已禁用（仅本次运行，写回配置失败）");
+            return;
+        }
+        mcpConnecting = v.name();
+        Thread t = new Thread(() -> {
+            try {
+                var r = onSubmit.enableMcp(v.name());
+                if (r == null) return;
+                if (!r.applied()) state.setNotice("MCP " + v.name() + " 连接失败：" + brief(r.error()));
+                else if (!r.persisted()) state.setNotice("已启用（仅本次运行，写回配置失败）");
+            } finally {
+                mcpConnecting = null;                            // 渲染线程下一帧即看到
+            }
+        }, "mcp-enable");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** 错误摘要截断（面板/notice 单行显示）。 */
+    private static String brief(String s) {
+        if (s == null) return "未知错误";
+        return s.length() > 60 ? s.substring(0, 60) + "…" : s;
+    }
+
+    /** MCP 面板：标题 + 每 server 一行（状态标记/来源层/工具数/错误摘要），Tab 展开工具短名清单。
+     *  高亮走纯前景 PICK_SEL（底色条会串到下一项，见 Theme.PICK_SEL 注释）。 */
+    private Element[] mcpPickerChildren() {
+        List<McpRegistry.ServerView> list = onSubmit.mcpServers();
+        if (list.isEmpty()) return new Element[0];               // scope 每帧 eager 求值：首行判空
+        int sel = clampIndex(pickIndex, list.size());
+        List<Element> els = new ArrayList<>();
+        els.add(text("  MCP 服务器（↑↓ 选择 · Enter 启用/禁用 · Tab 查看工具 · Esc 关闭）").style(PICK_TITLE));
+        for (int i = 0; i < list.size(); i++) {
+            McpRegistry.ServerView v = list.get(i);
+            boolean isSel = i == sel;
+            boolean connecting = v.name().equals(mcpConnecting);
+            String mark = connecting ? "⟳" : switch (v.status()) {
+                case CONNECTED -> "✓";
+                case DISABLED -> "○";
+                case FAILED -> "✗";
+            };
+            String layer = v.source() == McpConfigLoader.ConfigSource.PROJECT ? "[项目级]" : "[用户级]";
+            String detail = connecting ? "连接中…" : switch (v.status()) {
+                case CONNECTED -> "已连接 · " + v.toolCount() + " 工具";
+                case DISABLED -> "已禁用";
+                case FAILED -> "连接失败：" + brief(v.error());
+            };
+            els.add(text("  " + (isSel ? "❯ " : "  ") + mark + " " + (i + 1) + ". " + v.name()
+                    + "  " + layer + " " + detail)
+                    .style(isSel ? PICK_SEL : PICK_ITEM));
+            if (isSel && mcpExpanded) {
+                if (v.toolNames().isEmpty()) {
+                    els.add(text("        （未连接，无工具信息）").style(PICK_DESC));
+                } else {
+                    for (String tn : v.toolNames()) {
+                        els.add(text("        · " + tn).style(PICK_DESC));
+                    }
+                }
+            }
+        }
+        return els.toArray(new Element[0]);
+    }
+
+    // 测试钩子
+    boolean pickingMcpForTest() { return pickingMcp; }
 
     // ── AskUserQuestion 作答面板 ─────────────────────────────────────────
     /** 可作答性：至少 1 问、且每问至少 1 个选项（否则 onAskKey 的 `% n` 会除零崩线程，见 drain 的降级）。 */
