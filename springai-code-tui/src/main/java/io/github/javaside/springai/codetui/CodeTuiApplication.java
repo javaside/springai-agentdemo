@@ -5,9 +5,7 @@ import io.github.javaside.springai.codetui.agent.AnthropicProvider;
 import io.github.javaside.springai.codetui.agent.CodingAgent;
 import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.FileSessionRepository;
-import io.github.javaside.springai.codetui.agent.McpClientManager;
-import io.github.javaside.springai.codetui.agent.McpConfigLoader;
-import io.github.javaside.springai.codetui.agent.McpServerConfig;
+import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.QwenProvider;
@@ -19,8 +17,6 @@ import io.github.javaside.springai.codetui.ui.ConversationState;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
-
-import org.springframework.ai.tool.ToolCallback;
 
 /**
  * springai-code-tui 入口 —— 接入真实 {@link CodingAgent}，装配模型 / 工具 / TUI 并启动。
@@ -58,23 +54,24 @@ public class CodeTuiApplication {
         boolean resumed = wantContinue && latest.isPresent();
         String sessionId = resumed ? latest.get() : SessionIds.newId();
 
-        // MCP：启动期读 .codetui/mcp.json（两层）→ 并行连接 → 发现工具。连接失败静默降级为空。
-        java.util.List<McpServerConfig> mcpConfigs = McpConfigLoader.load(root);
-        McpClientManager mcpManager = McpClientManager.connectAll(mcpConfigs);
-        java.util.List<ToolCallback> mcpTools = mcpManager.toolCallbacks();
-        if (!mcpTools.isEmpty()) {
-            state.pushInfo("（MCP：已发现 " + mcpTools.size() + " 个工具。）");
+        // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
+        // 运行期 /mcp 可启停（详见 McpRegistry）。连接失败进 error 态、静默降级。
+        McpRegistry mcpRegistry = McpRegistry.init(root, state);
+        int mcpToolCount = mcpRegistry.activeTools().size();
+        if (mcpToolCount > 0) {
+            state.pushInfo("（MCP：已发现 " + mcpToolCount + " 个工具。）");
         }
 
         // 从此处起装配 runtime/agent/view 直至 view.run() 全程 try/finally 关 MCP：
-        // connectAll() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
+        // init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
         int exitCode = 0;
         try {
-            AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state, mcpTools);
+            AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state, mcpRegistry);
             CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
                     runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
-                    runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer());
+                    runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer(),
+                    mcpRegistry);
 
             // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
             // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
@@ -93,7 +90,7 @@ public class CodeTuiApplication {
             exitCode = 1;
         } finally {
             // 保证任何路径（含装配期抛异常）都关闭 MCP 子进程（有界 2s），避免孤儿进程
-            mcpManager.close();
+            mcpRegistry.close();
         }
         // /exit 后立即终止 JVM。HTTP 客户端会留下非 daemon 线程——实测 OkHttp（OpenAI/智谱/Anthropic
         // 走这条）的 "OkHttp Dispatcher" 线程 keep-alive 达 60s，若不强制退出，进程会在 /exit 后卡 ~60s 才自然

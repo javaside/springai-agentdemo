@@ -71,6 +71,7 @@ public final class CodingAgent implements SubmitHandler {
     private final SessionRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel）
     private final SubagentRunner subagentRunner;   // 可空（测试桩）：取消回合时 shutdownNow 在飞并行子 agent + 供 busy 闸门查在飞数
     private final SessionFileExternalizer fileExternalizer;   // 可空（测试桩）：路径②，submit 开头把过往大文本 tool 结果外置为引用
+    private final McpRegistry mcpRegistry;   // 可空：MCP 运行期中枢；submit 每回合 .tools(activeTools) 快照注入 + /mcp 门面委托
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -114,6 +115,7 @@ public final class CodingAgent implements SubmitHandler {
         this.sessionRepository = sessionRepository;
         this.subagentRunner = null;    // 单-client 桩路径：无子 agent 执行器
         this.fileExternalizer = null;  // 单-client 桩路径：无路径②外置器
+        this.mcpRegistry = null;       // 单-client 桩路径：无 MCP 支持
     }
 
     /**
@@ -144,7 +146,7 @@ public final class CodingAgent implements SubmitHandler {
                 tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner, null);
     }
 
-    /** 多 provider 生产构造（全参）：{@code fileExternalizer} 路径②回合间外置大文本 tool 结果（可空）；其余同上。 */
+    /** 向后兼容重载（无 MCP 支持：测试桩用）。等价 mcpRegistry=null（不注入 MCP 工具、/mcp 门面返回空/null）。 */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
@@ -152,6 +154,19 @@ public final class CodingAgent implements SubmitHandler {
                        ToolCallback skillTool, SessionRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, null);
+    }
+
+    /** 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；其余同上。 */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -167,6 +182,7 @@ public final class CodingAgent implements SubmitHandler {
         this.sessionRepository = sessionRepository;
         this.subagentRunner = subagentRunner;
         this.fileExternalizer = fileExternalizer;
+        this.mcpRegistry = mcpRegistry;
     }
 
     @Override
@@ -217,6 +233,9 @@ public final class CodingAgent implements SubmitHandler {
         try {
             Disposable reactive = client.prompt()
                     .user(effectiveText)
+                    // MCP 工具每回合快照注入：与 defaultTools 合并（Spring AI 2.0 per-request tools 语义），
+                    // /mcp 启停在下一回合即生效；mcp__ 前缀保证不与内置工具重名。空数组为 no-op。
+                    .tools(mcpRegistry == null ? new Object[0] : mcpRegistry.activeTools().toArray())
                     .options(perRequestOptions.mutate())   // 每次请求按当前所选模型覆盖（mutate 回 native builder，保留 maxTokens 等）
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
                     .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, modelGrounding))

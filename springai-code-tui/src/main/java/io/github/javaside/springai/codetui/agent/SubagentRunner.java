@@ -44,6 +44,8 @@ public final class SubagentRunner {
     private final Supplier<String> taskIdSupplier;
     /** 批量 runAll 的并发上限（同时在飞的子 agent 数）。默认 4；装配层可传入自定义值。 */
     private final int maxConcurrency;
+    /** 可空：MCP 工具的每次委派实时来源（enable/disable 即时反映到下一次委派的工具集）。 */
+    private final McpRegistry mcpRegistry;
 
     /** 当前在飞的子 agent 总数（串行 run + 并行 runAll 都计）；供 UI 的 busy 闸门判断「取消后是否还有旧子 agent 未清」。 */
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -61,17 +63,30 @@ public final class SubagentRunner {
     public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                           String projectInstructions, int maxConcurrency) {
         this(registry, tools, listener, projectInstructions, maxConcurrency,
-                () -> "task_" + UUID.randomUUID());
+                () -> "task_" + UUID.randomUUID(), null);
+    }
+
+    public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                          String projectInstructions, int maxConcurrency, McpRegistry mcpRegistry) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency,
+                () -> "task_" + UUID.randomUUID(), mcpRegistry);
     }
 
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                    String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency, taskIdSupplier, null);
+    }
+
+    SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                   String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier,
+                   McpRegistry mcpRegistry) {
         this.registry = registry;
         this.tools = tools;
         this.listener = listener;
         this.projectInstructions = projectInstructions == null ? "" : projectInstructions;
         this.taskIdSupplier = taskIdSupplier;
         this.maxConcurrency = Math.max(1, maxConcurrency);
+        this.mcpRegistry = mcpRegistry;
     }
 
     /** 执行一次委派，返回子 agent 最终文本。parentTurnId=发起 Task 的回合。 */
@@ -87,7 +102,7 @@ public final class SubagentRunner {
             // RetryingChatModel：子 agent 走阻塞 call()，代理网关会间歇性回 200+空 body（SDK 抛
             // *InvalidDataException、自带重试不覆盖），在 ChatModel 层按 LLM call 粒度重试（见该类注释）。
             ChatClient client = ChatClient.builder(RetryingChatModel.wrap(registry.active().chatModel()))
-                    .defaultTools(filterTools(tools, spec).toArray())
+                    .defaultTools(effectiveTools(spec).toArray())
                     .build();
             ChatOptions options = resolveOptions(spec);
             String result = client.prompt()
@@ -249,6 +264,15 @@ public final class SubagentRunner {
                 ? spec.model().substring(spec.model().indexOf(':') + 1)
                 : spec.model();
         return registry.active().options(modelId);
+    }
+
+    /** 子 agent 有效工具 = 内置装饰工具 + MCP 实时工具（registry 快照），再按 spec allow/deny 过滤（注册名精确匹配）。 */
+    List<ToolCallback> effectiveTools(SubagentSpec spec) {
+        List<ToolCallback> all = new ArrayList<>(tools);
+        if (mcpRegistry != null) {
+            all.addAll(mcpRegistry.activeTools());
+        }
+        return filterTools(all, spec);
     }
 
     /** 按 allow（空=全部）过滤、再按 deny 剔除。按真实注册名精确匹配。 */

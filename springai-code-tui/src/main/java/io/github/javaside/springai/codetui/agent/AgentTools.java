@@ -156,13 +156,13 @@ public final class AgentTools {
      * @param listener 工具 / Todo 事件出口
      *                 <p>注：conversationId（会话记忆）由 {@code CodingAgent.submit} 每次请求传入，
      *                 不在装配期绑定，故此处不需要 sessionId 参数。
-     * @param mcpTools 启动期已连接并发现的 MCP 工具（可能为空列表）。并入下方共享 {@code all} 列表后，
-     *                 随同一循环被 {@link ToolEventCallback} 装饰，从而同时进入主 agent 的 {@code decorated[]}
-     *                 与子 agent 复用的 {@code decoratedList}——主 + 子 agent 都能用。
-     *                 MCP 未启用或连接失败时，调用方传空列表即可，无需特殊处理。
+     * @param mcpRegistry 运行期 MCP 中枢（可空）。MCP 工具<b>不</b>烧入 defaultTools——改由
+     *                 CodingAgent 每回合 {@code .tools(mcpRegistry.activeTools())} 快照注入、
+     *                 SubagentRunner 经 {@code effectiveTools} 拼接注入，使 /mcp 的启停即时生效。
+     *                 registry 自行完成 MCP 工具的装饰（ToolEventCallback + 媒体外置），此处不再装饰。
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
-                                      List<ToolCallback> mcpTools) {
+                                      McpRegistry mcpRegistry) {
         // 不设 allowedDirectory：沙箱是库的 opt-in 特性，空列表即放行任何路径
         // （见 FileSystemTools.validateAllowedAccess：allowedDirectories.isEmpty() → 直接返回放行）。
         // 全线工具（Shell/Grep/Glob）本就不受 root 强制限制，单给 FS 设边界并无实际安全意义，
@@ -218,9 +218,7 @@ public final class AgentTools {
         all.add(todoCallback);      // 薄适配器版 TodoWrite（名仍为 "TodoWrite"）
         all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
 
-        // MCP 工具（启动期已连接+发现）：并入共享列表，随下方循环被 ToolEventCallback 装饰，
-        // 从而同时流入 decorated[]（主 agent）与 decoratedList（子 agent）。空列表则无副作用。
-        all.addAll(mcpTools);
+        // MCP 工具不并入此列表：由 McpRegistry 自行装饰，CodingAgent/SubagentRunner 每回合取快照注入（见 build javadoc）。
 
         // 媒体外置（路径①）：装饰循环前构造一次 store + handler，供每个工具的装饰器共享。
         MediaArtifactStore mediaStore =
@@ -247,7 +245,7 @@ public final class AgentTools {
         java.util.List<ToolCallback> decoratedList = java.util.List.of(decorated);
         int subagentConcurrency = resolveSubagentConcurrency();
         SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener,
-                projectInstructions, subagentConcurrency);
+                projectInstructions, subagentConcurrency, mcpRegistry);
         java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
         ToolCallback taskTool = SubagentTool.create(subagentSpecs,
                 (spec, prompt, desc, turnIgnored) ->
@@ -345,9 +343,9 @@ public final class AgentTools {
                 reloadableSkill, subagentRunner, fileExternalizer);
     }
 
-    /** 向后兼容：无 MCP 工具（等价空列表）。现有测试与旧调用走这条。 */
+    /** 向后兼容：无 MCP 支持（等价 registry=null）。现有测试与旧调用走这条。 */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener) {
-        return build(registry, root, listener, java.util.List.of());
+        return build(registry, root, listener, (McpRegistry) null);
     }
 
     /** 子 agent 并行并发度：环境变量 CODETUI_SUBAGENT_CONCURRENCY，非法/缺失回退 4，钳制到 [1, 32]。 */

@@ -29,10 +29,15 @@ class AgentToolsMcpWiringTest {
     }
 
     @Test
-    void buildAcceptsMcpToolsWithoutThrowing(@TempDir Path root) {
+    void buildAcceptsMcpRegistryWithoutThrowing(@TempDir Path root) {
+        McpConfigLoader.LoadedServer l = new McpConfigLoader.LoadedServer(
+                new McpServerConfig.StdioServerConfig("fake", false, java.time.Duration.ofSeconds(2),
+                        "echo", List.of(), java.util.Map.of()),
+                McpConfigLoader.ConfigSource.PROJECT, root.resolve("mcp.json"));
+        McpRegistry reg = McpRegistry.initForTest(root, new ConversationState(), List.of(l));
+        reg.addConnectedForTest("fake", List.of(fakeMcpTool()));
         assertDoesNotThrow(() -> AgentTools.build(
-                McpWiringTestSupport.dummyRegistry(), root, new ConversationState(),
-                List.of(fakeMcpTool())));
+                McpWiringTestSupport.dummyRegistry(), root, new ConversationState(), reg));
     }
 
     @Test
