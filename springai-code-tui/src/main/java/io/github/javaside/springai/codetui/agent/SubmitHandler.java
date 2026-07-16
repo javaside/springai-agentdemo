@@ -45,4 +45,14 @@ public interface SubmitHandler {
      * 默认 false，便于回显桩/测试桩省略。
      */
     default boolean hasInFlightSubagents() { return false; }
+
+    // ── MCP 管理（/mcp 面板用；默认空实现，便于回显桩/测试桩省略） ──
+    /** 已安装 MCP server 视图（含禁用项）。 */
+    default List<McpRegistry.ServerView> mcpServers() { return List.of(); }
+
+    /** 启用（含连接，阻塞秒级——调用方放后台线程）。null 表示无 MCP 支持。 */
+    default McpRegistry.ToggleResult enableMcp(String name) { return null; }
+
+    /** 禁用（即时完成）。null 表示无 MCP 支持。 */
+    default McpRegistry.ToggleResult disableMcp(String name) { return null; }
 }

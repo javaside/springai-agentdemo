@@ -398,6 +398,22 @@ public final class CodingAgent implements SubmitHandler {
         return subagentRunner != null && subagentRunner.inFlightCount() > 0;
     }
 
+    // ── MCP 管理门面（纯委托 McpRegistry；registry 缺失 = 无 MCP 支持） ──
+    @Override
+    public List<McpRegistry.ServerView> mcpServers() {
+        return mcpRegistry == null ? List.of() : mcpRegistry.servers();
+    }
+
+    @Override
+    public McpRegistry.ToggleResult enableMcp(String name) {
+        return mcpRegistry == null ? null : mcpRegistry.enable(name);
+    }
+
+    @Override
+    public McpRegistry.ToggleResult disableMcp(String name) {
+        return mcpRegistry == null ? null : mcpRegistry.disable(name);
+    }
+
     @Override
     public List<ModelOption> models() {
         return registry != null ? registry.allModels() : MODELS;
