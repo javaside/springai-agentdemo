@@ -12,6 +12,7 @@ import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.AppInfo;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -70,11 +71,17 @@ public final class McpClientManager {
         }
     }
 
-    /** 连接单个 server：构造 transport → sync client → initialize()。任何失败 → 记 WARN、返回 null。 */
-    private static McpSyncClient connectOne(McpServerConfig cfg) {
+    /** 连接结果：client 与 error 恰有一个非 null。error 为面向 UI 的失败摘要。 */
+    record ConnectOutcome(McpSyncClient client, String error) { }
+
+    /**
+     * 连接单个 server：构造 transport → sync client → initialize()。任何失败 → 记 WARN、返回错误文本。
+     * （带错误文本版，供 McpRegistry 的 /mcp 面板显示失败原因。）
+     */
+    static ConnectOutcome connectDetailed(McpServerConfig cfg) {
         McpClientTransport transport = McpTransportFactory.create(cfg).orElse(null);
         if (transport == null) {
-            return null;
+            return new ConnectOutcome(null, "构造传输失败（详见日志）");
         }
         try {
             McpSyncClient client = McpClient.sync(transport)
@@ -86,11 +93,37 @@ public final class McpClientManager {
                     .build();
             client.initialize();   // 阻塞握手，超时/失败抛异常
             log.info("MCP server '{}' 已连接。", cfg.name());
-            return client;
+            return new ConnectOutcome(client, null);
         } catch (Exception e) {
             log.warn("MCP server '{}' 连接失败，跳过：{}", cfg.name(), e.getMessage());
-            return null;
+            return new ConnectOutcome(null, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
         }
+    }
+
+    private static McpSyncClient connectOne(McpServerConfig cfg) {
+        return connectDetailed(cfg).client();
+    }
+
+    /**
+     * 发现单个已连 client 的工具，转成带 mcp__ 前缀的 {@link ToolCallback}（未装饰）；
+     * {@code listTools} 失败记 WARN 返回空列表。
+     */
+    static List<ToolCallback> discoverTools(McpSyncClient client) {
+        List<ToolCallback> out = new ArrayList<>();
+        String server = "?";
+        try {
+            server = client.getClientInfo().title();   // = cfg.name()（见 connectDetailed 的 Implementation）
+            for (McpSchema.Tool tool : client.listTools().tools()) {
+                out.add(SyncMcpToolCallback.builder()
+                        .mcpClient(client)
+                        .tool(tool)
+                        .prefixedToolName(prefixedName(server, tool.name()))
+                        .build());
+            }
+        } catch (Exception e) {
+            log.warn("MCP server '{}' 工具发现失败，跳过：{}", server, e.getMessage());
+        }
+        return out;
     }
 
     /**
@@ -100,32 +133,25 @@ public final class McpClientManager {
     public List<ToolCallback> toolCallbacks() {
         List<ToolCallback> out = new ArrayList<>();
         for (McpSyncClient client : clients) {
-            String server = "?";
-            try {
-                server = client.getClientInfo().title();   // = cfg.name()（见 connectOne 的 Implementation）
-                for (McpSchema.Tool tool : client.listTools().tools()) {
-                    out.add(SyncMcpToolCallback.builder()
-                            .mcpClient(client)
-                            .tool(tool)
-                            .prefixedToolName(prefixedName(server, tool.name()))
-                            .build());
-                }
-            } catch (Exception e) {
-                log.warn("MCP server '{}' 工具发现失败，跳过：{}", server, e.getMessage());
-            }
+            out.addAll(discoverTools(client));
         }
         return out;
     }
 
+    /** 关闭本 manager 持有的所有 client；语义与限制见 {@link #closeAll(Collection)}。 */
+    public void close() {
+        closeAll(clients);
+    }
+
     /**
-     * 关闭所有 client（优雅），总时长硬限 {@value #CLOSE_BUDGET_MS}ms；绝不阻塞退出。
+     * 关闭给定的一组 client（优雅），总时长硬限 {@value #CLOSE_BUDGET_MS}ms；绝不阻塞退出。
      *
      * <p><b>残留风险（有意取舍）</b>：本方法硬限 2s 总时长以优先保证 {@code /exit} 不卡。若某 server 的
      * {@code closeGracefully()} 在 2s 内未完成（SDK 内部最长 10s），close() 会放弃等待直接返回，其子进程
      * 可能在 JVM 退出瞬间未被优雅 destroy 而短暂残留，由 OS 在父进程消亡后回收——这是「不卡退出」优先于
      * 「保证优雅清理」的有意取舍。
      */
-    public void close() {
+    static void closeAll(Collection<McpSyncClient> clients) {
         if (clients.isEmpty()) {
             return;
         }

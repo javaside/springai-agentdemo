@@ -6,7 +6,10 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class McpClientManagerTest {
@@ -36,6 +39,21 @@ class McpClientManagerTest {
         } finally {
             mgr.close();
         }
+    }
+
+    @Test
+    void connectDetailedReturnsErrorTextOnFailure() {
+        McpServerConfig.StdioServerConfig bogus = new McpServerConfig.StdioServerConfig(
+                "bogus", true, Duration.ofSeconds(2),
+                "/nonexistent/definitely-not-a-real-binary-xyz", List.of(), Map.of());
+        McpClientManager.ConnectOutcome out = McpClientManager.connectDetailed(bogus);
+        assertNull(out.client());
+        assertNotNull(out.error(), "失败必须带错误文本（供 /mcp 面板显示）");
+    }
+
+    @Test
+    void closeAllOnEmptyIsNoop() {
+        assertDoesNotThrow(() -> McpClientManager.closeAll(List.of()));
     }
 
     @Test
