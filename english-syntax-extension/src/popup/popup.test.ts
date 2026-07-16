@@ -130,6 +130,45 @@ describe("Popup", () => {
     );
   });
 
+  it("offers 恢复网页原文 while parsing is still under way", async () => {
+    const subject = dependencies({
+      getStatus: vi.fn(() =>
+        Promise.resolve(status({ state: "running", discovered: 5, queued: 3, ready: 2 })),
+      ),
+      sendCommand: vi.fn(() => Promise.resolve(status({}))),
+    });
+    await createPopupPage(root(), subject);
+
+    const secondary = document.querySelector<HTMLButtonElement>("[data-secondary]");
+    expect(secondary?.textContent).toBe("恢复网页原文");
+    secondary!.click();
+
+    await vi.waitFor(() =>
+      expect(subject.sendCommand).toHaveBeenCalledWith("STOP_SESSION", expect.anything()),
+    );
+    await vi.waitFor(() => expect(primary().textContent).toBe("开始学习"));
+    expect(document.querySelector("[data-secondary]")).toBeNull();
+  });
+
+  it("offers 恢复网页原文 while paused and hides it once the primary button restores", async () => {
+    const paused = dependencies({
+      getStatus: vi.fn(() =>
+        Promise.resolve(status({ state: "paused", discovered: 5, queued: 3, ready: 2 })),
+      ),
+    });
+    await createPopupPage(root(), paused);
+    expect(document.querySelector("[data-secondary]")?.textContent).toBe("恢复网页原文");
+
+    const complete = dependencies({
+      getStatus: vi.fn(() =>
+        Promise.resolve(status({ state: "running", discovered: 5, ready: 4, failed: 1 })),
+      ),
+    });
+    await createPopupPage(root(), complete);
+    expect(primary().textContent).toBe("恢复网页原文");
+    expect(document.querySelector("[data-secondary]")).toBeNull();
+  });
+
   it("disables the button while a command is in flight", async () => {
     let release: (value: SessionStatus) => void;
     const subject = dependencies({

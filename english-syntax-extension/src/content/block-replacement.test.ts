@@ -67,6 +67,31 @@ describe("BlockReplacement", () => {
     expect(block.isConnected).toBe(false);
   });
 
+  it("restores the page with zero extension nodes even while a detail panel is open", () => {
+    const original = document.querySelector("p")!;
+    const block = learningBlock(["sentence-1"]);
+    renderReady(block);
+    const replacement = new BlockReplacement();
+    replacement.show(original, block);
+    block.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+    block.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [{ startToken: 0, endToken: 0, role: "主语", explanation: "句子的主语" }],
+      grammarPoints: [],
+      explanation: "详细解析",
+      modelProfileId: "profile-1",
+    });
+    expect(block.host.shadowRoot!.querySelectorAll(".detail")).toHaveLength(1);
+
+    replacement.restore();
+
+    expect(document.querySelector("[data-syntax-learning-block]")).toBeNull();
+    expect(document.querySelector("style[data-syntax-learning-hide]")).toBeNull();
+    expect(document.querySelector(".detail")).toBeNull();
+    expect(getComputedStyle(original).display).not.toBe("none");
+  });
+
   it("leaves no empty class attribute behind on an element that never had one", () => {
     document.body.replaceChildren();
     const original = document.createElement("p");

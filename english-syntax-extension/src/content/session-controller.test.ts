@@ -24,6 +24,7 @@ class FakeLearningBlock implements ControllerBlock {
   details: DetailAnalysis[] = [];
   failures: Array<{ sentenceId: string; sentence: string; message: string }> = [];
   loading: string[] = [];
+  closedDetails = 0;
 
   setExpectedSentenceIds(ids: readonly string[]): void {
     this.expected = [...ids];
@@ -41,6 +42,10 @@ class FakeLearningBlock implements ControllerBlock {
 
   setDetailLoading(sentenceId: string): void {
     this.loading.push(sentenceId);
+  }
+
+  closeDetails(): void {
+    this.closedDetails += 1;
   }
 
   renderDetail(analysis: DetailAnalysis): void {
@@ -576,6 +581,9 @@ describe("SessionController", () => {
     });
 
     expect(subject.learningBlocks[0]!.details).toEqual([detail("sentence-1")]);
+    // Every registered block is asked to close its open panel first, so only
+    // one explanation stays open across the page.
+    expect(subject.learningBlocks[0]!.closedDetails).toBe(1);
   });
 
   it("records context targets only while active and supports first-use selection text", async () => {

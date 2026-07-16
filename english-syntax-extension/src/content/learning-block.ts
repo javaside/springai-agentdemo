@@ -165,6 +165,7 @@ export class SyntaxLearningBlock {
   readonly host: HTMLElement;
   readonly #sentences: HTMLElement;
   #expectedSentenceIds = new Set<string>();
+  #expectedSentenceOrder: string[] = [];
   #resolvedSentenceIds = new Set<string>();
 
   constructor(ownerDocument: Document = document) {
@@ -208,6 +209,7 @@ export class SyntaxLearningBlock {
       throw new Error("Expected sentence IDs must be nonempty strings");
     }
     this.#expectedSentenceIds = expected;
+    this.#expectedSentenceOrder = [...ids];
     this.#resolvedSentenceIds = new Set();
   }
 
@@ -220,7 +222,6 @@ export class SyntaxLearningBlock {
 
   renderCore(sentence: string, tokens: readonly Token[], analysis: CoreAnalysis): void {
     this.#validateCoreInput(sentence, tokens, analysis);
-    this.#sentence(analysis.sentenceId)?.remove();
     const sentenceElement = createElement("section", "sentence");
     sentenceElement.dataset.sentenceId = analysis.sentenceId;
     sentenceElement.setAttribute("aria-label", sentence);
@@ -262,6 +263,11 @@ export class SyntaxLearningBlock {
       const translation = createElement("span", "translation", component.translation);
       componentElement.append(role, english, translation);
       componentElement.addEventListener("click", () => {
+        // A second click on the component whose explanation is already open
+        // toggles it closed instead of re-requesting the analysis.
+        if (this.#closeDetail(analysis.sentenceId, component)) {
+          return;
+        }
         this.dispatchEvent(
           new CustomEvent<SyntaxFocusEventDetail>("syntax-detail-request", {
             bubbles: true,
@@ -283,20 +289,40 @@ export class SyntaxLearningBlock {
       nextToken = component.endToken + 1;
     }
     this.#appendPunctuation(sentenceElement, tokens, nextToken, tokens.length - 1);
-    this.#sentences.append(sentenceElement);
+    this.#placeSentenceSection(analysis.sentenceId, sentenceElement);
     this.#resolvedSentenceIds.add(analysis.sentenceId);
   }
 
   setDetailLoading(sentenceId: string, focus: TokenRange): void {
-    const detail = this.#detailContainer(sentenceId, focus);
-    detail.className = "detail detail-loading";
+    const sentence = this.#sentence(sentenceId);
+    if (sentence === null) {
+      throw new Error(`Cannot render detail for unknown sentence: ${sentenceId}`);
+    }
+    // Only one explanation panel stays open at a time; opening a new one
+    // switches away from whatever was open before.
+    this.closeDetails();
+    const detail = createElement("div", "detail detail-loading");
+    detail.dataset.startToken = String(focus.startToken);
+    detail.dataset.endToken = String(focus.endToken);
     detail.setAttribute("aria-live", "polite");
     detail.setAttribute("aria-busy", "true");
     detail.textContent = "正在加载详细解析…";
+    sentence.append(detail);
+  }
+
+  closeDetails(): void {
+    for (const detail of this.#sentences.querySelectorAll(".detail")) {
+      detail.remove();
+    }
   }
 
   renderDetail(detailAnalysis: DetailAnalysis): void {
-    const detail = this.#detailContainer(detailAnalysis.sentenceId, detailAnalysis.focus);
+    const detail = this.#findDetail(detailAnalysis.sentenceId, detailAnalysis.focus);
+    // The reader may have toggled the panel closed while the analysis was in
+    // flight; a late response must not reopen it.
+    if (detail === null) {
+      return;
+    }
     detail.className = "detail";
     detail.removeAttribute("aria-busy");
     detail.replaceChildren();
@@ -320,7 +346,10 @@ export class SyntaxLearningBlock {
 
   renderError(sentenceId: string, focus: TokenRange, message: string): void {
     this.#assertExpected(sentenceId);
-    const detail = this.#detailContainer(sentenceId, focus);
+    const detail = this.#findDetail(sentenceId, focus);
+    if (detail === null) {
+      return;
+    }
     detail.className = "detail detail-error";
     detail.removeAttribute("aria-busy");
     detail.replaceChildren(createElement("span", "error-message", message));
@@ -341,7 +370,6 @@ export class SyntaxLearningBlock {
 
   renderFailure(sentenceId: string, sentence: string, message: string): void {
     this.#assertExpected(sentenceId);
-    this.#sentence(sentenceId)?.remove();
     const failure = createElement("section", "sentence-failure");
     failure.dataset.sentenceId = sentenceId;
     failure.append(
@@ -360,7 +388,7 @@ export class SyntaxLearningBlock {
       );
     });
     failure.append(retry);
-    this.#sentences.append(failure);
+    this.#placeSentenceSection(sentenceId, failure);
     this.#resolvedSentenceIds.add(sentenceId);
   }
 
@@ -429,10 +457,10 @@ export class SyntaxLearningBlock {
     }
   }
 
-  #detailContainer(sentenceId: string, focus: TokenRange): HTMLElement {
+  #findDetail(sentenceId: string, focus: TokenRange): HTMLElement | null {
     const sentence = this.#sentence(sentenceId);
     if (sentence === null) {
-      throw new Error(`Cannot render detail for unknown sentence: ${sentenceId}`);
+      return null;
     }
     for (const candidate of sentence.querySelectorAll<HTMLElement>(".detail")) {
       const candidateFocus = {
@@ -443,10 +471,43 @@ export class SyntaxLearningBlock {
         return candidate;
       }
     }
-    const detail = createElement("div", "detail");
-    detail.dataset.startToken = String(focus.startToken);
-    detail.dataset.endToken = String(focus.endToken);
-    sentence.append(detail);
-    return detail;
+    return null;
+  }
+
+  #closeDetail(sentenceId: string, focus: TokenRange): boolean {
+    const detail = this.#findDetail(sentenceId, focus);
+    if (detail === null) {
+      return false;
+    }
+    detail.remove();
+    return true;
+  }
+
+  /**
+   * Puts a (re-)rendered sentence section at its position in the block's
+   * source order. Appending re-renders and failures at the end used to move a
+   * sentence — and every detail panel later opened under it — below the
+   * sentences that follow it.
+   */
+  #placeSentenceSection(sentenceId: string, section: HTMLElement): void {
+    const existing = this.#sentence(sentenceId);
+    if (existing !== null) {
+      existing.replaceWith(section);
+      return;
+    }
+    const order = this.#expectedSentenceOrder.indexOf(sentenceId);
+    if (order !== -1) {
+      for (const sibling of this.#sentences.children) {
+        if (!(sibling instanceof HTMLElement) || sibling.dataset.sentenceId === undefined) {
+          continue;
+        }
+        const siblingOrder = this.#expectedSentenceOrder.indexOf(sibling.dataset.sentenceId);
+        if (siblingOrder > order) {
+          sibling.before(section);
+          return;
+        }
+      }
+    }
+    this.#sentences.append(section);
   }
 }

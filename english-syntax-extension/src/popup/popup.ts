@@ -68,6 +68,13 @@ export async function createPopupPage(
   primary.type = "button";
   primary.dataset.primary = "";
 
+  // Restoring the page must stay reachable mid-session: while parsing is under
+  // way (or paused) the primary button pauses/resumes, so a secondary button
+  // carries 恢复网页原文 until the completed session moves it onto the primary.
+  const secondary = element("button", "popup-page__secondary", "恢复网页原文");
+  secondary.type = "button";
+  secondary.dataset.secondary = "";
+
   const subline = element("p", "popup-page__subline");
   subline.dataset.subline = "";
   subline.setAttribute("aria-live", "polite");
@@ -93,6 +100,7 @@ export async function createPopupPage(
 
   const renderStatus = (): void => {
     subline.textContent = modelLine;
+    secondary.remove();
     if (profile === undefined) {
       primary.textContent = "去配置模型";
       primary.dataset.action = "open-options";
@@ -120,18 +128,25 @@ export async function createPopupPage(
       primary.textContent = "开始学习";
       command = "START_SESSION";
     }
+    if (status.state === "running" || status.state === "paused") {
+      if (command !== "STOP_SESSION") {
+        secondary.disabled = false;
+        primary.after(secondary);
+      }
+    }
   };
 
-  primary.addEventListener("click", () => {
+  const runCommand = (type: PopupCommand): void => {
     if (profile === undefined) {
       dependencies.openOptions();
       return;
     }
     if (context === undefined) return;
     primary.disabled = true;
+    secondary.disabled = true;
     void (async () => {
       try {
-        const next = await dependencies.sendCommand(command, context);
+        const next = await dependencies.sendCommand(type, context);
         if (next !== undefined) status = next;
         renderStatus();
       } catch {
@@ -139,6 +154,13 @@ export async function createPopupPage(
         subline.textContent = "操作失败，请刷新页面或重新打开扩展后重试。";
       }
     })();
+  };
+
+  primary.addEventListener("click", () => {
+    runCommand(command);
+  });
+  secondary.addEventListener("click", () => {
+    runCommand("STOP_SESSION");
   });
 
   renderStatus();

@@ -28,6 +28,27 @@ function block(): SyntaxLearningBlock {
   return new SyntaxLearningBlock();
 }
 
+function analysisFor(sentenceId: string): CoreAnalysis {
+  return { ...analysis, sentenceId };
+}
+
+function detailFor(sentenceId: string, startToken: number, endToken: number): DetailAnalysis {
+  return {
+    sentenceId,
+    focus: { startToken, endToken },
+    structures: [{ startToken, endToken, role: "核心成分", explanation: "承担核心语法功能" }],
+    grammarPoints: ["一般现在时"],
+    explanation: "针对所选成分的详细语法解析",
+    modelProfileId: "profile-1",
+  };
+}
+
+function sectionOrder(element: SyntaxLearningBlock): Array<string | undefined> {
+  return [
+    ...element.host.shadowRoot!.querySelectorAll<HTMLElement>(".sentences > [data-sentence-id]"),
+  ].map((section) => section.dataset.sentenceId);
+}
+
 describe("SyntaxLearningBlock", () => {
   beforeEach(() => {
     document.body.replaceChildren();
@@ -227,6 +248,100 @@ describe("SyntaxLearningBlock", () => {
       sentenceId: "sentence-1",
       focus: { startToken: 1, endToken: 1 },
     });
+  });
+
+  it("re-renders a sentence in place instead of moving it below its later siblings", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.setExpectedSentenceIds(["sentence-1", "sentence-2", "sentence-3"]);
+    element.renderCore(sentence, tokens, analysisFor("sentence-1"));
+    element.renderCore(sentence, tokens, analysisFor("sentence-2"));
+    element.renderCore(sentence, tokens, analysisFor("sentence-3"));
+
+    // A correction or retry re-render must not move the sentence — and any
+    // detail panel opened under it — below the sentences that follow it.
+    element.renderCore(sentence, tokens, analysisFor("sentence-2"));
+    expect(sectionOrder(element)).toEqual(["sentence-1", "sentence-2", "sentence-3"]);
+
+    element.renderFailure("sentence-2", sentence, "解析失败");
+    expect(sectionOrder(element)).toEqual(["sentence-1", "sentence-2", "sentence-3"]);
+  });
+
+  it("inserts a late failure at its sentence position instead of the block end", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.setExpectedSentenceIds(["sentence-1", "sentence-2", "sentence-3"]);
+    element.renderCore(sentence, tokens, analysisFor("sentence-1"));
+    element.renderCore(sentence, tokens, analysisFor("sentence-3"));
+
+    element.renderFailure("sentence-2", sentence, "解析失败");
+
+    expect(sectionOrder(element)).toEqual(["sentence-1", "sentence-2", "sentence-3"]);
+    expect(
+      element.host
+        .shadowRoot!.querySelector("[data-sentence-id='sentence-2']")
+        ?.classList.contains("sentence-failure"),
+    ).toBe(true);
+  });
+
+  it("toggles a component's detail panel closed on the second click without a new request", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    const listener = vi.fn();
+    document.addEventListener("syntax-detail-request", listener);
+    const component = element.host.shadowRoot!.querySelector<HTMLButtonElement>(".component")!;
+
+    component.click();
+    expect(listener).toHaveBeenCalledOnce();
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+    element.renderDetail(detailFor("sentence-1", 0, 0));
+    expect(element.host.shadowRoot!.querySelectorAll(".detail")).toHaveLength(1);
+
+    component.click();
+    expect(element.host.shadowRoot!.querySelectorAll(".detail")).toHaveLength(0);
+    expect(listener).toHaveBeenCalledOnce();
+
+    component.click();
+    expect(listener).toHaveBeenCalledTimes(2);
+    document.removeEventListener("syntax-detail-request", listener);
+  });
+
+  it("keeps only the newest detail panel open and anchors it inside its own sentence", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.setExpectedSentenceIds(["sentence-1", "sentence-2"]);
+    element.renderCore(sentence, tokens, analysisFor("sentence-1"));
+    element.renderCore(sentence, tokens, analysisFor("sentence-2"));
+
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+    element.renderDetail(detailFor("sentence-1", 0, 0));
+    element.setDetailLoading("sentence-2", { startToken: 1, endToken: 1 });
+
+    const root = element.host.shadowRoot!;
+    const details = root.querySelectorAll<HTMLElement>(".detail");
+    expect(details).toHaveLength(1);
+    expect(details[0]!.dataset.startToken).toBe("1");
+    expect(details[0]!.closest("[data-sentence-id]")).toBe(
+      root.querySelector("[data-sentence-id='sentence-2']"),
+    );
+  });
+
+  it("drops detail and error responses for a panel the reader already closed", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    const component = element.host.shadowRoot!.querySelector<HTMLButtonElement>(".component")!;
+
+    component.click();
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+    component.click();
+    expect(element.host.shadowRoot!.querySelectorAll(".detail")).toHaveLength(0);
+
+    element.renderDetail(detailFor("sentence-1", 0, 0));
+    expect(element.host.shadowRoot!.querySelectorAll(".detail")).toHaveLength(0);
+    element.renderError("sentence-1", { startToken: 0, endToken: 0 }, "暂时无法解析");
+    expect(element.host.shadowRoot!.querySelectorAll(".detail")).toHaveLength(0);
   });
 
   it("includes the required isolated, wrapping, accessible and motion-safe CSS contract", () => {

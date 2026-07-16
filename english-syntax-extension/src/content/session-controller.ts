@@ -31,6 +31,7 @@ export interface ControllerBlock {
   renderCore(sentence: string, tokens: readonly Token[], analysis: CoreAnalysis): void;
   renderFailure(sentenceId: string, sentence: string, message: string): void;
   setDetailLoading(sentenceId: string, focus: TokenRange): void;
+  closeDetails(): void;
   renderDetail(analysis: DetailAnalysis): void;
   renderError(sentenceId: string, focus: TokenRange, message: string): void;
   isReadyToReplace(): boolean;
@@ -295,6 +296,11 @@ export class SessionController {
     const located = this.locateSentence(detail.sentenceId);
     if (located === undefined || located.sentence.core === undefined || this.state !== "running") {
       return;
+    }
+    // Only one explanation panel is open at a time across the whole page, so
+    // every open panel closes when this one opens.
+    for (const block of this.blocks.values()) {
+      block.learningBlock.closeDetails();
     }
     located.block.learningBlock.setDetailLoading(detail.sentenceId, detail.focus);
     const version = ++this.operationVersion;
