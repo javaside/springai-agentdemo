@@ -323,12 +323,15 @@ export async function createOptionsPage(
     refreshActivateButton();
   };
 
+  let lastProfiles: PublicModelProfile[] = [];
+
   const loadProfiles = async (selectedId = ""): Promise<void> => {
     const [profiles, active] = await Promise.all([
       dependencies.listProfiles(),
       dependencies.getActiveProfileId(),
     ]);
     activeProfileId = active;
+    lastProfiles = profiles;
     buildProfileOptions(profiles, selectedId);
   };
 
@@ -358,23 +361,20 @@ export async function createOptionsPage(
     void loadProfile(savedSelect.value);
     refreshActivateButton();
   });
-  const relabelActiveOption = (): void => {
-    for (const option of savedSelect.options) {
-      if (option.value === "") continue;
-      const base = option.textContent?.replace("（启用中）", "") ?? "";
-      option.textContent = option.value === activeProfileId ? `${base}（启用中）` : base;
-    }
-  };
-
   activateButton.addEventListener("click", () => {
     void (async () => {
       const profileId = savedSelect.value;
       if (profileId === "") return;
-      await dependencies.setActiveProfile(profileId);
-      activeProfileId = profileId;
-      relabelActiveOption();
-      refreshActivateButton();
-      result.textContent = "已切换启用配置，随后的解析请求将使用它。";
+      activateButton.disabled = true;
+      try {
+        await dependencies.setActiveProfile(profileId);
+        activeProfileId = profileId;
+        buildProfileOptions(lastProfiles, savedSelect.value);
+        result.textContent = "已切换启用配置，随后的解析请求将使用它。";
+      } catch {
+        result.textContent = "切换启用配置失败，请刷新页面后重试。";
+        refreshActivateButton();
+      }
     })();
   });
   form.addEventListener("submit", (event) => {

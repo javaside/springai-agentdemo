@@ -285,7 +285,69 @@ describe("Options page", () => {
 
     activate.click();
     await vi.waitFor(() => expect(subject.setActiveProfile).toHaveBeenCalledWith("p-2"));
+    await vi.waitFor(() =>
+      expect([...select.options].map((option) => option.textContent)).toEqual([
+        "新建配置",
+        "DeepSeek · deepseek-v4-flash",
+        "Local · qwen（启用中）",
+      ]),
+    );
     expect(activate.textContent).toBe("已启用");
     expect(activate.disabled).toBe(true);
+  });
+
+  it("keeps the activate button usable when switching the profile fails", async () => {
+    const subject = dependencies({
+      listProfiles: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "p-1",
+            name: "DeepSeek",
+            baseUrl: "https://api.example.com/v1",
+            model: "deepseek-v4-flash",
+            timeoutMs: 45_000,
+            jsonSchemaSupport: "unknown" as const,
+          },
+          {
+            id: "p-2",
+            name: "Local",
+            baseUrl: "http://localhost:11434/v1",
+            model: "qwen",
+            timeoutMs: 45_000,
+            jsonSchemaSupport: "unknown" as const,
+          },
+        ]),
+      ),
+      getProfile: vi.fn((profileId: string) =>
+        Promise.resolve({
+          id: profileId,
+          name: "Local",
+          baseUrl: "http://localhost:11434/v1",
+          apiKey: "secret",
+          model: "qwen",
+          headers: {},
+          timeoutMs: 45_000,
+          jsonSchemaSupport: "unknown" as const,
+        }),
+      ),
+      getActiveProfileId: vi.fn(() => Promise.resolve("p-1")),
+      setActiveProfile: vi.fn(() => Promise.reject(new Error("Unknown model profile"))),
+    });
+    await createOptionsPage(root(), subject);
+
+    const select = document.querySelector<HTMLSelectElement>("#options-saved-profile")!;
+    select.value = "p-2";
+    select.dispatchEvent(new Event("change"));
+    const activate = document.querySelector<HTMLButtonElement>("[data-action='activate-profile']")!;
+    await vi.waitFor(() => expect(activate.disabled).toBe(false));
+
+    activate.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-connection-result]")?.textContent).toContain(
+        "切换启用配置失败",
+      ),
+    );
+    expect(activate.disabled).toBe(false);
+    expect(activate.textContent).toBe("设为启用");
   });
 });
