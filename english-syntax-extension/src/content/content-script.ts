@@ -4,6 +4,7 @@ import { GrammarRole } from "../shared/grammar";
 import { isRequestMessage } from "../shared/protocol";
 import type { RequestMessage, ResponseMessage, SessionStatus } from "../shared/protocol";
 import { MESSAGE_VERSION } from "../shared/versions";
+import { SyntaxProgressPill } from "./progress-pill";
 import { SessionController } from "./session-controller";
 import type { RuntimeTransport, SessionControllerOptions } from "./session-controller";
 
@@ -338,8 +339,10 @@ function installContentScript(): void {
   if (typeof chrome === "undefined" || chrome.runtime?.onMessage === undefined) return;
   if (document.documentElement.dataset.syntaxLearningExtension === "ready") return;
   let statusCounter = 0;
+  const pill = new SyntaxProgressPill();
   const router = new ContentScriptRouter({
     relayStatus: (documentId, status) => {
+      pill.update(status);
       const message: ResponseMessage = {
         version: MESSAGE_VERSION,
         requestId: `${documentId}:status:${++statusCounter}`,
