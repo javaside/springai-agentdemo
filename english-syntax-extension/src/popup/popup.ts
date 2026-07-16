@@ -182,7 +182,9 @@ export function runtimeDependencies(): PopupDependencies {
       if (response.type === "ERROR") throw new Error(response.error.message);
       return response.type === "SESSION_STATUS" ? response.status : undefined;
     },
-    openOptions: () => chrome.runtime.openOptionsPage(),
+    openOptions: () => {
+      void chrome.runtime.openOptionsPage();
+    },
   };
 }
 

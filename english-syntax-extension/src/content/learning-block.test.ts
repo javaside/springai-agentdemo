@@ -257,7 +257,7 @@ describe("SyntaxLearningBlock", () => {
     );
     expect(colors).toEqual(["#2563eb", "#dc2626", "#059669"]); // 主语蓝、谓语红、宾语绿
 
-    const styles = root.querySelector("style")!.textContent!;
+    const styles = root.querySelector("style")!.textContent;
     expect(styles).toContain("border-bottom: 1.5px solid");
     expect(styles).toContain("var(--syntax-role-color");
     // 成分不再有底色块

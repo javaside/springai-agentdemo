@@ -21,7 +21,7 @@ describe("SyntaxProgressPill", () => {
   });
 
   const pillText = (pill: SyntaxProgressPill): string =>
-    pill.host.shadowRoot!.querySelector(".pill")!.textContent!.replace(/\s+/gu, " ").trim();
+    pill.host.shadowRoot!.querySelector(".pill")!.textContent.replace(/\s+/gu, " ").trim();
 
   it("appears with live counts while the session is running", () => {
     const pill = new SyntaxProgressPill();
