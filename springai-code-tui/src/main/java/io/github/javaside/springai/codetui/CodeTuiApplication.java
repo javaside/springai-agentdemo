@@ -10,6 +10,7 @@ import io.github.javaside.springai.codetui.agent.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.McpServerConfig;
 import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.QwenProvider;
 import io.github.javaside.springai.codetui.agent.SessionIds;
 import io.github.javaside.springai.codetui.agent.ZhipuProvider;
 import io.github.javaside.springai.codetui.ui.CodeTuiView;
@@ -29,18 +30,19 @@ public class CodeTuiApplication {
     public static void main(String[] args) throws Exception {
         Path root = Path.of(System.getProperty("user.dir")).toAbsolutePath();
 
-        // 三家 provider：谁配了 key 谁 available。至少需一家可用（通常 DeepSeek）。
+        // 多家 provider：谁配了 key 谁 available。至少需一家可用（通常 DeepSeek）。
         // base-url 可选：配了 *_BASE_URL 就覆盖，否则用各家内置默认（便于走代理/私有网关）。
         ProviderRegistry registry;
         try {
             registry = new ProviderRegistry(java.util.List.of(
                     new DeepSeekProvider(System.getenv("DEEPSEEK_API_KEY"), System.getenv("DEEPSEEK_BASE_URL")),
                     new ZhipuProvider(System.getenv("ZHIPU_API_KEY"), System.getenv("ZHIPU_BASE_URL")),
+                    new QwenProvider(System.getenv("DASHSCOPE_API_KEY"), System.getenv("DASHSCOPE_BASE_URL")),
                     new AnthropicProvider(System.getenv("ANTHROPIC_API_KEY"), System.getenv("ANTHROPIC_BASE_URL")),
                     new OpenAiProvider(System.getenv("OPENAI_API_KEY"), System.getenv("OPENAI_BASE_URL"))));
         } catch (IllegalStateException e) {
             System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
-                    "DEEPSEEK_API_KEY / ZHIPU_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY，再运行。");
+                    "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY，再运行。");
             return;
         }
 

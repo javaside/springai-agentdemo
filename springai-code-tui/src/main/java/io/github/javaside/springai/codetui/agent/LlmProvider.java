@@ -15,7 +15,7 @@ import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
  */
 public interface LlmProvider {
 
-    /** provider 稳定 id：{@code "deepseek"} | {@code "anthropic"} | {@code "openai"}。 */
+    /** provider 稳定 id：{@code "deepseek"} | {@code "zhipu"} | {@code "qwen"} | {@code "anthropic"} | {@code "openai"}。 */
     String id();
 
     /** 对应 API key 是否已配置。false 则不装配 ChatModel、不出现在 /model。 */
