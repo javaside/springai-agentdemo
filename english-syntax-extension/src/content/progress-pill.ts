@@ -1,13 +1,15 @@
-import type { SessionStatus } from "../shared/protocol";
+import { isSessionComplete, type SessionStatus } from "../shared/protocol";
 
 const FADE_DELAY_MS = 2500;
 
 const STYLES = `
 :host {
   all: initial;
+  pointer-events: none;
 }
 
 .pill {
+  pointer-events: none;
   position: fixed;
   right: 16px;
   bottom: 16px;
@@ -44,14 +46,6 @@ const STYLES = `
   }
 }
 `;
-
-function isComplete(status: SessionStatus): boolean {
-  return (
-    status.discovered > 0 &&
-    status.queued === 0 &&
-    status.ready + status.failed >= status.discovered
-  );
-}
 
 /**
  * A page-corner progress pill fed by SessionController status updates. Pure
@@ -93,7 +87,7 @@ export class SyntaxProgressPill {
       this.#render(`⏸ 已暂停 ${done}/${status.discovered}`, false);
       return;
     }
-    if (isComplete(status)) {
+    if (isSessionComplete(status)) {
       this.#render(status.failed > 0 ? `✓ 完成，${status.failed} 句失败` : "✓ 解析完成", false);
       this.#fadeTimer = setTimeout(() => this.remove(), FADE_DELAY_MS);
       return;

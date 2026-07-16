@@ -56,6 +56,14 @@ export interface SessionStatus {
   profileId?: string;
 }
 
+export function isSessionComplete(status: SessionStatus): boolean {
+  return (
+    status.discovered > 0 &&
+    status.queued === 0 &&
+    status.ready + status.failed >= status.discovered
+  );
+}
+
 export interface CacheStats {
   entries: number;
   estimatedBytes: number;

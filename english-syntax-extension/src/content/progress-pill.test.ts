@@ -63,6 +63,16 @@ describe("SyntaxProgressPill", () => {
     expect(pillText(pill)).toContain("2/4");
   });
 
+  it("stays purely presentational: pointer events pass through", () => {
+    const pill = new SyntaxProgressPill();
+
+    pill.update(status({ state: "running", discovered: 5, queued: 5 }));
+
+    const styles = pill.host.shadowRoot!.querySelector("style")!.textContent;
+    expect(styles).toMatch(/:host\s*\{[^}]*pointer-events:\s*none/u);
+    expect(styles).toMatch(/\.pill\s*\{[^}]*pointer-events:\s*none/u);
+  });
+
   it("disappears immediately when the session stops", () => {
     const pill = new SyntaxProgressPill();
 

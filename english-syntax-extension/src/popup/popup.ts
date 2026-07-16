@@ -1,5 +1,5 @@
 import { ConfigRepository, type PublicModelProfile } from "../background/config-repository";
-import type { ResponseMessage, SessionStatus } from "../shared/protocol";
+import { isSessionComplete, type ResponseMessage, type SessionStatus } from "../shared/protocol";
 import { MESSAGE_VERSION } from "../shared/versions";
 
 export interface PopupTabContext {
@@ -45,14 +45,6 @@ function isSupportedUrl(url: string | undefined): boolean {
   } catch {
     return false;
   }
-}
-
-function isComplete(status: SessionStatus): boolean {
-  return (
-    status.discovered > 0 &&
-    status.queued === 0 &&
-    status.ready + status.failed >= status.discovered
-  );
 }
 
 export async function createPopupPage(
@@ -115,7 +107,7 @@ export async function createPopupPage(
       return;
     }
     primary.disabled = false;
-    if (status.state === "running" && isComplete(status)) {
+    if (status.state === "running" && isSessionComplete(status)) {
       primary.textContent = "恢复网页原文";
       command = "STOP_SESSION";
     } else if (status.state === "running") {

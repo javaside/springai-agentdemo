@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GrammarRole } from "./grammar";
-import { isRequestMessage } from "./protocol";
+import { isRequestMessage, isSessionComplete, type SessionStatus } from "./protocol";
 
 const page = {
   version: 1,
@@ -190,5 +190,31 @@ describe("request protocol guard", () => {
     ["profileId", { ...page, type: "SWITCH_PROFILE", profileId: "\t" }],
   ])("rejects a whitespace-only %s", (_field, request) => {
     expect(isRequestMessage(request)).toBe(false);
+  });
+});
+
+describe("session completion", () => {
+  const status = (overrides: Partial<SessionStatus>): SessionStatus => ({
+    state: "running",
+    discovered: 0,
+    queued: 0,
+    ready: 0,
+    failed: 0,
+    ...overrides,
+  });
+
+  it.each([
+    ["every sentence is ready", { discovered: 4, ready: 4 }],
+    ["ready and failed cover the discovery", { discovered: 4, ready: 3, failed: 1 }],
+  ])("is complete when %s", (_description, overrides) => {
+    expect(isSessionComplete(status(overrides))).toBe(true);
+  });
+
+  it.each([
+    ["nothing was discovered", {}],
+    ["sentences are still queued", { discovered: 4, queued: 1, ready: 3 }],
+    ["results have not covered the discovery", { discovered: 4, ready: 2, failed: 1 }],
+  ])("is incomplete when %s", (_description, overrides) => {
+    expect(isSessionComplete(status(overrides))).toBe(false);
   });
 });
