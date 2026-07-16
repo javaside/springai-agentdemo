@@ -28,6 +28,8 @@ function dependencies(overrides: Partial<OptionsDependencies> = {}): OptionsDepe
     clearCache: vi.fn(() => Promise.resolve()),
     getCacheLimitMb: vi.fn(() => Promise.resolve(50)),
     setCacheLimitMb: vi.fn(() => Promise.resolve()),
+    getActiveProfileId: vi.fn(() => Promise.resolve(undefined as string | undefined)),
+    setActiveProfile: vi.fn(() => Promise.resolve()),
     confirm: vi.fn(() => true),
     ...overrides,
   };
@@ -227,5 +229,63 @@ describe("Options page", () => {
     expect(buttons.every((button) => button.tabIndex >= 0)).toBe(true);
     expect(document.querySelector(".options-page")).not.toBeNull();
     expect(document.querySelector("[data-focus-style='visible']")).not.toBeNull();
+  });
+
+  it("marks the active profile and lets another profile take over", async () => {
+    const subject = dependencies({
+      listProfiles: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "p-1",
+            name: "DeepSeek",
+            baseUrl: "https://api.example.com/v1",
+            model: "deepseek-v4-flash",
+            timeoutMs: 45_000,
+            jsonSchemaSupport: "unknown" as const,
+          },
+          {
+            id: "p-2",
+            name: "Local",
+            baseUrl: "http://localhost:11434/v1",
+            model: "qwen",
+            timeoutMs: 45_000,
+            jsonSchemaSupport: "unknown" as const,
+          },
+        ]),
+      ),
+      getProfile: vi.fn((profileId: string) =>
+        Promise.resolve({
+          id: profileId,
+          name: "DeepSeek",
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "secret",
+          model: "deepseek-v4-flash",
+          headers: {},
+          timeoutMs: 45_000,
+          jsonSchemaSupport: "unknown" as const,
+        }),
+      ),
+      getActiveProfileId: vi.fn(() => Promise.resolve("p-1")),
+    });
+    await createOptionsPage(root(), subject);
+
+    const select = document.querySelector<HTMLSelectElement>("#options-saved-profile")!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "新建配置",
+      "DeepSeek · deepseek-v4-flash（启用中）",
+      "Local · qwen",
+    ]);
+
+    // 载入非启用配置 → 按钮可点,点击后设为启用
+    select.value = "p-2";
+    select.dispatchEvent(new Event("change"));
+    const activate = document.querySelector<HTMLButtonElement>("[data-action='activate-profile']")!;
+    await vi.waitFor(() => expect(activate.disabled).toBe(false));
+    expect(activate.textContent).toBe("设为启用");
+
+    activate.click();
+    await vi.waitFor(() => expect(subject.setActiveProfile).toHaveBeenCalledWith("p-2"));
+    expect(activate.textContent).toBe("已启用");
+    expect(activate.disabled).toBe(true);
   });
 });
