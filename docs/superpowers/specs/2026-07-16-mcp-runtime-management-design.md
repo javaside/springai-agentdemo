@@ -34,7 +34,7 @@ public final class McpRegistry {
     static McpRegistry init(Path root);          // 启动：加载两层配置（含 enabled:false 条目）+ 并行连接 enabled 项
     List<ServerView> servers();                  // /mcp 面板数据源（名字/来源层/状态/工具数/工具名清单）
     List<ToolCallback> activeTools();            // 当前所有「已启用且已连接」server 的已装饰工具（每回合快照）
-    boolean enable(String name);                 // 连接 + 发现 + 装饰 + 回写 enabled:true（阻塞，UI 提示中）
+    boolean enable(String name);                 // 连接 + 发现 + 装饰 + 回写 enabled:true（阻塞方法；由 UI 层放后台线程调）
     boolean disable(String name);                // 摘除工具 + closeGracefully + 回写 enabled:false
     void close();                                // 退出：关所有已连 client（沿用 2s 预算逻辑）
 }
@@ -92,7 +92,7 @@ MCP 工具**不再**并入 `AgentTools.build` 的 `defaultTools`（内置工具�
 
 - 状态标记：`✓` 已启用且已连接；`○` 已禁用；`✗` 已启用但连接失败（error 摘要跟在行尾）。
 - **选中高亮用纯前景色**（PICK_SEL 风格，严禁背景色条——TamboUI 底色会串到下一项）。
-- Enter/Space：切换选中项。禁用→启用触发阻塞连接，期间状态栏显示「⟳ 连接 <name>…」（连接在后台线程做，完成后回 UI 线程刷新，不冻结渲染循环）；启用→禁用即时完成。对 `✗` 项 Enter = 重试连接。
+- Enter/Space：切换选中项。禁用→启用需连接握手（秒级）：UI 把 `registry.enable` 放后台线程执行、期间状态栏显示「⟳ 连接 <name>…」且该行标记为连接中，完成后回 UI 线程刷新——渲染循环不冻结；启用→禁用即时完成。对 `✗` 项 Enter = 重试连接。
 - Tab：展开/收起选中 server 的工具名清单（已连接项列 `mcp__` 前缀后的短名，只读、暗色、缩进；未连接项显示「（未连接，无工具信息）」）。
 - 数字 1..9 快选，与现有选择器一致。
 - **仅空闲可操作**：`/mcp` 提交时若 `busy()`（回合中/压缩中/在飞子 agent）则 notice「忙碌中，无法管理 MCP」拒绝打开——避免回合中途摘工具/关连接撞上在飞调用。
