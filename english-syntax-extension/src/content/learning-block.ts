@@ -1,5 +1,22 @@
-import { GRAMMAR_LABELS } from "../shared/grammar";
+import { GRAMMAR_LABELS, GrammarRole } from "../shared/grammar";
 import type { CoreAnalysis, DetailAnalysis, Token, TokenRange } from "../shared/grammar";
+
+const ROLE_COLORS: Readonly<Record<GrammarRole, string>> = {
+  [GrammarRole.SUBJECT]: "#2563eb",
+  [GrammarRole.PREDICATE]: "#dc2626",
+  [GrammarRole.OBJECT]: "#059669",
+  [GrammarRole.PREDICATIVE]: "#0891b2",
+  [GrammarRole.ATTRIBUTE]: "#7c3aed",
+  [GrammarRole.ADVERBIAL]: "#d97706",
+  [GrammarRole.COMPLEMENT]: "#0891b2",
+  [GrammarRole.APPOSITIVE]: "#6b7280",
+  [GrammarRole.SUBJECT_CLAUSE]: "#2563eb",
+  [GrammarRole.OBJECT_CLAUSE]: "#059669",
+  [GrammarRole.PREDICATIVE_CLAUSE]: "#0891b2",
+  [GrammarRole.ATTRIBUTIVE_CLAUSE]: "#7c3aed",
+  [GrammarRole.ADVERBIAL_CLAUSE]: "#d97706",
+  [GrammarRole.INDEPENDENT_ELEMENT]: "#6b7280",
+};
 
 const STYLES = `
 :host {
@@ -17,7 +34,7 @@ const STYLES = `
   display: flex;
   flex-wrap: wrap;
   align-items: end;
-  column-gap: 0.7em;
+  column-gap: 0.5em;
   row-gap: 0.55em;
   max-inline-size: 100%;
   overflow-wrap: anywhere;
@@ -30,16 +47,19 @@ const STYLES = `
   justify-items: center;
   min-inline-size: 0;
   max-inline-size: 100%;
-  padding: 0.15em 0.35em 0.2em;
+  padding: 0;
   border: 0;
-  border-radius: 0.4em;
-  background: color-mix(in srgb, currentColor 7%, transparent);
+  background: transparent;
   font: inherit;
   color: inherit;
   text-align: center;
   cursor: pointer;
   overflow-wrap: anywhere;
   transition: opacity 120ms ease;
+}
+
+.component:hover {
+  opacity: 0.72;
 }
 
 .role,
@@ -53,18 +73,20 @@ const STYLES = `
 
 .role {
   font-size: max(11px, 0.68em);
-  opacity: 0.72;
+  color: var(--syntax-role-color, currentColor);
+  opacity: 0.85;
 }
 
 .english {
-  border-bottom: 2px solid currentColor;
+  border-bottom: 1.5px solid
+    color-mix(in srgb, var(--syntax-role-color, currentColor) 60%, transparent);
   justify-self: stretch;
   text-align: center;
 }
 
 .translation {
   font-size: max(12px, 0.8em);
-  opacity: 0.84;
+  opacity: 0.78;
 }
 
 .punctuation {
@@ -210,6 +232,7 @@ export class SyntaxLearningBlock {
       componentElement.type = "button";
       componentElement.dataset.startToken = String(component.startToken);
       componentElement.dataset.endToken = String(component.endToken);
+      componentElement.style.setProperty("--syntax-role-color", ROLE_COLORS[component.role]);
       componentElement.setAttribute(
         "aria-label",
         `${GRAMMAR_LABELS[component.role]}：${component.translation}`,

@@ -240,8 +240,27 @@ describe("SyntaxLearningBlock", () => {
     expect(css).toContain("font: inherit");
     expect(css).toContain("color: inherit");
     expect(css).toContain("font-size: max(11px");
-    expect(css).toContain("border-bottom: 2px solid currentColor");
+    expect(css).toContain("border-bottom: 1.5px solid");
     expect(css).toContain(":focus-visible");
     expect(css).toContain("prefers-reduced-motion: reduce");
+  });
+
+  it("colors each component underline by grammar role without any backdrop", () => {
+    const element = block();
+    document.body.append(element.host);
+
+    element.renderCore(sentence, tokens, analysis);
+
+    const root = element.host.shadowRoot!;
+    const colors = [...root.querySelectorAll<HTMLElement>(".component")].map((component) =>
+      component.style.getPropertyValue("--syntax-role-color"),
+    );
+    expect(colors).toEqual(["#2563eb", "#dc2626", "#059669"]); // 主语蓝、谓语红、宾语绿
+
+    const styles = root.querySelector("style")!.textContent!;
+    expect(styles).toContain("border-bottom: 1.5px solid");
+    expect(styles).toContain("var(--syntax-role-color");
+    // 成分不再有底色块
+    expect(styles).not.toMatch(/\.component\s*\{[^}]*background:\s*color-mix/u);
   });
 });
