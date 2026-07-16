@@ -26,8 +26,10 @@ import java.util.concurrent.Executors;
  * <p><b>装饰职责</b>：enable/初连时即用 ToolEventCallback + MediaExternalizingCallback 装饰，
  * {@link #activeTools()} 返回的始终是已装饰实例——与内置工具行为一致（TUI 工具活动行 + 媒体外置路径①）。
  *
- * <p><b>并发</b>：条目表用 synchronized(this) 保护；连接（秒级阻塞）在锁外做，enable/disable 由 UI 层
- * 保证同一时刻至多一个在飞（connecting 闸门）。activeTools() 每回合取一次快照，回合中途切换不影响在飞回合。
+ * <p><b>并发</b>：条目表用 synchronized(this) 保护；enable/disable 全程互斥于独立的 {@code toggleLock}
+ * （registry 自证串行，不依赖 UI 层闸门），杜绝「enable 锁外连接在飞时 disable 插入、迟到写回把禁用复活」。
+ * 连接（秒级阻塞）仍在 this 锁外做，不挡 servers()/activeTools() 读；disable 最坏被在飞 enable 挡秒级。
+ * activeTools() 每回合取一次快照，回合中途切换不影响在飞回合。
  *
  * <p><b>降级契约</b>：连接失败记入 error 态（enabled 意图仍回写）；回写失败内存态照常生效、
  * ToggleResult.persisted=false 供 UI 提示；一律不抛异常。
@@ -60,6 +62,8 @@ public final class McpRegistry {
     }
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
+    /** enable/disable 全程互斥锁（连接阻塞期间不占 this，读方法不受挡）。锁序：toggleLock 外、this 内。 */
+    private final Object toggleLock = new Object();
     private final Path root;
     private final AgentListener listener;
     private final MediaArtifactStore mediaStore;
@@ -98,7 +102,7 @@ public final class McpRegistry {
 
     /** 测试钩子：把条目直接置为「已启用、已连接、给定工具」（client 仍 null，close 时自然跳过）。 */
     synchronized void addConnectedForTest(String name, List<ToolCallback> decoratedTools) {
-        Entry e = entries.get(name);
+        Entry e = Objects.requireNonNull(entries.get(name), name);
         e.enabled = true;
         e.error = null;
         e.tools = List.copyOf(decoratedTools);
@@ -127,25 +131,32 @@ public final class McpRegistry {
         }
     }
 
-    /** 连接 + 发现 + 装饰单条目，结果写回 entry（成功清 error，失败记 error）。启动期专用（无锁）。 */
-    private void connectAndDiscover(Entry e) {
+    /** 连接三元组：成功时 client 非 null、error 为 null；失败时反之，tools 恒空。 */
+    private record Connected(McpSyncClient client, List<ToolCallback> tools, String error) { }
+
+    /** 连接 + 发现 + 装饰单条目（不写回 entry——写回策略由调用方决定）。 */
+    private Connected connect(Entry e) {
         McpClientManager.ConnectOutcome out = McpClientManager.connectDetailed(e.loaded.config());
         if (out.client() == null) {
-            e.client = null;
-            e.tools = List.of();
-            e.error = out.error();
-            return;
+            return new Connected(null, List.of(), out.error());
         }
-        e.client = out.client();
-        e.error = null;
         List<ToolCallback> decorated = new ArrayList<>();
         for (ToolCallback raw : McpClientManager.discoverTools(out.client())) {
             decorated.add(decorate(raw));
         }
-        e.tools = List.copyOf(decorated);
+        return new Connected(out.client(), List.copyOf(decorated), null);
     }
 
-    private ToolCallback decorate(ToolCallback raw) {
+    /** 启动期写回策略：直写 entry（此时无并发访问，不加锁；enabled 已为 true）。 */
+    private void connectAndDiscover(Entry e) {
+        Connected c = connect(e);
+        e.client = c.client();
+        e.tools = c.tools();
+        e.error = c.error();
+    }
+
+    /** 包私供测试断言装饰链（外层 ToolEventCallback）。 */
+    ToolCallback decorate(ToolCallback raw) {
         return new ToolEventCallback(
                 new MediaExternalizingCallback(raw, mediaStore, mediaHandler, root), listener);
     }
@@ -154,11 +165,14 @@ public final class McpRegistry {
     public synchronized List<ServerView> servers() {
         List<ServerView> out = new ArrayList<>();
         for (Entry e : entries.values()) {
+            String name = e.loaded.config().name();
             Status status = !e.enabled ? Status.DISABLED
                     : (e.client != null || e.connectedForTest) ? Status.CONNECTED : Status.FAILED;
+            // 本 entry 的注册名前缀（与 McpClientManager.prefixedName 同款 sanitize），按已知前缀精确剥离。
+            String prefix = "mcp__" + org.springframework.ai.mcp.McpToolUtils.format(name) + "__";
             List<String> shortNames = e.tools.stream()
-                    .map(t -> shortName(t.getToolDefinition().name())).toList();
-            out.add(new ServerView(e.loaded.config().name(), e.loaded.source(), status,
+                    .map(t -> shortName(prefix, t.getToolDefinition().name())).toList();
+            out.add(new ServerView(name, e.loaded.source(), status,
                     e.tools.size(), shortNames, e.error));
         }
         return out;
@@ -180,71 +194,68 @@ public final class McpRegistry {
      * 连接失败也回写（用户意图是启用，下次启动自动重试）；已连接则幂等返回成功。
      */
     public ToggleResult enable(String name) {
-        Entry e;
-        synchronized (this) {
-            e = entries.get(name);
-            if (e == null) {
-                return new ToggleResult(false, false, "未知 server：" + name);
+        synchronized (toggleLock) {
+            Entry e;
+            synchronized (this) {
+                e = entries.get(name);
+                if (e == null) {
+                    return new ToggleResult(false, false, "未知 server：" + name);
+                }
+                if (e.enabled && (e.client != null || e.connectedForTest)) {
+                    return new ToggleResult(true, true, null);
+                }
             }
-            if (e.enabled && (e.client != null || e.connectedForTest)) {
-                return new ToggleResult(true, true, null);
+            connectAndPublish(e);
+            boolean persisted = McpConfigWriter.setEnabled(e.loaded.file(), name, true);
+            synchronized (this) {
+                return new ToggleResult(e.client != null, persisted, e.error);
             }
-        }
-        connectAndDiscoverLocked(e);
-        boolean persisted = McpConfigWriter.setEnabled(e.loaded.file(), name, true);
-        synchronized (this) {
-            return new ToggleResult(e.client != null, persisted, e.error);
         }
     }
 
-    /** 连接在锁外做（阻塞秒级），仅结果写回时短暂持锁。 */
-    private void connectAndDiscoverLocked(Entry e) {
-        McpClientManager.ConnectOutcome out = McpClientManager.connectDetailed(e.loaded.config());
-        List<ToolCallback> decorated = List.of();
-        if (out.client() != null) {
-            List<ToolCallback> tmp = new ArrayList<>();
-            for (ToolCallback raw : McpClientManager.discoverTools(out.client())) {
-                tmp.add(decorate(raw));
-            }
-            decorated = List.copyOf(tmp);
-        }
+    /** 运行期写回策略：连接在 this 锁外做（阻塞秒级），仅结果发布时短暂持锁（调用方持 toggleLock）。 */
+    private void connectAndPublish(Entry e) {
+        Connected c = connect(e);
         synchronized (this) {
             e.enabled = true;
-            e.client = out.client();
-            e.tools = decorated;
-            e.error = out.error();
+            e.client = c.client();
+            e.tools = c.tools();
+            e.error = c.error();
         }
     }
 
-    /** 禁用：摘除工具（下回合快照即不含）+ 后台优雅关连接 + 回写 enabled:false。即时完成。 */
+    /** 禁用：摘除工具（下回合快照即不含）+ 后台优雅关连接 + 回写 enabled:false。即时完成
+     *（最坏被在飞 enable 的 toggleLock 挡秒级；UI 单飞契约成立时永不发生）。 */
     public ToggleResult disable(String name) {
-        McpSyncClient toClose;
-        Entry e;
-        synchronized (this) {
-            e = entries.get(name);
-            if (e == null) {
-                return new ToggleResult(false, false, "未知 server：" + name);
-            }
-            toClose = e.client;
-            e.client = null;
-            e.tools = List.of();
-            e.enabled = false;
-            e.error = null;
-            e.connectedForTest = false;
-        }
-        if (toClose != null) {
-            Thread t = new Thread(() -> {
-                try {
-                    toClose.closeGracefully();
-                } catch (Exception ex) {
-                    log.warn("MCP client 关闭异常（忽略）：{}", ex.getMessage());
+        synchronized (toggleLock) {
+            McpSyncClient toClose;
+            Entry e;
+            synchronized (this) {
+                e = entries.get(name);
+                if (e == null) {
+                    return new ToggleResult(false, false, "未知 server：" + name);
                 }
-            }, "mcp-disable-close");
-            t.setDaemon(true);
-            t.start();
+                toClose = e.client;
+                e.client = null;
+                e.tools = List.of();
+                e.enabled = false;
+                e.error = null;
+                e.connectedForTest = false;
+            }
+            if (toClose != null) {
+                Thread t = new Thread(() -> {
+                    try {
+                        toClose.closeGracefully();
+                    } catch (Exception ex) {
+                        log.warn("MCP client 关闭异常（忽略）：{}", ex.getMessage());
+                    }
+                }, "mcp-disable-close");
+                t.setDaemon(true);
+                t.start();
+            }
+            boolean persisted = McpConfigWriter.setEnabled(e.loaded.file(), name, false);
+            return new ToggleResult(true, persisted, null);
         }
-        boolean persisted = McpConfigWriter.setEnabled(e.loaded.file(), name, false);
-        return new ToggleResult(true, persisted, null);
     }
 
     /** 退出清理：关所有在连 client（复用 2s 预算逻辑）。 */
@@ -257,9 +268,8 @@ public final class McpRegistry {
         McpClientManager.closeAll(toClose);
     }
 
-    /** {@code mcp__<server>__<tool>} → {@code <tool>}（面板展示短名）；无前缀则原样。 */
-    static String shortName(String registered) {
-        int i = registered.lastIndexOf("__");
-        return i >= 0 ? registered.substring(i + 2) : registered;
+    /** 按本 server 的已知前缀 {@code mcp__<server>__} 剥出短名（含 {@code __} 的工具名不被过度剥离）；不匹配则原样。 */
+    static String shortName(String prefix, String registered) {
+        return registered.startsWith(prefix) ? registered.substring(prefix.length()) : registered;
     }
 }

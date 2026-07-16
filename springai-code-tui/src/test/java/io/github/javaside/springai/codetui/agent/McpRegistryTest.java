@@ -11,11 +11,13 @@ import tools.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -105,6 +107,57 @@ class McpRegistryTest {
         McpRegistry reg = McpRegistry.initForTest(Path.of("."), new ConversationState(), List.of());
         assertFalse(reg.enable("nope").applied());
         assertFalse(reg.disable("nope").applied());
+    }
+
+    /** 只记录工具事件的 listener（其余方法空实现）。 */
+    private static final class RecordingListener implements AgentListener {
+        final List<String> events = new ArrayList<>();
+        @Override public void onTurnStarted(long turnId) { }
+        @Override public void onUserMessage(long turnId, String text) { }
+        @Override public void onAssistantToken(long turnId, String token) { }
+        @Override public void onToolStarted(long turnId, String toolName, String input) {
+            events.add("start:" + toolName);
+        }
+        @Override public void onToolFinished(long turnId, String toolName, String output, boolean ok) {
+            events.add("finish:" + toolName + ":" + ok);
+        }
+        @Override public void onSubagentStarted(long turnId, String taskId, String agentName, String description) { }
+        @Override public void onSubagentFinished(long turnId, String taskId, String finalText) { }
+        @Override public void onTodoUpdated(long turnId, List<String> todoLines) { }
+        @Override public void onTurnComplete(long turnId) { }
+        @Override public void onError(long turnId, Throwable error) { }
+        @Override public void onQuestionAsked(long turnId, AskRequest request) { }
+        @Override public void onCompactionStarted(String reason) { }
+        @Override public void onCompactionFinished(int eventsRemoved, int tokensSaved) { }
+        @Override public void onCompactionFailed(String message) { }
+    }
+
+    @Test
+    void decorateWrapsWithToolEventCallbackAndFiresListenerEvents(@TempDir Path root) {
+        RecordingListener listener = new RecordingListener();
+        McpRegistry reg = McpRegistry.initForTest(root, listener, List.of());
+        try {
+            ToolCallback decorated = reg.decorate(fakeTool("mcp__s1__ping"));
+            assertInstanceOf(ToolEventCallback.class, decorated, "外层须是 ToolEventCallback（TUI 工具活动行）");
+            assertEquals("ok", decorated.call("{}"), "调用应穿透装饰链回到原工具");
+            assertEquals(List.of("start:mcp__s1__ping", "finish:mcp__s1__ping:true"), listener.events,
+                    "装饰后调用应发工具开始/结束事件");
+        } finally {
+            reg.close();
+        }
+    }
+
+    @Test
+    void shortNameStripsOnlyOwnServerPrefix(@TempDir Path root) throws Exception {
+        Path f = writeCfg(root, "s1", true);
+        McpRegistry reg = McpRegistry.initForTest(root, new ConversationState(), List.of(bogus("s1", false, f)));
+        try {
+            reg.addConnectedForTest("s1", List.of(fakeTool("mcp__s1__do__thing"), fakeTool("unprefixed")));
+            assertEquals(List.of("do__thing", "unprefixed"), reg.servers().get(0).toolNames(),
+                    "含 __ 的工具名不被过度剥离；无前缀原样");
+        } finally {
+            reg.close();
+        }
     }
 
     @Test
