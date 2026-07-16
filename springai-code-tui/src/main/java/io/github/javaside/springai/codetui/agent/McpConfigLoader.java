@@ -32,9 +32,7 @@ public final class McpConfigLoader {
 
     /** 生产入口：由项目根解析出用户级 + 项目级两个文件路径后加载。 */
     public static List<McpServerConfig> load(Path root) {
-        Path userFile = Path.of(System.getProperty("user.home")).resolve(".codetui").resolve("mcp.json");
-        Path projectFile = root.resolve(".codetui").resolve("mcp.json");
-        return load(userFile, projectFile);
+        return load(userMcpFile(), projectMcpFile(root));
     }
 
     /** 可测入口：显式两文件。项目级覆盖用户级同名项，保持插入顺序（用户项在前、项目新增在后）。 */
@@ -57,9 +55,15 @@ public final class McpConfigLoader {
 
     /** 生产入口（全量版）：与 {@link #load(Path)} 同源两文件，但保留 enabled:false 条目，供 /mcp 列出再启用。 */
     public static List<LoadedServer> loadAll(Path root) {
-        Path userFile = Path.of(System.getProperty("user.home")).resolve(".codetui").resolve("mcp.json");
-        Path projectFile = root.resolve(".codetui").resolve("mcp.json");
-        return loadAll(userFile, projectFile);
+        return loadAll(userMcpFile(), projectMcpFile(root));
+    }
+
+    private static Path userMcpFile() {
+        return Path.of(System.getProperty("user.home")).resolve(".codetui").resolve("mcp.json");
+    }
+
+    private static Path projectMcpFile(Path root) {
+        return root.resolve(".codetui").resolve("mcp.json");
     }
 
     /** 可测入口（全量版）：项目级覆盖用户级同名项（含来源层与回写目标一并换成项目级）。 */
