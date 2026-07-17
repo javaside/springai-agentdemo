@@ -15,6 +15,8 @@ export enum GrammarRole {
   ATTRIBUTIVE_CLAUSE = "ATTRIBUTIVE_CLAUSE",
   ADVERBIAL_CLAUSE = "ADVERBIAL_CLAUSE",
   INDEPENDENT_ELEMENT = "INDEPENDENT_ELEMENT",
+  COORDINATE_CLAUSE = "COORDINATE_CLAUSE",
+  CONJUNCTION = "CONJUNCTION",
 }
 
 export const GRAMMAR_LABELS: Readonly<Record<GrammarRole, string>> = {
@@ -32,6 +34,8 @@ export const GRAMMAR_LABELS: Readonly<Record<GrammarRole, string>> = {
   [GrammarRole.ATTRIBUTIVE_CLAUSE]: "定语从句",
   [GrammarRole.ADVERBIAL_CLAUSE]: "状语从句",
   [GrammarRole.INDEPENDENT_ELEMENT]: "独立成分",
+  [GrammarRole.COORDINATE_CLAUSE]: "并列分句",
+  [GrammarRole.CONJUNCTION]: "并列连词",
 };
 
 export interface Token {

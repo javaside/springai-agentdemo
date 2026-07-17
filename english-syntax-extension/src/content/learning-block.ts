@@ -16,6 +16,8 @@ const ROLE_COLORS: Readonly<Record<GrammarRole, string>> = {
   [GrammarRole.ATTRIBUTIVE_CLAUSE]: "#7c3aed",
   [GrammarRole.ADVERBIAL_CLAUSE]: "#d97706",
   [GrammarRole.INDEPENDENT_ELEMENT]: "#6b7280",
+  [GrammarRole.COORDINATE_CLAUSE]: "#0d9488",
+  [GrammarRole.CONJUNCTION]: "#6b7280",
 };
 
 const STYLES = `

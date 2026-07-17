@@ -54,6 +54,26 @@ describe("core analysis validation", () => {
     expect(result).toEqual({ ok: true, value: [expectedAnalysis] });
   });
 
+  it("accepts the compound-sentence roles COORDINATE_CLAUSE and CONJUNCTION", () => {
+    const result = validateCoreBatch(
+      {
+        sentences: [
+          {
+            sentenceId: "sentence-1",
+            components: [
+              { startToken: 0, endToken: 0, role: "COORDINATE_CLAUSE", translation: "第一分句" },
+              { startToken: 1, endToken: 1, role: "CONJUNCTION", translation: "并且" },
+              { startToken: 2, endToken: 3, role: "COORDINATE_CLAUSE", translation: "第二分句" },
+            ],
+          },
+        ],
+      },
+      [request],
+      "profile-1",
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("reports the exact path and message for an uncovered lexical token", () => {
     const raw = structuredClone(rawCore);
     raw.sentences[0]!.components.splice(2, 1);

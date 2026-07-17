@@ -378,4 +378,23 @@ describe("SyntaxLearningBlock", () => {
     // 成分不再有底色块
     expect(styles).not.toMatch(/\.component\s*\{[^}]*background:\s*color-mix/u);
   });
+
+  it("colors coordinate clauses teal and conjunctions gray", () => {
+    const element = block();
+    document.body.append(element.host);
+
+    element.renderCore(sentence, tokens, {
+      ...analysis,
+      components: [
+        { startToken: 0, endToken: 0, role: GrammarRole.COORDINATE_CLAUSE, translation: "分句一" },
+        { startToken: 1, endToken: 1, role: GrammarRole.CONJUNCTION, translation: "连词" },
+        { startToken: 2, endToken: 3, role: GrammarRole.COORDINATE_CLAUSE, translation: "分句二" },
+      ],
+    });
+
+    const colors = [...element.host.shadowRoot!.querySelectorAll<HTMLElement>(".component")].map(
+      (component) => component.style.getPropertyValue("--syntax-role-color"),
+    );
+    expect(colors).toEqual(["#0d9488", "#6b7280", "#0d9488"]);
+  });
 });
