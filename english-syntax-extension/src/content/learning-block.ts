@@ -112,6 +112,42 @@ const STYLES = `
   overflow-wrap: anywhere;
 }
 
+.detail-annotations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  column-gap: 0.5em;
+  row-gap: 0.55em;
+  max-inline-size: 100%;
+  margin-block-end: 0.45em;
+}
+
+.annotation {
+  display: inline-grid;
+  grid-template-rows: repeat(2, auto);
+  justify-items: center;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+.annotation-role {
+  font-size: max(11px, 0.68em);
+  color: var(--syntax-role-color, currentColor);
+  opacity: 0.85;
+}
+
+.annotation-english {
+  border-bottom: 1.5px solid
+    color-mix(in srgb, var(--syntax-role-color, currentColor) 60%, transparent);
+  justify-self: stretch;
+  text-align: center;
+}
+
+.detail-structure {
+  margin-block: 0.2em;
+}
+
 .retry {
   margin-inline-start: 0.5em;
   border: 1px solid currentColor;
@@ -165,6 +201,42 @@ function circledNumber(value: number): string {
   return value >= 1 && value <= 20 ? String.fromCodePoint(0x2460 + value - 1) : `${value}`;
 }
 
+const FALLBACK_ANNOTATION_COLOR = "#6b7280";
+
+const ROLE_COLOR_BY_LABEL: ReadonlyMap<string, string> = new Map(
+  Object.values(GrammarRole).map((role) => [GRAMMAR_LABELS[role], ROLE_COLORS[role]]),
+);
+
+/** 详解 structure 的 role 是模型自由文本；按中文名精确匹配成分色，匹配不到统一灰色。 */
+function structureColor(role: string): string {
+  return ROLE_COLOR_BY_LABEL.get(role) ?? FALLBACK_ANNOTATION_COLOR;
+}
+
+/**
+ * 按 token 闭区间还原英文原文：首 token 去掉前导空格（与正文标注一致），
+ * 其余 token 保留前导空格。区间反转、越界或不完整时返回 undefined。
+ */
+function annotationEnglish(tokens: readonly Token[], range: TokenRange): string | undefined {
+  if (
+    !Number.isInteger(range.startToken) ||
+    !Number.isInteger(range.endToken) ||
+    range.startToken < 0 ||
+    range.endToken >= tokens.length ||
+    range.startToken > range.endToken
+  ) {
+    return undefined;
+  }
+  let english = "";
+  for (let index = range.startToken; index <= range.endToken; index += 1) {
+    const token = tokens[index];
+    if (token === undefined) {
+      return undefined;
+    }
+    english += (index === range.startToken ? "" : token.leadingWhitespace) + token.text;
+  }
+  return english;
+}
+
 export class SyntaxLearningBlock {
   /**
    * A content script runs in an isolated world where `window.customElements`
@@ -177,6 +249,7 @@ export class SyntaxLearningBlock {
   #expectedSentenceIds = new Set<string>();
   #expectedSentenceOrder: string[] = [];
   #resolvedSentenceIds = new Set<string>();
+  #tokensBySentence = new Map<string, readonly Token[]>();
 
   constructor(ownerDocument: Document = document) {
     this.host = ownerDocument.createElement("div");
@@ -232,6 +305,7 @@ export class SyntaxLearningBlock {
 
   renderCore(sentence: string, tokens: readonly Token[], analysis: CoreAnalysis): void {
     this.#validateCoreInput(sentence, tokens, analysis);
+    this.#tokensBySentence.set(analysis.sentenceId, [...tokens]);
     const sentenceElement = createElement("section", "sentence");
     sentenceElement.dataset.sentenceId = analysis.sentenceId;
     sentenceElement.setAttribute("aria-label", sentence);
@@ -347,14 +421,35 @@ export class SyntaxLearningBlock {
     detail.removeAttribute("aria-busy");
     detail.replaceChildren();
 
-    for (const structure of detailAnalysis.structures) {
-      const row = createElement("div", "detail-structure");
-      row.append(
-        createElement("strong", "detail-role", structure.role),
-        document.createTextNode("："),
-        createElement("span", "detail-explanation", structure.explanation),
-      );
-      detail.append(row);
+    if (detailAnalysis.structures.length > 0) {
+      const tokens = this.#tokensBySentence.get(detailAnalysis.sentenceId) ?? [];
+      const annotations = createElement("div", "detail-annotations");
+      for (const [index, structure] of detailAnalysis.structures.entries()) {
+        const english = annotationEnglish(tokens, structure);
+        // 区间越界/反转：跳过标注块，下方解释列表仍按同一序号列出该条。
+        if (english === undefined) {
+          continue;
+        }
+        const annotation = createElement("span", "annotation");
+        annotation.style.setProperty("--syntax-role-color", structureColor(structure.role));
+        annotation.append(
+          createElement("span", "annotation-role", `${circledNumber(index + 1)} ${structure.role}`),
+          createElement("span", "annotation-english", english),
+        );
+        annotations.append(annotation);
+      }
+      if (annotations.childElementCount > 0) {
+        detail.append(annotations);
+      }
+      for (const [index, structure] of detailAnalysis.structures.entries()) {
+        const row = createElement("div", "detail-structure");
+        row.append(
+          createElement("strong", "detail-role", `${circledNumber(index + 1)} ${structure.role}`),
+          document.createTextNode("："),
+          createElement("span", "detail-explanation", structure.explanation),
+        );
+        detail.append(row);
+      }
     }
     if (detailAnalysis.grammarPoints.length > 0) {
       detail.append(

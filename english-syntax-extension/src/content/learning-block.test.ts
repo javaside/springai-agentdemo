@@ -501,4 +501,109 @@ describe("SyntaxLearningBlock", () => {
       [...element.host.shadowRoot!.querySelectorAll(".role")].map((role) => role.textContent),
     ).toEqual(["并列分句", "并列连词", "状语"]);
   });
+
+  it("renders a numbered annotation zone reconstructed from token ranges above the explanations", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [
+        { startToken: 0, endToken: 1, role: "主语", explanation: "主语与谓语" },
+        { startToken: 2, endToken: 2, role: "引导词", explanation: "未知角色回退灰色" },
+      ],
+      grammarPoints: ["一般现在时"],
+      explanation: "整体讲解",
+      modelProfileId: "profile-1",
+    });
+
+    const root = element.host.shadowRoot!;
+    const annotations = [...root.querySelectorAll<HTMLElement>(".annotation")];
+    expect(
+      annotations.map((annotation) =>
+        [...annotation.children].map((child) => [child.className, child.textContent]),
+      ),
+    ).toEqual([
+      [
+        ["annotation-role", "① 主语"],
+        // 首 token 去前导空格、后续 token 保留——与正文标注同一规则。
+        ["annotation-english", "Learners read"],
+      ],
+      [
+        ["annotation-role", "② 引导词"],
+        ["annotation-english", "books"],
+      ],
+    ]);
+    expect(
+      annotations.map((annotation) => annotation.style.getPropertyValue("--syntax-role-color")),
+    ).toEqual(["#2563eb", "#6b7280"]);
+    // 顺序：标注区 → 逐条解释 → 语法点 → 整体讲解。
+    expect([...root.querySelector(".detail")!.children].map((child) => child.className)).toEqual([
+      "detail-annotations",
+      "detail-structure",
+      "detail-structure",
+      "grammar-points",
+      "detail-summary",
+    ]);
+    expect([...root.querySelectorAll(".detail-structure")].map((row) => row.textContent)).toEqual([
+      "① 主语：主语与谓语",
+      "② 引导词：未知角色回退灰色",
+    ]);
+  });
+
+  it("skips the annotation but keeps the numbered explanation for an invalid token range", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [
+        { startToken: 0, endToken: 0, role: "主语", explanation: "第一条" },
+        { startToken: 9, endToken: 12, role: "状语", explanation: "第二条区间越界" },
+        { startToken: 2, endToken: 1, role: "谓语", explanation: "第三条区间反转" },
+      ],
+      grammarPoints: [],
+      explanation: "整体讲解",
+      modelProfileId: "profile-1",
+    });
+
+    const root = element.host.shadowRoot!;
+    expect(
+      [...root.querySelectorAll(".annotation .annotation-role")].map((role) => role.textContent),
+    ).toEqual(["① 主语"]);
+    // 序号以解释列表为准：标注区少一块也不错位。
+    expect([...root.querySelectorAll(".detail-structure")].map((row) => row.textContent)).toEqual([
+      "① 主语：第一条",
+      "② 状语：第二条区间越界",
+      "③ 谓语：第三条区间反转",
+    ]);
+  });
+
+  it("falls back to the plain panel when structures is empty", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [],
+      grammarPoints: ["一般现在时"],
+      explanation: "整体讲解",
+      modelProfileId: "profile-1",
+    });
+
+    const root = element.host.shadowRoot!;
+    expect(root.querySelector(".detail-annotations")).toBeNull();
+    expect(root.querySelector(".detail-structure")).toBeNull();
+    expect(root.querySelector(".grammar-points")?.textContent).toBe("一般现在时");
+    expect(root.querySelector(".detail-summary")?.textContent).toBe("整体讲解");
+  });
 });
