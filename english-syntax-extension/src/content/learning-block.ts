@@ -160,8 +160,9 @@ function eventDetail(sentenceId: string, focus: TokenRange): SyntaxFocusEventDet
 }
 
 function circledNumber(value: number): string {
-  // ①（U+2460）起的带圈数字覆盖 1–20；更长的枚举退回普通数字。
-  return value >= 1 && value <= 20 ? String.fromCodePoint(0x2460 + value - 1) : `${value}.`;
+  // Circled digits starting at ① (U+2460) cover 1-20; longer enumerations
+  // fall back to plain numerals.
+  return value >= 1 && value <= 20 ? String.fromCodePoint(0x2460 + value - 1) : `${value}`;
 }
 
 export class SyntaxLearningBlock {
@@ -243,16 +244,20 @@ export class SyntaxLearningBlock {
     for (const component of analysis.components) {
       this.#appendPunctuation(sentenceElement, tokens, nextToken, component.startToken - 1);
       let label = GRAMMAR_LABELS[component.role];
+      let accessibleLabel = label;
       if (component.role === GrammarRole.COORDINATE_CLAUSE && coordinateClauseTotal >= 2) {
         coordinateClauseIndex += 1;
+        // The visible label keeps the circled digit; the accessible label uses
+        // a plain digit that screen readers announce reliably.
         label = `${label}${circledNumber(coordinateClauseIndex)}`;
+        accessibleLabel = `${accessibleLabel}${coordinateClauseIndex}`;
       }
       const componentElement = createElement("button", "component");
       componentElement.type = "button";
       componentElement.dataset.startToken = String(component.startToken);
       componentElement.dataset.endToken = String(component.endToken);
       componentElement.style.setProperty("--syntax-role-color", ROLE_COLORS[component.role]);
-      componentElement.setAttribute("aria-label", `${label}：${component.translation}`);
+      componentElement.setAttribute("aria-label", `${accessibleLabel}：${component.translation}`);
       const role = createElement("span", "role", label);
       const english = createElement("span", "english");
 

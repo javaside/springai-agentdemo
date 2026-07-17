@@ -437,9 +437,46 @@ describe("SyntaxLearningBlock", () => {
       "并列连词",
       "并列分句②",
     ]);
+    // The visible label keeps ①; the accessible label uses a plain digit that
+    // screen readers announce reliably.
     expect(root.querySelector(".component")!.getAttribute("aria-label")).toBe(
-      "并列分句①：太阳升起来了",
+      "并列分句1：太阳升起来了",
     );
+  });
+
+  it("restarts coordinate-clause numbering at ① for each sentence", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.setExpectedSentenceIds(["sentence-1", "sentence-2"]);
+    element.renderCore(compoundSentence, compoundTokens, compoundAnalysis);
+    element.renderCore(compoundSentence, compoundTokens, {
+      ...compoundAnalysis,
+      sentenceId: "sentence-2",
+    });
+
+    const root = element.host.shadowRoot!;
+    const rolesBySentence = [...root.querySelectorAll<HTMLElement>("[data-sentence-id]")].map(
+      (section) => [...section.querySelectorAll(".role")].map((role) => role.textContent),
+    );
+    expect(rolesBySentence).toEqual([
+      ["并列分句①", "并列连词", "并列分句②"],
+      ["并列分句①", "并列连词", "并列分句②"],
+    ]);
+  });
+
+  it("keeps ①② numbering after an in-place re-render of the same sentence", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(compoundSentence, compoundTokens, compoundAnalysis);
+    element.renderCore(compoundSentence, compoundTokens, compoundAnalysis);
+
+    const root = element.host.shadowRoot!;
+    expect(root.querySelectorAll(".sentence")).toHaveLength(1);
+    expect([...root.querySelectorAll(".role")].map((role) => role.textContent)).toEqual([
+      "并列分句①",
+      "并列连词",
+      "并列分句②",
+    ]);
   });
 
   it("keeps a lone coordinate clause unnumbered", () => {
