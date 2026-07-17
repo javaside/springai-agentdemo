@@ -31,7 +31,7 @@
 - Test: `src/language/analysis-validator.test.ts`
 - Test: `src/content/learning-block.test.ts`
 
-- [ ] **Step 1: 写失败测试——标签**。在 `src/shared/grammar.test.ts` 的 `describe("grammar roles", ...)` 内、现有 it 之后追加：
+- [x] **Step 1: 写失败测试——标签**。在 `src/shared/grammar.test.ts` 的 `describe("grammar roles", ...)` 内、现有 it 之后追加：
 
 ```ts
 it("labels the compound-sentence roles", () => {
@@ -40,7 +40,7 @@ it("labels the compound-sentence roles", () => {
 });
 ```
 
-- [ ] **Step 2: 写失败测试——校验器接受新角色**。在 `src/language/analysis-validator.test.ts` 的 `describe("core analysis validation", ...)` 内、`it("accepts complete, ordered core coverage", ...)` 之后追加（复用文件顶部已有的 `request` 夹具，"Learners read books." 4 个 token）：
+- [x] **Step 2: 写失败测试——校验器接受新角色**。在 `src/language/analysis-validator.test.ts` 的 `describe("core analysis validation", ...)` 内、`it("accepts complete, ordered core coverage", ...)` 之后追加（复用文件顶部已有的 `request` 夹具，"Learners read books." 4 个 token）：
 
 ```ts
 it("accepts the compound-sentence roles COORDINATE_CLAUSE and CONJUNCTION", () => {
@@ -64,7 +64,7 @@ it("accepts the compound-sentence roles COORDINATE_CLAUSE and CONJUNCTION", () =
 });
 ```
 
-- [ ] **Step 3: 写失败测试——正文配色**。在 `src/content/learning-block.test.ts` 的 `describe("SyntaxLearningBlock", ...)` 内、`it("colors each component underline by grammar role without any backdrop", ...)` 之后追加（复用文件顶部的 `sentence`/`tokens`/`analysis` 夹具）：
+- [x] **Step 3: 写失败测试——正文配色**。在 `src/content/learning-block.test.ts` 的 `describe("SyntaxLearningBlock", ...)` 内、`it("colors each component underline by grammar role without any backdrop", ...)` 之后追加（复用文件顶部的 `sentence`/`tokens`/`analysis` 夹具）：
 
 ```ts
 it("colors coordinate clauses teal and conjunctions gray", () => {
@@ -87,12 +87,12 @@ it("colors coordinate clauses teal and conjunctions gray", () => {
 });
 ```
 
-- [ ] **Step 4: 跑测试确认失败**
+- [x] **Step 4: 跑测试确认失败**
 
 Run: `npx vitest run src/shared/grammar.test.ts src/language/analysis-validator.test.ts src/content/learning-block.test.ts`
 Expected: 3 个新用例 FAIL（`expected undefined to be '并列分句'`、`expected false to be true`、颜色数组不匹配），其余全部保持 PASS。
 
-- [ ] **Step 5: 实现——枚举与标签**。`src/shared/grammar.ts` 中 enum 的 `INDEPENDENT_ELEMENT = "INDEPENDENT_ELEMENT",` 一行之后追加两个成员：
+- [x] **Step 5: 实现——枚举与标签**。`src/shared/grammar.ts` 中 enum 的 `INDEPENDENT_ELEMENT = "INDEPENDENT_ELEMENT",` 一行之后追加两个成员：
 
 ```ts
   COORDINATE_CLAUSE = "COORDINATE_CLAUSE",
@@ -106,24 +106,24 @@ Expected: 3 个新用例 FAIL（`expected undefined to be '并列分句'`、`exp
   [GrammarRole.CONJUNCTION]: "并列连词",
 ```
 
-- [ ] **Step 6: 实现——颜色**。`src/content/learning-block.ts` 的 `ROLE_COLORS` 中 `[GrammarRole.INDEPENDENT_ELEMENT]: "#6b7280",` 之后追加：
+- [x] **Step 6: 实现——颜色**。`src/content/learning-block.ts` 的 `ROLE_COLORS` 中 `[GrammarRole.INDEPENDENT_ELEMENT]: "#6b7280",` 之后追加：
 
 ```ts
   [GrammarRole.COORDINATE_CLAUSE]: "#0d9488",
   [GrammarRole.CONJUNCTION]: "#6b7280",
 ```
 
-- [ ] **Step 7: 类型完整性检查**（`Record<GrammarRole, string>` 漏项在这里暴露）
+- [x] **Step 7: 类型完整性检查**（`Record<GrammarRole, string>` 漏项在这里暴露）
 
 Run: `npx tsc --noEmit`
 Expected: 零错误。
 
-- [ ] **Step 8: 跑测试确认通过**
+- [x] **Step 8: 跑测试确认通过**
 
 Run: `npx vitest run src/shared/grammar.test.ts src/language/analysis-validator.test.ts src/content/learning-block.test.ts`
 Expected: 全部 PASS。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add src/shared/grammar.ts src/shared/grammar.test.ts src/content/learning-block.ts src/content/learning-block.test.ts src/language/analysis-validator.test.ts
@@ -141,7 +141,7 @@ git commit -m "feat(extension): 语法角色新增并列分句与并列连词" -
 - Test: `src/background/analysis-cache.test.ts`（版本参与缓存键 → cache miss）
 - Test: `src/background/openai-compatible-adapter.test.ts`（`describe("syntax prompts", ...)` 内的提示词文案断言）
 
-- [ ] **Step 1: 写失败测试——版本升级导致缓存 miss**。`src/background/analysis-cache.test.ts` 顶部 import 区追加：
+- [x] **Step 1: 写失败测试——版本升级导致缓存 miss**。`src/background/analysis-cache.test.ts` 顶部 import 区追加：
 
 ```ts
 import { CORE_PROMPT_VERSION } from "../shared/versions";
@@ -163,7 +163,7 @@ it("invalidates every version-1 core cache entry after the prompt version bump",
 
 （`coreIdentity` 是该文件顶部已有夹具，`promptVersion: 1`；`analysis-service.ts:590` 生成核心缓存键时把 `CORE_PROMPT_VERSION` 作为 `promptVersion` 传入 `createCoreCacheKey`，所以常量一变、键必变、旧核心缓存必 miss，详解缓存不受影响。）
 
-- [ ] **Step 2: 写失败测试——提示词文案**。`src/background/openai-compatible-adapter.test.ts` 中 `describe("syntax prompts", ...)` 内：
+- [x] **Step 2: 写失败测试——提示词文案**。`src/background/openai-compatible-adapter.test.ts` 中 `describe("syntax prompts", ...)` 内：
 
 （a）把 `it("states all core structural invariants", ...)` 里的 `expect(prompt).toContain("14");` 改成：
 
@@ -185,12 +185,12 @@ it("states the compound-sentence rules for coordinate clauses and conjunctions",
 });
 ```
 
-- [ ] **Step 3: 跑测试确认失败**
+- [x] **Step 3: 跑测试确认失败**
 
 Run: `npx vitest run src/background/analysis-cache.test.ts src/background/openai-compatible-adapter.test.ts`
 Expected: 新增/修改的断言 FAIL（`expected 1 to be 2`、`expected '…' to contain '16'`、`/coordinating conjunction/i` 不匹配），其余 PASS。
 
-- [ ] **Step 4: 实现——升版本**。`src/shared/versions.ts` 整文件改为：
+- [x] **Step 4: 实现——升版本**。`src/shared/versions.ts` 整文件改为：
 
 ```ts
 export const MESSAGE_VERSION = 1 as const;
@@ -201,7 +201,7 @@ export const DETAIL_PROMPT_VERSION = 1 as const;
 
 （**不动** `CORE_SCHEMA_VERSION`——components 数据形状不变，spec §1。）
 
-- [ ] **Step 5: 实现——提示词规则**。用下面内容整体替换 `src/background/prompts.ts` 的 `buildCorePrompt` 函数（角色数改为从枚举派生，避免再次硬编码漂移）：
+- [x] **Step 5: 实现——提示词规则**。用下面内容整体替换 `src/background/prompts.ts` 的 `buildCorePrompt` 函数（角色数改为从枚举派生，避免再次硬编码漂移）：
 
 ```ts
 export function buildCorePrompt(sentences: readonly SentenceInput[]): string {
@@ -225,12 +225,12 @@ export function buildCorePrompt(sentences: readonly SentenceInput[]): string {
 
 （首行 `"Analyze the numbered English sentences..."` 保持不变——`tests/support/fake-openai-server.ts` 的 `detectKind` 按首行识别 core 请求。）
 
-- [ ] **Step 6: 跑测试确认通过**
+- [x] **Step 6: 跑测试确认通过**
 
 Run: `npx vitest run src/background/analysis-cache.test.ts src/background/openai-compatible-adapter.test.ts`
 Expected: 全部 PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add src/shared/versions.ts src/background/prompts.ts src/background/analysis-cache.test.ts src/background/openai-compatible-adapter.test.ts
@@ -246,7 +246,7 @@ git commit -m "feat(extension): 核心提示词加入复合句规则并升 promp
 - Modify: `src/content/learning-block.ts`（`circledNumber` 帮助函数 + `renderCore` 内标签计算）
 - Test: `src/content/learning-block.test.ts`
 
-- [ ] **Step 1: 写失败测试**。在 `src/content/learning-block.test.ts` 顶部夹具区（`analysis` 定义之后、`function block()` 之前）追加复合句夹具：
+- [x] **Step 1: 写失败测试**。在 `src/content/learning-block.test.ts` 顶部夹具区（`analysis` 定义之后、`function block()` 之前）追加复合句夹具：
 
 ```ts
 const compoundSentence = "The sun rose and the birds sang.";
@@ -321,12 +321,12 @@ it("keeps a lone coordinate clause unnumbered", () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npx vitest run src/content/learning-block.test.ts`
 Expected: 第一个新用例 FAIL（实际标签是 `"并列分句"` 没有①），第二个 PASS（现状即无编号），其余 PASS。
 
-- [ ] **Step 3: 实现**。`src/content/learning-block.ts`：
+- [x] **Step 3: 实现**。`src/content/learning-block.ts`：
 
 （a）在模块级帮助函数区（`eventDetail` 函数之后、`export class SyntaxLearningBlock` 之前）追加：
 
@@ -379,12 +379,12 @@ function circledNumber(value: number): string {
       const role = createElement("span", "role", label);
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `npx vitest run src/content/learning-block.test.ts`
 Expected: 全部 PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/content/learning-block.ts src/content/learning-block.test.ts
@@ -402,7 +402,7 @@ git commit -m "feat(extension): 正文并列分句渲染期编号①②" -m "Co-
 
 顺序按 spec §3：标注区 → 逐条解释 → 语法点 → 整体讲解。容错：区间越界/反转 → 跳过该条标注块但解释仍按同一序号列出；`structures` 为空 → 不渲染标注区与解释列表（退回现状）。详解请求/缓存/开合切换/单面板/还原逻辑全部不动。
 
-- [ ] **Step 1: 写失败测试**。在 `src/content/learning-block.test.ts` 的 `describe("SyntaxLearningBlock", ...)` 内（Task 3 用例之后）追加三个用例（复用顶部 `sentence`/`tokens`/`analysis` 夹具，"Learners read books."）：
+- [x] **Step 1: 写失败测试**。在 `src/content/learning-block.test.ts` 的 `describe("SyntaxLearningBlock", ...)` 内（Task 3 用例之后）追加三个用例（复用顶部 `sentence`/`tokens`/`analysis` 夹具，"Learners read books."）：
 
 ```ts
 it("renders a numbered annotation zone reconstructed from token ranges above the explanations", () => {
@@ -511,12 +511,12 @@ it("falls back to the plain panel when structures is empty", () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npx vitest run src/content/learning-block.test.ts`
 Expected: 前两个新用例 FAIL（没有 `.annotation` 元素、`.detail-structure` 文本没有序号），第三个可能 PASS（空 structures 现状即不渲染）；既有用例全部 PASS。
 
-- [ ] **Step 3: 实现**。`src/content/learning-block.ts` 四处修改：
+- [x] **Step 3: 实现**。`src/content/learning-block.ts` 四处修改：
 
 （a）STYLES 内、`.detail,\n.sentence-failure { ... }` 规则块之后追加：
 
@@ -669,17 +669,17 @@ this.#tokensBySentence.set(analysis.sentenceId, [...tokens]);
   }
 ```
 
-- [ ] **Step 4: 跑测试确认通过（含既有回归：单面板/toggle/晚到响应丢弃/XSS 惰性文本）**
+- [x] **Step 4: 跑测试确认通过（含既有回归：单面板/toggle/晚到响应丢弃/XSS 惰性文本）**
 
 Run: `npx vitest run src/content/learning-block.test.ts`
 Expected: 全部 PASS。
 
-- [ ] **Step 5: 类型检查**
+- [x] **Step 5: 类型检查**
 
 Run: `npx tsc --noEmit`
 Expected: 零错误。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add src/content/learning-block.ts src/content/learning-block.test.ts
@@ -696,7 +696,7 @@ git commit -m "feat(extension): 详解面板新增标注区与序号解释列表
 - Modify: `tests/support/fake-openai-server.ts`（新增 2 个 ScriptedOutcome + 生成器 + 焦点解析提取）
 - Test: `tests/e2e/extension.spec.ts`
 
-- [ ] **Step 1: 写失败的 E2E 用例**。在 `tests/e2e/extension.spec.ts` 末尾追加（沿用现有惯例：穿透 shadow 的 CSS 定位、`dispatchFromUi`、`learningBlocks`/`openArticle`/`seedLocalProfile`/`uiMessage` 帮助函数）：
+- [x] **Step 1: 写失败的 E2E 用例**。在 `tests/e2e/extension.spec.ts` 末尾追加（沿用现有惯例：穿透 shadow 的 CSS 定位、`dispatchFromUi`、`learningBlocks`/`openArticle`/`seedLocalProfile`/`uiMessage` 帮助函数）：
 
 ```ts
 test("a compound sentence renders numbered coordinate clauses and an annotated detail panel", async ({
@@ -788,12 +788,12 @@ test("a compound sentence renders numbered coordinate clauses and an annotated d
 });
 ```
 
-- [ ] **Step 2: 跑 E2E 确认失败**
+- [x] **Step 2: 跑 E2E 确认失败**
 
 Run: `npx playwright test -g "compound sentence renders"`
 Expected: FAIL（TS 编译报 `kind: "compound"` 不在 ScriptedOutcome 联合类型内，或夹具页 404 → 学习块计数超时）。注意该命令内部先执行 `npm run build`（fixtures.ts 的 `buildPatchedExtension`），偶发 ETIMEDOUT 时重跑。
 
-- [ ] **Step 3: 实现——夹具页**。新建 `tests/fixtures/pages/compound-article.html`：
+- [x] **Step 3: 实现——夹具页**。新建 `tests/fixtures/pages/compound-article.html`：
 
 ```html
 <!doctype html>
@@ -814,7 +814,7 @@ Expected: FAIL（TS 编译报 `kind: "compound"` 不在 ScriptedOutcome 联合�
 
 （句长 32 字符 > `MINIMUM_AUTO_TEXT_LENGTH = 20`（document-scanner.ts:18），段落可被自动选中。分词为 8 个 token：The(0) sun(1) rose(2) and(3) the(4) birds(5) sang(6) .(7)。）
 
-- [ ] **Step 4: 实现——fake server**。`tests/support/fake-openai-server.ts` 四处修改：
+- [x] **Step 4: 实现——fake server**。`tests/support/fake-openai-server.ts` 四处修改：
 
 （a）`ScriptedOutcome` 联合类型的 `| { kind: "xss"; payload: string }` 之后插入：
 
@@ -943,17 +943,17 @@ const { startToken, endToken } = parseFocus(this.requests.at(-1)?.promptText ?? 
   }
 ```
 
-- [ ] **Step 5: 跑新用例确认通过**
+- [x] **Step 5: 跑新用例确认通过**
 
 Run: `npx playwright test -g "compound sentence renders"`
 Expected: 1 passed。
 
-- [ ] **Step 6: 跑全部 E2E 确认无回归**
+- [x] **Step 6: 跑全部 E2E 确认无回归**
 
 Run: `npx playwright test`
 Expected: 全部 passed（含既有的详解开合、STOP 零残留、XSS 用例）。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add tests/fixtures/pages/compound-article.html tests/support/fake-openai-server.ts tests/e2e/extension.spec.ts
