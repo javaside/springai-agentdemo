@@ -638,3 +638,91 @@ test("a progress pill appears during analysis and disappears after completion", 
   await expect(page.locator(".component").first()).toBeVisible({ timeout: 15_000 });
   await expect(pill).toBeHidden({ timeout: 15_000 });
 });
+
+test("a compound sentence renders numbered coordinate clauses and an annotated detail panel", async ({
+  harness,
+}) => {
+  await seedLocalProfile(harness, "compound-model");
+  harness.fakeModel.script("compound-model", [{ kind: "compound" }, { kind: "compound-detail" }]);
+  const page = await openArticle(harness, "compound-article.html");
+  const originalParagraph = await page.locator("#compound").evaluate((node) => node.outerHTML);
+  const tabId = await harness.tabIdFor(`${harness.pagesOrigin}/compound-article.html`);
+  const documentId = "e2e-doc-compound";
+  await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId }));
+  await expect(learningBlocks(page)).toHaveCount(1, { timeout: 20_000 });
+
+  // 正文：并列分句①/② + 并列连词，及各自配色。
+  await expect(page.locator(".component .role")).toHaveText(["并列分句①", "并列连词", "并列分句②"]);
+  const componentColors = await learningBlocks(page)
+    .first()
+    .evaluate((host) =>
+      [...host.shadowRoot!.querySelectorAll<HTMLElement>(".component")].map((component) =>
+        component.style.getPropertyValue("--syntax-role-color"),
+      ),
+    );
+  expect(componentColors).toEqual(["#0d9488", "#6b7280", "#0d9488"]);
+
+  // 点击第一个并列分句 → 详解面板出现两行式标注区与 ①②③ 对应解释。
+  const firstClause = page.locator(".component").first();
+  await firstClause.click();
+  await expect(page.locator(".detail")).toContainText("详细语法解析", { timeout: 15_000 });
+  const detail = await learningBlocks(page)
+    .first()
+    .evaluate((host) => {
+      const root = host.shadowRoot!;
+      return {
+        annotations: [...root.querySelectorAll<HTMLElement>(".annotation")].map((annotation) => ({
+          rows: [...annotation.children].map((child) => [child.className, child.textContent]),
+          color: annotation.style.getPropertyValue("--syntax-role-color"),
+        })),
+        structures: [...root.querySelectorAll(".detail-structure")].map((row) => row.textContent),
+        grammarPoints: root.querySelector(".grammar-points")?.textContent,
+        summary: root.querySelector(".detail-summary")?.textContent,
+      };
+    });
+  expect(detail.annotations).toEqual([
+    {
+      rows: [
+        ["annotation-role", "① 主语"],
+        ["annotation-english", "The sun"],
+      ],
+      color: "#2563eb",
+    },
+    {
+      rows: [
+        ["annotation-role", "② 谓语"],
+        ["annotation-english", "rose"],
+      ],
+      color: "#dc2626",
+    },
+    {
+      rows: [
+        ["annotation-role", "③ 并列连词"],
+        ["annotation-english", "and"],
+      ],
+      color: "#6b7280",
+    },
+  ]);
+  expect(detail.structures).toEqual([
+    "① 主语：The sun 是第一分句的主语。",
+    "② 谓语：rose 是第一分句的谓语动词。",
+    "③ 并列连词：and 连接前后两个并列分句。",
+  ]);
+  expect(detail.grammarPoints).toBe("并列句");
+  expect(detail.summary).toBe("这是针对所选并列分句的详细语法解析。");
+  expect(harness.fakeModel.recordedOfKind("detail")).toHaveLength(1);
+
+  // 再点收起。
+  await firstClause.click();
+  await expect(page.locator(".detail")).toHaveCount(0);
+
+  // STOP 还原零残留不回归。
+  const stopped = await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
+  expect(stopped).toMatchObject({ type: "SESSION_STATUS", status: { state: "stopped" } });
+  await expect(learningBlocks(page)).toHaveCount(0);
+  await expect(page.locator("style[data-syntax-learning-hide]")).toHaveCount(0);
+  expect(await page.locator("#compound").evaluate((node) => node.outerHTML)).toBe(
+    originalParagraph,
+  );
+  await expect(page.locator("#compound")).toBeVisible();
+});

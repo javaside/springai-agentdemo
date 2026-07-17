@@ -28,6 +28,8 @@ export type ScriptedOutcome =
   | { kind: "coverage-gap" }
   | { kind: "partial" }
   | { kind: "xss"; payload: string }
+  | { kind: "compound" }
+  | { kind: "compound-detail" }
   | { kind: "timeout" };
 
 export interface RecordedRequest {
@@ -209,6 +211,53 @@ function coverageGapComponents(): GeneratedComponent[] {
   return [{ startToken: 0, endToken: 0, role: "SUBJECT", translation: "占位" }];
 }
 
+/**
+ * A deterministic compound-sentence analysis: the tokens before the first
+ * coordinating conjunction form one COORDINATE_CLAUSE, the conjunction is its
+ * own CONJUNCTION component, and the remaining lexical tokens form the second
+ * COORDINATE_CLAUSE. A sentence without an inner conjunction falls back to
+ * the automatic simple analysis so the outcome stays validator-compliant.
+ */
+function compoundComponents(sentence: PromptSentence): GeneratedComponent[] {
+  const conjunction = sentence.tokens.find(
+    (token) => !token.punctuation && ["and", "but", "or", "so"].includes(token.text.toLowerCase()),
+  );
+  const lexical = sentence.tokens.filter((token) => !token.punctuation);
+  if (conjunction === undefined || conjunction === lexical[0] || conjunction === lexical.at(-1)) {
+    return autoComponents(sentence);
+  }
+  return [
+    {
+      startToken: lexical[0]!.id,
+      endToken: conjunction.id - 1,
+      role: "COORDINATE_CLAUSE",
+      translation: "第一分句的完整翻译",
+    },
+    {
+      startToken: conjunction.id,
+      endToken: conjunction.id,
+      role: "CONJUNCTION",
+      translation: "并且",
+    },
+    {
+      startToken: conjunction.id + 1,
+      endToken: lexical.at(-1)!.id,
+      role: "COORDINATE_CLAUSE",
+      translation: "第二分句的完整翻译",
+    },
+  ];
+}
+
+/** Shared by the detail responders: recover the requested focus from the prompt. */
+function parseFocus(promptText: string): { startToken: number; endToken: number } {
+  const match = /Focus(?: range)?:\s*\n+\s*\{\s*"startToken":\s*(\d+),\s*"endToken":\s*(\d+)/.exec(
+    promptText,
+  );
+  return match
+    ? { startToken: Number(match[1]), endToken: Number(match[2]) }
+    : { startToken: 0, endToken: 0 };
+}
+
 export class FakeOpenAiServer {
   private readonly server: Server;
   private readonly scriptQueues = new Map<string, ScriptedOutcome[]>();
@@ -348,6 +397,12 @@ export class FakeOpenAiServer {
           })),
         );
         return;
+      case "compound":
+        this.respondCore(response, sentences, (sentence) => compoundComponents(sentence));
+        return;
+      case "compound-detail":
+        this.respondCompoundDetail(response, sentences);
+        return;
       case "auto":
         this.respondAuto(response, kind, sentences);
         return;
@@ -395,13 +450,7 @@ export class FakeOpenAiServer {
 
   private respondDetail(response: ServerResponse, sentences: PromptSentence[]): void {
     const sentence = sentences[0];
-    const promptText = this.requests.at(-1)?.promptText ?? "";
-    const focusMatch =
-      /Focus(?: range)?:\s*\n+\s*\{\s*"startToken":\s*(\d+),\s*"endToken":\s*(\d+)/.exec(
-        promptText,
-      );
-    const startToken = focusMatch ? Number(focusMatch[1]) : 0;
-    const endToken = focusMatch ? Number(focusMatch[2]) : 0;
+    const { startToken, endToken } = parseFocus(this.requests.at(-1)?.promptText ?? "");
     response.writeHead(200, { "content-type": "application/json" });
     response.end(
       completion(
@@ -418,6 +467,44 @@ export class FakeOpenAiServer {
           ],
           grammarPoints: ["示例语法点"],
           explanation: "这是针对所选成分的详细语法解析。",
+        }),
+      ),
+    );
+  }
+
+  private respondCompoundDetail(response: ServerResponse, sentences: PromptSentence[]): void {
+    const sentence = sentences[0];
+    const { startToken, endToken } = parseFocus(this.requests.at(-1)?.promptText ?? "");
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(
+      completion(
+        jsonBody({
+          sentenceId: sentence?.sentenceId ?? "",
+          focus: { startToken, endToken },
+          // Token indices assume the compound-article.html fixture sentence
+          // "The sun rose and the birds sang." (tokens 0-7).
+          structures: [
+            {
+              startToken: 0,
+              endToken: 1,
+              role: "主语",
+              explanation: "The sun 是第一分句的主语。",
+            },
+            {
+              startToken: 2,
+              endToken: 2,
+              role: "谓语",
+              explanation: "rose 是第一分句的谓语动词。",
+            },
+            {
+              startToken: 3,
+              endToken: 3,
+              role: "并列连词",
+              explanation: "and 连接前后两个并列分句。",
+            },
+          ],
+          grammarPoints: ["并列句"],
+          explanation: "这是针对所选并列分句的详细语法解析。",
         }),
       ),
     );
