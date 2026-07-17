@@ -1,0 +1,87 @@
+# springai-agentdemo v1.4.0
+
+在 [v1.3.1](release-notes-v1.3.1.md) 基础上的**功能版**（minor）。核心交付物仍是终端编码智能体 **`springai-code-tui`**。本版三大新增：**通义千问 provider**（含流式工具调用分片修复）、**`*_MODELS` 可配置模型清单**、**`/mcp` 运行期 MCP 管理**（启用/禁用即时生效 + 配置回写）。无破坏性变更，建议所有用户升级。
+
+**下载物仍是两个自包含运行包（解压即用，无需构建）：**
+
+- `springai-code-tui-1.4.0-dist.tar.gz`（macOS / Linux 首选）
+- `springai-code-tui-1.4.0-dist.zip`（Windows 首选）
+
+两者内容一致：启动脚本（`bin/`）+ 主 jar + 全部运行期依赖（`lib/`）+ `LICENSE`/`NOTICE`/`README`。运行时界面版本标识为 **`v1.4.0`**。
+
+> 完整功能全景与⚠️安全声明见 [v1.3.0 发布说明](release-notes-v1.3.0.md) 与 [v1.0.0 发布说明](release-notes-v1.0.0.md)；本文只列出相对 v1.3.1 的变化。
+
+---
+
+## ✨ 新功能
+
+### 通义千问 provider（百炼 OpenAI 兼容通路）
+
+第 5 家对话模型接入：设 `DASHSCOPE_API_KEY` 即激活 `QwenProvider`（默认 `qwen3.7-max`，另有 `3.7-plus`/`3.6-flash`/`qwen3-coder-next`），复用 `spring-ai-openai` 走百炼 OpenAI 兼容端点（`DASHSCOPE_BASE_URL` 可自定义，默认 `.../compatible-mode/v1`）。`/model` 运行时切换、子 agent `provider:model` 跨 provider 路由、统一 read 超时等既有机制全部适用。
+
+- **修复流式工具调用即崩**：百炼兼容模式的流式 `tool_calls` 增量分片带 `"id":""`（空串而非缺省），会炸上游 ChunkMerger。以 SSE 归一化装饰器在传输层抹平（空串 id 视同延续分片），工具调用全链路可用。
+- **真机验证**：新增流式工具调用真机冒烟测试（`DASHSCOPE_API_KEY` 门控，默认跳过），防兼容通路回归。
+
+### `*_MODELS` 可配置模型清单
+
+五家 provider 的模型清单不再写死：`DEEPSEEK_MODELS` / `ZHIPU_MODELS` / `DASHSCOPE_MODELS` / `ANTHROPIC_MODELS` / `OPENAI_MODELS` 环境变量（逗号分隔，**首项为默认模型**）即可增删排序 `/model` 可选项——新模型发布当天即可用，无需等版本更新。未设置时沿用内置清单，行为不变。
+
+```bash
+export DEEPSEEK_MODELS=deepseek-v4-pro,deepseek-v4-flash
+```
+
+### `/mcp` 运行期 MCP 管理
+
+MCP server 从「启动定生死」升级为**运行期可管理**：
+
+- **管理面板**：空闲时输入 `/mcp`，列出两层配置（用户级 `~/.codetui/mcp.json` + 项目级）的**全部** server——含 `enabled:false` 与连接失败项，标注来源层 `[项目级]`/`[用户级]`、状态（已连接/已禁用/连接失败＋原因）、工具数；`Tab` 展开工具清单，`↑↓`/`1-9` 选择，`Esc` 关闭。
+- **Enter 启用/禁用，即时生效**：禁用立刻摘除其工具并后台关连接；启用后台连接（不卡界面），成功即注入——**下一回合模型即见/不见其工具**（主 agent 每回合动态快照 + 子 agent 委派时同步生效，allow/deny 过滤照常适用）。连接失败的 server 可在面板直接重试启用。
+- **持久化回写**：切换**原子回写**该条目所属层 `mcp.json` 的 `enabled` 字段，重启后保留；回写失败降级为「仅本次运行生效」并提示，绝不丢配置文件。
+
+设计与实施记录见 [`docs/superpowers/specs/2026-07-16-mcp-runtime-management-design.md`](docs/superpowers/specs/2026-07-16-mcp-runtime-management-design.md)。已知边界：管理粒度为整 server；新增/删除条目或改 `command`/`args` 仍需重启（面板条目集在启动期定型）。
+
+---
+
+## 🔧 工程
+
+- 全模块版本号 1.3.1 → **1.4.0**。
+- 全量测试：`springai-code-tui` **460 用例通过**（新增千问 SSE 归一化 / `*_MODELS` 解析与装配 / McpRegistry 启停与回写 / 子 agent 动态注入 / `/mcp` 面板交互等回归）；pty 实机冒烟 `mcp_manage_smoke.py` 通过（真实 stdio server 启停 + `mcp.json` 回写 + 无孤儿进程）；`-Pdist` 产出 1.4.0 运行包。
+- 三组 spec + 实施计划入库（`docs/superpowers/`）：千问 provider、可配置模型清单、MCP 运行期管理。
+
+---
+
+## 📦 仓库模块
+
+| 模块 | 说明 |
+| --- | --- |
+| **springai-code-tui** ⭐ | 终端编码智能体（**本次发布的可下载运行物**）。 |
+| springai-core-demo | Spring AI 原始 API 教学。 |
+| springai-agent-demo | 智能体教学：工具调用、多步 agent、会话记忆等。 |
+| springai-boot-demo | Spring Boot 自动装配版对照。 |
+| springai-jline-demo | JLine 终端交互基础示例。 |
+
+> demo 模块请 clone 源码后 `mvn` 运行，见各模块 README；下载包只含 `springai-code-tui`。
+
+---
+
+## 🔐 校验（SHA-256）
+
+```
+f75415bdeed1ff134402052e29104dfe8101e4d26e533a5403c284cfde6fce17  springai-code-tui-1.4.0-dist.tar.gz
+8e3a9dcf1a5639bbccaa3a603e58553b8b3ba4c73621784efd337b32e852c676  springai-code-tui-1.4.0-dist.zip
+```
+
+```bash
+shasum -a 256 -c <<'EOF'
+f75415bdeed1ff134402052e29104dfe8101e4d26e533a5403c284cfde6fce17  springai-code-tui-1.4.0-dist.tar.gz
+8e3a9dcf1a5639bbccaa3a603e58553b8b3ba4c73621784efd337b32e852c676  springai-code-tui-1.4.0-dist.zip
+EOF
+```
+
+---
+
+## 📄 许可
+
+[Apache License 2.0](LICENSE)。发布包内随附 `LICENSE` 与 `NOTICE`（含所分发第三方库：Spring AI / Spring Boot / spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）。
+
+**环境**：JDK 17+，macOS / Linux / Windows。
