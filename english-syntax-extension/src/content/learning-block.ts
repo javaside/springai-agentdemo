@@ -443,9 +443,19 @@ export class SyntaxLearningBlock {
     detail.textContent = "正在加载详细解析…";
 
     if (component !== null) {
-      // Insert detail panel immediately after the clicked component,
-      // so it appears below the component regardless of sentence wrapping.
-      component.after(detail);
+      // 面板独占一行，插在点击成分正后方会把同一行后续成分挤到面板下面；
+      // 因此插到点击成分所在“视觉行”的行尾：跳过与点击成分矩形垂直重叠
+      // （同一行）的后续兄弟节点。行判定依赖真实布局，零尺寸环境（单测）
+      // 自然退化为紧跟点击成分。
+      const clickedBottom = component.getBoundingClientRect().bottom;
+      let anchor: Element = component;
+      for (let next = anchor.nextElementSibling; next !== null; next = next.nextElementSibling) {
+        if (next.getBoundingClientRect().top >= clickedBottom) {
+          break;
+        }
+        anchor = next;
+      }
+      anchor.after(detail);
     } else {
       // Fallback: append to sentence container (for failed sentences or edge cases).
       sentence.append(detail);
