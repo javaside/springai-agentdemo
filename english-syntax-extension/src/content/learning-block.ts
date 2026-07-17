@@ -1,6 +1,8 @@
 import { GRAMMAR_LABELS, GrammarRole } from "../shared/grammar";
 import type { CoreAnalysis, DetailAnalysis, Token, TokenRange } from "../shared/grammar";
 
+// Gray #6b7280 is the shared "neutral/functional" bucket (APPOSITIVE,
+// INDEPENDENT_ELEMENT, CONJUNCTION).
 const ROLE_COLORS: Readonly<Record<GrammarRole, string>> = {
   [GrammarRole.SUBJECT]: "#2563eb",
   [GrammarRole.PREDICATE]: "#dc2626",

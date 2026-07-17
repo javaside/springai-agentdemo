@@ -71,7 +71,31 @@ describe("core analysis validation", () => {
       [request],
       "profile-1",
     );
-    expect(result.ok).toBe(true);
+    expect(result).toEqual({
+      ok: true,
+      value: [
+        {
+          schemaVersion: 1,
+          sentenceId: "sentence-1",
+          components: [
+            {
+              startToken: 0,
+              endToken: 0,
+              role: GrammarRole.COORDINATE_CLAUSE,
+              translation: "第一分句",
+            },
+            { startToken: 1, endToken: 1, role: GrammarRole.CONJUNCTION, translation: "并且" },
+            {
+              startToken: 2,
+              endToken: 3,
+              role: GrammarRole.COORDINATE_CLAUSE,
+              translation: "第二分句",
+            },
+          ],
+          modelProfileId: "profile-1",
+        },
+      ],
+    });
   });
 
   it("reports the exact path and message for an uncovered lexical token", () => {
