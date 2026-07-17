@@ -389,6 +389,10 @@ describe("syntax prompts", () => {
     expect(prompt).toContain("COORDINATE_CLAUSE");
     expect(prompt).toContain("CONJUNCTION");
     expect(prompt).toMatch(/coordinating conjunction/i);
+    // The conjunction list is the closed FANBOYS set, with no open-ended
+    // ellipsis a model could stretch to subordinators like "because".
+    expect(prompt).toContain("(for, and, nor, but, or, yet, so)");
+    expect(prompt).not.toContain("...");
     expect(prompt).toMatch(/complete Chinese translation/i);
     expect(prompt).toMatch(/subordinate clause.*one whole component/is);
     expect(prompt).toMatch(/never wrap.*single subject-predicate/is);
