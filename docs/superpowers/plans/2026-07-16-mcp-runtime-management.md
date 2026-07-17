@@ -39,7 +39,7 @@
 - Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpConfigLoader.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/McpConfigLoaderTest.java`（追加）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `McpConfigLoaderTest` 追加（沿用该类现有 `@TempDir`/写临时 json 风格）：
 
@@ -84,12 +84,12 @@ void loadAllDegradesOnMissingFiles(@TempDir Path dir) {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpConfigLoaderTest`
 Expected: 编译失败（`LoadedServer`/`ConfigSource`/`loadAll` 不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 在 `McpConfigLoader` 内追加（`load()` 一字不改；把现有 `parseFile` 的 enabled 过滤上提，内部复用无过滤版本）：
 
@@ -136,12 +136,12 @@ private static List<McpServerConfig> parseFile(Path file) {
 
 同时更新类 javadoc：降级契约中「被 enabled:false 关闭 → 跳过」仅适用 `load()`；`loadAll` 保留禁用项。
 
-- [ ] **Step 4: 跑测试确认通过（含既有用例零回归）**
+- [x] **Step 4: 跑测试确认通过（含既有用例零回归）**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpConfigLoaderTest`
 Expected: 全绿
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpConfigLoader.java \
@@ -157,7 +157,7 @@ git commit -m "feat(mcp): McpConfigLoader.loadAll 保留 disabled 条目并标�
 - Create: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpConfigWriter.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/McpConfigWriterTest.java`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package io.github.javaside.springai.codetui.agent;
@@ -231,12 +231,12 @@ class McpConfigWriterTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpConfigWriterTest`
 Expected: 编译失败（类不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```java
 package io.github.javaside.springai.codetui.agent;
@@ -299,12 +299,12 @@ final class McpConfigWriter {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpConfigWriterTest`
 Expected: 全绿
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpConfigWriter.java \
@@ -320,7 +320,7 @@ git commit -m "feat(mcp): McpConfigWriter 原子回写单条目 enabled 字段"
 - Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpClientManager.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/McpClientManagerTest.java`（追加）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `McpClientManagerTest` 追加：
 
@@ -341,12 +341,12 @@ void closeAllOnEmptyIsNoop() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpClientManagerTest`
 Expected: 编译失败（`ConnectOutcome`/`connectDetailed`/`closeAll` 不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 对 `McpClientManager` 做三处提炼（连接/发现/关闭逻辑均不重写，只挪）：
 
@@ -416,12 +416,12 @@ public List<ToolCallback> toolCallbacks() {
 
 (c) `close()` 主体提为静态 `closeAll(Collection<McpSyncClient>)`（2s 预算注释随行迁移），实例 `close()` 变 `closeAll(clients)` 一行。
 
-- [ ] **Step 4: 跑测试确认通过（含既有用例零回归）**
+- [x] **Step 4: 跑测试确认通过（含既有用例零回归）**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpClientManagerTest`
 Expected: 全绿
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpClientManager.java \
@@ -437,7 +437,7 @@ git commit -m "refactor(mcp): 提炼 connectDetailed/discoverTools/closeAll 供 
 - Create: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpRegistry.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/McpRegistryTest.java`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package io.github.javaside.springai.codetui.agent;
@@ -562,12 +562,12 @@ class McpRegistryTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpRegistryTest`
 Expected: 编译失败（类不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```java
 package io.github.javaside.springai.codetui.agent;
@@ -841,12 +841,12 @@ public final class McpRegistry {
 
 `AgentListener` 的实际包名以 `AgentTools.java` 顶部 import 为准（`ConversationState` implements 它）；如与上文不符按源码改。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpRegistryTest`
 Expected: 全绿
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/McpRegistry.java \
@@ -866,7 +866,7 @@ git commit -m "feat(mcp): McpRegistry 运行期中枢——enable/disable 即时
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/SubagentRunnerMcpToolsTest.java`（新建）
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/AgentToolsMcpWiringTest.java`（改）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `SubagentRunnerMcpToolsTest`：
 
@@ -960,12 +960,12 @@ void buildAcceptsMcpRegistryWithoutThrowing(@TempDir Path root) {
 
 （`threeArgOverloadStillBuildsForBackwardCompat` 保留不动。）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest='SubagentRunnerMcpToolsTest,AgentToolsMcpWiringTest'`
 Expected: 编译失败（新构造器/`effectiveTools`/build 新签名不存在）
 
-- [ ] **Step 3: 实现——SubagentRunner**
+- [x] **Step 3: 实现——SubagentRunner**
 
 加字段 + 新构造器（现有构造器全部委托 `mcpRegistry=null`，零破坏）：
 
@@ -994,7 +994,7 @@ List<ToolCallback> effectiveTools(SubagentSpec spec) {
 
 `run()` 里 `.defaultTools(filterTools(tools, spec).toArray())` 改为 `.defaultTools(effectiveTools(spec).toArray())`。
 
-- [ ] **Step 4: 实现——AgentTools**
+- [x] **Step 4: 实现——AgentTools**
 
 `build` 第 4 参 `List<ToolCallback> mcpTools` 改为 `McpRegistry mcpRegistry`（可空）：
 
@@ -1003,7 +1003,7 @@ List<ToolCallback> effectiveTools(SubagentSpec spec) {
 - 3 参向后兼容重载改为委托 `build(registry, root, listener, (McpRegistry) null)`。
 - 相应更新方法 javadoc：MCP 工具不再烧入 defaultTools，改由 CodingAgent/SubagentRunner 每回合从 registry 取快照。
 
-- [ ] **Step 5: 实现——CodingAgent**
+- [x] **Step 5: 实现——CodingAgent**
 
 - 加字段 `private final McpRegistry mcpRegistry;`
 - 全参生产构造器追加尾参 `McpRegistry mcpRegistry`；现有全参构造器改为委托传 null；单-client 桩构造器链全部 `this.mcpRegistry = null;`（在链尾真构造器赋值）。
@@ -1015,7 +1015,7 @@ List<ToolCallback> effectiveTools(SubagentSpec spec) {
 
 （Spring AI 2.0 `ChatClientRequestSpec.tools(Object...)` 与 defaultTools 合并，已核实 DefaultChatClient 源码第 1028 行起；`mcp__` 前缀保证不与内置工具重名。空数组为 no-op。）
 
-- [ ] **Step 6: 实现——CodeTuiApplication**
+- [x] **Step 6: 实现——CodeTuiApplication**
 
 替换启动期 MCP 三行流水线（62-67 行附近）：
 
@@ -1034,12 +1034,12 @@ if (mcpToolCount > 0) {
 - `finally { mcpManager.close(); }` → `finally { mcpRegistry.close(); }`
 - 删掉 `McpClientManager`/旧局部变量的 import 与引用。
 
-- [ ] **Step 7: 跑测试确认通过 + 全模块回归**
+- [x] **Step 7: 跑测试确认通过 + 全模块回归**
 
 Run: `mvn test -pl springai-code-tui`
 Expected: 全绿（含既有 MCP wiring / CodingAgent / SubagentRunner 用例）
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add springai-code-tui/src/main/java springai-code-tui/src/test/java
@@ -1055,7 +1055,7 @@ git commit -m "feat(mcp): MCP 工具改每回合从 McpRegistry 动态注入（�
 - Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/CodingAgent.java`
 - Test: 由 Task 7 的视图测试覆盖（门面是纯委托，无独立逻辑）
 
-- [ ] **Step 1: SubmitHandler 追加默认方法**
+- [x] **Step 1: SubmitHandler 追加默认方法**
 
 ```java
 // ── MCP 管理（/mcp 面板用；默认空实现，便于回显桩/测试桩省略） ──
@@ -1069,7 +1069,7 @@ default McpRegistry.ToggleResult enableMcp(String name) { return null; }
 default McpRegistry.ToggleResult disableMcp(String name) { return null; }
 ```
 
-- [ ] **Step 2: CodingAgent 实现（纯委托）**
+- [x] **Step 2: CodingAgent 实现（纯委托）**
 
 ```java
 @Override
@@ -1088,7 +1088,7 @@ public McpRegistry.ToggleResult disableMcp(String name) {
 }
 ```
 
-- [ ] **Step 3: 编译验证 + Commit**
+- [x] **Step 3: 编译验证 + Commit**
 
 Run: `mvn test -pl springai-code-tui -Dtest=McpRegistryTest`（顺带编译全模块）
 Expected: 编译通过、全绿
@@ -1107,7 +1107,7 @@ git commit -m "feat(mcp): SubmitHandler MCP 管理门面 + CodingAgent 委托实
 - Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/CodeTuiViewMcpTest.java`（新建）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package io.github.javaside.springai.codetui.ui;
@@ -1227,12 +1227,12 @@ class CodeTuiViewMcpTest {
 
 注：Esc 的 KeyEvent 构造以现有测试（如 CodeTuiViewAskTest）里的取消键写法为准，若是 `KeyEvent.ofKey(KeyCode.ESC)` 之外的形式照抄现有。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=CodeTuiViewMcpTest`
 Expected: 编译失败（`pickingMcpForTest` 等不存在）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 (a) 字段 + 命令注册：
 
@@ -1373,12 +1373,12 @@ boolean pickingMcpForTest() { return pickingMcp; }
 
 （`clampIndex` 已存在——斜杠菜单在用；`pickIndex` 复用现有字段，与 /model、/skill 一致，三个面板互斥激活。）
 
-- [ ] **Step 4: 跑测试确认通过 + 全模块回归**
+- [x] **Step 4: 跑测试确认通过 + 全模块回归**
 
 Run: `mvn test -pl springai-code-tui`
 Expected: 全绿
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java \
@@ -1393,14 +1393,14 @@ git commit -m "feat(mcp): /mcp 管理面板——状态/来源层/工具数展�
 **Files:**
 - Create: `springai-code-tui/src/test/resources/scripts/mcp_manage_smoke.py`
 
-- [ ] **Step 1: 重新构建（项目惯例：改渲染必须重新 package/compile 再实机验证）**
+- [x] **Step 1: 重新构建（项目惯例：改渲染必须重新 package/compile 再实机验证）**
 
 ```bash
 mvn -q -pl springai-code-tui compile test-compile
 mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target/cp.txt
 ```
 
-- [ ] **Step 2: 写冒烟脚本**
+- [x] **Step 2: 写冒烟脚本**
 
 复用 `clear_smoke.py` 的 `PtySession`/classpath 脚手架与 `mcp_smoke.py` 的真实 server 配置方式（`npx @modelcontextprotocol/server-filesystem`，dummy API key）。脚本流程与断言：
 
@@ -1430,7 +1430,7 @@ rendering nor the real write-back path end-to-end.
 - `send("\r")` 重启用（真实重连 npx，等待放宽到 30s）→ 等 `✓` 回来；断言 mcp.json `enabled` 翻回 `True`
 - `send("\x1b")` 关面板 → `send("/exit\r")` → 断言 10s 内退出、`server-filesystem` 无孤儿进程（复用 `mcp_smoke.py` 的 `count_orphans`）
 
-- [ ] **Step 3: 跑既有 + 新增冒烟**
+- [x] **Step 3: 跑既有 + 新增冒烟**
 
 ```bash
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/mcp_smoke.py
@@ -1438,12 +1438,12 @@ rendering nor the real write-back path end-to-end.
 ```
 Expected: 两个都 `SMOKE PASS`（需要 npx 与网络/npm 缓存；失败时脚本打印屏幕快照供人眼排查）
 
-- [ ] **Step 4: 全模块最终回归**
+- [x] **Step 4: 全模块最终回归**
 
 Run: `mvn test -pl springai-code-tui`
 Expected: 全绿
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add springai-code-tui/src/test/resources/scripts/mcp_manage_smoke.py
