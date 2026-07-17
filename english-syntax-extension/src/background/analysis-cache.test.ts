@@ -1,5 +1,6 @@
 import "fake-indexeddb/auto";
 import { describe, expect, it, vi } from "vitest";
+import { CORE_PROMPT_VERSION } from "../shared/versions";
 import { AnalysisCache, createCoreCacheKey, createCorrectionCacheKey } from "./analysis-cache";
 
 const coreIdentity = {
@@ -23,6 +24,16 @@ describe("analysis cache keys", () => {
     const changed = await createCoreCacheKey({ ...coreIdentity, ...override });
 
     expect(changed).not.toBe(baseline);
+  });
+
+  it("invalidates every version-1 core cache entry after the prompt version bump", async () => {
+    expect(CORE_PROMPT_VERSION).toBe(2);
+    const previousVersionKey = await createCoreCacheKey({ ...coreIdentity, promptVersion: 1 });
+    const currentVersionKey = await createCoreCacheKey({
+      ...coreIdentity,
+      promptVersion: CORE_PROMPT_VERSION,
+    });
+    expect(currentVersionKey).not.toBe(previousVersionKey);
   });
 
   it("separates correction context without including API keys", async () => {

@@ -377,11 +377,21 @@ describe("syntax prompts", () => {
     const prompt = buildCorePrompt([sentence]);
     expect(prompt).toContain("SUBJECT");
     expect(prompt).toContain("INDEPENDENT_ELEMENT");
-    expect(prompt).toContain("14");
+    expect(prompt).toContain("16");
     expect(prompt).toMatch(/closed.*Token/i);
     expect(prompt).toMatch(/exactly once/i);
     expect(prompt).toMatch(/Chinese/i);
     expect(prompt).toMatch(/JSON only/i);
+  });
+
+  it("states the compound-sentence rules for coordinate clauses and conjunctions", () => {
+    const prompt = buildCorePrompt([sentence]);
+    expect(prompt).toContain("COORDINATE_CLAUSE");
+    expect(prompt).toContain("CONJUNCTION");
+    expect(prompt).toMatch(/coordinating conjunction/i);
+    expect(prompt).toMatch(/complete Chinese translation/i);
+    expect(prompt).toMatch(/subordinate clause.*one whole component/is);
+    expect(prompt).toMatch(/never wrap.*single subject-predicate/is);
   });
 
   it("spells out the exact output envelope so schema-free models cannot guess", () => {

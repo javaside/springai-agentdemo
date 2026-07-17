@@ -29,12 +29,15 @@ const DETAIL_OUTPUT_SHAPE = [
 ].join("\n");
 
 export function buildCorePrompt(sentences: readonly SentenceInput[]): string {
-  const roles = Object.values(GrammarRole).join(", ");
+  const roles = Object.values(GrammarRole);
   return [
     "Analyze the numbered English sentences below into core grammatical components.",
-    `The role field is a closed 14-role enum: ${roles}.`,
+    `The role field is a closed ${roles.length}-role enum: ${roles.join(", ")}.`,
     "Every component uses a closed Token interval [startToken, endToken]; both endpoints are inclusive Token IDs from the supplied sentence.",
     "Coverage rule: every non-punctuation Token must be covered exactly once. Components must be ordered, non-overlapping, and may include punctuation but may not contain punctuation only.",
+    "Compound-sentence rule: when two or more clauses that could each stand alone as a sentence are joined by a coordinating conjunction (and, but, or, so, ...) or a semicolon, tag each clause as one whole COORDINATE_CLAUSE whose translation is the complete Chinese translation of that clause, and tag the coordinating conjunction as its own separate CONJUNCTION component (in a comma-plus-conjunction pair, tag only the conjunction itself as CONJUNCTION).",
+    "Complex-sentence rule: keep tagging a subordinate clause as one whole component with one of the five clause roles (SUBJECT_CLAUSE, OBJECT_CLAUSE, PREDICATIVE_CLAUSE, ATTRIBUTIVE_CLAUSE, ADVERBIAL_CLAUSE); never split its internal structure.",
+    "Simple-sentence rule: never wrap a sentence with a single subject-predicate structure in COORDINATE_CLAUSE.",
     "Give every component a concise, non-empty Chinese translation.",
     "Keep every sentenceId and every supplied Token unchanged. Return JSON only, with no Markdown or explanatory prose.",
     CORE_OUTPUT_SHAPE,
