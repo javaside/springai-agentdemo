@@ -108,6 +108,7 @@ const STYLES = `
 }
 
 .detail {
+  display: block;
   inline-size: 100%;
   max-inline-size: 100%;
   margin-block: 0.75em;
@@ -425,13 +426,29 @@ export class SyntaxLearningBlock {
     // Only one explanation panel stays open at a time; opening a new one
     // switches away from whatever was open before.
     this.closeDetails();
+
+    // Find the clicked component element by matching token range.
+    // For sentences that failed core analysis, no components exist in the DOM,
+    // so we fall back to appending the detail panel to the sentence container.
+    const component = sentence.querySelector(
+      `.component[data-start-token="${focus.startToken}"][data-end-token="${focus.endToken}"]`,
+    );
+
     const detail = createElement("div", "detail detail-loading");
     detail.dataset.startToken = String(focus.startToken);
     detail.dataset.endToken = String(focus.endToken);
     detail.setAttribute("aria-live", "polite");
     detail.setAttribute("aria-busy", "true");
     detail.textContent = "正在加载详细解析…";
-    sentence.append(detail);
+
+    if (component !== null) {
+      // Insert detail panel immediately after the clicked component,
+      // so it appears below the component regardless of sentence wrapping.
+      component.after(detail);
+    } else {
+      // Fallback: append to sentence container (for failed sentences or edge cases).
+      sentence.append(detail);
+    }
   }
 
   closeDetails(): void {
