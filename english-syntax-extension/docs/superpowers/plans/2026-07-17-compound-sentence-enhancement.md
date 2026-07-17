@@ -966,33 +966,33 @@ git commit -m "test(extension): 复合句正文标注与详解标注区 E2E" -m 
 
 **Files:** 无新改动（若 prettier/lint 修复改动了已有文件则一并提交）。
 
-- [ ] **Step 1: 单测全量**
+- [x] **Step 1: 单测全量**
 
 Run: `npm test`
 Expected: 全部 PASS（较基线新增约 10 个用例）。
 
-- [ ] **Step 2: lint**
+- [x] **Step 2: lint**
 
 Run: `npm run lint`
 Expected: 仅 1 个既有 error（`src/options/options.test.ts:167`，被接受的基线），本计划触碰的文件零新增 error/warning。若有新增，就地修复后重跑。
 
-- [ ] **Step 3: 格式化**
+- [x] **Step 3: 格式化**
 
 Run: `npx prettier --write src/shared/grammar.ts src/shared/grammar.test.ts src/shared/versions.ts src/background/prompts.ts src/background/analysis-cache.test.ts src/background/openai-compatible-adapter.test.ts src/content/learning-block.ts src/content/learning-block.test.ts src/language/analysis-validator.test.ts tests/support/fake-openai-server.ts tests/e2e/extension.spec.ts tests/fixtures/pages/compound-article.html`
 然后 Run: `npm run format:check`
 Expected: `All matched files use Prettier code style!`
 
-- [ ] **Step 4: 构建 + 重建 dist**
+- [x] **Step 4: 构建 + 重建 dist**
 
 Run: `npm run build`
 Expected: `tsc --noEmit` 零错误、两次 vite build 成功、`dist/` 已更新（dist 未纳入 git，无需提交）。偶发 ETIMEDOUT 时原样重跑一次。
 
-- [ ] **Step 5: E2E 全量**
+- [x] **Step 5: E2E 全量**
 
 Run: `npx playwright test`
 Expected: 全部 passed。
 
-- [ ] **Step 6: 收尾提交（仅当 Step 2/3 产生了修改）**
+- [x] **Step 6: 收尾提交（仅当 Step 2/3 产生了修改）**
 
 ```bash
 git status --short
@@ -1001,4 +1001,4 @@ git add -A
 git commit -m "chore(extension): lint 与 prettier 收尾" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 7（人工验收，非阻塞）:** 按 spec §4——真实 DeepSeek key + headed 浏览器，找含并列句与主从复合句的英文页面，浅色+深色页面各截图核对正文分句标注（并列分句①②青绿 `#0d9488`、并列连词灰 `#6b7280`）与详解面板标注区观感。此步由用户执行确认。
+- [x] **Step 7（人工验收，非阻塞）:** 按 spec §4——真实 DeepSeek key + headed 浏览器，找含并列句与主从复合句的英文页面，浅色+深色页面各截图核对正文分句标注（并列分句①②青绿 `#0d9488`、并列连词灰 `#6b7280`）与详解面板标注区观感。此步由用户执行确认。

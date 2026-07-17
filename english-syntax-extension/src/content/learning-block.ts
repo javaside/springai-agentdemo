@@ -420,8 +420,8 @@ export class SyntaxLearningBlock {
       const annotations = createElement("div", "detail-annotations");
       for (const [index, structure] of detailAnalysis.structures.entries()) {
         const english = annotationEnglish(tokens, structure);
-        // 区间越界/反转：跳过标注块，下方解释列表仍按同一序号列出该条。
-        if (english === undefined) {
+        // 区间越界/反转或纯标点（还原为空文本）：跳过标注块，下方解释列表仍按同一序号列出该条。
+        if (english === undefined || english === "") {
           continue;
         }
         const annotation = createElement("span", "annotation");

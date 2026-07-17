@@ -567,6 +567,7 @@ describe("SyntaxLearningBlock", () => {
         { startToken: 0, endToken: 0, role: "主语", explanation: "第一条" },
         { startToken: 9, endToken: 12, role: "状语", explanation: "第二条区间越界" },
         { startToken: 2, endToken: 1, role: "谓语", explanation: "第三条区间反转" },
+        { startToken: 3, endToken: 3, role: "标点", explanation: "第四条纯标点" },
       ],
       grammarPoints: [],
       explanation: "整体讲解",
@@ -582,6 +583,7 @@ describe("SyntaxLearningBlock", () => {
       "① 主语：第一条",
       "② 状语：第二条区间越界",
       "③ 谓语：第三条区间反转",
+      "④ 标点：第四条纯标点",
     ]);
   });
 
