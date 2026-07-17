@@ -25,7 +25,8 @@ export const CORE_OUTPUT_SHAPE = [
 const DETAIL_OUTPUT_SHAPE = [
   "Output exactly one JSON object of this shape:",
   '{"sentenceId": string, "focus": {"startToken": number, "endToken": number}, "structures": [{"startToken": number, "endToken": number, "role": string, "explanation": string}], "grammarPoints": [string], "explanation": string}',
-  "Echo the supplied sentenceId and focus unchanged. Write explanations and grammar points in Chinese.",
+  "Echo the supplied sentenceId and focus unchanged. Write explanations, grammar points, and every structure's role field in Chinese. Use concise Chinese grammatical terms for roles (主语/谓语/宾语/定语/状语/系动词/引导词/连词 etc.), never English enum values.",
+  "The structures array must break down the internal components of the focus range. Never return a single structure that covers the entire focus — split it into meaningful sub-components (subject, predicate, object, clauses, etc.).",
 ].join("\n");
 
 export function buildCorePrompt(sentences: readonly SentenceInput[]): string {

@@ -683,4 +683,31 @@ describe("SyntaxLearningBlock", () => {
       "① 主语：第一条",
     ]);
   });
+
+  it("maps known English enum role names to their Chinese labels for color lookup", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [
+        { startToken: 0, endToken: 0, role: "SUBJECT", explanation: "英文枚举兜底" },
+        { startToken: 1, endToken: 1, role: "PREDICATE", explanation: "另一个英文枚举" },
+        { startToken: 2, endToken: 2, role: "COORDINATE_CLAUSE", explanation: "并列分句枚举" },
+      ],
+      grammarPoints: [],
+      explanation: "兜底测试",
+      modelProfileId: "profile-1",
+    });
+
+    const root = element.host.shadowRoot!;
+    const annotations = [...root.querySelectorAll<HTMLElement>(".annotation")];
+    // SUBJECT → 主语 → #2563eb, PREDICATE → 谓语 → #dc2626, COORDINATE_CLAUSE → 并列分句 → #0d9488
+    expect(
+      annotations.map((annotation) => annotation.style.getPropertyValue("--syntax-role-color")),
+    ).toEqual(["#2563eb", "#dc2626", "#0d9488"]);
+  });
 });

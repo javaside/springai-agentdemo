@@ -444,4 +444,19 @@ describe("syntax prompts", () => {
     expect(prompt).toContain('"modelProfileId": "profile-1"');
     expect(prompt).toContain('"startToken": 0');
   });
+
+  it("requires Chinese role names and internal breakdown in detail structures", () => {
+    const core = {
+      schemaVersion: 1 as const,
+      sentenceId: "s-1",
+      components: [],
+      modelProfileId: "profile-1",
+    };
+    const prompt = buildDetailPrompt(sentence, core, { startToken: 0, endToken: 1 });
+    expect(prompt).toMatch(/role.*Chinese/i);
+    expect(prompt).toMatch(/主语|谓语|宾语/);
+    expect(prompt).toMatch(/never.*English enum/i);
+    expect(prompt).toMatch(/never return a single structure that covers the entire focus/i);
+    expect(prompt).toMatch(/split.*sub-components/i);
+  });
 });

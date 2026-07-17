@@ -191,9 +191,25 @@ const ROLE_COLOR_BY_LABEL: ReadonlyMap<string, string> = new Map(
   Object.values(GrammarRole).map((role) => [GRAMMAR_LABELS[role], ROLE_COLORS[role]]),
 );
 
-/** 详解 structure 的 role 是模型自由文本；按中文名精确匹配成分色，匹配不到统一灰色。 */
+/**
+ * 详解 structure 的 role 是模型自由文本（新版提示词要求中文，但提供英文枚举兜底）；
+ * 优先精确匹配中文标签拿颜色，若为已知英文枚举值则映射后再查，否则统一灰色。
+ */
 function structureColor(role: string): string {
-  return ROLE_COLOR_BY_LABEL.get(role) ?? FALLBACK_ANNOTATION_COLOR;
+  // 优先中文标签精确匹配
+  const directColor = ROLE_COLOR_BY_LABEL.get(role);
+  if (directColor !== undefined) {
+    return directColor;
+  }
+  // 枚举值兜底：英文枚举 → 中文标签 → 颜色
+  if (role in GrammarRole) {
+    const chineseLabel = GRAMMAR_LABELS[role as GrammarRole];
+    const mappedColor = ROLE_COLOR_BY_LABEL.get(chineseLabel);
+    if (mappedColor !== undefined) {
+      return mappedColor;
+    }
+  }
+  return FALLBACK_ANNOTATION_COLOR;
 }
 
 /** 标注块与解释列表共用的「①+角色名」标签。 */
