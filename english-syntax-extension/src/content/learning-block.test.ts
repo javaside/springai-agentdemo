@@ -24,6 +24,33 @@ const analysis: CoreAnalysis = {
   modelProfileId: "profile-1",
 };
 
+const compoundSentence = "The sun rose and the birds sang.";
+const compoundTokens: Token[] = [
+  { id: 0, text: "The", start: 0, end: 3, leadingWhitespace: "", punctuation: false },
+  { id: 1, text: "sun", start: 4, end: 7, leadingWhitespace: " ", punctuation: false },
+  { id: 2, text: "rose", start: 8, end: 12, leadingWhitespace: " ", punctuation: false },
+  { id: 3, text: "and", start: 13, end: 16, leadingWhitespace: " ", punctuation: false },
+  { id: 4, text: "the", start: 17, end: 20, leadingWhitespace: " ", punctuation: false },
+  { id: 5, text: "birds", start: 21, end: 26, leadingWhitespace: " ", punctuation: false },
+  { id: 6, text: "sang", start: 27, end: 31, leadingWhitespace: " ", punctuation: false },
+  { id: 7, text: ".", start: 31, end: 32, leadingWhitespace: "", punctuation: true },
+];
+const compoundAnalysis: CoreAnalysis = {
+  schemaVersion: CORE_SCHEMA_VERSION,
+  sentenceId: "sentence-1",
+  components: [
+    {
+      startToken: 0,
+      endToken: 2,
+      role: GrammarRole.COORDINATE_CLAUSE,
+      translation: "太阳升起来了",
+    },
+    { startToken: 3, endToken: 3, role: GrammarRole.CONJUNCTION, translation: "而且" },
+    { startToken: 4, endToken: 6, role: GrammarRole.COORDINATE_CLAUSE, translation: "鸟儿在歌唱" },
+  ],
+  modelProfileId: "profile-1",
+};
+
 function block(): SyntaxLearningBlock {
   return new SyntaxLearningBlock();
 }
@@ -396,5 +423,45 @@ describe("SyntaxLearningBlock", () => {
       (component) => component.style.getPropertyValue("--syntax-role-color"),
     );
     expect(colors).toEqual(["#0d9488", "#6b7280", "#0d9488"]);
+  });
+
+  it("numbers coordinate clauses ①② at render time when a sentence has two or more", () => {
+    const element = block();
+    document.body.append(element.host);
+
+    element.renderCore(compoundSentence, compoundTokens, compoundAnalysis);
+
+    const root = element.host.shadowRoot!;
+    expect([...root.querySelectorAll(".role")].map((role) => role.textContent)).toEqual([
+      "并列分句①",
+      "并列连词",
+      "并列分句②",
+    ]);
+    expect(root.querySelector(".component")!.getAttribute("aria-label")).toBe(
+      "并列分句①：太阳升起来了",
+    );
+  });
+
+  it("keeps a lone coordinate clause unnumbered", () => {
+    const element = block();
+    document.body.append(element.host);
+
+    element.renderCore(compoundSentence, compoundTokens, {
+      ...compoundAnalysis,
+      components: [
+        {
+          startToken: 0,
+          endToken: 2,
+          role: GrammarRole.COORDINATE_CLAUSE,
+          translation: "太阳升起来了",
+        },
+        { startToken: 3, endToken: 3, role: GrammarRole.CONJUNCTION, translation: "而且" },
+        { startToken: 4, endToken: 6, role: GrammarRole.ADVERBIAL, translation: "鸟儿在歌唱" },
+      ],
+    });
+
+    expect(
+      [...element.host.shadowRoot!.querySelectorAll(".role")].map((role) => role.textContent),
+    ).toEqual(["并列分句", "并列连词", "状语"]);
   });
 });

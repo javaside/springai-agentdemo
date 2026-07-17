@@ -159,6 +159,11 @@ function eventDetail(sentenceId: string, focus: TokenRange): SyntaxFocusEventDet
   };
 }
 
+function circledNumber(value: number): string {
+  // ①（U+2460）起的带圈数字覆盖 1–20；更长的枚举退回普通数字。
+  return value >= 1 && value <= 20 ? String.fromCodePoint(0x2460 + value - 1) : `${value}.`;
+}
+
 export class SyntaxLearningBlock {
   /**
    * A content script runs in an isolated world where `window.customElements`
@@ -230,19 +235,25 @@ export class SyntaxLearningBlock {
     sentenceElement.dataset.sentenceId = analysis.sentenceId;
     sentenceElement.setAttribute("aria-label", sentence);
 
+    const coordinateClauseTotal = analysis.components.filter(
+      (component) => component.role === GrammarRole.COORDINATE_CLAUSE,
+    ).length;
+    let coordinateClauseIndex = 0;
     let nextToken = 0;
     for (const component of analysis.components) {
       this.#appendPunctuation(sentenceElement, tokens, nextToken, component.startToken - 1);
+      let label = GRAMMAR_LABELS[component.role];
+      if (component.role === GrammarRole.COORDINATE_CLAUSE && coordinateClauseTotal >= 2) {
+        coordinateClauseIndex += 1;
+        label = `${label}${circledNumber(coordinateClauseIndex)}`;
+      }
       const componentElement = createElement("button", "component");
       componentElement.type = "button";
       componentElement.dataset.startToken = String(component.startToken);
       componentElement.dataset.endToken = String(component.endToken);
       componentElement.style.setProperty("--syntax-role-color", ROLE_COLORS[component.role]);
-      componentElement.setAttribute(
-        "aria-label",
-        `${GRAMMAR_LABELS[component.role]}：${component.translation}`,
-      );
-      const role = createElement("span", "role", GRAMMAR_LABELS[component.role]);
+      componentElement.setAttribute("aria-label", `${label}：${component.translation}`);
+      const role = createElement("span", "role", label);
       const english = createElement("span", "english");
 
       for (let index = component.startToken; index <= component.endToken; index += 1) {
