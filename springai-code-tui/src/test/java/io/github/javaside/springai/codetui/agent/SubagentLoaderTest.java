@@ -13,7 +13,7 @@ class SubagentLoaderTest {
 
     @Test
     void parsesFrontmatterAndBody() {
-        SubagentSpec s = SubagentLoader.parse("classpath:/agents-test/sample.md");
+        SubagentSpec s = SubagentLoader.parse("classpath:/agents/sample.md");
         assertEquals("sample", s.name());
         assertEquals("a sample agent for testing", s.description());
         assertEquals(List.of("read", "grep", "glob"), s.allowTools());
