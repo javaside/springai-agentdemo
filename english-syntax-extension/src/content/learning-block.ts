@@ -107,7 +107,18 @@ const STYLES = `
   outline-offset: 2px;
 }
 
-.detail,
+.detail {
+  inline-size: 100%;
+  max-inline-size: 100%;
+  margin-block: 0.75em;
+  overflow-wrap: anywhere;
+  border: 1px solid #e2e5e9;
+  border-inline-start: 3px solid #0d9488;
+  border-radius: 8px;
+  background: #fafbfc;
+  padding: 1em 1.125em;
+}
+
 .sentence-failure {
   inline-size: 100%;
   max-inline-size: 100%;
@@ -130,6 +141,15 @@ const STYLES = `
 
 .detail-structure {
   margin-block: 0.2em;
+}
+
+.grammar-points,
+.detail-summary {
+  margin-block-start: 0.875em;
+  padding-block-start: 0.625em;
+  border-block-start: 1px dashed #e2e5e9;
+  font-size: 0.8125rem;
+  line-height: 1.7;
 }
 
 .retry {
