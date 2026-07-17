@@ -606,4 +606,79 @@ describe("SyntaxLearningBlock", () => {
     expect(root.querySelector(".grammar-points")?.textContent).toBe("一般现在时");
     expect(root.querySelector(".detail-summary")?.textContent).toBe("整体讲解");
   });
+
+  it("excludes a trailing punctuation token from the annotation underline like the body text", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [{ startToken: 2, endToken: 3, role: "宾语", explanation: "宾语与句号" }],
+      grammarPoints: [],
+      explanation: "整体讲解",
+      modelProfileId: "profile-1",
+    });
+
+    // The body text keeps a trailing punctuation token out of the underline;
+    // the annotation underline mirrors that rule.
+    expect(element.host.shadowRoot!.querySelector(".annotation-english")?.textContent).toBe(
+      "books",
+    );
+  });
+
+  it("skips every annotation but keeps the numbered explanations without a token table", () => {
+    const element = block();
+    document.body.append(element.host);
+    // A failed sentence never went through renderCore, so no token table exists.
+    element.renderFailure("sentence-1", sentence, "解析失败");
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [
+        { startToken: 0, endToken: 0, role: "主语", explanation: "第一条" },
+        { startToken: 1, endToken: 1, role: "谓语", explanation: "第二条" },
+      ],
+      grammarPoints: [],
+      explanation: "整体讲解",
+      modelProfileId: "profile-1",
+    });
+
+    const root = element.host.shadowRoot!;
+    expect(root.querySelector(".detail-annotations")).toBeNull();
+    expect([...root.querySelectorAll(".detail-structure")].map((row) => row.textContent)).toEqual([
+      "① 主语：第一条",
+      "② 谓语：第二条",
+    ]);
+  });
+
+  it("clears stored token tables when the expected sentence set is reset", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+
+    // A reset starts a new render cycle; a sentence that then fails must not
+    // reuse the stale token table from before the reset.
+    element.setExpectedSentenceIds(["sentence-1"]);
+    element.renderFailure("sentence-1", sentence, "解析失败");
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [{ startToken: 0, endToken: 0, role: "主语", explanation: "第一条" }],
+      grammarPoints: [],
+      explanation: "整体讲解",
+      modelProfileId: "profile-1",
+    });
+
+    const root = element.host.shadowRoot!;
+    expect(root.querySelector(".detail-annotations")).toBeNull();
+    expect([...root.querySelectorAll(".detail-structure")].map((row) => row.textContent)).toEqual([
+      "① 主语：第一条",
+    ]);
+  });
 });

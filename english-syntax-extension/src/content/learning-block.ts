@@ -34,7 +34,8 @@ const STYLES = `
   max-inline-size: 100%;
 }
 
-.sentence {
+.sentence,
+.detail-annotations {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
@@ -75,13 +76,15 @@ const STYLES = `
   overflow-wrap: anywhere;
 }
 
-.role {
+.role,
+.annotation-role {
   font-size: max(11px, 0.68em);
   color: var(--syntax-role-color, currentColor);
   opacity: 0.85;
 }
 
-.english {
+.english,
+.annotation-english {
   border-bottom: 1.5px solid
     color-mix(in srgb, var(--syntax-role-color, currentColor) 60%, transparent);
   justify-self: stretch;
@@ -113,12 +116,6 @@ const STYLES = `
 }
 
 .detail-annotations {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  column-gap: 0.5em;
-  row-gap: 0.55em;
-  max-inline-size: 100%;
   margin-block-end: 0.45em;
 }
 
@@ -129,19 +126,6 @@ const STYLES = `
   min-inline-size: 0;
   max-inline-size: 100%;
   overflow-wrap: anywhere;
-}
-
-.annotation-role {
-  font-size: max(11px, 0.68em);
-  color: var(--syntax-role-color, currentColor);
-  opacity: 0.85;
-}
-
-.annotation-english {
-  border-bottom: 1.5px solid
-    color-mix(in srgb, var(--syntax-role-color, currentColor) 60%, transparent);
-  justify-self: stretch;
-  text-align: center;
 }
 
 .detail-structure {
@@ -212,9 +196,15 @@ function structureColor(role: string): string {
   return ROLE_COLOR_BY_LABEL.get(role) ?? FALLBACK_ANNOTATION_COLOR;
 }
 
+/** 标注块与解释列表共用的「①+角色名」标签。 */
+function structureLabel(index: number, role: string): string {
+  return `${circledNumber(index + 1)} ${role}`;
+}
+
 /**
- * 按 token 闭区间还原英文原文：首 token 去掉前导空格（与正文标注一致），
- * 其余 token 保留前导空格。区间反转、越界或不完整时返回 undefined。
+ * 按 token 闭区间还原英文原文：首 token 去掉前导空格、区间末尾的标点不入下划线
+ * （均与正文标注一致），其余 token 保留前导空格。区间反转、越界或不完整时返回
+ * undefined。
  */
 function annotationEnglish(tokens: readonly Token[], range: TokenRange): string | undefined {
   if (
@@ -231,6 +221,9 @@ function annotationEnglish(tokens: readonly Token[], range: TokenRange): string 
     const token = tokens[index];
     if (token === undefined) {
       return undefined;
+    }
+    if (token.punctuation && index === range.endToken) {
+      continue;
     }
     english += (index === range.startToken ? "" : token.leadingWhitespace) + token.text;
   }
@@ -294,6 +287,7 @@ export class SyntaxLearningBlock {
     this.#expectedSentenceIds = expected;
     this.#expectedSentenceOrder = [...ids];
     this.#resolvedSentenceIds = new Set();
+    this.#tokensBySentence = new Map();
   }
 
   isReadyToReplace(): boolean {
@@ -433,7 +427,7 @@ export class SyntaxLearningBlock {
         const annotation = createElement("span", "annotation");
         annotation.style.setProperty("--syntax-role-color", structureColor(structure.role));
         annotation.append(
-          createElement("span", "annotation-role", `${circledNumber(index + 1)} ${structure.role}`),
+          createElement("span", "annotation-role", structureLabel(index, structure.role)),
           createElement("span", "annotation-english", english),
         );
         annotations.append(annotation);
@@ -444,7 +438,7 @@ export class SyntaxLearningBlock {
       for (const [index, structure] of detailAnalysis.structures.entries()) {
         const row = createElement("div", "detail-structure");
         row.append(
-          createElement("strong", "detail-role", `${circledNumber(index + 1)} ${structure.role}`),
+          createElement("strong", "detail-role", structureLabel(index, structure.role)),
           document.createTextNode("："),
           createElement("span", "detail-explanation", structure.explanation),
         );
