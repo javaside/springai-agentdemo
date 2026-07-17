@@ -268,7 +268,7 @@ function parseDetailStructure(
     addError(errors, path, "must be an object");
     return undefined;
   }
-  if (!hasOnlyKeys(value, ["startToken", "endToken", "role", "explanation"])) {
+  if (!hasOnlyKeys(value, ["startToken", "endToken", "role", "explanation", "translation"])) {
     addError(errors, path, "contains unknown fields");
   }
   const range = parseRange(value, path, errors);
@@ -286,16 +286,24 @@ function parseDetailStructure(
   if (!isSafeText(explanation) || explanation.trim().length === 0) {
     addError(errors, `${path}.explanation`, "must be a non-empty safe string");
   }
+  // 译文是渐进增强：缺失或空串时标注块退回两行；类型/内容不安全才算校验错误。
+  const translation = value.translation;
+  if (translation !== undefined && !isSafeText(translation)) {
+    addError(errors, `${path}.translation`, "must be a safe string when present");
+  }
   if (
     range === undefined ||
     !isSafeText(role) ||
     role.trim().length === 0 ||
     !isSafeText(explanation) ||
-    explanation.trim().length === 0
+    explanation.trim().length === 0 ||
+    (translation !== undefined && !isSafeText(translation))
   ) {
     return undefined;
   }
-  return { ...range, role, explanation };
+  return isSafeText(translation) && translation.trim().length > 0
+    ? { ...range, role, explanation, translation }
+    : { ...range, role, explanation };
 }
 
 export function validateDetail(

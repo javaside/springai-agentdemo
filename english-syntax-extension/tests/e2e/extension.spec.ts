@@ -685,6 +685,7 @@ test("a compound sentence renders numbered coordinate clauses and an annotated d
       rows: [
         ["annotation-role", "① 主语"],
         ["annotation-english", "The sun"],
+        ["annotation-translation", "太阳"],
       ],
       color: "#2563eb",
     },
@@ -692,6 +693,7 @@ test("a compound sentence renders numbered coordinate clauses and an annotated d
       rows: [
         ["annotation-role", "② 谓语"],
         ["annotation-english", "rose"],
+        ["annotation-translation", "升起"],
       ],
       color: "#dc2626",
     },
@@ -699,6 +701,7 @@ test("a compound sentence renders numbered coordinate clauses and an annotated d
       rows: [
         ["annotation-role", "③ 并列连词"],
         ["annotation-english", "and"],
+        ["annotation-translation", "和"],
       ],
       color: "#6b7280",
     },

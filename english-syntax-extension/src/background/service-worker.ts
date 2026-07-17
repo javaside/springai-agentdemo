@@ -151,6 +151,9 @@ function sanitizeDetail(analysis: DetailAnalysis, profile: ModelProfile): Detail
       endToken: structure.endToken,
       role: redactProfileSecrets(structure.role, profile),
       explanation: redactProfileSecrets(structure.explanation, profile),
+      ...(structure.translation !== undefined
+        ? { translation: redactProfileSecrets(structure.translation, profile) }
+        : {}),
     })),
     grammarPoints: analysis.grammarPoints.map((point) => redactProfileSecrets(point, profile)),
     explanation: redactProfileSecrets(analysis.explanation, profile),

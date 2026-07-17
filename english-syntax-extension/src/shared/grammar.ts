@@ -67,6 +67,8 @@ export interface CoreAnalysis {
 export interface DetailStructure extends TokenRange {
   role: string;
   explanation: string;
+  /** 成分的简短中文译文（标注区第三行）；模型缺省时标注块退回两行。 */
+  translation?: string;
 }
 
 export interface DetailAnalysis {

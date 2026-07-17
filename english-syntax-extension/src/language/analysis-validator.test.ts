@@ -258,4 +258,33 @@ describe("detail analysis validation", () => {
   ])("rejects a script-like %s", (_description, change) => {
     invalidDetail({ ...rawDetail, ...change });
   });
+
+  it("keeps a structure translation and stamps it into the result", () => {
+    const raw = {
+      ...rawDetail,
+      structures: [{ ...rawDetail.structures[0], translation: "读书" }],
+    };
+    expect(validateDetail(raw, request, focus, "profile-1")).toEqual({
+      ok: true,
+      value: { ...raw, modelProfileId: "profile-1" },
+    });
+  });
+
+  it("drops a blank translation instead of failing the whole detail", () => {
+    const raw = {
+      ...rawDetail,
+      structures: [{ ...rawDetail.structures[0], translation: "  " }],
+    };
+    expect(validateDetail(raw, request, focus, "profile-1")).toEqual({
+      ok: true,
+      value: { ...rawDetail, modelProfileId: "profile-1" },
+    });
+  });
+
+  it("rejects a script-like structure translation", () => {
+    invalidDetail({
+      ...rawDetail,
+      structures: [{ ...rawDetail.structures[0], translation: "<script>alert(1)</script>" }],
+    });
+  });
 });

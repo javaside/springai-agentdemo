@@ -710,4 +710,58 @@ describe("SyntaxLearningBlock", () => {
       annotations.map((annotation) => annotation.style.getPropertyValue("--syntax-role-color")),
     ).toEqual(["#2563eb", "#dc2626", "#0d9488"]);
   });
+
+  it("renders a third translation row under the underline and omits it when absent", () => {
+    const element = block();
+    document.body.append(element.host);
+    element.renderCore(sentence, tokens, analysis);
+    element.setDetailLoading("sentence-1", { startToken: 0, endToken: 0 });
+
+    element.renderDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 0 },
+      structures: [
+        {
+          startToken: 0,
+          endToken: 1,
+          role: "主语",
+          explanation: "带译文",
+          translation: "学习者阅读",
+        },
+        { startToken: 2, endToken: 2, role: "宾语", explanation: "旧缓存无译文" },
+        {
+          startToken: 2,
+          endToken: 2,
+          role: "状语",
+          explanation: "空白译文视同缺失",
+          translation: "  ",
+        },
+      ],
+      grammarPoints: [],
+      explanation: "译文行测试",
+      modelProfileId: "profile-1",
+    });
+
+    const root = element.host.shadowRoot!;
+    const annotations = [...root.querySelectorAll<HTMLElement>(".annotation")];
+    expect(
+      annotations.map((annotation) =>
+        [...annotation.children].map((child) => [child.className, child.textContent]),
+      ),
+    ).toEqual([
+      [
+        ["annotation-role", "① 主语"],
+        ["annotation-english", "Learners read"],
+        ["annotation-translation", "学习者阅读"],
+      ],
+      [
+        ["annotation-role", "② 宾语"],
+        ["annotation-english", "books"],
+      ],
+      [
+        ["annotation-role", "③ 状语"],
+        ["annotation-english", "books"],
+      ],
+    ]);
+  });
 });

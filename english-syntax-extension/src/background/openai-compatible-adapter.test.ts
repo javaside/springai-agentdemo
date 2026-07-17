@@ -458,5 +458,8 @@ describe("syntax prompts", () => {
     expect(prompt).toMatch(/never.*English enum/i);
     expect(prompt).toMatch(/never return a single structure that covers the entire focus/i);
     expect(prompt).toMatch(/split.*sub-components/i);
+    // 标注区第三行译文：每个 structure 必须带自身英文片段的简短中文译文。
+    expect(prompt).toContain('"translation": string');
+    expect(prompt).toMatch(/concise Chinese translation of exactly its own English text/i);
   });
 });

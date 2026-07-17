@@ -181,6 +181,9 @@ const DETAIL_SCHEMA: JsonSchemaSpec = {
             endToken: { type: "integer", minimum: 0 },
             role: { type: "string", minLength: 1 },
             explanation: { type: "string", minLength: 1 },
+            // 译文由提示词强制要求，但 schema 层不列入 required：兼容模式下模型
+            // 偶发缺失时按渐进增强降级为两行标注，而非整次 INVALID_MODEL_OUTPUT。
+            translation: { type: "string", minLength: 1, maxLength: 120 },
           },
         },
       },

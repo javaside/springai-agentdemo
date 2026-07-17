@@ -91,7 +91,8 @@ const STYLES = `
   text-align: center;
 }
 
-.translation {
+.translation,
+.annotation-translation {
   font-size: max(12px, 0.8em);
   opacity: 0.78;
 }
@@ -133,7 +134,7 @@ const STYLES = `
 
 .annotation {
   display: inline-grid;
-  grid-template-rows: repeat(2, auto);
+  grid-auto-rows: auto;
   justify-items: center;
   min-inline-size: 0;
   max-inline-size: 100%;
@@ -483,6 +484,10 @@ export class SyntaxLearningBlock {
           createElement("span", "annotation-role", structureLabel(index, structure.role)),
           createElement("span", "annotation-english", english),
         );
+        // 第三行译文与正文同构；旧缓存/模型缺省时退回两行标注。
+        if (structure.translation !== undefined && structure.translation.trim().length > 0) {
+          annotation.append(createElement("span", "annotation-translation", structure.translation));
+        }
         annotations.append(annotation);
       }
       if (annotations.childElementCount > 0) {
