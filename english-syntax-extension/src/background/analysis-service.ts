@@ -57,6 +57,8 @@ interface AnalysisInputBase {
 export interface CoreBatchInput extends AnalysisInputBase {
   sentences: readonly SentenceInput[];
   priority?: Extract<SchedulerPriority, "visible-core" | "prefetch-core">;
+  /** 「重新解析」置位:跳过读缓存,结果照常覆盖写回。 */
+  bypassCache?: boolean;
 }
 
 export interface DetailInput extends AnalysisInputBase {
@@ -339,9 +341,12 @@ export class CachedAnalysisService implements AnalysisService {
         key: await this.coreKey(sentence),
       })),
     );
-    const cached = await Promise.all(
-      keyedSentences.map(({ key }) => this.options.cache.getCore<unknown>(key)),
-    );
+    const cached =
+      input.bypassCache === true
+        ? keyedSentences.map(() => undefined)
+        : await Promise.all(
+            keyedSentences.map(({ key }) => this.options.cache.getCore<unknown>(key)),
+          );
     if (signal.aborted) throw cancellationError();
 
     const resultsById = new Map<string, CoreAnalysis>();

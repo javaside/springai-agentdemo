@@ -306,6 +306,7 @@ export function registerServiceWorker(
                 profile,
                 documentId: request.documentId,
                 sentences: request.sentences,
+                ...(request.bypassCache === true ? { bypassCache: true } : {}),
               },
               new AbortController().signal,
             );

@@ -75,6 +75,8 @@ interface BlockRecord {
   learningBlock: ControllerBlock;
   replacement: ControllerReplacement;
   operationVersion: number;
+  /** 「重新解析」一次性标记:下次 analyzeBlock 携带 bypassCache 后即清除。 */
+  bypassCacheOnce?: boolean;
 }
 
 export interface SessionControllerOptions {
@@ -287,6 +289,8 @@ export class SessionController {
       )
       .map(([blockId]) => blockId);
     for (const blockId of visibleBlockIds) {
+      const block = this.blocks.get(blockId);
+      if (block !== undefined) block.bypassCacheOnce = true;
       this.invalidateBlock(blockId);
       this.queueVisibleBlock(blockId, true);
     }
@@ -426,6 +430,8 @@ export class SessionController {
   }
 
   private async analyzeBlock(block: BlockRecord): Promise<void> {
+    const bypassCache = block.bypassCacheOnce === true;
+    block.bypassCacheOnce = undefined;
     const version = ++this.operationVersion;
     block.operationVersion = version;
     const failures: SentenceFailure[] = [];
@@ -454,6 +460,7 @@ export class SessionController {
     const request = this.pageRequest({
       type: "ANALYZE_CORE",
       sentences: outgoing.map(({ input }) => input),
+      ...(bypassCache ? { bypassCache: true as const } : {}),
     });
     const response = await this.send(request, version);
     if (response === undefined || block.operationVersion !== version || this.isStopped()) {

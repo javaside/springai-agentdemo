@@ -25,7 +25,7 @@ export type RequestMessage =
   | (PageRequestBase & { type: "STOP_SESSION" })
   | (PageRequestBase & { type: "GET_SESSION_STATUS" })
   | (PageRequestBase & { type: "REANALYZE_VISIBLE" })
-  | (PageRequestBase & { type: "ANALYZE_CORE"; sentences: SentenceInput[] })
+  | (PageRequestBase & { type: "ANALYZE_CORE"; sentences: SentenceInput[]; bypassCache?: true })
   | (PageRequestBase & {
       type: "ANALYZE_DETAIL";
       sentence: SentenceInput;
@@ -190,8 +190,9 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
       return hasOnlyKeys(value, pageOnlyKeys) && hasPageContext(value);
     case "ANALYZE_CORE":
       return (
-        hasOnlyKeys(value, [...pageOnlyKeys, "sentences"]) &&
+        hasOnlyKeys(value, [...pageOnlyKeys, "sentences", "bypassCache"]) &&
         hasPageContext(value) &&
+        (value.bypassCache === undefined || value.bypassCache === true) &&
         Array.isArray(value.sentences) &&
         value.sentences.every(isSentenceInput)
       );

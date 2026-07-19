@@ -362,6 +362,9 @@ describe("SessionController", () => {
     subject.controller.reanalyzeVisible();
 
     await vi.waitFor(() => expect(subject.transport.sent).toHaveLength(2));
+    const [initial, reanalyzed] = subject.transport.sent;
+    expect(initial).not.toHaveProperty("bypassCache");
+    expect(reanalyzed).toMatchObject({ type: "ANALYZE_CORE", bypassCache: true });
     expect(subject.viewport.checked).toContain(subject.replacements[0]!.displayed);
     expect(subject.replacements[0]!.restores).toBeGreaterThan(0);
     expect(subject.viewport.invalidated).toContain("block-1");

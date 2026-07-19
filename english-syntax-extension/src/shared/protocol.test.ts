@@ -111,6 +111,13 @@ describe("request protocol guard", () => {
     );
   });
 
+  it("accepts ANALYZE_CORE with bypassCache: true and rejects other values", () => {
+    const validAnalyzeCore = { ...page, type: "ANALYZE_CORE", sentences: [sentence] };
+    expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: true })).toBe(true);
+    expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: false })).toBe(false);
+    expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: "yes" })).toBe(false);
+  });
+
   it.each([
     ["a null token", { ...sentence, tokens: [null] }],
     ["an arbitrary token", { ...sentence, tokens: [{ command: "RUN" }] }],

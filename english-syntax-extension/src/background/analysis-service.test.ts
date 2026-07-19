@@ -158,6 +158,26 @@ function coreInput(sentences: SentenceInput[] = [sentenceOne], selectedProfile =
 }
 
 describe("CachedAnalysisService core orchestration", () => {
+  it("bypassCache skips reads but overwrites the cache with the fresh result", async () => {
+    const { adapter, cache, scheduler, service } = harness([
+      { sentences: [rawCore(sentenceOne)] },
+      { sentences: [rawCore(sentenceOne)] },
+    ]);
+    await service.analyzeCore(coreInput(), new AbortController().signal);
+    expect(cache.core.size).toBe(1);
+    adapter.completeJson.mockClear();
+    scheduler.schedule.mockClear();
+
+    const outcome = await service.analyzeCore(
+      { ...coreInput(), bypassCache: true },
+      new AbortController().signal,
+    );
+
+    expect(outcome.cacheHit).toBe(false);
+    expect(adapter.completeJson).toHaveBeenCalledTimes(1);
+    expect(cache.core.size).toBe(1);
+  });
+
   it("returns a cache hit without scheduling or calling the adapter", async () => {
     const { adapter, scheduler, service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
     await service.analyzeCore(coreInput(), new AbortController().signal);
