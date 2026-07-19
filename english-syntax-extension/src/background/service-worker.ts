@@ -676,6 +676,9 @@ export function registerServiceWorker(
       status: existing?.status ?? emptyStatus("stopped"),
     });
     port.onDisconnect.addListener(() => {
+      // 读一次 lastError,避免页面进 bfcache 关闭端口时控制台打
+      // "Unchecked runtime.lastError"。
+      void chromeApi.runtime.lastError;
       if (activeTabs.get(tabId)?.documentId !== documentId) return;
       dependencies.scheduler.cancelDocument(documentId);
       activeTabs.delete(tabId);

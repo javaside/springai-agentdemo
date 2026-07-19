@@ -193,7 +193,21 @@ export interface ContentRuntimeApi {
 
 function chromeRuntimeApi(): ContentRuntimeApi {
   return {
-    connect: (connectInfo) => chrome.runtime.connect(connectInfo),
+    connect: (connectInfo) => {
+      const port = chrome.runtime.connect(connectInfo);
+      return {
+        disconnect: () => port.disconnect(),
+        onDisconnect: {
+          addListener: (listener) =>
+            port.onDisconnect.addListener(() => {
+              // 页面进 bfcache 时 Chrome 会关闭端口并设置 lastError;onDisconnect
+              // 回调里不读它就会在控制台打 "Unchecked runtime.lastError"。
+              void chrome.runtime.lastError;
+              listener();
+            }),
+        },
+      };
+    },
     sendMessage: (message) => chrome.runtime.sendMessage(message),
   };
 }
