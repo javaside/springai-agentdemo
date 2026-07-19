@@ -2,7 +2,7 @@ import type { TokenRange } from "../shared/grammar";
 import type { CacheStats } from "../shared/protocol";
 
 const DATABASE_NAME = "english-syntax-learning-v1";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const DEFAULT_LIMIT_BYTES = 50 * 1024 * 1024;
 const STORE_NAMES = ["core", "detail", "correction"] as const;
 
@@ -107,8 +107,14 @@ function openDatabase(): Promise<IDBDatabase> {
       "upgradeneeded",
       () => {
         for (const storeName of STORE_NAMES) {
-          const store = request.result.createObjectStore(storeName, { keyPath: "key" });
-          store.createIndex("lastAccessedAt", "lastAccessedAt");
+          // v1→v2:键构成变更(去 profile/模型/提示词维度),旧键条目永远查不到,
+          // 升级时直接清空;新装用户走 createObjectStore 分支。
+          if (request.result.objectStoreNames.contains(storeName)) {
+            request.transaction?.objectStore(storeName).clear();
+          } else {
+            const store = request.result.createObjectStore(storeName, { keyPath: "key" });
+            store.createIndex("lastAccessedAt", "lastAccessedAt");
+          }
         }
       },
       { once: true },
@@ -191,36 +197,6 @@ export class AnalysisCache {
     for (const storeName of STORE_NAMES) {
       transaction.objectStore(storeName).clear();
     }
-    await done;
-  }
-
-  async clearByProfile(profileId: string): Promise<void> {
-    const transaction = this.database.transaction(STORE_NAMES, "readwrite");
-    const done = transactionDone(transaction);
-    await Promise.all(
-      STORE_NAMES.map(
-        (storeName) =>
-          new Promise<void>((resolve, reject) => {
-            const request = transaction.objectStore(storeName).openCursor();
-            request.addEventListener(
-              "error",
-              () => reject(request.error ?? new Error("Reading the cache cursor failed")),
-              { once: true },
-            );
-            request.addEventListener("success", () => {
-              const cursor = request.result;
-              if (cursor === null) {
-                resolve();
-                return;
-              }
-              if ((cursor.value as CacheRecord<unknown>).profileId === profileId) {
-                cursor.delete();
-              }
-              cursor.continue();
-            });
-          }),
-      ),
-    );
     await done;
   }
 

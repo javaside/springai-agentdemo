@@ -123,19 +123,6 @@ describe("AnalysisCache", () => {
     expect((await cache.stats()).entries).toBe(2);
   });
 
-  it("clears only records belonging to the selected profile", async () => {
-    const cache = await emptyCache();
-    await cache.putCore("core-a", "profile-a", { id: "core-a" });
-    await cache.putDetail("detail-a", "profile-a", { id: "detail-a" });
-    await cache.putCore("core-b", "profile-b", { id: "core-b" });
-
-    await cache.clearByProfile("profile-a");
-
-    expect(await cache.getCore("core-a")).toBeUndefined();
-    expect(await cache.getDetail("detail-a")).toBeUndefined();
-    expect(await cache.getCore("core-b")).toEqual({ id: "core-b" });
-  });
-
   it("clears every cache store without touching chrome.storage.local", async () => {
     const local = { get: vi.fn(), set: vi.fn(), clear: vi.fn(), remove: vi.fn() };
     vi.stubGlobal("chrome", { storage: { local } });
