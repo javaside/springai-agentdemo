@@ -729,3 +729,38 @@ test("a compound sentence renders numbered coordinate clauses and an annotated d
   );
   await expect(page.locator("#compound")).toBeVisible();
 });
+
+test("重开会话零请求命中缓存，重新解析强制二次请求", async ({ harness }) => {
+  await seedLocalProfile(harness);
+  const { page, tabId, documentId } = await startSession(harness, "dynamic-article.html");
+  // 等全部近视口块解析完成再采样冷启动请求数，避免中途欠采样。
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  const coldCalls = harness.fakeModel.recordedOfKind("core").length;
+  expect(coldCalls).toBeGreaterThan(0);
+
+  // 二次会话（模拟重开页面）：应全部命中缓存，core 请求数不变。
+  await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
+  const secondDocument = `${documentId}-revisit`;
+  await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId: secondDocument }));
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(coldCalls);
+
+  // 重新解析：必须绕过缓存，真实再次请求模型。重析可见句集与冷启动同一批，
+  // 故 core 请求数应停在冷启动的两倍；轮询到该值即等到全部重析请求落定，
+  // 避免迟到请求漏进第三次会话比对。
+  await harness.dispatchFromUi(
+    uiMessage("REANALYZE_VISIBLE", { tabId, documentId: secondDocument }),
+  );
+  await expect
+    .poll(() => harness.fakeModel.recordedOfKind("core").length, { timeout: 20_000 })
+    .toBe(coldCalls * 2);
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  const reanalyzedCalls = harness.fakeModel.recordedOfKind("core").length;
+
+  // 三次会话：重析结果已覆盖写回缓存，且 bypass 是一次性的——再开会话仍零新请求。
+  await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId: secondDocument }));
+  const thirdDocument = `${documentId}-after-reanalyze`;
+  await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId: thirdDocument }));
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(reanalyzedCalls);
+});
