@@ -730,24 +730,31 @@ test("a compound sentence renders numbered coordinate clauses and an annotated d
   await expect(page.locator("#compound")).toBeVisible();
 });
 
-test("重开会话零请求命中缓存，重新解析强制二次请求", async ({ harness }) => {
+test("a revisited session is served from cache and REANALYZE_VISIBLE forces fresh model calls", async ({
+  harness,
+}) => {
   await seedLocalProfile(harness);
   const { page, tabId, documentId } = await startSession(harness, "dynamic-article.html");
-  // 等全部近视口块解析完成再采样冷启动请求数，避免中途欠采样。
+  // Wait until every near-viewport block finishes analyzing before sampling the
+  // cold-start request count, so the sample can't undercount mid-flight.
   await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
   const coldCalls = harness.fakeModel.recordedOfKind("core").length;
   expect(coldCalls).toBeGreaterThan(0);
 
-  // 二次会话（模拟重开页面）：应全部命中缓存，core 请求数不变。
+  // Second session (a simulated revisit): everything must hit the cache, so the
+  // core request count stays unchanged.
   await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
+  await expect(learningBlocks(page)).toHaveCount(0);
   const secondDocument = `${documentId}-revisit`;
   await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId: secondDocument }));
   await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
   expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(coldCalls);
 
-  // 重新解析：必须绕过缓存，真实再次请求模型。重析可见句集与冷启动同一批，
-  // 故 core 请求数应停在冷启动的两倍；轮询到该值即等到全部重析请求落定，
-  // 避免迟到请求漏进第三次会话比对。
+  // Reanalyze: it must bypass the cache and really request the model again. The
+  // reanalyzed visible set is the same batch as the cold start, so the core
+  // request count should settle at exactly twice the cold count; polling to that
+  // value waits for every reanalysis request to land, keeping a late request
+  // from leaking into the third-session comparison.
   await harness.dispatchFromUi(
     uiMessage("REANALYZE_VISIBLE", { tabId, documentId: secondDocument }),
   );
@@ -757,8 +764,10 @@ test("重开会话零请求命中缓存，重新解析强制二次请求", async
   await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
   const reanalyzedCalls = harness.fakeModel.recordedOfKind("core").length;
 
-  // 三次会话：重析结果已覆盖写回缓存，且 bypass 是一次性的——再开会话仍零新请求。
+  // Third session: the reanalyzed result was written back over the cache, and
+  // the bypass is one-shot — reopening still makes zero new requests.
   await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId: secondDocument }));
+  await expect(learningBlocks(page)).toHaveCount(0);
   const thirdDocument = `${documentId}-after-reanalyze`;
   await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId: thirdDocument }));
   await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
