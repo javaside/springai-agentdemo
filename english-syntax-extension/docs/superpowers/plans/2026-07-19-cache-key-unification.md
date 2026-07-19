@@ -9,6 +9,7 @@
 **Tech Stack:** TypeScript + Chrome MV3、Vitest(happy-dom + fake-indexeddb)、Playwright、真实 DeepSeek 验收脚本(Playwright harness 模式)。
 
 **环境约定(全程有效):**
+
 - 工作目录:`english-syntax-extension/`(worktree 分支 `codex/english-syntax-extension-next`,不合并主干、不推送)。
 - 门禁:`npm test`、`npm run lint`(**恰好 1 条既有基线错误** src/options/options.test.ts:167,勿修勿增)、`npm run format:check`、`npm run build`、`npx playwright test`。
 - 提交信息结尾加 trailer:`Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`。
@@ -19,21 +20,22 @@
 
 ## 文件地图
 
-| 文件 | 职责变化 |
-|---|---|
-| `src/background/analysis-cache.ts` | 键输入类型瘦身;`DATABASE_VERSION` 2 + 升级清空;删 `clearByProfile` |
-| `src/background/analysis-service.ts` | 句子归一化去 profile.id;三个键函数瘦身;`CoreBatchInput.bypassCache`;analyzeCore 跳读 |
-| `src/shared/protocol.ts` | `ANALYZE_CORE` 加可选 `bypassCache?: true` + 校验 |
-| `src/background/service-worker.ts` | ANALYZE_CORE case 透传 bypassCache |
-| `src/content/session-controller.ts` | `BlockRecord.bypassCacheOnce`;reanalyzeVisible 置位;analyzeBlock 消费 |
-| 测试 | analysis-cache.test.ts、新建 analysis-cache.migration.test.ts、analysis-service.test.ts、protocol.test.ts、session-controller.test.ts、tests/e2e/extension.spec.ts |
-| 验收 | 新建 `.superpowers/acceptance/verify-cache-unification.mjs` |
+| 文件                                 | 职责变化                                                                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/background/analysis-cache.ts`   | 键输入类型瘦身;`DATABASE_VERSION` 2 + 升级清空;删 `clearByProfile`                                                                                                 |
+| `src/background/analysis-service.ts` | 句子归一化去 profile.id;三个键函数瘦身;`CoreBatchInput.bypassCache`;analyzeCore 跳读                                                                               |
+| `src/shared/protocol.ts`             | `ANALYZE_CORE` 加可选 `bypassCache?: true` + 校验                                                                                                                  |
+| `src/background/service-worker.ts`   | ANALYZE_CORE case 透传 bypassCache                                                                                                                                 |
+| `src/content/session-controller.ts`  | `BlockRecord.bypassCacheOnce`;reanalyzeVisible 置位;analyzeBlock 消费                                                                                              |
+| 测试                                 | analysis-cache.test.ts、新建 analysis-cache.migration.test.ts、analysis-service.test.ts、protocol.test.ts、session-controller.test.ts、tests/e2e/extension.spec.ts |
+| 验收                                 | 新建 `.superpowers/acceptance/verify-cache-unification.mjs`                                                                                                        |
 
 ---
 
 ### Task 1: 缓存键收敛
 
 **Files:**
+
 - Modify: `src/background/analysis-cache.ts:25-69`(类型与 identity)
 - Modify: `src/background/analysis-service.ts:204-210, 348, 588-621`
 - Test: `src/background/analysis-cache.test.ts`、`src/background/analysis-service.test.ts`
@@ -153,31 +155,31 @@ function normalizedSentenceText(sentence: SentenceInput): string {
 第 355-372 行测试 `"isolates cache entries across profile switches even with the same endpoint and model"` 整体替换为:
 
 ```ts
-  it("shares cache entries across profiles, providers, and models for the same sentence", async () => {
-    const otherProfile = {
-      ...profile,
-      id: "profile-2",
-      name: "Second",
-      baseUrl: "https://other-provider.example/v1",
-      model: "another-model",
-    };
-    const { adapter, cache, scheduler, service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
+it("shares cache entries across profiles, providers, and models for the same sentence", async () => {
+  const otherProfile = {
+    ...profile,
+    id: "profile-2",
+    name: "Second",
+    baseUrl: "https://other-provider.example/v1",
+    model: "another-model",
+  };
+  const { adapter, cache, scheduler, service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
 
-    const first = await service.analyzeCore(coreInput(), new AbortController().signal);
-    adapter.completeJson.mockClear();
-    scheduler.schedule.mockClear();
-    const second = await service.analyzeCore(
-      coreInput([sentenceOne], otherProfile),
-      new AbortController().signal,
-    );
+  const first = await service.analyzeCore(coreInput(), new AbortController().signal);
+  adapter.completeJson.mockClear();
+  scheduler.schedule.mockClear();
+  const second = await service.analyzeCore(
+    coreInput([sentenceOne], otherProfile),
+    new AbortController().signal,
+  );
 
-    expect(first.result[0]!.modelProfileId).toBe("profile-1");
-    expect(second.cacheHit).toBe(true);
-    expect(second.result[0]!.modelProfileId).toBe("profile-2");
-    expect(adapter.completeJson).not.toHaveBeenCalled();
-    expect(scheduler.schedule).not.toHaveBeenCalled();
-    expect(cache.core.size).toBe(1);
-  });
+  expect(first.result[0]!.modelProfileId).toBe("profile-1");
+  expect(second.cacheHit).toBe(true);
+  expect(second.result[0]!.modelProfileId).toBe("profile-2");
+  expect(adapter.completeJson).not.toHaveBeenCalled();
+  expect(scheduler.schedule).not.toHaveBeenCalled();
+  expect(cache.core.size).toBe(1);
+});
 ```
 
 (命中后重绑当前 profile 由既有 `validateCachedCore` 盖章逻辑保证,第 178 行测试已覆盖。)
@@ -203,6 +205,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: bypassCache 强制刷新通道
 
 **Files:**
+
 - Modify: `src/shared/protocol.ts:28, 191-197`
 - Modify: `src/background/analysis-service.ts`(CoreBatchInput、analyzeCore)
 - Modify: `src/background/service-worker.ts:304-310`(ANALYZE_CORE case)
@@ -214,11 +217,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 在 `src/shared/protocol.test.ts` 中 ANALYZE_CORE 相关用例旁新增(沿用该文件现有的合法 ANALYZE_CORE 消息构造,记为 `validAnalyzeCore`,按文件内实际 fixture 名替换):
 
 ```ts
-  it("accepts ANALYZE_CORE with bypassCache: true and rejects other values", () => {
-    expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: true })).toBe(true);
-    expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: false })).toBe(false);
-    expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: "yes" })).toBe(false);
-  });
+it("accepts ANALYZE_CORE with bypassCache: true and rejects other values", () => {
+  expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: true })).toBe(true);
+  expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: false })).toBe(false);
+  expect(isRequestMessage({ ...validAnalyzeCore, bypassCache: "yes" })).toBe(false);
+});
 ```
 
 Run: `npx vitest run src/shared/protocol.test.ts` → FAIL(未知键被 hasOnlyKeys 拒绝,第一个断言不成立)。
@@ -251,25 +254,25 @@ Run: `npx vitest run src/shared/protocol.test.ts` → PASS。
 `src/background/analysis-service.test.ts` core orchestration describe 内新增:
 
 ```ts
-  it("bypassCache skips reads but overwrites the cache with the fresh result", async () => {
-    const { adapter, cache, scheduler, service } = harness([
-      { sentences: [rawCore(sentenceOne)] },
-      { sentences: [rawCore(sentenceOne)] },
-    ]);
-    await service.analyzeCore(coreInput(), new AbortController().signal);
-    expect(cache.core.size).toBe(1);
-    adapter.completeJson.mockClear();
-    scheduler.schedule.mockClear();
+it("bypassCache skips reads but overwrites the cache with the fresh result", async () => {
+  const { adapter, cache, scheduler, service } = harness([
+    { sentences: [rawCore(sentenceOne)] },
+    { sentences: [rawCore(sentenceOne)] },
+  ]);
+  await service.analyzeCore(coreInput(), new AbortController().signal);
+  expect(cache.core.size).toBe(1);
+  adapter.completeJson.mockClear();
+  scheduler.schedule.mockClear();
 
-    const outcome = await service.analyzeCore(
-      { ...coreInput(), bypassCache: true },
-      new AbortController().signal,
-    );
+  const outcome = await service.analyzeCore(
+    { ...coreInput(), bypassCache: true },
+    new AbortController().signal,
+  );
 
-    expect(outcome.cacheHit).toBe(false);
-    expect(adapter.completeJson).toHaveBeenCalledTimes(1);
-    expect(cache.core.size).toBe(1);
-  });
+  expect(outcome.cacheHit).toBe(false);
+  expect(adapter.completeJson).toHaveBeenCalledTimes(1);
+  expect(cache.core.size).toBe(1);
+});
 ```
 
 Run: `npx vitest run src/background/analysis-service.test.ts` → FAIL(第二次命中缓存,adapter 未被调用)。
@@ -290,10 +293,10 @@ export interface CoreBatchInput extends AnalysisInputBase {
 `analyzeCore` 中读缓存一行(约 351 行)改为:
 
 ```ts
-    const cached =
-      input.bypassCache === true
-        ? keyedSentences.map(() => undefined)
-        : await Promise.all(keyedSentences.map(({ key }) => this.options.cache.getCore<unknown>(key)));
+const cached =
+  input.bypassCache === true
+    ? keyedSentences.map(() => undefined)
+    : await Promise.all(keyedSentences.map(({ key }) => this.options.cache.getCore<unknown>(key)));
 ```
 
 Run: `npx vitest run src/background/analysis-service.test.ts` → PASS。
@@ -316,9 +319,9 @@ Run: `npx vitest run src/background/analysis-service.test.ts` → PASS。
 `src/content/session-controller.test.ts` 第 355-369 行附近的 reanalyzeVisible 用例中,`await vi.waitFor(() => expect(subject.transport.sent).toHaveLength(2));` 之后追加断言:
 
 ```ts
-    const [initial, reanalyzed] = subject.transport.sent;
-    expect(initial).not.toHaveProperty("bypassCache");
-    expect(reanalyzed).toMatchObject({ type: "ANALYZE_CORE", bypassCache: true });
+const [initial, reanalyzed] = subject.transport.sent;
+expect(initial).not.toHaveProperty("bypassCache");
+expect(reanalyzed).toMatchObject({ type: "ANALYZE_CORE", bypassCache: true });
 ```
 
 Run: `npx vitest run src/content/session-controller.test.ts` → FAIL。
@@ -342,8 +345,8 @@ interface BlockRecord {
 `reanalyzeVisible()`(第 283-293 行)循环体在 `this.invalidateBlock(blockId);` 前加:
 
 ```ts
-      const block = this.blocks.get(blockId);
-      if (block !== undefined) block.bypassCacheOnce = true;
+const block = this.blocks.get(blockId);
+if (block !== undefined) block.bypassCacheOnce = true;
 ```
 
 `analyzeBlock`(第 428 行起)开头消费标记:
@@ -357,11 +360,11 @@ interface BlockRecord {
 构造请求处(第 454-457 行)改为:
 
 ```ts
-    const request = this.pageRequest({
-      type: "ANALYZE_CORE",
-      sentences: outgoing.map(({ input }) => input),
-      ...(bypassCache ? { bypassCache: true as const } : {}),
-    });
+const request = this.pageRequest({
+  type: "ANALYZE_CORE",
+  sentences: outgoing.map(({ input }) => input),
+  ...(bypassCache ? { bypassCache: true as const } : {}),
+});
 ```
 
 Run: `npx vitest run src/content/session-controller.test.ts` → PASS。
@@ -382,6 +385,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: IndexedDB v2 迁移 + 删除 clearByProfile
 
 **Files:**
+
 - Modify: `src/background/analysis-cache.ts:5, 109-135, 203-231`
 - Test: Create `src/background/analysis-cache.migration.test.ts`;Modify `src/background/analysis-cache.test.ts:130-141`
 
@@ -449,22 +453,22 @@ Expected: FAIL(现库版本仍为 1,旧记录仍可读,`getCore("legacy-key")` �
 `analysis-cache.ts` 第 5 行 `DATABASE_VERSION = 1` → `2`。`openDatabase` 的 upgradeneeded 回调(第 112-121 行)替换为:
 
 ```ts
-    request.addEventListener(
-      "upgradeneeded",
-      () => {
-        for (const storeName of STORE_NAMES) {
-          // v1→v2:键构成变更(去 profile/模型/提示词维度),旧键条目永远查不到,
-          // 升级时直接清空;新装用户走 createObjectStore 分支。
-          if (request.result.objectStoreNames.contains(storeName)) {
-            request.transaction?.objectStore(storeName).clear();
-          } else {
-            const store = request.result.createObjectStore(storeName, { keyPath: "key" });
-            store.createIndex("lastAccessedAt", "lastAccessedAt");
-          }
-        }
-      },
-      { once: true },
-    );
+request.addEventListener(
+  "upgradeneeded",
+  () => {
+    for (const storeName of STORE_NAMES) {
+      // v1→v2:键构成变更(去 profile/模型/提示词维度),旧键条目永远查不到,
+      // 升级时直接清空;新装用户走 createObjectStore 分支。
+      if (request.result.objectStoreNames.contains(storeName)) {
+        request.transaction?.objectStore(storeName).clear();
+      } else {
+        const store = request.result.createObjectStore(storeName, { keyPath: "key" });
+        store.createIndex("lastAccessedAt", "lastAccessedAt");
+      }
+    }
+  },
+  { once: true },
+);
 ```
 
 Run: `npx vitest run src/background/analysis-cache.migration.test.ts` → PASS。
@@ -489,6 +493,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: E2E(假模型服务器)
 
 **Files:**
+
 - Modify: `tests/e2e/extension.spec.ts`(文件末尾追加)
 
 - [ ] **Step 1: 写 E2E 用例**
@@ -499,17 +504,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 test("重开会话零请求命中缓存,重新解析强制二次请求", async ({ harness }) => {
   const { page, tabId, documentId } = await startSession(harness, "dynamic-article.html");
   await expect(page.locator("[data-syntax-learning-block]").first()).toBeVisible();
-  await expect
-    .poll(() => harness.fakeModel.recordedOfKind("core").length)
-    .toBeGreaterThan(0);
+  await expect.poll(() => harness.fakeModel.recordedOfKind("core").length).toBeGreaterThan(0);
   const coldCalls = harness.fakeModel.recordedOfKind("core").length;
 
   // 二次会话(模拟重开页面):应全部命中缓存,core 请求数不变。
   await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
   const secondDocument = `${documentId}-revisit`;
-  await harness.dispatchFromUi(
-    uiMessage("START_SESSION", { tabId, documentId: secondDocument }),
-  );
+  await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId: secondDocument }));
   await expect(page.locator("[data-syntax-learning-block]").first()).toBeVisible();
   expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(coldCalls);
 
@@ -545,6 +546,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: 全门禁 + 真机验收
 
 **Files:**
+
 - Create: `.superpowers/acceptance/verify-cache-unification.mjs`
 
 - [ ] **Step 1: 全门禁**
@@ -567,22 +569,25 @@ const reanalyzeStartedAt = Date.now();
 await dispatchFromUi({
   version: 1,
   requestId: `verify:REANALYZE:${++sessionCounter}`,
-  type: 'REANALYZE_VISIBLE',
+  type: "REANALYZE_VISIBLE",
   tabId: await tabIdFor(pageUrl),
   documentId: `verify-cache-doc-${sessionCounter - 1}`, // 与 run 2 的会话一致
 });
-await page.locator('[data-syntax-learning-block]').first().waitFor({ state: 'detached', timeout: 30_000 })
+await page
+  .locator("[data-syntax-learning-block]")
+  .first()
+  .waitFor({ state: "detached", timeout: 30_000 })
   .catch(() => {}); // 页面恢复原文的瞬间可能极短,允许错过
 await page
-  .locator('.component')
-  .filter({ has: page.locator('.role', { hasText: '并列连词' }) })
+  .locator(".component")
+  .filter({ has: page.locator(".role", { hasText: "并列连词" }) })
   .first()
   .waitFor({ timeout: 180_000 });
 const reanalyzeMs = Date.now() - reanalyzeStartedAt;
 log(`run 3 (reanalyze, must hit the real model): ${(reanalyzeMs / 1000).toFixed(1)}s`);
 
 const reanalyzeHitsModel = reanalyzeMs >= 2_000;
-console.log(`Reanalyze bypasses cache (>=2s real call): ${reanalyzeHitsModel ? 'PASS' : 'FAIL'}`);
+console.log(`Reanalyze bypasses cache (>=2s real call): ${reanalyzeHitsModel ? "PASS" : "FAIL"}`);
 process.exit(cacheWorks && reanalyzeHitsModel ? 0 : 1);
 ```
 

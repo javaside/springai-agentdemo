@@ -30,10 +30,10 @@ profile 一律不失效;想要新效果用「重新解析」手动刷新。唯�
 
 ### 1. 缓存键构成(src/background/analysis-service.ts / analysis-cache.ts)
 
-| store | 键的组成(SHA-256 前的身份数组) |
-|---|---|
-| core | `["core", 句子归一化文本, CORE_SCHEMA_VERSION]` |
-| detail | `["detail", 句子归一化文本, focus.startToken, focus.endToken, CORE_SCHEMA_VERSION]` |
+| store      | 键的组成(SHA-256 前的身份数组)                                                       |
+| ---------- | ------------------------------------------------------------------------------------ |
+| core       | `["core", 句子归一化文本, CORE_SCHEMA_VERSION]`                                      |
+| detail     | `["detail", 句子归一化文本, focus.startToken, focus.endToken, CORE_SCHEMA_VERSION]`  |
 | correction | `["correction", 句子归一化文本, 页面URL, 句子实例ID, 反馈原文, CORE_SCHEMA_VERSION]` |
 
 移出:`profile.id`、`providerOrigin`、`model`、`CORE_PROMPT_VERSION`、
@@ -73,6 +73,7 @@ store 执行清空(新装用户走原有 createObjectStore 分支)。旧键条�
 ### 6. 测试与验收
 
 单测:
+
 - 键构成:换 profile.id/模型/服务商/提示词版本 → 键不变;换 schema 版本或
   句子文本/focus → 键变。
 - analyzeCore bypassCache:跳过读、模型结果覆盖写回;不带标记时行为不变。
@@ -82,6 +83,7 @@ E2E(假模型服务器):重新解析触发第二次模型请求且页面更新;�
 二次开页零请求(命中缓存)。
 
 真机验收(真实 DeepSeek,harness 模式,key 从环境变量读、日志脱敏):
+
 1. 分析页面 → 删除并重建同配置 profile → 重开页面命中缓存(≈0s);
 2. 换模型(如 deepseek-chat ↔ deepseek-v4-flash)→ 重开页面命中缓存;
 3. 点「重新解析」→ 观察到真实二次请求且渲染刷新。
