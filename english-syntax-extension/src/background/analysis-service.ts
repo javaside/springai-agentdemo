@@ -1,11 +1,7 @@
 import { GrammarRole } from "../shared/grammar";
 import type { CoreAnalysis, DetailAnalysis, TokenRange } from "../shared/grammar";
 import type { SentenceInput } from "../shared/protocol";
-import {
-  CORE_PROMPT_VERSION,
-  CORE_SCHEMA_VERSION,
-  DETAIL_PROMPT_VERSION,
-} from "../shared/versions";
+import { CORE_SCHEMA_VERSION } from "../shared/versions";
 import { validateCoreBatch, validateDetail } from "../language/analysis-validator";
 import type { ValidationError } from "../language/analysis-validator";
 import { createCoreCacheKey, createCorrectionCacheKey } from "./analysis-cache";
@@ -201,13 +197,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizedSentenceIdentity(profile: ModelProfile, sentence: SentenceInput): string {
-  const normalizedSentence = sentence.text.trim().replace(/\s+/gu, " ");
-  return JSON.stringify([profile.id, normalizedSentence]);
-}
-
-function providerOrigin(profile: ModelProfile): string {
-  return new URL(profile.baseUrl).origin;
+function normalizedSentenceText(sentence: SentenceInput): string {
+  return sentence.text.trim().replace(/\s+/gu, " ");
 }
 
 function cancellationError(): ModelRequestError {
@@ -345,7 +336,7 @@ export class CachedAnalysisService implements AnalysisService {
     const keyedSentences = await Promise.all(
       input.sentences.map(async (sentence) => ({
         sentence,
-        key: await this.coreKey(input.profile, sentence),
+        key: await this.coreKey(sentence),
       })),
     );
     const cached = await Promise.all(
@@ -585,22 +576,16 @@ export class CachedAnalysisService implements AnalysisService {
     }
   }
 
-  private coreKey(profile: ModelProfile, sentence: SentenceInput): Promise<string> {
+  private coreKey(sentence: SentenceInput): Promise<string> {
     return createCoreCacheKey({
-      normalizedSentence: normalizedSentenceIdentity(profile, sentence),
-      providerOrigin: providerOrigin(profile),
-      model: profile.model,
-      promptVersion: CORE_PROMPT_VERSION,
+      normalizedSentence: normalizedSentenceText(sentence),
       schemaVersion: CORE_SCHEMA_VERSION,
     });
   }
 
   private detailKey(input: DetailInput): Promise<string> {
     return createCoreCacheKey({
-      normalizedSentence: normalizedSentenceIdentity(input.profile, input.sentence),
-      providerOrigin: providerOrigin(input.profile),
-      model: input.profile.model,
-      promptVersion: DETAIL_PROMPT_VERSION,
+      normalizedSentence: normalizedSentenceText(input.sentence),
       schemaVersion: CORE_SCHEMA_VERSION,
       focus: input.focus,
     });
@@ -608,10 +593,7 @@ export class CachedAnalysisService implements AnalysisService {
 
   private correctionKey(input: CorrectionInput): Promise<string> {
     return createCorrectionCacheKey({
-      normalizedSentence: normalizedSentenceIdentity(input.profile, input.sentence),
-      providerOrigin: providerOrigin(input.profile),
-      model: input.profile.model,
-      promptVersion: CORE_PROMPT_VERSION,
+      normalizedSentence: normalizedSentenceText(input.sentence),
       schemaVersion: CORE_SCHEMA_VERSION,
       pageUrl: input.pageUrl,
       sentenceInstanceId: input.sentenceInstanceId,

@@ -1,22 +1,15 @@
 import "fake-indexeddb/auto";
 import { describe, expect, it, vi } from "vitest";
-import { CORE_PROMPT_VERSION } from "../shared/versions";
 import { AnalysisCache, createCoreCacheKey, createCorrectionCacheKey } from "./analysis-cache";
 
 const coreIdentity = {
   normalizedSentence: "The cat sleeps.",
-  providerOrigin: "https://api.example.com",
-  model: "syntax-model",
-  promptVersion: 1,
   schemaVersion: 1,
 };
 
 describe("analysis cache keys", () => {
   it.each([
     ["sentence", { normalizedSentence: "The dog sleeps." }],
-    ["provider origin", { providerOrigin: "https://other.example.com" }],
-    ["model", { model: "other-model" }],
-    ["prompt version", { promptVersion: 2 }],
     ["schema version", { schemaVersion: 2 }],
     ["focus interval", { focus: { startToken: 1, endToken: 2 } }],
   ])("separates keys by %s", async (_field, override) => {
@@ -26,14 +19,17 @@ describe("analysis cache keys", () => {
     expect(changed).not.toBe(baseline);
   });
 
-  it("invalidates every version-1 core cache entry after the prompt version bump", async () => {
-    expect(CORE_PROMPT_VERSION).toBe(2);
-    const previousVersionKey = await createCoreCacheKey({ ...coreIdentity, promptVersion: 1 });
-    const currentVersionKey = await createCoreCacheKey({
+  it("ignores profile, provider, model, and prompt-version fields entirely", async () => {
+    const baseline = await createCoreCacheKey(coreIdentity);
+    const withLegacyFields = await createCoreCacheKey({
       ...coreIdentity,
-      promptVersion: CORE_PROMPT_VERSION,
-    });
-    expect(currentVersionKey).not.toBe(previousVersionKey);
+      profileId: "profile-2",
+      providerOrigin: "https://other.example.com",
+      model: "other-model",
+      promptVersion: 99,
+    } as never);
+
+    expect(withLegacyFields).toBe(baseline);
   });
 
   it("separates correction context without including API keys", async () => {

@@ -24,9 +24,6 @@ export interface AnalysisCacheOptions {
 
 export interface CoreCacheKeyInput {
   normalizedSentence: string;
-  providerOrigin: string;
-  model: string;
-  promptVersion: number;
   schemaVersion: number;
   focus?: TokenRange;
 }
@@ -40,9 +37,6 @@ export interface CorrectionCacheKeyInput extends CoreCacheKeyInput {
 function coreIdentity(input: CoreCacheKeyInput): readonly unknown[] {
   return [
     input.normalizedSentence,
-    input.providerOrigin,
-    input.model,
-    input.promptVersion,
     input.schemaVersion,
     input.focus === undefined ? null : [input.focus.startToken, input.focus.endToken],
   ];

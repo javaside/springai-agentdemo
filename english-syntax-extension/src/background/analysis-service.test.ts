@@ -352,23 +352,30 @@ describe("CachedAnalysisService core orchestration", () => {
     expect(cache.core.size).toBe(1);
   });
 
-  it("isolates cache entries across profile switches even with the same endpoint and model", async () => {
-    const otherProfile = { ...profile, id: "profile-2", name: "Second" };
-    const { adapter, cache, service } = harness([
-      { sentences: [rawCore(sentenceOne)] },
-      { sentences: [rawCore(sentenceOne)] },
-    ]);
+  it("shares cache entries across profiles, providers, and models for the same sentence", async () => {
+    const otherProfile = {
+      ...profile,
+      id: "profile-2",
+      name: "Second",
+      baseUrl: "https://other-provider.example/v1",
+      model: "another-model",
+    };
+    const { adapter, cache, scheduler, service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
 
     const first = await service.analyzeCore(coreInput(), new AbortController().signal);
+    adapter.completeJson.mockClear();
+    scheduler.schedule.mockClear();
     const second = await service.analyzeCore(
       coreInput([sentenceOne], otherProfile),
       new AbortController().signal,
     );
 
     expect(first.result[0]!.modelProfileId).toBe("profile-1");
+    expect(second.cacheHit).toBe(true);
     expect(second.result[0]!.modelProfileId).toBe("profile-2");
-    expect(adapter.completeJson).toHaveBeenCalledTimes(2);
-    expect(cache.core.size).toBe(2);
+    expect(adapter.completeJson).not.toHaveBeenCalled();
+    expect(scheduler.schedule).not.toHaveBeenCalled();
+    expect(cache.core.size).toBe(1);
   });
 
   it.each([
