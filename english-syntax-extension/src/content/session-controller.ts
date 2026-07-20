@@ -24,12 +24,14 @@ export type SentencePhase =
   | "validating"
   | "ready"
   | "failed"
+  | "skipped"
   | "stale";
 
 export interface ControllerBlock {
   setExpectedSentenceIds(ids: readonly string[]): void;
   renderCore(sentence: string, tokens: readonly Token[], analysis: CoreAnalysis): void;
   renderFailure(sentenceId: string, sentence: string, message: string): void;
+  renderSkipped(sentenceId: string, sentence: string): void;
   setDetailLoading(sentenceId: string, focus: TokenRange): void;
   closeDetails(): void;
   renderDetail(analysis: DetailAnalysis): void;
@@ -180,6 +182,7 @@ export class SessionController {
       queued: records.filter(({ phase }) => phase === "queued").length,
       ready: records.filter(({ phase }) => phase === "ready").length,
       failed: records.filter(({ phase }) => phase === "failed").length,
+      skipped: records.filter(({ phase }) => phase === "skipped").length,
       ...(this.selectedProfileId === undefined ? {} : { profileId: this.selectedProfileId }),
     };
   }
@@ -325,7 +328,12 @@ export class SessionController {
       located.block.learningBlock.renderError(
         detail.sentenceId,
         detail.focus,
-        response === undefined ? "REQUEST_CANCELLED" : responseErrorMessage(response),
+        // NO_CACHE 是纯缓存模式的预期状态而非故障，面板只给中文引导文案、不带错误码前缀。
+        response !== undefined && response.type === "ERROR" && response.error.code === "NO_CACHE"
+          ? response.error.message
+          : response === undefined
+            ? "REQUEST_CANCELLED"
+            : responseErrorMessage(response),
       );
     }
   }
@@ -425,7 +433,13 @@ export class SessionController {
       this.pausedBlocks.add(blockId);
       return;
     }
-    if (block.sentences.every(({ phase }) => phase === "ready" || phase === "failed")) return;
+    if (
+      block.sentences.every(
+        ({ phase }) => phase === "ready" || phase === "failed" || phase === "skipped",
+      )
+    ) {
+      return;
+    }
     void this.analyzeBlock(block);
   }
 
@@ -468,9 +482,17 @@ export class SessionController {
     }
     for (const sentence of outgoing) this.transition(sentence, "validating");
     const analyses = response.type === "CORE_RESULT" ? response.analyses : [];
+    const cacheOnly = response.type === "CORE_RESULT" && response.cacheOnly === true;
     for (const sentence of outgoing) {
       const analysis = analyses.find(({ sentenceId }) => sentenceId === sentence.input.sentenceId);
       if (analysis === undefined) {
+        if (cacheOnly) {
+          // 纯缓存会话未命中不算失败：不标红、不给重试。部分命中时未命中句以纯原文
+          // 参与替换；整块全未命中则由 finishBlock 的守卫保持页面原始 DOM。
+          block.learningBlock.renderSkipped(sentence.input.sentenceId, sentence.input.text);
+          this.transition(sentence, "skipped");
+          continue;
+        }
         const failure = {
           sentenceId: sentence.input.sentenceId,
           sentence: sentence.input.text,
@@ -500,6 +522,11 @@ export class SessionController {
   private finishBlock(block: BlockRecord, failures: readonly SentenceFailure[]): void {
     const original = block.candidate.element;
     if (!isHTMLElement(original)) return;
+    // 纯缓存会话整块未命中：替换成纯文本副本会丢失页面原有标记，保持原 DOM。
+    if (block.sentences.length > 0 && block.sentences.every(({ phase }) => phase === "skipped")) {
+      this.emitStatus();
+      return;
+    }
     if (failures.length > 0) {
       block.replacement.showPartialFailure(original, block.learningBlock, failures);
     } else if (block.learningBlock.isReadyToReplace()) {
@@ -714,7 +741,9 @@ export class SessionController {
 
   private unfinishedBlockIds(): string[] {
     return [...this.blocks.values()].flatMap((block) =>
-      block.sentences.some(({ phase }) => phase !== "ready" && phase !== "failed")
+      block.sentences.some(
+        ({ phase }) => phase !== "ready" && phase !== "failed" && phase !== "skipped",
+      )
         ? [block.candidate.id]
         : [],
     );

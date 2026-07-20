@@ -2,8 +2,9 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GrammarRole } from "../shared/grammar";
-import type { CoreAnalysis, DetailAnalysis, Token } from "../shared/grammar";
+import type { CoreAnalysis, DetailAnalysis, Token, TokenRange } from "../shared/grammar";
 import type { RequestMessage, ResponseMessage } from "../shared/protocol";
+import { isSessionComplete } from "../shared/protocol";
 import type { CandidateBlock } from "./document-scanner";
 import { scanDocument } from "./document-scanner";
 import type {
@@ -23,6 +24,8 @@ class FakeLearningBlock implements ControllerBlock {
   cores: CoreAnalysis[] = [];
   details: DetailAnalysis[] = [];
   failures: Array<{ sentenceId: string; sentence: string; message: string }> = [];
+  skips: Array<{ sentenceId: string; sentence: string }> = [];
+  errors: Array<{ sentenceId: string; message: string }> = [];
   loading: string[] = [];
   closedDetails = 0;
 
@@ -40,6 +43,11 @@ class FakeLearningBlock implements ControllerBlock {
     this.resolved.add(sentenceId);
   }
 
+  renderSkipped(sentenceId: string, sentence: string): void {
+    this.skips.push({ sentenceId, sentence });
+    this.resolved.add(sentenceId);
+  }
+
   setDetailLoading(sentenceId: string): void {
     this.loading.push(sentenceId);
   }
@@ -52,7 +60,9 @@ class FakeLearningBlock implements ControllerBlock {
     this.details.push(analysis);
   }
 
-  renderError(): void {}
+  renderError(sentenceId: string, _focus: TokenRange, message: string): void {
+    this.errors.push({ sentenceId, message });
+  }
 
   isReadyToReplace(): boolean {
     return this.expected.length > 0 && this.expected.every((id) => this.resolved.has(id));
@@ -307,6 +317,154 @@ describe("SessionController", () => {
     });
     expect(subject.replacements[0]!.partialShows).toBe(1);
     expect(subject.replacements[0]!.shows).toBe(0);
+  });
+
+  it("renders hits, keeps misses as plain skipped text, and reports skipped in status", async () => {
+    const transport = new FakeTransport((message) =>
+      Promise.resolve({
+        version: 1,
+        requestId: message.requestId,
+        type: "CORE_RESULT",
+        analyses: message.type === "ANALYZE_CORE" ? [core(message.sentences[0]!.sentenceId)] : [],
+        cacheOnly: true,
+      }),
+    );
+    const subject = harness("Readers learn. Writers practice daily.", transport);
+
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.skipped).toBe(1));
+
+    const block = subject.learningBlocks[0]!;
+    expect(block.cores).toHaveLength(1);
+    expect(block.skips).toEqual([
+      { sentenceId: "sentence-2", sentence: "Writers practice daily." },
+    ]);
+    expect(block.failures).toHaveLength(0);
+    const status = subject.controller.status;
+    expect(status.failed).toBe(0);
+    expect(isSessionComplete(status)).toBe(true);
+    expect(subject.replacements[0]!.shows).toBe(1);
+    expect(subject.replacements[0]!.partialShows).toBe(0);
+  });
+
+  it("does not replace a block whose sentences are all cache misses", async () => {
+    const transport = new FakeTransport((message) =>
+      Promise.resolve({
+        version: 1,
+        requestId: message.requestId,
+        type: "CORE_RESULT",
+        analyses: [],
+        cacheOnly: true,
+      }),
+    );
+    const subject = harness("Readers learn. Writers practice daily.", transport);
+
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.skipped).toBe(2));
+
+    expect(subject.replacements[0]!.shows).toBe(0);
+    expect(subject.replacements[0]!.partialShows).toBe(0);
+    expect(subject.controller.status.failed).toBe(0);
+    expect(subject.learningBlocks[0]!.skips).toHaveLength(2);
+  });
+
+  it("still fails missing sentences when the response is not cacheOnly", async () => {
+    const transport = new FakeTransport((message) =>
+      Promise.resolve({
+        version: 1,
+        requestId: message.requestId,
+        type: "CORE_RESULT",
+        analyses: [],
+      }),
+    );
+    const subject = harness(undefined, transport);
+
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.failed).toBe(1));
+
+    expect(subject.learningBlocks[0]!.skips).toHaveLength(0);
+    expect(subject.controller.status.skipped).toBe(0);
+    expect(subject.learningBlocks[0]!.failures).toHaveLength(1);
+    expect(subject.replacements[0]!.partialShows).toBe(1);
+  });
+
+  it("renders the NO_CACHE detail message without the code prefix", async () => {
+    const subject = harness(
+      undefined,
+      new FakeTransport((message) =>
+        Promise.resolve(
+          message.type === "ANALYZE_DETAIL"
+            ? {
+                version: 1,
+                requestId: message.requestId,
+                type: "ERROR",
+                error: {
+                  code: "NO_CACHE",
+                  message: "该成分暂无缓存详解，配置模型后可获取",
+                  retryable: false,
+                },
+              }
+            : {
+                version: 1,
+                requestId: message.requestId,
+                type: "CORE_RESULT",
+                analyses:
+                  message.type === "ANALYZE_CORE"
+                    ? message.sentences.map((sentence) => core(sentence.sentenceId))
+                    : [],
+              },
+        ),
+      ),
+    );
+    await startAndEmit(subject);
+
+    await subject.controller.requestDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 1 },
+    });
+
+    expect(subject.learningBlocks[0]!.errors).toEqual([
+      { sentenceId: "sentence-1", message: "该成分暂无缓存详解，配置模型后可获取" },
+    ]);
+  });
+
+  it("keeps the code prefix for detail errors other than NO_CACHE", async () => {
+    const subject = harness(
+      undefined,
+      new FakeTransport((message) =>
+        Promise.resolve(
+          message.type === "ANALYZE_DETAIL"
+            ? {
+                version: 1,
+                requestId: message.requestId,
+                type: "ERROR",
+                error: { code: "NETWORK_ERROR", message: "网络请求失败", retryable: true },
+              }
+            : {
+                version: 1,
+                requestId: message.requestId,
+                type: "CORE_RESULT",
+                analyses:
+                  message.type === "ANALYZE_CORE"
+                    ? message.sentences.map((sentence) => core(sentence.sentenceId))
+                    : [],
+              },
+        ),
+      ),
+    );
+    await startAndEmit(subject);
+
+    await subject.controller.requestDetail({
+      sentenceId: "sentence-1",
+      focus: { startToken: 0, endToken: 1 },
+    });
+
+    expect(subject.learningBlocks[0]!.errors).toEqual([
+      { sentenceId: "sentence-1", message: "NETWORK_ERROR：网络请求失败" },
+    ]);
   });
 
   it("pauses new visible work, resumes it, and stop cancels and restores", async () => {

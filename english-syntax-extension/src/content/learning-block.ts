@@ -128,6 +128,13 @@ const STYLES = `
   overflow-wrap: anywhere;
 }
 
+.sentence-skipped {
+  inline-size: 100%;
+  max-inline-size: 100%;
+  margin-block: 0.35em;
+  overflow-wrap: anywhere;
+}
+
 .detail-annotations {
   margin-block-end: 0.45em;
 }
@@ -566,6 +573,16 @@ export class SyntaxLearningBlock {
     });
     failure.append(retry);
     this.#placeSentenceSection(sentenceId, failure);
+    this.#resolvedSentenceIds.add(sentenceId);
+  }
+
+  /** 纯缓存模式未命中：按原文渲染，无错误样式、无重试按钮。 */
+  renderSkipped(sentenceId: string, sentence: string): void {
+    this.#assertExpected(sentenceId);
+    const section = createElement("section", "sentence-skipped");
+    section.dataset.sentenceId = sentenceId;
+    section.append(createElement("span", "original-sentence", sentence));
+    this.#placeSentenceSection(sentenceId, section);
     this.#resolvedSentenceIds.add(sentenceId);
   }
 

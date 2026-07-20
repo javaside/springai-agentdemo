@@ -98,6 +98,22 @@ describe("SyntaxLearningBlock", () => {
     expect(element.isReadyToReplace()).toBe(true);
   });
 
+  it("renders a skipped sentence as plain original text without failure styling or retry", () => {
+    const element = block();
+    element.setExpectedSentenceIds(["sentence-1", "sentence-2"]);
+    element.renderCore(sentence, tokens, analysis);
+    expect(element.isReadyToReplace()).toBe(false);
+
+    element.renderSkipped("sentence-2", "A cache-missed original sentence.");
+
+    const section = element.host.shadowRoot!.querySelector('[data-sentence-id="sentence-2"]')!;
+    expect(section.classList.contains("sentence-skipped")).toBe(true);
+    expect(section.classList.contains("sentence-failure")).toBe(false);
+    expect(section.textContent).toBe("A cache-missed original sentence.");
+    expect(section.querySelector("button")).toBeNull();
+    expect(element.isReadyToReplace()).toBe(true);
+  });
+
   it("renders role, underlined English, then component Chinese without a sentence translation", () => {
     const element = block();
     document.body.append(element.host);
