@@ -232,4 +232,34 @@ describe("request scheduler", () => {
     scheduler.cancelDocument("document-1");
     await expect(running).rejects.toMatchObject({ code: "REQUEST_CANCELLED" });
   });
+
+  it("runs prefetch-detail requests after every other priority", async () => {
+    const order: string[] = [];
+    const scheduler = new RequestScheduler<string, string>({
+      concurrency: 1,
+      fetchTask: async (batch) => {
+        order.push(...batch.map(({ input }) => input));
+        return batch.map(({ input }) => input);
+      },
+    });
+    const request = (cacheKey: string, priority: SchedulerPriority) =>
+      scheduler.schedule({
+        cacheKey,
+        documentId: "doc",
+        priority,
+        sentenceCount: 1,
+        input: cacheKey,
+      });
+
+    scheduler.pause();
+    const requests = [
+      request("p-detail", "prefetch-detail"),
+      request("p-core", "prefetch-core"),
+      request("click", "detail-click"),
+    ];
+    scheduler.resume();
+    await Promise.all(requests);
+    expect(order.indexOf("p-detail")).toBeGreaterThan(order.indexOf("p-core"));
+    expect(order.indexOf("p-core")).toBeGreaterThan(order.indexOf("click"));
+  });
 });

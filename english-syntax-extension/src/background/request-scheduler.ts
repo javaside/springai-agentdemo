@@ -1,6 +1,7 @@
 import type { ExtensionError, ExtensionErrorCode } from "../shared/errors";
 
-export type SchedulerPriority = "user-retry" | "detail-click" | "visible-core" | "prefetch-core";
+export type SchedulerPriority =
+  "user-retry" | "detail-click" | "visible-core" | "prefetch-core" | "prefetch-detail";
 
 export interface ScheduledRequest<Input> {
   cacheKey: string;
@@ -61,6 +62,7 @@ const PRIORITY_RANK: Readonly<Record<SchedulerPriority, number>> = {
   "detail-click": 1,
   "visible-core": 2,
   "prefetch-core": 3,
+  "prefetch-detail": 4,
 };
 
 function cancellationError(): SchedulerRequestError {
