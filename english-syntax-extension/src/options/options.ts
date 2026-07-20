@@ -527,10 +527,16 @@ function runtimeDependencies(): OptionsDependencies {
   const repository = new ConfigRepository();
   // 选项页与 service worker 同源同库(同 DATABASE_VERSION):直连读写,
   // 大文件不过消息通道;IndexedDB 事务自身保证与 SW 的并发安全。
+  // 打开失败不缓存 rejection:清空记忆化,让下次点击真正重试。
   let cachePromise: Promise<AnalysisCache> | undefined;
   const openCache = (): Promise<AnalysisCache> =>
     (cachePromise ??= (async () =>
-      AnalysisCache.open({ limitBytes: await repository.getCacheLimitBytes() }))());
+      AnalysisCache.open({ limitBytes: await repository.getCacheLimitBytes() }))().catch(
+      (error: unknown) => {
+        cachePromise = undefined;
+        throw error;
+      },
+    ));
   const send = (message: unknown): Promise<ResponseMessage> => chrome.runtime.sendMessage(message);
   return {
     listProfiles: () => repository.listPublicProfiles(),

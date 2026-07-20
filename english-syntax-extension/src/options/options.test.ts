@@ -385,12 +385,13 @@ describe("cache import/export", () => {
     const subject = dependencies();
     await createOptionsPage(root(), subject);
     const urlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fake");
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
 
     document.querySelector<HTMLButtonElement>("[data-action='export-cache']")!.click();
 
     await vi.waitFor(() => expect(subject.exportCacheFile).toHaveBeenCalledOnce());
     expect(urlSpy).toHaveBeenCalledOnce();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:fake");
     expect(document.body.textContent).toContain("已导出 0 条缓存");
   });
 
