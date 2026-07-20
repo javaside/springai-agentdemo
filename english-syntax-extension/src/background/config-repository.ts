@@ -21,6 +21,7 @@ interface StorageArea {
 const PROFILES_KEY = "profiles.v1";
 const ACTIVE_PROFILE_ID_KEY = "activeProfileId.v1";
 const CACHE_LIMIT_MB_KEY = "cacheLimitMb.v1";
+const PREFETCH_DETAIL_KEY = "prefetchDetail.v1";
 const DEFAULT_CACHE_LIMIT_MB = 50;
 const CACHE_LIMIT_CHOICES_MB = new Set([10, 50, 100, 200]);
 const FORBIDDEN_HEADERS = new Set([
@@ -156,5 +157,14 @@ export class ConfigRepository {
       throw new Error("Analysis cache limit must be 10, 50, 100, or 200 MB");
     }
     await this.storage.set({ [CACHE_LIMIT_MB_KEY]: limitMb });
+  }
+
+  /** 「预载成分详解」全局开关;非 true 的任何存量值一律按 false。 */
+  async getPrefetchDetail(): Promise<boolean> {
+    return (await this.storage.get(PREFETCH_DETAIL_KEY))[PREFETCH_DETAIL_KEY] === true;
+  }
+
+  async setPrefetchDetail(enabled: boolean): Promise<void> {
+    await this.storage.set({ [PREFETCH_DETAIL_KEY]: enabled === true });
   }
 }

@@ -142,6 +142,24 @@ describe("ConfigRepository", () => {
 
     await expect(repository.setCacheLimitMb(limitMb)).rejects.toThrow("cache limit");
   });
+
+  describe("prefetch detail flag", () => {
+    it("defaults to false and round-trips true", async () => {
+      const repository = new ConfigRepository(storageMock().area);
+      expect(await repository.getPrefetchDetail()).toBe(false);
+
+      await repository.setPrefetchDetail(true);
+      expect(await repository.getPrefetchDetail()).toBe(true);
+
+      await repository.setPrefetchDetail(false);
+      expect(await repository.getPrefetchDetail()).toBe(false);
+    });
+
+    it("treats a corrupted stored value as false", async () => {
+      const repository = new ConfigRepository(storageMock({ "prefetchDetail.v1": "yes" }).area);
+      expect(await repository.getPrefetchDetail()).toBe(false);
+    });
+  });
 });
 
 describe("service worker security initialization", () => {
