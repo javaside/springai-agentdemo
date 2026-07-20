@@ -261,9 +261,12 @@ export function registerServiceWorker(
 
   const profileFor = async (tabId: number): Promise<ModelProfile | undefined> => {
     const selectedId = activeTabs.get(tabId)?.status.profileId;
-    return selectedId === undefined
-      ? dependencies.configRepository.getActiveProfile()
-      : dependencies.configRepository.getProfile(selectedId);
+    if (selectedId === undefined) return dependencies.configRepository.getActiveProfile();
+    // pin 的 profile 可能已被删除:回退当前启用配置,而不是静默降级纯缓存。
+    return (
+      (await dependencies.configRepository.getProfile(selectedId)) ??
+      dependencies.configRepository.getActiveProfile()
+    );
   };
 
   const route = async (

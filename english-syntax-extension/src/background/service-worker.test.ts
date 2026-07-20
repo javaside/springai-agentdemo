@@ -703,10 +703,35 @@ describe("service worker orchestration", () => {
     );
 
     expect(response).toMatchObject({ type: "CORE_RESULT", cacheOnly: true });
-    expect((response as Extract<ResponseMessage, { type: "CORE_RESULT" }>).analyses).toHaveLength(
-      1,
-    );
+    expect((response as Extract<ResponseMessage, { type: "CORE_RESULT" }>).analyses).toEqual([
+      cachedAnalysis,
+    ]);
     expect(lookupCore).toHaveBeenCalledWith([sentence]);
+  });
+
+  it("falls back to the active profile when the pinned profile was deleted", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies(), subject.api);
+    const listener = subject.events.runtime.onMessage.listeners[0]!;
+    await dispatch(listener, {
+      version: 1,
+      requestId: "status-1",
+      type: "SESSION_STATUS",
+      tabId: 7,
+      documentId: "document-1",
+      status: { ...emptyRunningStatus, profileId: "profile-deleted" },
+    });
+
+    const response = await dispatch(
+      listener,
+      pageRequest({ type: "ANALYZE_CORE", sentences: [sentence] }),
+    );
+
+    expect(response.type).toBe("CORE_RESULT");
+    expect(response).not.toHaveProperty("cacheOnly");
+    const analyses = (response as Extract<ResponseMessage, { type: "CORE_RESULT" }>).analyses;
+    expect(analyses).toHaveLength(1);
+    expect(analyses[0]!.modelProfileId).toBe("profile-a");
   });
 
   it("ANALYZE_DETAIL returns NO_CACHE on a miss and DETAIL_RESULT on a hit", async () => {

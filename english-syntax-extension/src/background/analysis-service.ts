@@ -485,17 +485,16 @@ export class CachedAnalysisService implements AnalysisService {
   }
 
   async lookupCore(sentences: readonly SentenceInput[]): Promise<CoreAnalysis[]> {
-    const results: CoreAnalysis[] = [];
-    for (const sentence of sentences) {
-      const key = await this.coreKey(sentence);
-      const value = validateCachedCore(
-        await this.options.cache.getCore<unknown>(key),
+    const cached = await Promise.all(
+      sentences.map(async (sentence) => ({
         sentence,
-        CACHE_ONLY_PROFILE_ID,
-      );
-      if (value !== undefined) results.push(value);
-    }
-    return results;
+        value: await this.options.cache.getCore<unknown>(await this.coreKey(sentence)),
+      })),
+    );
+    return cached.flatMap(({ sentence, value }) => {
+      const analysis = validateCachedCore(value, sentence, CACHE_ONLY_PROFILE_ID);
+      return analysis === undefined ? [] : [analysis];
+    });
   }
 
   async lookupDetail(input: DetailLookupInput): Promise<DetailAnalysis | undefined> {
