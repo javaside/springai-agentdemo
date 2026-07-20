@@ -227,3 +227,40 @@ describe("session completion", () => {
     expect(isSessionComplete(status(overrides))).toBe(false);
   });
 });
+
+describe("prefetch protocol", () => {
+  it("accepts START_SESSION with and without the prefetchDetail flag", () => {
+    const base = {
+      ...page,
+      type: "START_SESSION",
+    };
+    expect(isRequestMessage(base)).toBe(true);
+    expect(isRequestMessage({ ...base, prefetchDetail: true })).toBe(true);
+    expect(isRequestMessage({ ...base, prefetchDetail: false })).toBe(false);
+  });
+
+  it("accepts PREFETCH_SENTENCE_DETAILS with sentence and core only", () => {
+    const message = {
+      ...page,
+      type: "PREFETCH_SENTENCE_DETAILS",
+      sentence,
+      core,
+    };
+    expect(isRequestMessage(message)).toBe(true);
+    expect(isRequestMessage({ ...message, focus: { startToken: 0, endToken: 0 } })).toBe(false);
+  });
+
+  it("keeps isSessionComplete independent of detail counters", () => {
+    const status = {
+      state: "running",
+      discovered: 2,
+      queued: 0,
+      ready: 2,
+      failed: 0,
+      detailTotal: 6,
+      detailReady: 1,
+      detailFailed: 0,
+    } as const;
+    expect(isSessionComplete(status)).toBe(true);
+  });
+});

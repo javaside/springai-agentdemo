@@ -20,7 +20,7 @@ export interface SentenceInput {
 }
 
 export type RequestMessage =
-  | (PageRequestBase & { type: "START_SESSION" })
+  | (PageRequestBase & { type: "START_SESSION"; prefetchDetail?: true })
   | (PageRequestBase & { type: "PAUSE_SESSION" })
   | (PageRequestBase & { type: "STOP_SESSION" })
   | (PageRequestBase & { type: "GET_SESSION_STATUS" })
@@ -31,6 +31,11 @@ export type RequestMessage =
       sentence: SentenceInput;
       core: CoreAnalysis;
       focus: TokenRange;
+    })
+  | (PageRequestBase & {
+      type: "PREFETCH_SENTENCE_DETAILS";
+      sentence: SentenceInput;
+      core: CoreAnalysis;
     })
   | (PageRequestBase & {
       type: "REANALYZE_WITH_FEEDBACK";
@@ -55,6 +60,12 @@ export interface SessionStatus {
   failed: number;
   /** 纯缓存会话中未命中而保持原文的句数。 */
   skipped?: number;
+  /** 详解预载:已就绪句子的成分总数(仅预载开启的会话出现)。 */
+  detailTotal?: number;
+  /** 详解预载:已确认入缓存的成分数(含预载前已命中缓存的)。 */
+  detailReady?: number;
+  /** 详解预载:repair 后仍失败的成分数。 */
+  detailFailed?: number;
   profileId?: string;
 }
 
@@ -77,6 +88,7 @@ export type ResponseMessage =
   | (MessageBase & { type: "SESSION_STATUS"; status: SessionStatus })
   | (MessageBase & { type: "CORE_RESULT"; analyses: CoreAnalysis[]; cacheOnly?: true })
   | (MessageBase & { type: "DETAIL_RESULT"; analysis: DetailAnalysis })
+  | (MessageBase & { type: "SENTENCE_DETAILS_RESULT"; succeeded: number; failed: number })
   | (MessageBase & { type: "CACHE_STATS"; stats: CacheStats })
   | (MessageBase & {
       type: "PROFILE_TEST_RESULT";
@@ -183,13 +195,25 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
   }
 
   switch (value.type) {
-    case "START_SESSION":
     case "PAUSE_SESSION":
     case "STOP_SESSION":
     case "GET_SESSION_STATUS":
     case "REANALYZE_VISIBLE":
     case "PARSE_CONTEXT_BLOCK":
       return hasOnlyKeys(value, pageOnlyKeys) && hasPageContext(value);
+    case "START_SESSION":
+      return (
+        hasOnlyKeys(value, [...pageOnlyKeys, "prefetchDetail"]) &&
+        hasPageContext(value) &&
+        (value.prefetchDetail === undefined || value.prefetchDetail === true)
+      );
+    case "PREFETCH_SENTENCE_DETAILS":
+      return (
+        hasOnlyKeys(value, [...pageOnlyKeys, "sentence", "core"]) &&
+        hasPageContext(value) &&
+        isSentenceInput(value.sentence) &&
+        isCoreAnalysis(value.core)
+      );
     case "ANALYZE_CORE":
       return (
         hasOnlyKeys(value, [...pageOnlyKeys, "sentences", "bypassCache"]) &&

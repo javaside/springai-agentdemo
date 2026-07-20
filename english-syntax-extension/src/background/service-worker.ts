@@ -385,6 +385,17 @@ export function registerServiceWorker(
             return errorResponse(request.requestId, code);
           }
         }
+        case "PREFETCH_SENTENCE_DETAILS": {
+          // Routing implemented in a later task; acknowledge with empty counts
+          // so the message contract typechecks in the meantime.
+          return {
+            version: MESSAGE_VERSION,
+            requestId: request.requestId,
+            type: "SENTENCE_DETAILS_RESULT",
+            succeeded: 0,
+            failed: 0,
+          };
+        }
         case "REANALYZE_WITH_FEEDBACK": {
           const profile = await profileFor(request.tabId);
           if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
