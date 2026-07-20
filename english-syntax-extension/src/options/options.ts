@@ -4,6 +4,14 @@ import {
   type PublicModelProfile,
 } from "../background/config-repository";
 import { hostPermissionPattern, normalizeBaseUrl } from "../background/base-url";
+import { AnalysisCache } from "../background/analysis-cache";
+import {
+  exportCacheFile,
+  importCacheFile,
+  type CacheExportFile,
+  type ImportFailureReason,
+  type ImportReport,
+} from "./cache-transfer";
 import type { ExtensionErrorCode } from "../shared/errors";
 import type { CacheStats, ResponseMessage } from "../shared/protocol";
 import { MESSAGE_VERSION } from "../shared/versions";
@@ -40,6 +48,8 @@ export interface OptionsDependencies {
   getActiveProfileId: () => Promise<string | undefined>;
   setActiveProfile: (profileId: string) => Promise<void>;
   confirm: (message: string) => boolean;
+  exportCacheFile: () => Promise<CacheExportFile>;
+  importCacheFile: (text: string) => Promise<ImportReport>;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -219,6 +229,17 @@ export async function createOptionsPage(
   const clearButton = element("button", "options-page__danger", "清空缓存");
   clearButton.type = "button";
   clearButton.dataset.action = "clear-cache";
+  const exportButton = element("button", "options-page__secondary", "导出缓存");
+  exportButton.type = "button";
+  exportButton.dataset.action = "export-cache";
+  const importButton = element("button", "options-page__secondary", "导入缓存");
+  importButton.type = "button";
+  importButton.dataset.action = "import-cache";
+  const importInput = element("input");
+  importInput.type = "file";
+  importInput.accept = ".json,application/json";
+  importInput.dataset.importInput = "";
+  importInput.hidden = true;
   const clearStatus = element("p", "options-page__result");
   clearStatus.setAttribute("role", "status");
   cacheSection.append(
@@ -228,6 +249,9 @@ export async function createOptionsPage(
     cacheLimit,
     cacheHint,
     clearButton,
+    exportButton,
+    importButton,
+    importInput,
     clearStatus,
   );
   root.append(heading, intro, warning, profileSection, cacheSection);
@@ -432,9 +456,62 @@ export async function createOptionsPage(
     if (!dependencies.confirm("确定清空全部分析缓存吗？此操作不会删除模型配置。")) return;
     void dependencies.clearCache().then(async () => {
       clearStatus.textContent = "缓存已清空，模型配置保持不变。";
-      const stats = await dependencies.getCacheStats();
-      cacheStats.textContent = `${stats.entries} 条，估算占用 ${cacheSize(stats.estimatedBytes)}`;
+      await refreshStats();
     });
+  });
+
+  const refreshStats = async (): Promise<void> => {
+    const stats = await dependencies.getCacheStats();
+    cacheStats.textContent = `${stats.entries} 条，估算占用 ${cacheSize(stats.estimatedBytes)}`;
+  };
+
+  const importFailureMessage = (reason: ImportFailureReason): string => {
+    switch (reason) {
+      case "not-json":
+        return "导入失败：文件不是有效的 JSON。";
+      case "bad-format":
+        return "导入失败：文件格式不符，不是本扩展导出的缓存文件。";
+      case "schema-mismatch":
+        return "导入失败：缓存 schema 版本不匹配，请让对方升级扩展后重新导出。";
+    }
+  };
+
+  exportButton.addEventListener("click", () => {
+    void (async () => {
+      try {
+        const file = await dependencies.exportCacheFile();
+        const blob = new Blob([JSON.stringify(file)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const anchor = element("a");
+        anchor.href = url;
+        anchor.download = `english-syntax-cache-${file.exportedAt.slice(0, 10).replaceAll("-", "")}.json`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+        clearStatus.textContent = `已导出 ${file.core.length + file.detail.length} 条缓存。`;
+      } catch {
+        clearStatus.textContent = "导出失败，请重试。";
+      }
+    })();
+  });
+
+  importButton.addEventListener("click", () => importInput.click());
+  importInput.addEventListener("change", () => {
+    const file = importInput.files?.[0];
+    if (file === undefined) return;
+    importInput.value = "";
+    void (async () => {
+      try {
+        const report = await dependencies.importCacheFile(await file.text());
+        if (!report.ok) {
+          clearStatus.textContent = importFailureMessage(report.reason);
+          return;
+        }
+        clearStatus.textContent = `导入完成：新增 ${report.added} 条，已有跳过 ${report.skipped} 条，无效丢弃 ${report.invalid} 条。`;
+        await refreshStats();
+      } catch {
+        clearStatus.textContent = "导入失败：读取或写入缓存时出错，请重试。";
+      }
+    })();
   });
 
   const [stats, limit] = await Promise.all([
@@ -448,6 +525,12 @@ export async function createOptionsPage(
 
 function runtimeDependencies(): OptionsDependencies {
   const repository = new ConfigRepository();
+  // 选项页与 service worker 同源同库(同 DATABASE_VERSION):直连读写,
+  // 大文件不过消息通道;IndexedDB 事务自身保证与 SW 的并发安全。
+  let cachePromise: Promise<AnalysisCache> | undefined;
+  const openCache = (): Promise<AnalysisCache> =>
+    (cachePromise ??= (async () =>
+      AnalysisCache.open({ limitBytes: await repository.getCacheLimitBytes() }))());
   const send = (message: unknown): Promise<ResponseMessage> => chrome.runtime.sendMessage(message);
   return {
     listProfiles: () => repository.listPublicProfiles(),
@@ -499,6 +582,8 @@ function runtimeDependencies(): OptionsDependencies {
     getActiveProfileId: () => repository.getActiveProfileId(),
     setActiveProfile: (profileId) => repository.setActiveProfile(profileId),
     confirm: (message) => window.confirm(message),
+    exportCacheFile: async () => exportCacheFile(await openCache()),
+    importCacheFile: async (text) => importCacheFile(await openCache(), text),
   };
 }
 

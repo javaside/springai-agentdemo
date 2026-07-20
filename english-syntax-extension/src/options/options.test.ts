@@ -31,6 +31,19 @@ function dependencies(overrides: Partial<OptionsDependencies> = {}): OptionsDepe
     getActiveProfileId: vi.fn(() => Promise.resolve(undefined as string | undefined)),
     setActiveProfile: vi.fn(() => Promise.resolve()),
     confirm: vi.fn(() => true),
+    exportCacheFile: vi.fn(() =>
+      Promise.resolve({
+        format: "english-syntax-cache" as const,
+        formatVersion: 1 as const,
+        schemaVersion: 1,
+        exportedAt: "2026-07-20T00:00:00.000Z",
+        core: [],
+        detail: [],
+      }),
+    ),
+    importCacheFile: vi.fn(() =>
+      Promise.resolve({ ok: true as const, added: 2, skipped: 1, invalid: 0 }),
+    ),
     ...overrides,
   };
 }
@@ -349,5 +362,73 @@ describe("Options page", () => {
     );
     expect(activate.disabled).toBe(false);
     expect(activate.textContent).toBe("设为启用");
+  });
+});
+
+describe("cache import/export", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  });
+
+  it("renders export and import controls inside the cache panel", async () => {
+    await createOptionsPage(root(), dependencies());
+
+    expect(document.querySelector("[data-action='export-cache']")?.textContent).toBe("导出缓存");
+    expect(document.querySelector("[data-action='import-cache']")?.textContent).toBe("导入缓存");
+    const fileInput = document.querySelector<HTMLInputElement>("[data-import-input]");
+    expect(fileInput?.type).toBe("file");
+    expect(fileInput?.accept).toBe(".json,application/json");
+  });
+
+  it("invokes the export dependency and triggers a download when 导出缓存 is clicked", async () => {
+    const subject = dependencies();
+    await createOptionsPage(root(), subject);
+    const urlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fake");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    document.querySelector<HTMLButtonElement>("[data-action='export-cache']")!.click();
+
+    await vi.waitFor(() => expect(subject.exportCacheFile).toHaveBeenCalledOnce());
+    expect(urlSpy).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain("已导出 0 条缓存");
+  });
+
+  it("shows merge counts and refreshes stats after a successful import", async () => {
+    const subject = dependencies();
+    await createOptionsPage(root(), subject);
+
+    const fileInput = document.querySelector<HTMLInputElement>("[data-import-input]")!;
+    const file = new File([JSON.stringify({ any: "thing" })], "cache.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(fileInput, "files", { value: [file], configurable: true });
+    fileInput.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("新增 2 条，已有跳过 1 条，无效丢弃 0 条"),
+    );
+    expect(subject.importCacheFile).toHaveBeenCalledWith(JSON.stringify({ any: "thing" }));
+    expect(subject.getCacheStats).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps every import failure reason to a Chinese message", async () => {
+    for (const [reason, message] of [
+      ["not-json", "不是有效的 JSON"],
+      ["bad-format", "文件格式不符"],
+      ["schema-mismatch", "schema 版本不匹配"],
+    ] as const) {
+      const subject = dependencies({
+        importCacheFile: vi.fn(() => Promise.resolve({ ok: false as const, reason })),
+      });
+      await createOptionsPage(root(), subject);
+      const fileInput = document.querySelector<HTMLInputElement>("[data-import-input]")!;
+      Object.defineProperty(fileInput, "files", {
+        value: [new File(["x"], "cache.json")],
+        configurable: true,
+      });
+      fileInput.dispatchEvent(new Event("change"));
+      await vi.waitFor(() => expect(document.body.textContent).toContain(message));
+    }
   });
 });
