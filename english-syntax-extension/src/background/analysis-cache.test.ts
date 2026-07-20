@@ -140,3 +140,52 @@ describe("AnalysisCache", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("transfer entries", () => {
+  it("exports key/value pairs of one store without bookkeeping fields", async () => {
+    const cache = await emptyCache();
+    await cache.putCore("a".repeat(64), "profile-x", { components: [1] });
+    await cache.putDetail("b".repeat(64), "profile-x", { structures: [] });
+
+    const core = await cache.exportEntries("core");
+    const detail = await cache.exportEntries("detail");
+
+    expect(core).toEqual([{ key: "a".repeat(64), value: { components: [1] } }]);
+    expect(detail).toEqual([{ key: "b".repeat(64), value: { structures: [] } }]);
+  });
+
+  it("imports only missing keys and never overwrites local entries", async () => {
+    const cache = await emptyCache();
+    await cache.putCore("a".repeat(64), "profile-x", { local: true });
+
+    const outcome = await cache.importEntries(
+      "core",
+      [
+        { key: "a".repeat(64), value: { imported: true } },
+        { key: "c".repeat(64), value: { imported: true } },
+      ],
+      "imported",
+    );
+
+    expect(outcome).toEqual({ added: 1, skipped: 1 });
+    expect(await cache.getCore("a".repeat(64))).toEqual({ local: true });
+    expect(await cache.getCore("c".repeat(64))).toEqual({ imported: true });
+  });
+
+  it("enforces the byte limit once after a bulk import", async () => {
+    const cache = await emptyCache(600);
+    const outcome = await cache.importEntries(
+      "core",
+      [
+        { key: "d".repeat(64), value: { pad: "x".repeat(10) } },
+        { key: "e".repeat(64), value: { pad: "y".repeat(10) } },
+        { key: "f".repeat(64), value: { pad: "z".repeat(10) } },
+      ],
+      "imported",
+    );
+
+    expect(outcome.added).toBe(3);
+    const stats = await cache.stats();
+    expect(stats.estimatedBytes).toBeLessThanOrEqual(600);
+  });
+});

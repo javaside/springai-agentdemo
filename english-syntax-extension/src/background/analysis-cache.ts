@@ -22,6 +22,19 @@ export interface AnalysisCacheOptions {
   now?: () => number;
 }
 
+/** 可导入导出的 store(correction 与页面实例绑定,跨人不可命中,不参与共享)。 */
+export type TransferStoreName = "core" | "detail";
+
+export interface TransferEntry {
+  key: string;
+  value: unknown;
+}
+
+export interface ImportOutcome {
+  added: number;
+  skipped: number;
+}
+
 export interface CoreCacheKeyInput {
   normalizedSentence: string;
   schemaVersion: number;
@@ -173,6 +186,46 @@ export class AnalysisCache {
 
   async putCorrection<T>(key: string, profileId: string, value: T): Promise<void> {
     await this.put("correction", key, profileId, value);
+  }
+
+  async exportEntries(storeName: TransferStoreName): Promise<TransferEntry[]> {
+    const transaction = this.database.transaction(storeName, "readonly");
+    const done = transactionDone(transaction);
+    const records = await requestResult<CacheRecord<unknown>[]>(
+      transaction.objectStore(storeName).getAll(),
+    );
+    await done;
+    return records.map(({ key, value }) => ({ key, value }));
+  }
+
+  /** 本地优先合并:已有键跳过,只写缺失键;整批一个事务,最后统一执行一次 LRU 限额。 */
+  async importEntries(
+    storeName: TransferStoreName,
+    entries: readonly TransferEntry[],
+    profileId: string,
+  ): Promise<ImportOutcome> {
+    const transaction = this.database.transaction(storeName, "readwrite");
+    const done = transactionDone(transaction);
+    const store = transaction.objectStore(storeName);
+    let added = 0;
+    for (const entry of entries) {
+      const existing = await requestResult<CacheRecord<unknown> | undefined>(store.get(entry.key));
+      if (existing !== undefined) continue;
+      const timestamp = this.nextTimestamp();
+      const record: CacheRecord<unknown> = {
+        key: entry.key,
+        profileId,
+        value: entry.value,
+        createdAt: timestamp,
+        lastAccessedAt: timestamp,
+        estimatedBytes: estimateBytes(entry.value),
+      };
+      store.put(record);
+      added += 1;
+    }
+    await done;
+    await this.enforceLimit();
+    return { added, skipped: entries.length - added };
   }
 
   async stats(): Promise<CacheStats> {
