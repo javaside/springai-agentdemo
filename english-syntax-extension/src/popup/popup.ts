@@ -96,12 +96,15 @@ export async function createPopupPage(
       : await dependencies.getStatus(context).catch(() => EMPTY_STATUS);
 
   const modelLine = profile === undefined ? "" : `${profile.name} · ${profile.model}`;
+  const cacheOnly = profile === undefined;
   let command: PopupCommand = "START_SESSION";
 
   const renderStatus = (): void => {
-    subline.textContent = modelLine;
+    subline.textContent = cacheOnly
+      ? "尚未配置模型，仅显示已缓存的解析；点右上角 ⚙︎ 配置。"
+      : modelLine;
     secondary.remove();
-    if (profile === undefined) {
+    if (cacheOnly && !supported) {
       primary.textContent = "去配置模型";
       primary.dataset.action = "open-options";
       primary.disabled = false;
@@ -119,13 +122,15 @@ export async function createPopupPage(
       primary.textContent = "恢复网页原文";
       command = "STOP_SESSION";
     } else if (status.state === "running") {
-      primary.textContent = `解析中… ${status.ready + status.failed}/${status.discovered}（点击暂停）`;
+      primary.textContent = cacheOnly
+        ? `缓存命中 ${status.ready}/${status.discovered} 句（点击暂停）`
+        : `解析中… ${status.ready + status.failed}/${status.discovered}（点击暂停）`;
       command = "PAUSE_SESSION";
     } else if (status.state === "paused") {
       primary.textContent = "继续学习";
       command = "START_SESSION";
     } else {
-      primary.textContent = "开始学习";
+      primary.textContent = cacheOnly ? "查看缓存" : "开始学习";
       command = "START_SESSION";
     }
     if (status.state === "running" || status.state === "paused") {
@@ -137,7 +142,7 @@ export async function createPopupPage(
   };
 
   const runCommand = (type: PopupCommand): void => {
-    if (profile === undefined) {
+    if (cacheOnly && !supported) {
       dependencies.openOptions();
       return;
     }
