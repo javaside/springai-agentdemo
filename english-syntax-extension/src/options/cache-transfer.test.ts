@@ -4,6 +4,7 @@ import type { TransferEntry, TransferStoreName } from "../background/analysis-ca
 import {
   CACHE_FILE_FORMAT,
   CACHE_FILE_FORMAT_VERSION,
+  IMPORTED_PROFILE_ID,
   exportCacheFile,
   importCacheFile,
   type CacheTransferPort,
@@ -15,17 +16,21 @@ const KEY_B = "b".repeat(64);
 function fakePort(initial: Partial<Record<TransferStoreName, TransferEntry[]>> = {}): {
   port: CacheTransferPort;
   written: Record<TransferStoreName, TransferEntry[]>;
+  receivedProfileIds: string[];
 } {
   const stores: Record<TransferStoreName, TransferEntry[]> = {
     core: [...(initial.core ?? [])],
     detail: [...(initial.detail ?? [])],
   };
   const written: Record<TransferStoreName, TransferEntry[]> = { core: [], detail: [] };
+  const receivedProfileIds: string[] = [];
   return {
     written,
+    receivedProfileIds,
     port: {
       exportEntries: (store) => Promise.resolve([...stores[store]]),
-      importEntries: (store, entries) => {
+      importEntries: (store, entries, profileId) => {
+        receivedProfileIds.push(profileId);
         const existing = new Set(stores[store].map(({ key }) => key));
         const added = entries.filter(({ key }) => !existing.has(key));
         stores[store].push(...added);
@@ -69,7 +74,9 @@ describe("exportCacheFile", () => {
 
 describe("importCacheFile", () => {
   it("merges valid entries and reports added/skipped/invalid counts", async () => {
-    const { port } = fakePort({ core: [{ key: KEY_A, value: { local: true } }] });
+    const { port, receivedProfileIds } = fakePort({
+      core: [{ key: KEY_A, value: { local: true } }],
+    });
     const file = validFile();
     (file.core as unknown[]).push(
       { key: "not-hex", value: {} },
@@ -79,6 +86,7 @@ describe("importCacheFile", () => {
     const report = await importCacheFile(port, JSON.stringify(file));
 
     expect(report).toEqual({ ok: true, added: 1, skipped: 1, invalid: 2 });
+    expect(receivedProfileIds).toEqual([IMPORTED_PROFILE_ID, IMPORTED_PROFILE_ID]);
   });
 
   it("is idempotent: importing the same file twice skips everything", async () => {
@@ -98,13 +106,25 @@ describe("importCacheFile", () => {
   });
 
   it("rejects the whole file when the format header does not match", async () => {
-    const { port } = fakePort();
+    const { port, written } = fakePort();
     const file = validFile();
     file.format = "something-else";
     expect(await importCacheFile(port, JSON.stringify(file))).toEqual({
       ok: false,
       reason: "bad-format",
     });
+    expect(written.core).toHaveLength(0);
+  });
+
+  it("rejects the whole file when the format version does not match", async () => {
+    const { port, written } = fakePort();
+    const file = validFile();
+    file.formatVersion = CACHE_FILE_FORMAT_VERSION + 1;
+    expect(await importCacheFile(port, JSON.stringify(file))).toEqual({
+      ok: false,
+      reason: "bad-format",
+    });
+    expect(written.core).toHaveLength(0);
   });
 
   it("rejects the whole file when the schema version differs", async () => {
