@@ -188,23 +188,6 @@ describe("Popup", () => {
     await vi.waitFor(() => expect(primary().disabled).toBe(false));
   });
 
-  it("offers 查看缓存 on a supported page when no profile exists", async () => {
-    const subject = dependencies({
-      listProfiles: vi.fn(() => Promise.resolve([])),
-      getActiveProfileId: vi.fn(() => Promise.resolve(undefined)),
-    });
-    await createPopupPage(root(), subject);
-
-    expect(primary().textContent).toBe("查看缓存");
-    expect(primary().disabled).toBe(false);
-    expect(subline().textContent).toContain("尚未配置模型");
-    primary().click();
-    await vi.waitFor(() =>
-      expect(subject.sendCommand).toHaveBeenCalledWith("START_SESSION", expect.anything()),
-    );
-    expect(subject.openOptions).not.toHaveBeenCalled();
-  });
-
   it("disables the primary button on unsupported pages", async () => {
     const subject = dependencies({
       getActiveTab: vi.fn(() => Promise.resolve({ id: 7, url: "chrome://extensions" })),
@@ -285,6 +268,19 @@ describe("cache-only mode (no profile configured)", () => {
     expect(primary().textContent).toBe("恢复网页原文");
   });
 
+  it("resumes a paused cache-only session with 继续学习", async () => {
+    await createPopupPage(
+      root(),
+      noProfile({
+        getStatus: vi.fn(() =>
+          Promise.resolve(status({ state: "paused", discovered: 5, ready: 2, skipped: 1 })),
+        ),
+      }),
+    );
+
+    expect(primary().textContent).toBe("继续学习");
+  });
+
   it("keeps the setup entry on unsupported pages", async () => {
     const subject = noProfile({
       getActiveTab: vi.fn(() => Promise.resolve({ id: 7, url: "chrome://extensions" })),
@@ -293,6 +289,7 @@ describe("cache-only mode (no profile configured)", () => {
 
     expect(primary().textContent).toBe("去配置模型");
     expect(primary().disabled).toBe(false);
+    expect(subline().textContent).toContain("先在设置页添加一个");
     primary().click();
     await vi.waitFor(() => expect(subject.openOptions).toHaveBeenCalled());
     expect(subject.sendCommand).not.toHaveBeenCalled();
