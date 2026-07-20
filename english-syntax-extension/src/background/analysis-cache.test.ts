@@ -172,7 +172,7 @@ describe("transfer entries", () => {
     expect(await cache.getCore("c".repeat(64))).toEqual({ imported: true });
   });
 
-  it("enforces the byte limit once after a bulk import", async () => {
+  it("evicts oldest entries after a bulk import exceeds the byte limit", async () => {
     const cache = await emptyCache(600);
     const outcome = await cache.importEntries(
       "core",
@@ -187,5 +187,8 @@ describe("transfer entries", () => {
     expect(outcome.added).toBe(3);
     const stats = await cache.stats();
     expect(stats.estimatedBytes).toBeLessThanOrEqual(600);
+    expect(await cache.getCore("d".repeat(64))).toBeUndefined();
+    expect(await cache.getCore("e".repeat(64))).toEqual({ pad: "y".repeat(10) });
+    expect(await cache.getCore("f".repeat(64))).toEqual({ pad: "z".repeat(10) });
   });
 });
