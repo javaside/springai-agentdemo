@@ -655,6 +655,14 @@ export class SessionController {
         ? response.analyses.find(({ sentenceId: id }) => id === sentenceId)
         : undefined;
     if (analysis === undefined) {
+      if (response.type === "CORE_RESULT" && response.cacheOnly === true) {
+        // 纯缓存会话里重试（如 TOO_LONG 失败句）仍未命中：与 analyzeBlock 同语义，
+        // 转 skipped 而非 failed，也不再触发失败替换。
+        block.learningBlock.renderSkipped(sentenceId, sentence.input.text);
+        this.transition(sentence, "skipped");
+        this.finishBlock(block, []);
+        return;
+      }
       this.transition(sentence, "failed");
       this.finishBlock(block, [
         { sentenceId, sentence: sentence.input.text, message: responseErrorMessage(response) },

@@ -370,6 +370,59 @@ describe("SessionController", () => {
     expect(subject.learningBlocks[0]!.skips).toHaveLength(2);
   });
 
+  it("does not resend analysis for a block whose sentences are all skipped", async () => {
+    const transport = new FakeTransport((message) =>
+      Promise.resolve({
+        version: 1,
+        requestId: message.requestId,
+        type: "CORE_RESULT",
+        analyses: [],
+        cacheOnly: true,
+      }),
+    );
+    const subject = harness("Readers learn. Writers practice daily.", transport);
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.skipped).toBe(2));
+    expect(subject.transport.sent).toHaveLength(1);
+
+    subject.viewport.emit();
+    await Promise.resolve();
+
+    expect(subject.transport.sent).toHaveLength(1);
+  });
+
+  it("converts a retried failed sentence to skipped in a cache-only session", async () => {
+    const transport = new FakeTransport((message) =>
+      Promise.resolve({
+        version: 1,
+        requestId: message.requestId,
+        type: "CORE_RESULT",
+        analyses: [],
+        cacheOnly: true,
+      }),
+    );
+    const subject = harness(`Readers ${"understand ".repeat(210)}sentences.`, transport);
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.failed).toBe(1));
+    expect(subject.replacements[0]!.partialShows).toBe(1);
+
+    document.dispatchEvent(
+      new CustomEvent("syntax-reanalyze-request", {
+        detail: { sentenceId: "sentence-1", focus: { startToken: 0, endToken: 0 } },
+      }),
+    );
+
+    await vi.waitFor(() => expect(subject.controller.status.skipped).toBe(1));
+    expect(subject.controller.status.failed).toBe(0);
+    expect(subject.learningBlocks[0]!.skips.map(({ sentenceId }) => sentenceId)).toEqual([
+      "sentence-1",
+    ]);
+    // 重试未命中不再触发失败替换；初始 TOO_LONG 的那一次保持不变。
+    expect(subject.replacements[0]!.partialShows).toBe(1);
+  });
+
   it("still fails missing sentences when the response is not cacheOnly", async () => {
     const transport = new FakeTransport((message) =>
       Promise.resolve({
