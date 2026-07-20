@@ -773,3 +773,71 @@ test("a revisited session is served from cache and REANALYZE_VISIBLE forces fres
   await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
   expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(reanalyzedCalls);
 });
+
+test("exported cache re-imports after a wipe and restores analyses without new model calls", async ({
+  harness,
+}) => {
+  await seedLocalProfile(harness);
+  const { page, tabId, documentId } = await startSession(harness, "dynamic-article.html");
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  const coldCalls = harness.fakeModel.recordedOfKind("core").length;
+  expect(coldCalls).toBeGreaterThan(0);
+  await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
+  await expect(learningBlocks(page)).toHaveCount(0);
+
+  const optionsPage = await harness.context.newPage();
+  await optionsPage.goto(harness.optionsUrl);
+
+  // Export through the real Blob + anchor download flow.
+  const [download] = await Promise.all([
+    optionsPage.waitForEvent("download"),
+    optionsPage.locator("[data-action='export-cache']").click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^english-syntax-cache-\d{8}\.json$/);
+  const exportedPath = await download.path();
+
+  // Wipe everything; the confirm dialog must be armed before the click opens it.
+  optionsPage.once("dialog", (dialog) => void dialog.accept());
+  await optionsPage.locator("[data-action='clear-cache']").click();
+  await expect(optionsPage.locator("[role='status']", { hasText: "缓存已清空" })).toBeVisible();
+
+  // Re-import the exported file through the hidden file input.
+  await optionsPage.locator("[data-import-input]").setInputFiles(exportedPath);
+  const importStatus = optionsPage.locator("[role='status']", { hasText: "导入完成" });
+  await expect(importStatus).toBeVisible();
+  await expect(importStatus).toContainText("无效丢弃 0 条");
+  await optionsPage.close();
+
+  // A fresh session on the same article must be served entirely from the
+  // re-imported cache, so the core request count stays at the cold count.
+  const revisitDocument = `${documentId}-after-import`;
+  await harness.dispatchFromUi(uiMessage("START_SESSION", { tabId, documentId: revisitDocument }));
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(coldCalls);
+  await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId: revisitDocument }));
+});
+
+test("a page with cached analyses renders in cache-only mode without any profile", async ({
+  harness,
+}) => {
+  await seedLocalProfile(harness);
+  const { page, tabId, documentId } = await startSession(harness, "dynamic-article.html");
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  const warmCalls = harness.fakeModel.recordedOfKind("core").length;
+  expect(warmCalls).toBeGreaterThan(0);
+  await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
+  await expect(learningBlocks(page)).toHaveCount(0);
+
+  // Remove every profile so the service worker can only answer from the cache.
+  await harness.serviceWorker.evaluate(async () => {
+    await chrome.storage.local.set({ "profiles.v1": [], "activeProfileId.v1": "" });
+  });
+
+  const cacheOnlyDocument = `${documentId}-cache-only`;
+  await harness.dispatchFromUi(
+    uiMessage("START_SESSION", { tabId, documentId: cacheOnlyDocument }),
+  );
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+  expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(warmCalls);
+  await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId: cacheOnlyDocument }));
+});
