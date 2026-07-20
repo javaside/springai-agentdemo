@@ -547,6 +547,49 @@ describe("CachedAnalysisService isolated analysis modes", () => {
     expect(cache.correction.size).toBe(1);
   });
 
+  it("lookupCore returns only cache hits and never touches the scheduler", async () => {
+    const { adapter, scheduler, service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
+    await service.analyzeCore(coreInput(), new AbortController().signal);
+    adapter.completeJson.mockClear();
+    scheduler.schedule.mockClear();
+
+    const results = await service.lookupCore([sentenceOne, sentenceTwo]);
+
+    expect(results.map(({ sentenceId }) => sentenceId)).toEqual([sentenceOne.sentenceId]);
+    expect(scheduler.schedule).not.toHaveBeenCalled();
+    expect(adapter.completeJson).not.toHaveBeenCalled();
+  });
+
+  it("lookupDetail returns undefined on a miss and the analysis on a hit", async () => {
+    const focus = { startToken: 1, endToken: 2 };
+    const { service } = harness([rawDetail(focus)]);
+
+    await expect(service.lookupDetail({ sentence: sentenceOne, focus })).resolves.toBeUndefined();
+
+    await service.analyzeDetail(
+      {
+        profile,
+        documentId: "document-1",
+        sentence: sentenceOne,
+        core: coreAnalysis(sentenceOne),
+        focus,
+      },
+      new AbortController().signal,
+    );
+    const hit = await service.lookupDetail({ sentence: sentenceOne, focus });
+
+    expect(hit?.sentenceId).toBe(sentenceOne.sentenceId);
+  });
+
+  it("lookupCore restamps the cached modelProfileId", async () => {
+    const { service } = harness([{ sentences: [rawCore(sentenceOne)] }]);
+    await service.analyzeCore(coreInput(), new AbortController().signal);
+
+    const results = await service.lookupCore([sentenceOne]);
+
+    expect(results).toEqual([coreAnalysis(sentenceOne, "cached")]);
+  });
+
   it("isolates corrections by page, sentence instance, and feedback in the correction store", async () => {
     const { adapter, cache, service } = harness(
       Array.from({ length: 4 }, () => ({ sentences: [rawCore(sentenceOne)] })),

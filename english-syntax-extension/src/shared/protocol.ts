@@ -53,6 +53,8 @@ export interface SessionStatus {
   queued: number;
   ready: number;
   failed: number;
+  /** 纯缓存会话中未命中而保持原文的句数。 */
+  skipped?: number;
   profileId?: string;
 }
 
@@ -60,7 +62,7 @@ export function isSessionComplete(status: SessionStatus): boolean {
   return (
     status.discovered > 0 &&
     status.queued === 0 &&
-    status.ready + status.failed >= status.discovered
+    status.ready + status.failed + (status.skipped ?? 0) >= status.discovered
   );
 }
 
@@ -73,7 +75,7 @@ export interface CacheStats {
 export type ResponseMessage =
   | (MessageBase & { type: "ACK"; acknowledgedType: RequestMessage["type"] })
   | (MessageBase & { type: "SESSION_STATUS"; status: SessionStatus })
-  | (MessageBase & { type: "CORE_RESULT"; analyses: CoreAnalysis[] })
+  | (MessageBase & { type: "CORE_RESULT"; analyses: CoreAnalysis[]; cacheOnly?: true })
   | (MessageBase & { type: "DETAIL_RESULT"; analysis: DetailAnalysis })
   | (MessageBase & { type: "CACHE_STATS"; stats: CacheStats })
   | (MessageBase & {

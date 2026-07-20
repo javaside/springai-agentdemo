@@ -11,6 +11,7 @@ export const ERROR_CODES = [
   "UNSAFE_CONTENT_BLOCK",
   "SENTENCE_TOO_LONG",
   "REQUEST_CANCELLED",
+  "NO_CACHE",
 ] as const;
 
 export type ExtensionErrorCode = (typeof ERROR_CODES)[number];

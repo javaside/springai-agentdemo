@@ -110,6 +110,8 @@ function dependencies(
     analyzeCore: vi.fn(defaultAnalyzeCore),
     analyzeDetail: vi.fn<AnalysisService["analyzeDetail"]>(),
     reanalyzeWithFeedback: vi.fn<AnalysisService["reanalyzeWithFeedback"]>(),
+    lookupCore: vi.fn<AnalysisService["lookupCore"]>(() => Promise.resolve([])),
+    lookupDetail: vi.fn<AnalysisService["lookupDetail"]>(() => Promise.resolve(undefined)),
     ...analysisOverrides,
   };
   const deps: ServiceWorkerDependencies = {
@@ -678,6 +680,96 @@ describe("service worker orchestration", () => {
     expect(profileA).toMatchObject({ type: "ERROR", error: { code: "AUTH_FAILED" } });
     expect(analyzeCore).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(profileA)).not.toContain("SECRET-A");
+  });
+
+  it("ANALYZE_CORE returns cache hits with cacheOnly instead of CONFIG_MISSING", async () => {
+    const cachedAnalysis = {
+      schemaVersion: 1 as const,
+      sentenceId: sentence.sentenceId,
+      components: [
+        { startToken: 0, endToken: 0, role: GrammarRole.SUBJECT, translation: "学习者" },
+      ],
+      modelProfileId: "cached",
+    };
+    const lookupCore = vi.fn<AnalysisService["lookupCore"]>(() =>
+      Promise.resolve([cachedAnalysis]),
+    );
+    const subject = chromeMock();
+    registerServiceWorker(dependencies({ lookupCore }, []), subject.api);
+
+    const response = await dispatch(
+      subject.events.runtime.onMessage.listeners[0]!,
+      pageRequest({ type: "ANALYZE_CORE", sentences: [sentence] }),
+    );
+
+    expect(response).toMatchObject({ type: "CORE_RESULT", cacheOnly: true });
+    expect((response as Extract<ResponseMessage, { type: "CORE_RESULT" }>).analyses).toHaveLength(
+      1,
+    );
+    expect(lookupCore).toHaveBeenCalledWith([sentence]);
+  });
+
+  it("ANALYZE_DETAIL returns NO_CACHE on a miss and DETAIL_RESULT on a hit", async () => {
+    const requestCore = {
+      schemaVersion: 1 as const,
+      sentenceId: sentence.sentenceId,
+      components: [
+        { startToken: 0, endToken: 0, role: GrammarRole.SUBJECT, translation: "学习者" },
+      ],
+      modelProfileId: "profile-a",
+    };
+    const cachedDetail = {
+      sentenceId: sentence.sentenceId,
+      focus: { startToken: 0, endToken: 0 },
+      structures: [{ startToken: 0, endToken: 0, role: "subject", explanation: "主语结构" }],
+      grammarPoints: ["主谓结构"],
+      explanation: "详细说明。",
+      modelProfileId: "cached",
+    };
+    const lookupDetail = vi
+      .fn<AnalysisService["lookupDetail"]>()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(cachedDetail);
+    const subject = chromeMock();
+    registerServiceWorker(dependencies({ lookupDetail }, []), subject.api);
+    const listener = subject.events.runtime.onMessage.listeners[0]!;
+    const request = pageRequest({
+      type: "ANALYZE_DETAIL",
+      sentence,
+      core: requestCore,
+      focus: { startToken: 0, endToken: 0 },
+    });
+
+    const miss = await dispatch(listener, request);
+    const hit = await dispatch(listener, request);
+
+    expect(miss).toMatchObject({ type: "ERROR", error: { code: "NO_CACHE" } });
+    expect(hit).toMatchObject({ type: "DETAIL_RESULT" });
+  });
+
+  it("REANALYZE_WITH_FEEDBACK still requires a profile", async () => {
+    const requestCore = {
+      schemaVersion: 1 as const,
+      sentenceId: sentence.sentenceId,
+      components: [
+        { startToken: 0, endToken: 0, role: GrammarRole.SUBJECT, translation: "学习者" },
+      ],
+      modelProfileId: "profile-a",
+    };
+    const subject = chromeMock();
+    registerServiceWorker(dependencies({}, []), subject.api);
+
+    const response = await dispatch(
+      subject.events.runtime.onMessage.listeners[0]!,
+      pageRequest({
+        type: "REANALYZE_WITH_FEEDBACK",
+        sentence,
+        core: requestCore,
+        feedback: "Treat read as the predicate.",
+      }),
+    );
+
+    expect(response).toMatchObject({ type: "ERROR", error: { code: "CONFIG_MISSING" } });
   });
 
   it("resumes a paused profile after its credentials change", async () => {

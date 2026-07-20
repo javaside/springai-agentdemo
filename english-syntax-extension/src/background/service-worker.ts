@@ -92,6 +92,7 @@ const ERROR_MESSAGES: Record<ExtensionErrorCode, string> = {
   UNSAFE_CONTENT_BLOCK: CONTEXT_INSTRUCTION,
   SENTENCE_TOO_LONG: "The sentence is too long",
   REQUEST_CANCELLED: "The request was cancelled",
+  NO_CACHE: "该成分暂无缓存详解，配置模型后可获取",
 };
 
 function errorResponse(
@@ -169,6 +170,8 @@ function isStatus(value: unknown): value is SessionStatus {
     [status.discovered, status.queued, status.ready, status.failed].every(
       (count) => Number.isSafeInteger(count) && (count as number) >= 0,
     ) &&
+    (status.skipped === undefined ||
+      (Number.isSafeInteger(status.skipped) && status.skipped >= 0)) &&
     (status.profileId === undefined || typeof status.profileId === "string")
   );
 }
@@ -298,7 +301,17 @@ export function registerServiceWorker(
       switch (request.type) {
         case "ANALYZE_CORE": {
           const profile = await profileFor(request.tabId);
-          if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
+          if (profile === undefined) {
+            // 纯缓存查看:只回命中,未命中句子由 content 侧保持原文;无 key 可脱敏,直接返回。
+            const analyses = await dependencies.analysisService.lookupCore(request.sentences);
+            return {
+              version: MESSAGE_VERSION,
+              requestId: request.requestId,
+              type: "CORE_RESULT",
+              analyses,
+              cacheOnly: true,
+            };
+          }
           if (isProfilePaused(profile)) return errorResponse(request.requestId, "AUTH_FAILED");
           try {
             const outcome = await dependencies.analysisService.analyzeCore(
@@ -331,7 +344,20 @@ export function registerServiceWorker(
         }
         case "ANALYZE_DETAIL": {
           const profile = await profileFor(request.tabId);
-          if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
+          if (profile === undefined) {
+            const analysis = await dependencies.analysisService.lookupDetail({
+              sentence: request.sentence,
+              focus: request.focus,
+            });
+            return analysis === undefined
+              ? errorResponse(request.requestId, "NO_CACHE")
+              : {
+                  version: MESSAGE_VERSION,
+                  requestId: request.requestId,
+                  type: "DETAIL_RESULT",
+                  analysis,
+                };
+          }
           if (isProfilePaused(profile)) return errorResponse(request.requestId, "AUTH_FAILED");
           try {
             const outcome = await dependencies.analysisService.analyzeDetail(
@@ -736,6 +762,10 @@ function defaultDependencies(): ServiceWorkerDependencies {
         (await getRuntime()).analysisService.analyzeDetail(...arguments_),
       reanalyzeWithFeedback: async (...arguments_) =>
         (await getRuntime()).analysisService.reanalyzeWithFeedback(...arguments_),
+      lookupCore: async (...arguments_) =>
+        (await getRuntime()).analysisService.lookupCore(...arguments_),
+      lookupDetail: async (...arguments_) =>
+        (await getRuntime()).analysisService.lookupDetail(...arguments_),
     },
     scheduler: {
       cancelDocument: (documentId) => {

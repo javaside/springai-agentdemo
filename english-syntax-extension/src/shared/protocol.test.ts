@@ -213,6 +213,7 @@ describe("session completion", () => {
   it.each([
     ["every sentence is ready", { discovered: 4, ready: 4 }],
     ["ready and failed cover the discovery", { discovered: 4, ready: 3, failed: 1 }],
+    ["cache-only skips cover the remainder", { discovered: 3, ready: 2, skipped: 1 }],
   ])("is complete when %s", (_description, overrides) => {
     expect(isSessionComplete(status(overrides))).toBe(true);
   });
@@ -221,6 +222,7 @@ describe("session completion", () => {
     ["nothing was discovered", {}],
     ["sentences are still queued", { discovered: 4, queued: 1, ready: 3 }],
     ["results have not covered the discovery", { discovered: 4, ready: 2, failed: 1 }],
+    ["skips leave part of the discovery uncovered", { discovered: 4, ready: 2, skipped: 1 }],
   ])("is incomplete when %s", (_description, overrides) => {
     expect(isSessionComplete(status(overrides))).toBe(false);
   });

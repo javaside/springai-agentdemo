@@ -67,6 +67,11 @@ export interface DetailInput extends AnalysisInputBase {
   focus: TokenRange;
 }
 
+export interface DetailLookupInput {
+  sentence: SentenceInput;
+  focus: TokenRange;
+}
+
 export interface CorrectionInput extends AnalysisInputBase {
   sentence: SentenceInput;
   core: CoreAnalysis;
@@ -100,6 +105,9 @@ export interface AnalysisService {
   analyzeCore(input: CoreBatchInput, signal: AbortSignal): Promise<CoreBatchOutcome>;
   analyzeDetail(input: DetailInput, signal: AbortSignal): Promise<DetailOutcome>;
   reanalyzeWithFeedback(input: CorrectionInput, signal: AbortSignal): Promise<CoreOutcome>;
+  /** 纯缓存查找:只回命中,不进调度器、不需要 profile(popup「查看缓存」模式)。 */
+  lookupCore(sentences: readonly SentenceInput[]): Promise<CoreAnalysis[]>;
+  lookupDetail(input: DetailLookupInput): Promise<DetailAnalysis | undefined>;
 }
 
 export interface CachedAnalysisServiceOptions {
@@ -108,6 +116,9 @@ export interface CachedAnalysisServiceOptions {
   scheduler: AnalysisScheduler;
   now?: () => number;
 }
+
+/** 纯缓存模式没有真实 profile,命中值统一改写为该占位 id。 */
+const CACHE_ONLY_PROFILE_ID = "cached";
 
 interface InvalidCoreSentence {
   sentence: SentenceInput;
@@ -473,6 +484,30 @@ export class CachedAnalysisService implements AnalysisService {
     return { result: validation.value, cacheHit: false };
   }
 
+  async lookupCore(sentences: readonly SentenceInput[]): Promise<CoreAnalysis[]> {
+    const results: CoreAnalysis[] = [];
+    for (const sentence of sentences) {
+      const key = await this.coreKey(sentence);
+      const value = validateCachedCore(
+        await this.options.cache.getCore<unknown>(key),
+        sentence,
+        CACHE_ONLY_PROFILE_ID,
+      );
+      if (value !== undefined) results.push(value);
+    }
+    return results;
+  }
+
+  async lookupDetail(input: DetailLookupInput): Promise<DetailAnalysis | undefined> {
+    const key = await this.detailKey(input);
+    return validateCachedDetail(
+      await this.options.cache.getDetail<unknown>(key),
+      input.sentence,
+      input.focus,
+      CACHE_ONLY_PROFILE_ID,
+    );
+  }
+
   async reanalyzeWithFeedback(input: CorrectionInput, signal: AbortSignal): Promise<CoreOutcome> {
     if (signal.aborted) throw cancellationError();
     const key = await this.correctionKey(input);
@@ -588,7 +623,7 @@ export class CachedAnalysisService implements AnalysisService {
     });
   }
 
-  private detailKey(input: DetailInput): Promise<string> {
+  private detailKey(input: { sentence: SentenceInput; focus: TokenRange }): Promise<string> {
     return createCoreCacheKey({
       normalizedSentence: normalizedSentenceText(input.sentence),
       schemaVersion: CORE_SCHEMA_VERSION,
