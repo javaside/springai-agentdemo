@@ -37,6 +37,7 @@ function harness(concurrency?: number) {
   });
   const settle = async (result: PrefetchSendResult) => {
     pending.shift()!.resolve(result);
+    // 两次微任务:排空 run() 里 await send 这一跳,让结果处理与后续 pump 都跑完。
     await Promise.resolve();
     await Promise.resolve();
   };
@@ -74,6 +75,17 @@ describe("DetailPrefetcher", () => {
 
     prefetcher.resume();
     expect(sent).toEqual(["s1", "s1"]);
+  });
+
+  it("does not resend a cancelled sentence until a new pump trigger", async () => {
+    const { prefetcher, sent, settle } = harness(1);
+    prefetcher.enqueue(sentence("s1"), core("s1", 3));
+    await settle({ kind: "cancelled" }); // 未 pause:如 stop 触发的 cancelDocument
+    expect(prefetcher.counts()).toEqual({ total: 3, ready: 0, failed: 0 });
+    expect(sent).toEqual(["s1"]); // no immediate resend
+
+    prefetcher.enqueue(sentence("s2"), core("s2", 2)); // new pump trigger
+    expect(sent).toEqual(["s1", "s1"]); // cancelled item sits at the queue front
   });
 
   it("counts the whole sentence as failed on a failed send", async () => {

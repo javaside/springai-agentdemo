@@ -12,7 +12,10 @@ export interface PrefetchItem {
   core: CoreAnalysis;
 }
 
-/** send 的归一化结果:ok 带成分级计数;cancelled 回滚重排;failed 整句计失败。 */
+/**
+ * send 的归一化结果:ok 带成分级计数;cancelled 回滚重排;failed 整句计失败。
+ * 调用方契约:ok 的 succeeded + failed 必须等于该句 core.components.length,否则计数永远对不上 total。
+ */
 export type PrefetchSendResult =
   { kind: "ok"; succeeded: number; failed: number } | { kind: "cancelled" } | { kind: "failed" };
 
@@ -41,6 +44,7 @@ export class DetailPrefetcher {
     return { total: this.total, ready: this.ready, failed: this.failed };
   }
 
+  /** 已完成(ok/failed)的句子仍在 trackedIds 中,不可重试——除非 discard 后重新 enqueue(有意为之)。 */
   enqueue(sentence: SentenceInput, core: CoreAnalysis): void {
     if (this.trackedIds.has(sentence.sentenceId) || core.components.length === 0) return;
     this.trackedIds.add(sentence.sentenceId);
@@ -87,9 +91,12 @@ export class DetailPrefetcher {
     }
     this.inFlight -= 1;
     if (result.kind === "cancelled") {
-      // 回滚为待发:计数不动,恢复后重发。
+      // 回滚为待发(队首)且不立即 pump:计数不动,等 resume() 或后续 enqueue() 再触发,
+      // 避免未 pause 时(如 stop 触发的 cancelDocument)立即重发形成取消-重发循环。
       this.queue.unshift(item);
-    } else if (result.kind === "failed") {
+      return;
+    }
+    if (result.kind === "failed") {
       this.failed += item.core.components.length;
       this.options.onChange();
     } else {
