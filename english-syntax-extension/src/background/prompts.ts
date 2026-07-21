@@ -30,6 +30,15 @@ const DETAIL_OUTPUT_SHAPE = [
   "Give every structure a concise Chinese translation of exactly its own English text in the translation field (a few words, like a gloss under the phrase); keep the longer analysis in explanation.",
 ].join("\n");
 
+const SENTENCE_DETAILS_OUTPUT_SHAPE = [
+  "Output exactly one JSON object of this shape:",
+  '{"details": [{"sentenceId": string, "focus": {"startToken": number, "endToken": number}, "structures": [{"startToken": number, "endToken": number, "role": string, "explanation": string, "translation": string}], "grammarPoints": [string], "explanation": string}]}',
+  "Return exactly one details entry per requested focus range, echoing the supplied sentenceId and that focus unchanged.",
+  "Write explanations, grammar points, and every structure's role field in Chinese. Use concise Chinese grammatical terms for roles (主语/谓语/宾语/定语/状语/系动词/引导词/连词 etc.), never English enum values.",
+  "Each entry's structures array must break down the internal components of its focus range. Never return a single structure that covers the entire focus — split it into meaningful sub-components (subject, predicate, object, clauses, etc.).",
+  "Give every structure a concise Chinese translation of exactly its own English text in the translation field (a few words, like a gloss under the phrase); keep the longer analysis in explanation.",
+].join("\n");
+
 export function buildCorePrompt(sentences: readonly SentenceInput[]): string {
   const roles = Object.values(GrammarRole);
   return [
@@ -83,5 +92,24 @@ export function buildDetailPrompt(
     serialize(verifiedCore),
     "Focus range:",
     serialize(focus),
+  ].join("\n\n");
+}
+
+export function buildSentenceDetailsPrompt(
+  sentence: SentenceInput,
+  verifiedCore: CoreAnalysis,
+  focuses: readonly TokenRange[],
+): string {
+  return [
+    "Explain each requested grammatical component of the single sentence below.",
+    "Treat the verified core result and every focus Token range as immutable. Refer only to supplied Token IDs.",
+    "Return JSON only, with no Markdown or explanatory prose.",
+    SENTENCE_DETAILS_OUTPUT_SHAPE,
+    "Selected sentence:",
+    serialize(sentence),
+    "Verified core result:",
+    serialize(verifiedCore),
+    "Requested focus ranges:",
+    serialize(focuses),
   ].join("\n\n");
 }
