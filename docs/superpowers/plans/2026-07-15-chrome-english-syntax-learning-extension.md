@@ -6,7 +6,7 @@
 
 **Architecture:** 扩展作为独立的 `english-syntax-extension` npm 工程加入仓库，不进入 Maven `<modules>`。Content Script 只负责正文识别、分句分词和 Shadow DOM 学习块；Manifest V3 Service Worker 独占 API Key、模型请求、校验、队列和 IndexedDB 缓存；Popup 与 Options 通过带版本的判别联合消息访问后台。
 
-**Tech Stack:** Chrome Manifest V3、Chrome 120+、Node.js 22.20+、TypeScript 7.0.2、Vite 8.1.4、vite-plugin-web-extension 4.5.1、Vitest 4.1.10、Happy DOM 20.10.6、fake-indexeddb 6.2.5、Playwright 1.61.1、ESLint 10.7.0、Prettier 3.9.5。
+**Tech Stack:** Chrome Manifest V3、Chrome 120+、Node.js 22.20+、TypeScript 6.0.3、Vite 8.1.4、vite-plugin-web-extension 4.5.1、Vitest 4.1.10、Happy DOM 20.10.6、fake-indexeddb 6.2.5、Playwright 1.61.1、ESLint 10.7.0、Prettier 3.9.5。
 
 **设计文档：** `docs/superpowers/specs/2026-07-15-chrome-english-syntax-learning-extension-design.md`
 
@@ -153,7 +153,7 @@ Create `package.json` with exact versions:
     "fake-indexeddb": "6.2.5",
     "happy-dom": "20.10.6",
     "prettier": "3.9.5",
-    "typescript": "7.0.2",
+    "typescript": "6.0.3",
     "typescript-eslint": "8.64.0",
     "vite": "8.1.4",
     "vite-plugin-web-extension": "4.5.1",
@@ -326,7 +326,7 @@ Create `content-script.ts` that only sets `document.documentElement.dataset.synt
 Run: `cd english-syntax-extension && npm test && npm run build && npm run lint && npm run format:check`
 Expected: all commands exit 0; `dist/manifest.json` exists, references bundled local assets only, and `dist/content-script.js` contains no top-level `import`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add english-syntax-extension
@@ -414,7 +414,7 @@ Define `DetailAnalysis` with `sentenceId`, focus closed interval, `structures`, 
 
 `ResponseMessage` has `ACK`, `SESSION_STATUS`, `CORE_RESULT`, `DETAIL_RESULT`, `CACHE_STATS`, `PROFILE_TEST_RESULT`, and `ERROR`. Implement `isRequestMessage` as a strict version/type/ID guard; do not accept unknown properties as executable instructions.
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 Run: `npm test -- src/shared && npm run build`
 Expected: PASS and no TypeScript errors.
@@ -952,17 +952,17 @@ git commit -m "feat(extension): wire secure background orchestration"
 - Consumes: public profiles, profile save/test commands, cache stats, session status.
 - Produces: accessible model configuration and current-tab controls.
 
-- [ ] **Step 1: 写 UI 失败测试**
+- [x] **Step 1: 写 UI 失败测试**
 
 Options tests assert labels for name/Base URL/API Key/model/timeout/custom headers, password input by default, privacy warning before first save, exact-origin permission request on save/test, forbidden header inline error, connection result distinction, cache limit choices 10/50/100/200 MB and clear confirmation.
 
 Popup tests assert no-profile onboarding, model switch, status counts, start/pause/resume/stop controls, failed sentence count, and a confirmation before `重新解析可视区域`. Test keyboard operation and visible focus.
 
-- [ ] **Step 2: 实现 Options**
+- [x] **Step 2: 实现 Options**
 
 Use native form controls and DOM APIs only. Custom headers are edited as repeatable name/value rows, but saved as a validated record. Never place API Key in a data attribute, URL, log or error text. `测试连接` returns separate messages for permission, network, authentication, model and JSON capability. Cache clear requires a button-triggered confirmation dialog and does not delete profiles.
 
-- [ ] **Step 3: 实现 Popup**
+- [x] **Step 3: 实现 Popup**
 
 Render active profile select and exact status counters from the design. When the active tab is unsupported, disable start and explain why. Stop button text is `停止并恢复网页`. Switching profiles sends `SWITCH_PROFILE` but never sends a reanalysis command. Use one CSS namespace per page and support 320 px width, dark color scheme and 200% zoom without horizontal scrolling.
 
@@ -995,17 +995,17 @@ git commit -m "feat(extension): add model settings and session controls"
 **Interfaces:**
 - Produces: 可重复的真实扩展验收、模拟模型服务器和安装/隐私说明。
 
-- [ ] **Step 1: 创建本地 OpenAI 模拟服务**
+- [x] **Step 1: 创建本地 OpenAI 模拟服务**
 
 Implement a Node HTTP server bound to `127.0.0.1` on an ephemeral port. It records sanitized requests and exposes scripted responses for success, schema-unsupported 400, 401, 429 with `Retry-After`, 500, delayed timeout, invalid JSON, coverage gap, repair success and repair failure. It must never print Authorization values.
 
-- [ ] **Step 2: 创建 Playwright 扩展 Fixture**
+- [x] **Step 2: 创建 Playwright 扩展 Fixture**
 
 `fixtures.ts` runs `npm run build`, launches a persistent Chromium context with `--disable-extensions-except=<dist>` and `--load-extension=<dist>`, discovers the MV3 Service Worker extension ID, serves local fixture pages, and stops every server/context after each worker scope.
 
 Create `playwright.config.ts` with one Chromium project, 30-second test timeout, trace on first retry, no external network dependency, and sequential execution for tests sharing Chrome permission state.
 
-- [ ] **Step 3: 写端到端失败测试**
+- [x] **Step 3: 写端到端失败测试**
 
 `extension.spec.ts` must cover:
 
@@ -1026,20 +1026,20 @@ Create `playwright.config.ts` with one Chromium project, 30-second test timeout,
 Run before final wiring: `npm run test:e2e`
 Expected: FAIL with missing behavior or fixture wiring, not a skipped suite.
 
-- [ ] **Step 4: 建立教学样本并完成回归**
+- [x] **Step 4: 建立教学样本并完成回归**
 
 `teaching-sentences.json` contains at least 36 fixed English sentences: three each for basic SVO, copular, passive, attribute, adverbial, complement, noun clauses, relative clauses, adverbial clauses, non-finite forms, inversion/ellipsis/emphasis, and quotation/abbreviation/long sentence. Each record includes `id`, `category`, `text`, and `requiredLexicalTokenCount`; CI validates tokenization and coverage invariants，不断言唯一的模型答案。
 
 Run: `npm test && npm run test:e2e && npm run build && npm run lint && npm run format:check`
 Expected: all commands exit 0; no skipped security/E2E test.
 
-- [ ] **Step 5: 写使用与隐私文档**
+- [x] **Step 5: 写使用与隐私文档**
 
 `english-syntax-extension/README.md` must document Node requirement, install, build, `chrome://extensions` unpacked loading, profile examples for DeepSeek and localhost Ollama, permissions, text sent to providers, API Key storage risk, cache clearing, unsupported pages, testing commands and troubleshooting for 401/429/CORS/invalid JSON.
 
 Add `english-syntax-extension` to the root README project tree and detailed-module links. State explicitly that it is an independent npm project and is not built by Maven.
 
-- [ ] **Step 6: Final verification**
+- [x] **Step 6: Final verification**
 
 Run:
 
@@ -1056,7 +1056,7 @@ git diff --check
 
 Expected: every command exits 0; `dist/manifest.json` is MV3; Git diff has no whitespace error.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add english-syntax-extension README.md
@@ -1067,9 +1067,9 @@ git commit -m "test(extension): verify end-to-end learning workflow"
 
 ## Completion Checklist
 
-- [ ] Run the complete verification command block from Task 14.
+- [x] Run the complete verification command block from Task 14.
 - [ ] Load `dist` manually in Chrome 120+ and verify one public article plus one localhost model.
-- [ ] Confirm `git status --short` contains no generated `dist`, coverage, Playwright report or temporary browser profile.
+- [x] Confirm `git status --short` contains no generated `dist`, coverage, Playwright report or temporary browser profile.
 - [ ] Compare every design requirement in the linked spec to a passing test or documented manual check.
 - [ ] Use `superpowers:requesting-code-review` for an independent requirement and quality review.
 - [ ] Use `superpowers:verification-before-completion` before any completion claim.

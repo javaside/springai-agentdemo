@@ -1,0 +1,104 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.45;
+  background: Canvas;
+  color: CanvasText;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  width: 300px;
+}
+
+.popup-page {
+  padding: 0.85rem 1rem 1rem;
+}
+
+.popup-page__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: 0.75rem;
+}
+
+.popup-page__title {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.popup-page__gear {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1.1rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+}
+
+.popup-page__gear:hover {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+
+.popup-page__primary {
+  width: 100%;
+  min-height: 2.9rem;
+  border: 0;
+  border-radius: 0.55rem;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  background: #155eef;
+  color: white;
+}
+
+.popup-page__primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.popup-page__secondary {
+  width: 100%;
+  min-height: 2.2rem;
+  margin-block-start: 0.5rem;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 0.55rem;
+  font: inherit;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+}
+
+.popup-page__secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.popup-page__subline {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  color: GrayText;
+  overflow-wrap: anywhere;
+}
+
+.popup-page button:focus-visible {
+  outline: 3px solid #ffbf47;
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .popup-page__primary {
+    background: #8ab4ff;
+    color: #07152f;
+  }
+}
