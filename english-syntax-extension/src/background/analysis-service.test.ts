@@ -627,3 +627,79 @@ describe("CachedAnalysisService isolated analysis modes", () => {
     expect(cache.detail.size).toBe(0);
   });
 });
+
+describe("analyzeSentenceDetails", () => {
+  const core = coreAnalysis(sentenceOne);
+  const focuses = core.components.map(({ startToken, endToken }) => ({ startToken, endToken }));
+
+  function detailInput(focus: TokenRange) {
+    return {
+      profile,
+      documentId: "document-1",
+      sentence: sentenceOne,
+      core,
+      focus,
+    };
+  }
+
+  it("returns all-cached counts without touching the scheduler", async () => {
+    const { adapter, scheduler, service } = harness(focuses.map((focus) => rawDetail(focus)));
+    for (const focus of focuses) {
+      await service.analyzeDetail(detailInput(focus), new AbortController().signal);
+    }
+    const baseline = scheduler.schedule.mock.calls.length;
+
+    const outcome = await service.analyzeSentenceDetails(
+      { profile, documentId: "doc", sentence: sentenceOne, core },
+      new AbortController().signal,
+    );
+
+    expect(outcome).toEqual({ succeeded: core.components.length, failed: 0 });
+    expect(scheduler.schedule.mock.calls.length).toBe(baseline);
+    expect(adapter.completeJson).toHaveBeenCalledTimes(focuses.length);
+  });
+
+  it("requests only the missing focuses in one call and caches each returned detail", async () => {
+    const missingFocuses = focuses.slice(1);
+    const { adapter, scheduler, service } = harness([
+      rawDetail(focuses[0]!),
+      { details: missingFocuses.map((focus) => rawDetail(focus)) },
+    ]);
+    await service.analyzeDetail(detailInput(focuses[0]!), new AbortController().signal);
+    const baseline = scheduler.schedule.mock.calls.length;
+
+    const outcome = await service.analyzeSentenceDetails(
+      { profile, documentId: "doc", sentence: sentenceOne, core },
+      new AbortController().signal,
+    );
+
+    expect(outcome).toEqual({ succeeded: core.components.length, failed: 0 });
+    expect(scheduler.schedule.mock.calls.length).toBe(baseline + 1);
+    const batchedMessages = adapter.completeJson.mock.calls.at(
+      -1,
+    )![1] as AnalysisModelWork["messages"];
+    const focusSection = batchedMessages[0]!.content.split("Requested focus ranges:").at(-1)!;
+    expect(JSON.parse(focusSection)).toEqual(missingFocuses);
+    for (const focus of missingFocuses) {
+      await expect(service.lookupDetail({ sentence: sentenceOne, focus })).resolves.toMatchObject({
+        focus,
+      });
+    }
+  });
+
+  it("repairs the invalid subset once and counts leftovers as failed", async () => {
+    const { scheduler, service } = harness([
+      { details: [rawDetail(focuses[0]!)] },
+      { details: [] },
+    ]);
+    const baseline = scheduler.schedule.mock.calls.length;
+
+    const outcome = await service.analyzeSentenceDetails(
+      { profile, documentId: "doc", sentence: sentenceOne, core },
+      new AbortController().signal,
+    );
+
+    expect(outcome).toEqual({ succeeded: 1, failed: 1 });
+    expect(scheduler.schedule.mock.calls.length).toBe(baseline + 2);
+  });
+});

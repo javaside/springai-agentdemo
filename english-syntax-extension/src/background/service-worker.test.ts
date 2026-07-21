@@ -112,6 +112,9 @@ function dependencies(
     reanalyzeWithFeedback: vi.fn<AnalysisService["reanalyzeWithFeedback"]>(),
     lookupCore: vi.fn<AnalysisService["lookupCore"]>(() => Promise.resolve([])),
     lookupDetail: vi.fn<AnalysisService["lookupDetail"]>(() => Promise.resolve(undefined)),
+    analyzeSentenceDetails: vi.fn<AnalysisService["analyzeSentenceDetails"]>(() =>
+      Promise.resolve({ succeeded: 0, failed: 0 }),
+    ),
     ...analysisOverrides,
   };
   const deps: ServiceWorkerDependencies = {

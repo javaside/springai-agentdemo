@@ -12,6 +12,7 @@ import {
   buildCorePrompt,
   buildDetailPrompt,
   buildRepairPrompt,
+  buildSentenceDetailsPrompt,
   CORE_OUTPUT_SHAPE,
 } from "./prompts";
 import type { ScheduledRequest, SchedulerPriority } from "./request-scheduler";
@@ -72,6 +73,16 @@ export interface DetailLookupInput {
   focus: TokenRange;
 }
 
+export interface SentenceDetailsInput extends AnalysisInputBase {
+  sentence: SentenceInput;
+  core: CoreAnalysis;
+}
+
+export interface SentenceDetailsOutcome {
+  succeeded: number;
+  failed: number;
+}
+
 export interface CorrectionInput extends AnalysisInputBase {
   sentence: SentenceInput;
   core: CoreAnalysis;
@@ -108,6 +119,11 @@ export interface AnalysisService {
   /** 纯缓存查找:只回命中,不进调度器、不需要 profile(popup「查看缓存」模式)。 */
   lookupCore(sentences: readonly SentenceInput[]): Promise<CoreAnalysis[]>;
   lookupDetail(input: DetailLookupInput): Promise<DetailAnalysis | undefined>;
+  /** 详解预载(按句合批):只补缺失成分,一次整句请求,结果逐成分写入现有缓存键。 */
+  analyzeSentenceDetails(
+    input: SentenceDetailsInput,
+    signal: AbortSignal,
+  ): Promise<SentenceDetailsOutcome>;
 }
 
 export interface CachedAnalysisServiceOptions {
@@ -202,6 +218,18 @@ const DETAIL_SCHEMA: JsonSchemaSpec = {
         items: { type: "string", minLength: 1, maxLength: 300 },
       },
       explanation: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+const SENTENCE_DETAILS_SCHEMA: JsonSchemaSpec = {
+  name: "sentence_details_analysis",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["details"],
+    properties: {
+      details: { type: "array", items: DETAIL_SCHEMA.schema },
     },
   },
 };
@@ -334,6 +362,23 @@ function detailRepairPrompt(
     `Focus:\n${JSON.stringify(input.focus, null, 2)}`,
     `Validation errors:\n${JSON.stringify(errors, null, 2)}`,
     `Invalid JSON:\n${JSON.stringify(invalidJson, null, 2)}`,
+  ].join("\n\n");
+}
+
+function sentenceDetailsRepairPrompt(
+  input: SentenceDetailsInput,
+  focuses: readonly TokenRange[],
+  errors: readonly ValidationError[],
+  invalidJson: unknown,
+): string {
+  return [
+    "Repair only the structure of the invalid sentence-details JSON so every requested focus has one valid entry.",
+    "Keep the sentence ID, Tokens, verified core analysis, and focus ranges unchanged. Return JSON only.",
+    `Sentence and Tokens:\n${JSON.stringify(input.sentence, null, 2)}`,
+    `Verified core analysis:\n${JSON.stringify(input.core, null, 2)}`,
+    `Validation errors:\n${JSON.stringify(errors, null, 2)}`,
+    `Invalid JSON:\n${JSON.stringify(invalidJson, null, 2)}`,
+    `Requested focus ranges:\n${JSON.stringify(focuses, null, 2)}`,
   ].join("\n\n");
 }
 
@@ -505,6 +550,123 @@ export class CachedAnalysisService implements AnalysisService {
       input.focus,
       CACHE_ONLY_PROFILE_ID,
     );
+  }
+
+  async analyzeSentenceDetails(
+    input: SentenceDetailsInput,
+    signal: AbortSignal,
+  ): Promise<SentenceDetailsOutcome> {
+    if (signal.aborted) throw cancellationError();
+    const targets = await Promise.all(
+      input.core.components.map(async (component) => {
+        const focus = { startToken: component.startToken, endToken: component.endToken };
+        const key = await this.detailKey({ sentence: input.sentence, focus });
+        const cached = validateCachedDetail(
+          await this.options.cache.getDetail<unknown>(key),
+          input.sentence,
+          focus,
+          input.profile.id,
+        );
+        return { focus, key, cached };
+      }),
+    );
+    if (signal.aborted) throw cancellationError();
+    let missing: { focus: TokenRange; key: string }[] = targets.filter(
+      ({ cached }) => cached === undefined,
+    );
+    let succeeded = targets.length - missing.length;
+    if (missing.length === 0) return { succeeded, failed: 0 };
+
+    const cacheKey = `${missing.map(({ key }) => key).join(":")}:sentence-details`;
+    const raw = await this.requestModel(
+      input.profile,
+      input.documentId,
+      "prefetch-detail",
+      cacheKey,
+      1,
+      [
+        {
+          role: "user",
+          content: buildSentenceDetailsPrompt(
+            input.sentence,
+            input.core,
+            missing.map(({ focus }) => focus),
+          ),
+        },
+      ],
+      SENTENCE_DETAILS_SCHEMA,
+      "sentence-details",
+      signal,
+    );
+    const firstPass = await this.validateAndCacheDetails(input, missing, raw);
+    succeeded += firstPass.valid;
+    missing = firstPass.invalid;
+    if (missing.length > 0) {
+      const repairRaw = await this.requestModel(
+        input.profile,
+        input.documentId,
+        "prefetch-detail",
+        `${cacheKey}:repair`,
+        1,
+        [
+          {
+            role: "user",
+            content: sentenceDetailsRepairPrompt(
+              input,
+              missing.map(({ focus }) => focus),
+              firstPass.errors,
+              raw,
+            ),
+          },
+        ],
+        SENTENCE_DETAILS_SCHEMA,
+        "sentence-details-repair",
+        signal,
+      );
+      const secondPass = await this.validateAndCacheDetails(input, missing, repairRaw);
+      succeeded += secondPass.valid;
+      missing = secondPass.invalid;
+    }
+    return { succeeded, failed: missing.length };
+  }
+
+  /** 逐 focus 从原始响应里捞对应条目、校验并写缓存;返回合格数与失败目标。 */
+  private async validateAndCacheDetails(
+    input: SentenceDetailsInput,
+    targets: readonly { focus: TokenRange; key: string }[],
+    raw: unknown,
+  ): Promise<{
+    valid: number;
+    invalid: { focus: TokenRange; key: string }[];
+    errors: ValidationError[];
+  }> {
+    const rawDetails =
+      isRecord(raw) && Array.isArray(raw.details) ? (raw.details as unknown[]) : [];
+    let valid = 0;
+    const invalid: { focus: TokenRange; key: string }[] = [];
+    const errors: ValidationError[] = [];
+    for (const target of targets) {
+      const candidate = rawDetails.find(
+        (item) => isRecord(item) && isMatchingFocus(item.focus, target.focus),
+      );
+      const validation =
+        candidate === undefined
+          ? undefined
+          : validateDetail(candidate, input.sentence, target.focus, input.profile.id);
+      if (validation !== undefined && validation.ok) {
+        await this.options.cache.putDetail(target.key, input.profile.id, validation.value);
+        valid += 1;
+        continue;
+      }
+      invalid.push(target);
+      if (validation !== undefined) errors.push(...validation.errors);
+      else
+        errors.push({
+          path: `details[focus ${target.focus.startToken}-${target.focus.endToken}]`,
+          message: "missing entry for requested focus",
+        });
+    }
+    return { valid, invalid, errors };
   }
 
   async reanalyzeWithFeedback(input: CorrectionInput, signal: AbortSignal): Promise<CoreOutcome> {
