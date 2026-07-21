@@ -54,12 +54,16 @@ export class DetailPrefetcher {
     this.pump();
   }
 
-  /** 句子所在块失效(stale):只丢还在排队的;在飞的让它跑完,结果照常计数。 */
+  /**
+   * 句子所在块失效(stale):还在排队的立即丢弃并扣减 total;
+   * 已完成或在飞的只释放 trackedIds(计数不动,在飞的跑完照常计数),
+   * 使句子重新就绪后能再次 enqueue(新入队按新成分数增长 total)。
+   */
   discard(sentenceId: string): void {
+    this.trackedIds.delete(sentenceId);
     const index = this.queue.findIndex(({ sentence }) => sentence.sentenceId === sentenceId);
     if (index === -1) return;
     const [dropped] = this.queue.splice(index, 1);
-    this.trackedIds.delete(sentenceId);
     this.total -= dropped!.core.components.length;
     this.options.onChange();
   }

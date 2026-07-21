@@ -106,6 +106,36 @@ describe("DetailPrefetcher", () => {
     expect(prefetcher.counts().total).toBe(5);
   });
 
+  it("re-enqueues a settled sentence after discard", async () => {
+    const { prefetcher, sent, settle } = harness(1);
+    prefetcher.enqueue(sentence("s1"), core("s1", 2));
+    await settle({ kind: "ok", succeeded: 2, failed: 0 });
+    expect(prefetcher.counts()).toEqual({ total: 2, ready: 2, failed: 0 });
+
+    prefetcher.discard("s1"); // settled: counts untouched, only tracking released
+    expect(prefetcher.counts()).toEqual({ total: 2, ready: 2, failed: 0 });
+
+    prefetcher.enqueue(sentence("s1"), core("s1", 2)); // 重新就绪后可再次入队
+    expect(prefetcher.counts().total).toBe(4);
+    expect(sent).toEqual(["s1", "s1"]);
+    await settle({ kind: "ok", succeeded: 2, failed: 0 });
+    expect(prefetcher.counts()).toEqual({ total: 4, ready: 4, failed: 0 });
+  });
+
+  it("discard() of an in-flight sentence keeps counts, lets it settle, and allows re-enqueue", async () => {
+    const { prefetcher, sent, settle } = harness(1);
+    prefetcher.enqueue(sentence("s1"), core("s1", 3)); // in flight
+    prefetcher.discard("s1");
+    expect(prefetcher.counts()).toEqual({ total: 3, ready: 0, failed: 0 });
+
+    await settle({ kind: "ok", succeeded: 3, failed: 0 }); // completion still counts
+    expect(prefetcher.counts()).toEqual({ total: 3, ready: 3, failed: 0 });
+
+    prefetcher.enqueue(sentence("s1"), core("s1", 2));
+    expect(prefetcher.counts().total).toBe(5);
+    expect(sent).toEqual(["s1", "s1"]);
+  });
+
   it("notifies onChange on every count movement", async () => {
     const { prefetcher, settle, onChange } = harness(1);
     prefetcher.enqueue(sentence("s1"), core("s1", 1));
