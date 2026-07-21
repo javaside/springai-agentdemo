@@ -88,7 +88,20 @@ export class SyntaxProgressPill {
       return;
     }
     if (isSessionComplete(status)) {
-      this.#render(status.failed > 0 ? `✓ 完成，${status.failed} 句失败` : "✓ 解析完成", false);
+      const detailSettled = (status.detailReady ?? 0) + (status.detailFailed ?? 0);
+      if (status.detailTotal !== undefined && detailSettled < status.detailTotal) {
+        this.#render(`详解预载中 ${detailSettled}/${status.detailTotal}`, true);
+        return;
+      }
+      const detailFailed = status.detailFailed ?? 0;
+      this.#render(
+        status.failed > 0
+          ? `✓ 完成，${status.failed} 句失败`
+          : detailFailed > 0
+            ? `✓ 解析完成（${detailFailed} 个详解失败）`
+            : "✓ 解析完成",
+        false,
+      );
       this.#fadeTimer = setTimeout(() => this.remove(), FADE_DELAY_MS);
       return;
     }

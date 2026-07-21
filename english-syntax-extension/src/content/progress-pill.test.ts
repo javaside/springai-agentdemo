@@ -9,8 +9,11 @@ function status(partial: Partial<SessionStatus>): SessionStatus {
 }
 
 describe("SyntaxProgressPill", () => {
+  let pill: SyntaxProgressPill;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    pill = new SyntaxProgressPill();
   });
 
   afterEach(() => {
@@ -22,6 +25,17 @@ describe("SyntaxProgressPill", () => {
 
   const pillText = (pill: SyntaxProgressPill): string =>
     pill.host.shadowRoot!.querySelector(".pill")!.textContent.replace(/\s+/gu, " ").trim();
+
+  const label = (): string =>
+    pill.host
+      .shadowRoot!.querySelector(".pill span:last-child")!
+      .textContent.replace(/\s+/gu, " ")
+      .trim();
+
+  const spinnerVisible = (): boolean => {
+    const spinner = pill.host.shadowRoot!.querySelector<HTMLElement>(".spinner")!;
+    return spinner.style.display !== "none";
+  };
 
   it("appears with live counts while the session is running", () => {
     const pill = new SyntaxProgressPill();
@@ -80,5 +94,39 @@ describe("SyntaxProgressPill", () => {
     pill.update(status({ state: "stopped" }));
 
     expect(pill.host.isConnected).toBe(false);
+  });
+
+  it("shows detail prefetch progress after the core phase completes", () => {
+    pill.update(
+      status({
+        state: "running",
+        discovered: 2,
+        ready: 2,
+        detailTotal: 6,
+        detailReady: 3,
+        detailFailed: 1,
+      }),
+    );
+    expect(label()).toBe("详解预载中 4/6");
+    expect(spinnerVisible()).toBe(true);
+  });
+
+  it("mentions failed details in the completion text", () => {
+    pill.update(
+      status({
+        state: "running",
+        discovered: 2,
+        ready: 2,
+        detailTotal: 6,
+        detailReady: 4,
+        detailFailed: 2,
+      }),
+    );
+    expect(label()).toBe("✓ 解析完成（2 个详解失败）");
+  });
+
+  it("keeps the plain completion text when prefetch is off", () => {
+    pill.update(status({ state: "running", discovered: 2, ready: 2 }));
+    expect(label()).toBe("✓ 解析完成");
   });
 });
