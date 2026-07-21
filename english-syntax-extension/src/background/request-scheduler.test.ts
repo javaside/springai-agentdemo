@@ -237,9 +237,9 @@ describe("request scheduler", () => {
     const order: string[] = [];
     const scheduler = new RequestScheduler<string, string>({
       concurrency: 1,
-      fetchTask: async (batch) => {
+      fetchTask: (batch) => {
         order.push(...batch.map(({ input }) => input));
-        return batch.map(({ input }) => input);
+        return Promise.resolve(batch.map(({ input }) => input));
       },
     });
     const request = (cacheKey: string, priority: SchedulerPriority) =>
