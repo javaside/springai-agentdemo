@@ -50,6 +50,8 @@ export interface OptionsDependencies {
   confirm: (message: string) => boolean;
   exportCacheFile: () => Promise<CacheExportFile>;
   importCacheFile: (text: string) => Promise<ImportReport>;
+  getPrefetchDetail: () => Promise<boolean>;
+  setPrefetchDetail: (enabled: boolean) => Promise<void>;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -226,6 +228,16 @@ export async function createOptionsPage(
     "options-page__hint",
     "新上限会保存，并在后台缓存下次打开时生效。",
   );
+  const prefetchLabel = element("label", "options-page__label");
+  const prefetchInput = element("input");
+  prefetchInput.type = "checkbox";
+  prefetchInput.dataset.prefetchDetail = "";
+  prefetchLabel.append(prefetchInput, document.createTextNode(" 预载成分详解"));
+  const prefetchHint = element(
+    "p",
+    "options-page__hint",
+    "开启后每句解析完成即自动生成全部成分详解并入缓存（可随导出分享）；token 消耗数倍于仅核心解析。下次点击「开始学习」生效。",
+  );
   const clearButton = element("button", "options-page__danger", "清空缓存");
   clearButton.type = "button";
   clearButton.dataset.action = "clear-cache";
@@ -248,6 +260,8 @@ export async function createOptionsPage(
     cacheLimitLabel,
     cacheLimit,
     cacheHint,
+    prefetchLabel,
+    prefetchHint,
     clearButton,
     exportButton,
     importButton,
@@ -452,6 +466,9 @@ export async function createOptionsPage(
     void dependencies.setCacheLimitMb(Number(cacheLimit.value));
     clearStatus.textContent = "缓存上限已保存，将在后台缓存下次打开时生效。";
   });
+  prefetchInput.addEventListener("change", () => {
+    void dependencies.setPrefetchDetail(prefetchInput.checked);
+  });
   clearButton.addEventListener("click", () => {
     if (!dependencies.confirm("确定清空全部分析缓存吗？此操作不会删除模型配置。")) return;
     void dependencies.clearCache().then(async () => {
@@ -521,6 +538,7 @@ export async function createOptionsPage(
   ]).then(([nextStats, nextLimit]) => [nextStats, nextLimit] as const);
   cacheStats.textContent = `${stats.entries} 条，估算占用 ${cacheSize(stats.estimatedBytes)}`;
   cacheLimit.value = String(limit);
+  prefetchInput.checked = await dependencies.getPrefetchDetail();
 }
 
 function runtimeDependencies(): OptionsDependencies {
@@ -590,6 +608,8 @@ function runtimeDependencies(): OptionsDependencies {
     confirm: (message) => window.confirm(message),
     exportCacheFile: async () => exportCacheFile(await openCache()),
     importCacheFile: async (text) => importCacheFile(await openCache(), text),
+    getPrefetchDetail: () => repository.getPrefetchDetail(),
+    setPrefetchDetail: (enabled) => repository.setPrefetchDetail(enabled),
   };
 }
 

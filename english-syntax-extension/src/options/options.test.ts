@@ -44,6 +44,8 @@ function dependencies(overrides: Partial<OptionsDependencies> = {}): OptionsDepe
     importCacheFile: vi.fn(() =>
       Promise.resolve({ ok: true as const, added: 2, skipped: 1, invalid: 0 }),
     ),
+    getPrefetchDetail: vi.fn(() => Promise.resolve(false)),
+    setPrefetchDetail: vi.fn(() => Promise.resolve()),
     ...overrides,
   };
 }
@@ -431,5 +433,27 @@ describe("cache import/export", () => {
       fileInput.dispatchEvent(new Event("change"));
       await vi.waitFor(() => expect(document.body.textContent).toContain(message));
     }
+  });
+});
+
+describe("detail prefetch toggle", () => {
+  it("renders the checkbox with the stored value", async () => {
+    await createOptionsPage(
+      root(),
+      dependencies({ getPrefetchDetail: vi.fn(() => Promise.resolve(true)) }),
+    );
+    const checkbox = document.querySelector<HTMLInputElement>("[data-prefetch-detail]");
+    expect(checkbox?.type).toBe("checkbox");
+    expect(checkbox?.checked).toBe(true);
+    expect(document.body.textContent).toContain("预载成分详解");
+  });
+
+  it("persists changes through setPrefetchDetail", async () => {
+    const subject = dependencies();
+    await createOptionsPage(root(), subject);
+    const checkbox = document.querySelector<HTMLInputElement>("[data-prefetch-detail]")!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(subject.setPrefetchDetail).toHaveBeenCalledWith(true));
   });
 });
