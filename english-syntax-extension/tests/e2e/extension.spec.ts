@@ -841,3 +841,43 @@ test("a page with cached analyses renders in cache-only mode without any profile
   expect(harness.fakeModel.recordedOfKind("core")).toHaveLength(warmCalls);
   await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId: cacheOnlyDocument }));
 });
+
+test("enabling detail prefetch caches every component and a click needs no model call", async ({
+  harness,
+}) => {
+  await seedLocalProfile(harness);
+  await harness.serviceWorker.evaluate(async () => {
+    await chrome.storage.local.set({ "prefetchDetail.v1": true });
+  });
+  const { page, tabId, documentId } = await startSession(harness, "dynamic-article.html");
+  await expect(learningBlocks(page)).toHaveCount(4, { timeout: 20_000 });
+
+  // Poll session status until the prefetch phase settles (probe, not wall clock).
+  await expect
+    .poll(
+      async () => {
+        const response = (await harness.dispatchFromUi(
+          uiMessage("GET_SESSION_STATUS", { tabId, documentId }),
+        )) as { status?: { detailTotal?: number; detailReady?: number; detailFailed?: number } };
+        const status = response.status ?? {};
+        return (
+          status.detailTotal !== undefined &&
+          (status.detailReady ?? 0) + (status.detailFailed ?? 0) >= status.detailTotal
+        );
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+
+  const sentenceCalls = harness.fakeModel.recordedOfKind("sentence-details").length;
+  expect(sentenceCalls).toBeGreaterThan(0);
+  expect(harness.fakeModel.recordedOfKind("detail")).toHaveLength(0);
+
+  // A click now renders straight from the cache: no single-detail model call.
+  await page.locator(".component").first().click();
+  await expect(page.locator(".detail").first()).toBeVisible({ timeout: 10_000 });
+  expect(harness.fakeModel.recordedOfKind("detail")).toHaveLength(0);
+  expect(harness.fakeModel.recordedOfKind("sentence-details")).toHaveLength(sentenceCalls);
+
+  await harness.dispatchFromUi(uiMessage("STOP_SESSION", { tabId, documentId }));
+});

@@ -16,6 +16,8 @@ export type RequestKind =
   | "core-repair"
   | "detail"
   | "detail-repair"
+  | "sentence-details"
+  | "sentence-details-repair"
   | "correction"
   | "correction-repair"
   | "unknown";
@@ -75,6 +77,10 @@ function detectKind(text: string): RequestKind {
   if (text.startsWith("Explain only the selected grammatical component")) return "detail";
   if (text.startsWith("Repair only the structure of the invalid detail-analysis JSON")) {
     return "detail-repair";
+  }
+  if (text.startsWith("Explain each requested grammatical component")) return "sentence-details";
+  if (text.startsWith("Repair only the structure of the invalid sentence-details JSON")) {
+    return "sentence-details-repair";
   }
   if (text.startsWith("Reanalyze the supplied sentence")) return "correction";
   if (text.startsWith("Repair only the structure of the invalid correction analysis")) {
@@ -258,6 +264,21 @@ function parseFocus(promptText: string): { startToken: number; endToken: number 
     : { startToken: 0, endToken: 0 };
 }
 
+/**
+ * Recover the batched sentence-details targets from the prompt: the sentenceId
+ * is the first "sentenceId" field and the focus array is the prompt's last
+ * section, after the "Requested focus ranges:" marker.
+ */
+function sentenceDetailsTargets(promptText: string): {
+  sentenceId: string;
+  focuses: { startToken: number; endToken: number }[];
+} {
+  const sentenceId = promptText.match(/"sentenceId":\s*"([^"]+)"/)?.[1] ?? "unknown";
+  const section = promptText.split("Requested focus ranges:")[1] ?? "[]";
+  const focuses = JSON.parse(section.trim()) as { startToken: number; endToken: number }[];
+  return { sentenceId, focuses };
+}
+
 export class FakeOpenAiServer {
   private readonly server: Server;
   private readonly scriptQueues = new Map<string, ScriptedOutcome[]>();
@@ -346,7 +367,7 @@ export class FakeOpenAiServer {
 
     const queue = this.scriptQueues.get(payload.model);
     const outcome: ScriptedOutcome = queue?.length ? queue.shift()! : { kind: "auto" };
-    this.reply(response, outcome, kind, sentences, payload.usedResponseFormat);
+    this.reply(response, outcome, kind, sentences, payload.usedResponseFormat, payload.promptText);
   }
 
   private reply(
@@ -355,6 +376,7 @@ export class FakeOpenAiServer {
     kind: RequestKind,
     sentences: PromptSentence[],
     usedResponseFormat: boolean,
+    promptText: string,
   ): void {
     switch (outcome.kind) {
       case "timeout":
@@ -373,7 +395,7 @@ export class FakeOpenAiServer {
           response.end(jsonBody({ error: "response_format is not supported by this model" }));
           return;
         }
-        this.reply(response, { kind: "auto" }, kind, sentences, usedResponseFormat);
+        this.reply(response, { kind: "auto" }, kind, sentences, usedResponseFormat, promptText);
         return;
       case "invalid-json":
         response.writeHead(200, { "content-type": "application/json" });
@@ -404,7 +426,7 @@ export class FakeOpenAiServer {
         this.respondCompoundDetail(response, sentences);
         return;
       case "auto":
-        this.respondAuto(response, kind, sentences);
+        this.respondAuto(response, kind, sentences, promptText);
         return;
     }
   }
@@ -413,6 +435,7 @@ export class FakeOpenAiServer {
     response: ServerResponse,
     kind: RequestKind,
     sentences: PromptSentence[],
+    promptText: string,
   ): void {
     switch (kind) {
       case "probe":
@@ -423,6 +446,14 @@ export class FakeOpenAiServer {
       case "detail-repair":
         this.respondDetail(response, sentences);
         return;
+      case "sentence-details":
+      case "sentence-details-repair": {
+        const { sentenceId, focuses } = sentenceDetailsTargets(promptText);
+        this.json(response, {
+          details: focuses.map((focus) => this.validDetailFor(sentenceId, focus)),
+        });
+        return;
+      }
       case "correction":
       case "correction-repair":
         this.respondCore(response, sentences, (sentence) => autoComponents(sentence, "（已纠正）"));
@@ -450,27 +481,37 @@ export class FakeOpenAiServer {
 
   private respondDetail(response: ServerResponse, sentences: PromptSentence[]): void {
     const sentence = sentences[0];
-    const { startToken, endToken } = parseFocus(this.requests.at(-1)?.promptText ?? "");
+    const focus = parseFocus(this.requests.at(-1)?.promptText ?? "");
+    this.json(response, this.validDetailFor(sentence?.sentenceId ?? "", focus));
+  }
+
+  /** Answer with a chat completion whose message content is the given JSON value. */
+  private json(response: ServerResponse, value: unknown): void {
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(
-      completion(
-        jsonBody({
-          sentenceId: sentence?.sentenceId ?? "",
-          focus: { startToken, endToken },
-          structures: [
-            {
-              startToken,
-              endToken,
-              role: "核心成分",
-              explanation: "该成分承担句子的核心语法功能。",
-              translation: "核心成分译文",
-            },
-          ],
-          grammarPoints: ["示例语法点"],
-          explanation: "这是针对所选成分的详细语法解析。",
-        }),
-      ),
-    );
+    response.end(completion(jsonBody(value)));
+  }
+
+  /** A deterministic, validator-compliant single-component detail analysis. */
+  private validDetailFor(
+    sentenceId: string,
+    focus: { startToken: number; endToken: number },
+  ): Record<string, unknown> {
+    const { startToken, endToken } = focus;
+    return {
+      sentenceId,
+      focus: { startToken, endToken },
+      structures: [
+        {
+          startToken,
+          endToken,
+          role: "核心成分",
+          explanation: "该成分承担句子的核心语法功能。",
+          translation: "核心成分译文",
+        },
+      ],
+      grammarPoints: ["示例语法点"],
+      explanation: "这是针对所选成分的详细语法解析。",
+    };
   }
 
   private respondCompoundDetail(response: ServerResponse, sentences: PromptSentence[]): void {
