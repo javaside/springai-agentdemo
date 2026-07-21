@@ -207,6 +207,27 @@ describe("Popup", () => {
     expect(subject.openOptions).toHaveBeenCalled();
   });
 
+  it("shows detail prefetch progress in the subline while it is running", async () => {
+    await createPopupPage(
+      root(),
+      dependencies({
+        getStatus: vi.fn(() =>
+          Promise.resolve(
+            status({
+              state: "running",
+              discovered: 5,
+              ready: 5,
+              detailTotal: 20,
+              detailReady: 7,
+              detailFailed: 1,
+            }),
+          ),
+        ),
+      }),
+    );
+    expect(subline().textContent).toContain("详解预载中 8/20");
+  });
+
   it("shows a one-line error on command failure", async () => {
     const subject = dependencies({
       sendCommand: vi.fn(() => Promise.reject(new Error("boom"))),

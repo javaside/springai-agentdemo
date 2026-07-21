@@ -133,6 +133,14 @@ export async function createPopupPage(
       primary.textContent = cacheOnly ? "查看缓存" : "开始学习";
       command = "START_SESSION";
     }
+    const detailSettled = (status.detailReady ?? 0) + (status.detailFailed ?? 0);
+    if (
+      status.state === "running" &&
+      status.detailTotal !== undefined &&
+      detailSettled < status.detailTotal
+    ) {
+      subline.textContent = `详解预载中 ${detailSettled}/${status.detailTotal}`;
+    }
     if (status.state === "running" || status.state === "paused") {
       if (command !== "STOP_SESSION") {
         secondary.disabled = false;
