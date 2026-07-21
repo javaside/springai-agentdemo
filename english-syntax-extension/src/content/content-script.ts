@@ -10,7 +10,7 @@ import type { RuntimeTransport, SessionControllerOptions } from "./session-contr
 
 interface RoutedController {
   readonly status: SessionStatus;
-  start(): Promise<void>;
+  start(options?: { prefetchDetail?: boolean }): Promise<void>;
   pause(): void;
   resume(): void;
   stop(): void;
@@ -124,6 +124,9 @@ function isSessionStatus(value: unknown): value is SessionStatus {
     isSafeInteger(value.queued) &&
     isSafeInteger(value.ready) &&
     isSafeInteger(value.failed) &&
+    (value.detailTotal === undefined || isSafeInteger(value.detailTotal)) &&
+    (value.detailReady === undefined || isSafeInteger(value.detailReady)) &&
+    (value.detailFailed === undefined || isSafeInteger(value.detailFailed)) &&
     (value.profileId === undefined || typeof value.profileId === "string")
   );
 }
@@ -297,7 +300,7 @@ export class ContentScriptRouter {
     const controller = this.controller(request.tabId, request.documentId);
     switch (request.type) {
       case "START_SESSION":
-        await controller.start();
+        await controller.start({ prefetchDetail: request.prefetchDetail === true });
         return statusResponse(request.requestId, controller.status);
       case "PAUSE_SESSION":
         controller.pause();

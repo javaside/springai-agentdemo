@@ -12,6 +12,8 @@ import { BlockReplacement } from "./block-replacement";
 import type { SentenceFailure } from "./block-replacement";
 import { nearestSafeBlock, scanDocument } from "./document-scanner";
 import type { CandidateBlock } from "./document-scanner";
+import { DetailPrefetcher } from "./detail-prefetcher";
+import type { PrefetchSendResult } from "./detail-prefetcher";
 import type { SyntaxFocusEventDetail } from "./learning-block";
 import { SyntaxLearningBlock } from "./learning-block";
 import { ViewportObserver } from "./viewport-observer";
@@ -146,6 +148,7 @@ export class SessionController {
   private readonly mutationRoots = new Set<ParentNode>();
   private readonly ephemeralSelectionAnchors = new Set<HTMLElement>();
   private readonly detailVersions = new Map<string, number>();
+  private prefetcher?: DetailPrefetcher;
   private readonly correctionVersions = new Map<string, number>();
   private readonly reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
   private state: SessionStatus["state"] = "stopped";
@@ -184,16 +187,32 @@ export class SessionController {
       failed: records.filter(({ phase }) => phase === "failed").length,
       skipped: records.filter(({ phase }) => phase === "skipped").length,
       ...(this.selectedProfileId === undefined ? {} : { profileId: this.selectedProfileId }),
+      ...(this.prefetcher === undefined
+        ? {}
+        : (() => {
+            const counts = this.prefetcher.counts();
+            return {
+              detailTotal: counts.total,
+              detailReady: counts.ready,
+              detailFailed: counts.failed,
+            };
+          })()),
     };
   }
 
-  async start(): Promise<void> {
+  async start(options?: { prefetchDetail?: boolean }): Promise<void> {
     if (this.state === "running") return;
     if (this.state === "paused") {
       this.resume();
       return;
     }
     this.state = "running";
+    if (options?.prefetchDetail === true) {
+      this.prefetcher = new DetailPrefetcher({
+        send: (item) => this.sendPrefetch(item.sentence, item.core),
+        onChange: () => this.emitStatus(),
+      });
+    }
     this.document.addEventListener("contextmenu", this.recordContextTarget, true);
     this.document.addEventListener("syntax-detail-request", this.handleDetailEvent);
     this.document.addEventListener("syntax-reanalyze-request", this.handleCorrectionEvent);
@@ -211,12 +230,14 @@ export class SessionController {
   pause(): void {
     if (this.state !== "running") return;
     this.state = "paused";
+    this.prefetcher?.pause();
     this.emitStatus();
   }
 
   resume(): void {
     if (this.state !== "paused") return;
     this.state = "running";
+    this.prefetcher?.resume();
     const waiting = [...this.pausedBlocks];
     this.pausedBlocks.clear();
     for (const blockId of waiting) this.queueVisibleBlock(blockId);
@@ -228,6 +249,7 @@ export class SessionController {
     this.state = "stopped";
     this.operationVersion += 1;
     this.options.transport.cancelDocument(this.documentId);
+    this.prefetcher = undefined;
     this.viewport.disconnect();
     this.mutationObserver?.disconnect();
     this.mutationObserver = undefined;
@@ -338,6 +360,23 @@ export class SessionController {
     }
   }
 
+  /** 预载发送:把 transport 响应归一化为 prefetcher 的三态结果(transport 拒绝由 prefetcher 兜成 failed)。 */
+  private async sendPrefetch(
+    sentence: SentenceInput,
+    core: CoreAnalysis,
+  ): Promise<PrefetchSendResult> {
+    const response = await this.options.transport.send(
+      this.pageRequest({ type: "PREFETCH_SENTENCE_DETAILS", sentence, core }),
+    );
+    if (response.type === "SENTENCE_DETAILS_RESULT") {
+      return { kind: "ok", succeeded: response.succeeded, failed: response.failed };
+    }
+    if (response.type === "ERROR" && response.error.code === "REQUEST_CANCELLED") {
+      return { kind: "cancelled" };
+    }
+    return { kind: "failed" };
+  }
+
   async submitCorrection(sentenceId: string, feedback: string): Promise<void> {
     const located = this.locateSentence(sentenceId);
     if (
@@ -381,6 +420,7 @@ export class SessionController {
     for (const sentence of block.sentences) {
       sentence.core = undefined;
       this.transition(sentence, "stale");
+      this.prefetcher?.discard(sentence.input.sentenceId);
     }
     this.emitStatus();
   }
@@ -506,6 +546,7 @@ export class SessionController {
         block.learningBlock.renderCore(sentence.input.text, sentence.input.tokens, analysis);
         sentence.core = analysis;
         this.transition(sentence, "ready");
+        this.prefetcher?.enqueue(sentence.input, analysis);
       } catch {
         const failure = {
           sentenceId: sentence.input.sentenceId,

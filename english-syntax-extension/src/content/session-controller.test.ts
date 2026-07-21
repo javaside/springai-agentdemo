@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GrammarRole } from "../shared/grammar";
 import type { CoreAnalysis, DetailAnalysis, Token, TokenRange } from "../shared/grammar";
-import type { RequestMessage, ResponseMessage } from "../shared/protocol";
+import type { RequestMessage, ResponseMessage, SessionStatus } from "../shared/protocol";
 import { isSessionComplete } from "../shared/protocol";
 import type { CandidateBlock } from "./document-scanner";
 import { scanDocument } from "./document-scanner";
@@ -1019,6 +1019,185 @@ describe("SessionController", () => {
   });
 });
 
+describe("detail prefetch integration", () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  function richCore(sentenceId: string, componentCount = 2): CoreAnalysis {
+    return {
+      schemaVersion: 1,
+      sentenceId,
+      modelProfileId: "profile-a",
+      components: Array.from({ length: componentCount }, (_, index) => ({
+        startToken: index,
+        endToken: index,
+        role: GrammarRole.SUBJECT,
+        translation: "译文",
+      })),
+    };
+  }
+
+  type PrefetchRequest = Extract<RequestMessage, { type: "PREFETCH_SENTENCE_DETAILS" }>;
+
+  function prefetchTransport(
+    respond: (message: PrefetchRequest) => ResponseMessage,
+  ): FakeTransport {
+    return new FakeTransport((message) =>
+      Promise.resolve(
+        message.type === "PREFETCH_SENTENCE_DETAILS"
+          ? respond(message)
+          : {
+              version: 1,
+              requestId: message.requestId,
+              type: "CORE_RESULT",
+              analyses:
+                message.type === "ANALYZE_CORE"
+                  ? message.sentences.map(({ sentenceId }) => richCore(sentenceId))
+                  : [],
+            },
+      ),
+    );
+  }
+
+  function prefetchMessages(transport: FakeTransport): PrefetchRequest[] {
+    return transport.sent.filter(
+      (message): message is PrefetchRequest => message.type === "PREFETCH_SENTENCE_DETAILS",
+    );
+  }
+
+  it("feeds ready sentences into the prefetcher and reports detail counts", async () => {
+    let lastStatus: SessionStatus | undefined;
+    const transport = prefetchTransport((message) => ({
+      version: 1,
+      requestId: message.requestId,
+      type: "SENTENCE_DETAILS_RESULT",
+      succeeded: 2,
+      failed: 0,
+    }));
+    const subject = harness("Readers learn. Writers practice daily.", transport, {
+      onStatus: (status) => {
+        lastStatus = status;
+      },
+    });
+
+    await subject.controller.start({ prefetchDetail: true });
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.ready).toBe(2));
+    await vi.waitFor(() => expect(subject.controller.status.detailReady).toBe(4));
+
+    expect(prefetchMessages(transport).length).toBe(2);
+    const [firstPrefetch] = prefetchMessages(transport);
+    expect(firstPrefetch).toMatchObject({ type: "PREFETCH_SENTENCE_DETAILS" });
+    expect(firstPrefetch!.sentence).toBeDefined();
+    expect(firstPrefetch!.core).toBeDefined();
+    expect(lastStatus).toMatchObject({ detailTotal: 4, detailReady: 4, detailFailed: 0 });
+  });
+
+  it("does not prefetch when started without the flag and omits detail fields", async () => {
+    const transport = prefetchTransport((message) => ({
+      version: 1,
+      requestId: message.requestId,
+      type: "SENTENCE_DETAILS_RESULT",
+      succeeded: 2,
+      failed: 0,
+    }));
+    const subject = harness("Readers learn. Writers practice daily.", transport);
+
+    await subject.controller.start();
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.ready).toBe(2));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(prefetchMessages(transport).length).toBe(0);
+    const lastStatus = subject.controller.status;
+    expect("detailTotal" in lastStatus).toBe(false);
+    expect("detailReady" in lastStatus).toBe(false);
+    expect("detailFailed" in lastStatus).toBe(false);
+  });
+
+  it("counts a whole sentence as failed on an ERROR response and re-queues on cancel", async () => {
+    const attempts = new Map<string, number>();
+    const transport = prefetchTransport((message) => {
+      const sentenceId = message.sentence.sentenceId;
+      const attempt = (attempts.get(sentenceId) ?? 0) + 1;
+      attempts.set(sentenceId, attempt);
+      if (sentenceId === "sentence-1") {
+        return {
+          version: 1,
+          requestId: message.requestId,
+          type: "ERROR",
+          error: { code: "NETWORK_ERROR", message: "网络请求失败", retryable: true },
+        };
+      }
+      if (attempt === 1) {
+        return {
+          version: 1,
+          requestId: message.requestId,
+          type: "ERROR",
+          error: { code: "REQUEST_CANCELLED", message: "已取消", retryable: true },
+        };
+      }
+      return {
+        version: 1,
+        requestId: message.requestId,
+        type: "SENTENCE_DETAILS_RESULT",
+        succeeded: 2,
+        failed: 0,
+      };
+    });
+    const subject = harness("Readers learn. Writers practice daily.", transport);
+
+    await subject.controller.start({ prefetchDetail: true });
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.detailFailed).toBe(2));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 取消的句子不计数、也不自动重发。
+    expect(subject.controller.status.detailReady).toBe(0);
+    expect(prefetchMessages(transport)).toHaveLength(2);
+
+    subject.controller.pause();
+    subject.controller.resume();
+    await vi.waitFor(() => expect(subject.controller.status.detailReady).toBe(2));
+
+    const resent = prefetchMessages(transport).filter(
+      ({ sentence }) => sentence.sentenceId === "sentence-2",
+    );
+    expect(resent).toHaveLength(2); // 首发 + resume 后恰好一次重发
+    expect(subject.controller.status).toMatchObject({
+      detailTotal: 4,
+      detailReady: 2,
+      detailFailed: 2,
+    });
+  });
+
+  it("stops prefetching after stop()", async () => {
+    const transport = prefetchTransport((message) => ({
+      version: 1,
+      requestId: message.requestId,
+      type: "SENTENCE_DETAILS_RESULT",
+      succeeded: 2,
+      failed: 0,
+    }));
+    const subject = harness("Readers learn. Writers practice daily.", transport);
+
+    await subject.controller.start({ prefetchDetail: true });
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.detailReady).toBe(4));
+    subject.controller.stop();
+
+    const lastStatus = subject.controller.status;
+    expect("detailTotal" in lastStatus).toBe(false);
+    expect("detailReady" in lastStatus).toBe(false);
+    expect("detailFailed" in lastStatus).toBe(false);
+    expect(prefetchMessages(transport)).toHaveLength(2);
+  });
+});
+
 describe("ContentScriptRouter", () => {
   it("deeply rejects malformed runtime results instead of trusting their type string", () => {
     expect(
@@ -1109,6 +1288,60 @@ describe("ContentScriptRouter", () => {
     expect(second).toMatchObject({ type: "SESSION_STATUS" });
     expect(factory).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it("isSessionStatus accepts detail counters and START_SESSION forwards the flag", async () => {
+    expect(
+      isRuntimeResponse(
+        {
+          version: 1,
+          requestId: "request-1",
+          type: "SESSION_STATUS",
+          status: {
+            state: "running",
+            discovered: 2,
+            queued: 0,
+            ready: 2,
+            failed: 0,
+            detailTotal: 4,
+            detailReady: 3,
+            detailFailed: 1,
+          },
+        },
+        "request-1",
+      ),
+    ).toBe(true);
+
+    const start = vi.fn<(options?: { prefetchDetail?: boolean }) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+    const router = new ContentScriptRouter({
+      controllerFactory: () => ({
+        documentId: "document-1",
+        status: { state: "running" as const, discovered: 0, queued: 0, ready: 0, failed: 0 },
+        start,
+        pause: vi.fn(),
+        resume: vi.fn(),
+        stop: vi.fn(),
+        parseSelection: vi.fn(() => Promise.resolve(undefined)),
+        parseContextBlock: vi.fn(() => Promise.resolve(undefined)),
+        reanalyzeVisible: vi.fn(),
+        switchProfile: vi.fn(),
+      }),
+      transportFactory: () => new FakeTransport(),
+    });
+
+    const response = await router.route({
+      version: 1,
+      requestId: "start-1",
+      type: "START_SESSION",
+      tabId: 3,
+      documentId: "document-1",
+      prefetchDetail: true,
+    });
+
+    expect(response).toMatchObject({ type: "SESSION_STATUS" });
+    expect(start).toHaveBeenCalledWith({ prefetchDetail: true });
   });
 
   it("routes a visible-area reanalysis request to the document controller", async () => {
