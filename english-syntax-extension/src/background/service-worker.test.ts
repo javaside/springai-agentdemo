@@ -920,6 +920,29 @@ describe("detail prefetch", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("PREFETCH_SENTENCE_DETAILS pauses the profile on AUTH_FAILED and stops calling the service", async () => {
+    const analyzeSentenceDetails = vi
+      .fn<AnalysisService["analyzeSentenceDetails"]>()
+      .mockRejectedValue(
+        Object.assign(new Error("SECRET-A"), {
+          code: "AUTH_FAILED",
+          retryable: false,
+          details: { status: 401 },
+        }),
+      );
+    const subject = chromeMock();
+    registerServiceWorker(dependencies({ analyzeSentenceDetails }), subject.api);
+    const listener = subject.events.runtime.onMessage.listeners[0]!;
+
+    const first = await dispatch(listener, prefetchSentenceDetailsRequest());
+    const second = await dispatch(listener, prefetchSentenceDetailsRequest());
+
+    expect(first).toMatchObject({ type: "ERROR", error: { code: "AUTH_FAILED" } });
+    expect(second).toMatchObject({ type: "ERROR", error: { code: "AUTH_FAILED" } });
+    expect(analyzeSentenceDetails).toHaveBeenCalledOnce();
+    expect(JSON.stringify([first, second])).not.toContain("SECRET-A");
+  });
+
   it("PREFETCH_SENTENCE_DETAILS without a profile returns CONFIG_MISSING", async () => {
     const subject = chromeMock();
     registerServiceWorker(dependencies({}, []), subject.api);

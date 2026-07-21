@@ -395,22 +395,29 @@ export function registerServiceWorker(
         case "PREFETCH_SENTENCE_DETAILS": {
           const profile = await profileFor(request.tabId);
           if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
-          const outcome = await dependencies.analysisService.analyzeSentenceDetails(
-            {
-              profile,
-              documentId: request.documentId,
-              sentence: request.sentence,
-              core: request.core,
-            },
-            new AbortController().signal,
-          );
-          return {
-            version: MESSAGE_VERSION,
-            requestId: request.requestId,
-            type: "SENTENCE_DETAILS_RESULT",
-            succeeded: outcome.succeeded,
-            failed: outcome.failed,
-          };
+          if (isProfilePaused(profile)) return errorResponse(request.requestId, "AUTH_FAILED");
+          try {
+            const outcome = await dependencies.analysisService.analyzeSentenceDetails(
+              {
+                profile,
+                documentId: request.documentId,
+                sentence: request.sentence,
+                core: request.core,
+              },
+              new AbortController().signal,
+            );
+            return {
+              version: MESSAGE_VERSION,
+              requestId: request.requestId,
+              type: "SENTENCE_DETAILS_RESULT",
+              succeeded: outcome.succeeded,
+              failed: outcome.failed,
+            };
+          } catch (error) {
+            const code = errorCode(error);
+            if (code === "AUTH_FAILED") pauseProfile(profile);
+            return errorResponse(request.requestId, code);
+          }
         }
         case "REANALYZE_WITH_FEEDBACK": {
           const profile = await profileFor(request.tabId);
