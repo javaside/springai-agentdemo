@@ -713,6 +713,7 @@ export class SessionController {
     block.learningBlock.renderCore(sentence.input.text, sentence.input.tokens, analysis);
     sentence.core = analysis;
     this.transition(sentence, "ready");
+    this.prefetcher?.enqueue(sentence.input, analysis);
     this.finishBlock(block, []);
   }
 

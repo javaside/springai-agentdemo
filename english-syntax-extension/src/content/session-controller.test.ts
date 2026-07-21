@@ -1175,6 +1175,50 @@ describe("detail prefetch integration", () => {
     });
   });
 
+  it("feeds a successfully retried sentence into the prefetcher", async () => {
+    let coreCalls = 0;
+    const transport = new FakeTransport((message) => {
+      if (message.type === "PREFETCH_SENTENCE_DETAILS") {
+        return Promise.resolve({
+          version: 1,
+          requestId: message.requestId,
+          type: "SENTENCE_DETAILS_RESULT",
+          succeeded: 2,
+          failed: 0,
+        } satisfies ResponseMessage);
+      }
+      coreCalls += 1;
+      return Promise.resolve({
+        version: 1,
+        requestId: message.requestId,
+        type: "CORE_RESULT",
+        analyses:
+          coreCalls > 1 && message.type === "ANALYZE_CORE"
+            ? message.sentences.map(({ sentenceId }) => richCore(sentenceId))
+            : [],
+      } satisfies ResponseMessage);
+    });
+    const subject = harness(undefined, transport);
+
+    await subject.controller.start({ prefetchDetail: true });
+    subject.viewport.emit();
+    await vi.waitFor(() => expect(subject.controller.status.failed).toBe(1));
+    expect(prefetchMessages(transport)).toHaveLength(0);
+
+    document.dispatchEvent(
+      new CustomEvent("syntax-reanalyze-request", {
+        detail: { sentenceId: "sentence-1", focus: { startToken: 0, endToken: 0 } },
+      }),
+    );
+
+    await vi.waitFor(() => expect(subject.controller.status.ready).toBe(1));
+    await vi.waitFor(() => expect(prefetchMessages(transport)).toHaveLength(1));
+    expect(prefetchMessages(transport)[0]!.sentence.sentenceId).toBe("sentence-1");
+    await vi.waitFor(() =>
+      expect(subject.controller.status).toMatchObject({ detailTotal: 2, detailReady: 2 }),
+    );
+  });
+
   it("stops prefetching after stop()", async () => {
     const transport = prefetchTransport((message) => ({
       version: 1,
