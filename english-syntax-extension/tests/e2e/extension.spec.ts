@@ -869,6 +869,14 @@ test("enabling detail prefetch caches every component and a click needs no model
     )
     .toBe(true);
 
+  // With the fake model every component must succeed: a non-zero failure count
+  // means the content-side response guard rejected genuine SW successes.
+  const settled = (await harness.dispatchFromUi(
+    uiMessage("GET_SESSION_STATUS", { tabId, documentId }),
+  )) as { status?: { detailTotal?: number; detailReady?: number; detailFailed?: number } };
+  expect(settled.status?.detailFailed).toBe(0);
+  expect(settled.status?.detailReady).toBe(settled.status?.detailTotal);
+
   const sentenceCalls = harness.fakeModel.recordedOfKind("sentence-details").length;
   expect(sentenceCalls).toBeGreaterThan(0);
   expect(harness.fakeModel.recordedOfKind("detail")).toHaveLength(0);

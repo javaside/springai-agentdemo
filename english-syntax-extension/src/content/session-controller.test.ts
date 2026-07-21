@@ -1263,6 +1263,39 @@ describe("ContentScriptRouter", () => {
     ).toBe(true);
   });
 
+  it("accepts a sentence-details result and rejects malformed counters", () => {
+    expect(
+      isRuntimeResponse(
+        {
+          version: 1,
+          requestId: "request-1",
+          type: "SENTENCE_DETAILS_RESULT",
+          succeeded: 2,
+          failed: 1,
+        },
+        "request-1",
+      ),
+    ).toBe(true);
+    expect(
+      isRuntimeResponse(
+        {
+          version: 1,
+          requestId: "request-1",
+          type: "SENTENCE_DETAILS_RESULT",
+          succeeded: "2",
+          failed: 1,
+        },
+        "request-1",
+      ),
+    ).toBe(false);
+    expect(
+      isRuntimeResponse(
+        { version: 1, requestId: "request-1", type: "SENTENCE_DETAILS_RESULT", succeeded: 2 },
+        "request-1",
+      ),
+    ).toBe(false);
+  });
+
   it("keeps a production Port watchdog and reconnects it after disconnect", () => {
     const disconnectListeners: Array<() => void> = [];
     const port = {

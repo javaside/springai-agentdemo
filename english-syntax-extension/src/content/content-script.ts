@@ -160,6 +160,8 @@ export function isRuntimeResponse(value: unknown, requestId: string): value is R
       return Array.isArray(value.analyses) && value.analyses.every(isCoreAnalysis);
     case "DETAIL_RESULT":
       return isDetailAnalysis(value.analysis);
+    case "SENTENCE_DETAILS_RESULT":
+      return isSafeInteger(value.succeeded) && isSafeInteger(value.failed);
     case "CACHE_STATS":
       return (
         isRecord(value.stats) &&
