@@ -86,6 +86,7 @@ const profiles: ModelProfile[] = [
 function dependencies(
   analysisOverrides: Partial<AnalysisService> = {},
   availableProfiles: ModelProfile[] = profiles,
+  prefetchDetail = false,
 ) {
   let activeProfileId = "profile-a";
   const defaultAnalyzeCore: AnalysisService["analyzeCore"] = ({ sentences, profile }) =>
@@ -129,6 +130,7 @@ function dependencies(
         activeProfileId = id;
         return Promise.resolve();
       }),
+      getPrefetchDetail: vi.fn(() => Promise.resolve(prefetchDetail)),
     },
     analysisService,
     scheduler: { cancelDocument: vi.fn() },
@@ -827,5 +829,146 @@ describe("service worker orchestration", () => {
 
     expect(retried.type).toBe("CORE_RESULT");
     expect(analyzeCore).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("detail prefetch", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const popup = {
+    id: "extension-id",
+    url: "chrome-extension://extension-id/src/popup/popup.html",
+  };
+  const requestCore = {
+    schemaVersion: 1 as const,
+    sentenceId: sentence.sentenceId,
+    components: [{ startToken: 0, endToken: 0, role: GrammarRole.SUBJECT, translation: "学习者" }],
+    modelProfileId: "profile-a",
+  };
+
+  function prefetchSentenceDetailsRequest(): RequestMessage {
+    return pageRequest({ type: "PREFETCH_SENTENCE_DETAILS", sentence, core: requestCore });
+  }
+
+  it("START_SESSION forwards prefetchDetail: true only when the flag is on and a profile exists", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies({}, profiles, true), subject.api);
+
+    await dispatch(
+      subject.events.runtime.onMessage.listeners[0]!,
+      pageRequest({ type: "START_SESSION" }),
+      popup,
+    );
+
+    expect(subject.events.tabs.sendMessage).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ type: "START_SESSION", prefetchDetail: true }),
+    );
+  });
+
+  it("START_SESSION omits the flag when disabled or when no profile exists", async () => {
+    const disabledSubject = chromeMock();
+    registerServiceWorker(dependencies({}, profiles, false), disabledSubject.api);
+    await dispatch(
+      disabledSubject.events.runtime.onMessage.listeners[0]!,
+      pageRequest({ type: "START_SESSION" }),
+      popup,
+    );
+    const disabledCommand = disabledSubject.events.tabs.sendMessage.mock.calls.find(
+      ([, message]) => (message as { type?: string }).type === "START_SESSION",
+    )![1];
+    expect(disabledCommand).not.toHaveProperty("prefetchDetail");
+
+    const profilelessSubject = chromeMock();
+    registerServiceWorker(dependencies({}, [], true), profilelessSubject.api);
+    await dispatch(
+      profilelessSubject.events.runtime.onMessage.listeners[0]!,
+      pageRequest({ type: "START_SESSION" }),
+      popup,
+    );
+    const profilelessCommand = profilelessSubject.events.tabs.sendMessage.mock.calls.find(
+      ([, message]) => (message as { type?: string }).type === "START_SESSION",
+    )![1];
+    expect(profilelessCommand).not.toHaveProperty("prefetchDetail");
+  });
+
+  it("PREFETCH_SENTENCE_DETAILS routes to the service and echoes counts", async () => {
+    const analyzeSentenceDetails = vi.fn<AnalysisService["analyzeSentenceDetails"]>(() =>
+      Promise.resolve({ succeeded: 3, failed: 1 }),
+    );
+    const subject = chromeMock();
+    registerServiceWorker(dependencies({ analyzeSentenceDetails }), subject.api);
+
+    const response = await dispatch(
+      subject.events.runtime.onMessage.listeners[0]!,
+      prefetchSentenceDetailsRequest(),
+    );
+
+    expect(response).toMatchObject({
+      type: "SENTENCE_DETAILS_RESULT",
+      succeeded: 3,
+      failed: 1,
+    });
+    expect(analyzeSentenceDetails).toHaveBeenCalledOnce();
+    const [input, signal] = analyzeSentenceDetails.mock.calls[0]!;
+    expect(input).toMatchObject({
+      profile: { id: "profile-a" },
+      documentId: "document-1",
+      sentence,
+      core: requestCore,
+    });
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("PREFETCH_SENTENCE_DETAILS without a profile returns CONFIG_MISSING", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies({}, []), subject.api);
+
+    const response = await dispatch(
+      subject.events.runtime.onMessage.listeners[0]!,
+      prefetchSentenceDetailsRequest(),
+    );
+
+    expect(response).toMatchObject({ type: "ERROR", error: { code: "CONFIG_MISSING" } });
+  });
+
+  it("isStatus accepts and relays detail counters", async () => {
+    const subject = chromeMock();
+    registerServiceWorker(dependencies(), subject.api);
+    const listener = subject.events.runtime.onMessage.listeners[0]!;
+    const statusWithDetails: SessionStatus = {
+      ...emptyRunningStatus,
+      detailTotal: 5,
+      detailReady: 3,
+      detailFailed: 1,
+    };
+
+    const relayed = await dispatch(listener, {
+      version: 1,
+      requestId: "status-detail",
+      type: "SESSION_STATUS",
+      tabId: 7,
+      documentId: "document-1",
+      status: statusWithDetails,
+    });
+    const fetched = await dispatch(listener, pageRequest({ type: "GET_SESSION_STATUS" }));
+
+    expect(relayed).toMatchObject({ type: "ACK" });
+    expect(fetched).toMatchObject({ type: "SESSION_STATUS", status: statusWithDetails });
+
+    for (const detailTotal of [-1, 1.5]) {
+      const rejected = await dispatch(listener, {
+        version: 1,
+        requestId: "status-detail-bad",
+        type: "SESSION_STATUS",
+        tabId: 7,
+        documentId: "document-1",
+        status: { ...emptyRunningStatus, detailTotal },
+      });
+      expect(rejected).toMatchObject({
+        type: "ERROR",
+        error: { code: "INVALID_MODEL_OUTPUT" },
+      });
+    }
   });
 });

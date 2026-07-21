@@ -26,6 +26,7 @@ interface ConfigPort {
   getProfile(profileId: string): Promise<ModelProfile | undefined>;
   getActiveProfile(): Promise<ModelProfile | undefined>;
   setActiveProfile(profileId: string): Promise<void>;
+  getPrefetchDetail(): Promise<boolean>;
 }
 
 interface SchedulerPort {
@@ -172,6 +173,12 @@ function isStatus(value: unknown): value is SessionStatus {
     ) &&
     (status.skipped === undefined ||
       (Number.isSafeInteger(status.skipped) && status.skipped >= 0)) &&
+    (status.detailTotal === undefined ||
+      (Number.isSafeInteger(status.detailTotal) && status.detailTotal >= 0)) &&
+    (status.detailReady === undefined ||
+      (Number.isSafeInteger(status.detailReady) && status.detailReady >= 0)) &&
+    (status.detailFailed === undefined ||
+      (Number.isSafeInteger(status.detailFailed) && status.detailFailed >= 0)) &&
     (status.profileId === undefined || typeof status.profileId === "string")
   );
 }
@@ -245,7 +252,7 @@ export function registerServiceWorker(
     tabId: number,
     documentId: string,
     body:
-      | { type: "START_SESSION" }
+      | { type: "START_SESSION"; prefetchDetail?: true }
       | { type: "PARSE_SELECTION"; selectionText: string }
       | { type: "PARSE_CONTEXT_BLOCK" },
   ): Promise<unknown> => {
@@ -386,14 +393,23 @@ export function registerServiceWorker(
           }
         }
         case "PREFETCH_SENTENCE_DETAILS": {
-          // Routing implemented in a later task; acknowledge with empty counts
-          // so the message contract typechecks in the meantime.
+          const profile = await profileFor(request.tabId);
+          if (profile === undefined) return errorResponse(request.requestId, "CONFIG_MISSING");
+          const outcome = await dependencies.analysisService.analyzeSentenceDetails(
+            {
+              profile,
+              documentId: request.documentId,
+              sentence: request.sentence,
+              core: request.core,
+            },
+            new AbortController().signal,
+          );
           return {
             version: MESSAGE_VERSION,
             requestId: request.requestId,
             type: "SENTENCE_DETAILS_RESULT",
-            succeeded: 0,
-            failed: 0,
+            succeeded: outcome.succeeded,
+            failed: outcome.failed,
           };
         }
         case "REANALYZE_WITH_FEEDBACK": {
@@ -458,9 +474,14 @@ export function registerServiceWorker(
           }
           await inject(request.tabId);
           const profile = await dependencies.configRepository.getActiveProfile();
+          const prefetchDetail =
+            profile !== undefined && (await dependencies.configRepository.getPrefetchDetail());
           const status = emptyStatus("running", profile?.id);
           activeTabs.set(request.tabId, { documentId, status });
-          await sendPageCommand(request.tabId, documentId, { type: "START_SESSION" });
+          await sendPageCommand(request.tabId, documentId, {
+            type: "START_SESSION",
+            ...(prefetchDetail ? { prefetchDetail: true } : {}),
+          });
           return {
             version: MESSAGE_VERSION,
             requestId: request.requestId,
@@ -638,11 +659,16 @@ export function registerServiceWorker(
       const documentId = activeTabs.get(tabId)?.documentId ?? generatedDocumentId(tabId);
       await inject(tabId);
       const profile = await dependencies.configRepository.getActiveProfile();
+      const prefetchDetail =
+        profile !== undefined && (await dependencies.configRepository.getPrefetchDetail());
       activeTabs.set(tabId, {
         documentId,
         status: emptyStatus("running", profile?.id),
       });
-      await sendPageCommand(tabId, documentId, { type: "START_SESSION" });
+      await sendPageCommand(tabId, documentId, {
+        type: "START_SESSION",
+        ...(prefetchDetail ? { prefetchDetail: true } : {}),
+      });
     })();
   });
 
