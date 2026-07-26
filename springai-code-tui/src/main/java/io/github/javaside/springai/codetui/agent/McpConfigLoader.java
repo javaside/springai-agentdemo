@@ -178,7 +178,22 @@ public final class McpConfigLoader {
             log.warn("MCP server '{}' 的 url 非法（需 http/https 绝对地址）：{}，跳过。", name, url);
             return null;
         }
-        return new McpServerConfig.HttpServerConfig(name, enabled, timeout, url, Map.of());
+        Map<String, String> headers = new LinkedHashMap<>();
+        JsonNode headersNode = node.get("headers");
+        if (headersNode != null && headersNode.isObject()) {
+            for (Map.Entry<String, JsonNode> e : headersNode.properties()) {
+                try {
+                    headers.put(e.getKey(),
+                            EnvInterpolator.interpolate(e.getValue().asString(), System::getenv));
+                } catch (EnvInterpolator.UndefinedVariableException ex) {
+                    // 整条跳过而非留下字面量：带着 ${X} 去请求只会换来一个看不懂的 401
+                    log.warn("MCP server '{}' 的 header {} {}，跳过该 server。",
+                            name, e.getKey(), ex.getMessage());
+                    return null;
+                }
+            }
+        }
+        return new McpServerConfig.HttpServerConfig(name, enabled, timeout, url, Map.copyOf(headers));
     }
 
     /**

@@ -235,4 +235,37 @@ class McpConfigLoaderTest {
 
         assertTrue(configs.isEmpty(), "sse 暂未支持，应跳过");
     }
+
+    @Test
+    void interpolatesHeaderValuesFromEnvironment(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "ctx7": { "type": "http", "url": "https://h/mcp",
+                              "headers": { "X-Path": "prefix-${PATH}", "X-Literal": "no-placeholder" } }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size());
+        McpServerConfig.HttpServerConfig http = (McpServerConfig.HttpServerConfig) configs.get(0);
+        assertEquals("no-placeholder", http.headers().get("X-Literal"), "字面值应原样透传");
+        assertEquals("prefix-" + System.getenv("PATH"), http.headers().get("X-Path"),
+                "${PATH} 应被真实环境变量替换");
+    }
+
+    @Test
+    void headerReferencingUndefinedVariableSkipsWholeServer(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "bad": { "type": "http", "url": "https://h/mcp",
+                             "headers": { "Authorization": "Bearer ${CODETUI_NO_SUCH_VAR_9F3A}" } },
+                    "good": { "type": "http", "url": "https://h/mcp" }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size(),
+                "引用未定义变量的 server 应整条跳过（带着字面量 ${} 去请求只会拿到看不懂的 401）");
+        assertEquals("good", configs.get(0).name());
+    }
 }
