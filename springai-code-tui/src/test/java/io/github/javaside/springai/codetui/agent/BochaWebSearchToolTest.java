@@ -54,14 +54,20 @@ class BochaWebSearchToolTest {
         private final HttpServer server;
         final AtomicInteger requests = new AtomicInteger();
         volatile String lastBody = "";
+        volatile String lastAuth = "";
 
         StubServer(int status, String responseJson) throws IOException {
+            this(status, responseJson, "application/json");
+        }
+
+        StubServer(int status, String responseBody, String contentType) throws IOException {
             this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             this.server.createContext("/v1/web-search", exchange -> {
                 requests.incrementAndGet();
+                lastAuth = String.valueOf(exchange.getRequestHeaders().getFirst("Authorization"));
                 lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                byte[] out = responseJson.getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                byte[] out = responseBody.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", contentType);
                 exchange.sendResponseHeaders(status, out.length);
                 try (OutputStream os = exchange.getResponseBody()) {
                     os.write(out);
@@ -137,6 +143,8 @@ class BochaWebSearchToolTest {
 
             assertTrue(out.contains("短片段二"),
                     "第二条无 summary，应退回 snippet，实际=" + out);
+            assertFalse(out.contains("短片段一"),
+                    "第一条有 summary，不应同时输出它的 snippet（fallback 必须是排他的），实际=" + out);
         }
     }
 
@@ -172,6 +180,31 @@ class BochaWebSearchToolTest {
             tool.webSearch("q", null, null);
 
             assertTrue(stub.lastBody.contains("\"count\":20"), "实际=" + stub.lastBody);
+        }
+    }
+
+    @Test
+    void builderClampsResultCount() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).resultCount(999).build();
+
+            tool.webSearch("q", null, null);
+
+            assertTrue(stub.lastBody.contains("\"count\":50"),
+                    "Builder 应把越界条数钳到上界 50，实际=" + stub.lastBody);
+        }
+    }
+
+    @Test
+    void sendsBearerAuthorizationHeader() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            tool.webSearch("q", null, null);
+
+            assertEquals("Bearer fake-key", stub.lastAuth, "必须带 Bearer 鉴权头，否则博查一律 401");
         }
     }
 
@@ -292,7 +325,26 @@ class BochaWebSearchToolTest {
             IllegalStateException ex = assertThrows(IllegalStateException.class,
                     () -> tool.webSearch("q", null, null));
 
-            assertTrue(ex.getMessage().contains("503"), "实际=" + ex.getMessage());
+            assertTrue(ex.getMessage().contains("博查搜索失败：HTTP 503"),
+                    "5xx 应走自定义转译（带前缀），实际=" + ex.getMessage());
+            assertFalse(ex.getMessage().contains("连不上"),
+                    "5xx 是服务端错误，不能报成连不上，实际=" + ex.getMessage());
+        }
+    }
+
+    @Test
+    void truncatesOverlongErrorBody() throws Exception {
+        String longMsg = "x".repeat(500);
+        try (StubServer stub = new StubServer(500, "{\"msg\":\"" + longMsg + "\"}")) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> tool.webSearch("q", null, null));
+
+            assertTrue(ex.getMessage().contains("…"), "超长响应体应被截断并加省略号，实际=" + ex.getMessage());
+            assertTrue(ex.getMessage().length() < 400,
+                    "截断后错误消息不应超过 400 字符，实际长度=" + ex.getMessage().length());
         }
     }
 
@@ -307,6 +359,22 @@ class BochaWebSearchToolTest {
 
         assertTrue(ex.getMessage().contains("连不上"),
                 "连接失败与服务端错误应措辞可区分，实际=" + ex.getMessage());
+    }
+
+    @Test
+    void nonJsonResponseIsNotReportedAsConnectionFailure() throws Exception {
+        try (StubServer stub = new StubServer(200, "<html><body>portal login</body></html>", "text/html")) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> tool.webSearch("q", null, null));
+
+            assertTrue(ex.getMessage().contains("无法解析"),
+                    "连接成功但响应非 JSON，应报解析失败，实际=" + ex.getMessage());
+            assertFalse(ex.getMessage().contains("连不上"),
+                    "连接明明成功了，不能报成连不上（会把排查方向带偏），实际=" + ex.getMessage());
+        }
     }
 
     @Test
@@ -335,6 +403,20 @@ class BochaWebSearchToolTest {
                     "响应形状不对时应点明缺什么字段，实际=" + ex.getMessage());
             assertTrue(ex.getMessage().contains("unexpected"),
                     "错误消息应带响应片段便于排查，实际=" + ex.getMessage());
+        }
+    }
+
+    @Test
+    void nonObjectResultElementsThrowReadableError() throws Exception {
+        try (StubServer stub = new StubServer(200, "{\"webPages\":{\"value\":[\"a\",\"b\"]}}")) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> tool.webSearch("q", null, null));
+
+            assertTrue(ex.getMessage().contains("webPages.value"),
+                    "应点明是结果数组的形状不对，实际=" + ex.getMessage());
         }
     }
 

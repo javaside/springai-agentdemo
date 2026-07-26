@@ -6,6 +6,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -13,6 +14,7 @@ import java.net.ProxySelector;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -141,8 +143,13 @@ public final class BochaWebSearchTool {
                     .body(MAP_TYPE);
         } catch (IllegalStateException e) {
             throw e;                       // onStatus 里已转译过，原样抛出
-        } catch (RestClientException e) {
+        } catch (ResourceAccessException e) {
             throw new IllegalStateException("博查搜索连不上（网络不通或超时）：" + e.getMessage(), e);
+        } catch (RestClientException e) {
+            // 连接成功但响应无法解析：常见于代理 / 门户 / WAF 返回的 HTML 拦截页（Content-Type 非 JSON）。
+            // 绝不能并进「连不上」——连接其实是通的，那句话会把排查方向带偏。
+            throw new IllegalStateException("博查搜索失败：响应无法解析（Content-Type 可能不是 JSON，"
+                    + "疑似代理或门户拦截页）：" + preview(String.valueOf(e.getMessage())), e);
         }
     }
 
@@ -167,10 +174,22 @@ public final class BochaWebSearchTool {
                     + preview(String.valueOf(response)));
         }
         Object value = pageMap.get("value");
+        // value 缺失 / 不是数组时按「零结果」降级而非抛异常：真实 API 在无结果时是否总会带上 value 字段
+        // 没有把握，抛异常有误伤风险。代价是结构畸形会被当成正常零结果告诉模型——已知取舍，非疏漏。
         if (!(value instanceof List<?> list)) {
             return List.of();
         }
-        return (List<Map<String, Object>>) list;
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (Object element : list) {
+            if (element instanceof Map<?, ?> item) {
+                results.add((Map<String, Object>) item);
+            }
+        }
+        if (results.isEmpty() && !list.isEmpty()) {
+            throw new IllegalStateException("博查搜索失败：webPages.value 里没有可识别的结果对象，响应片段："
+                    + preview(String.valueOf(response)));
+        }
+        return results;
     }
 
     private static String render(String query, List<Map<String, Object>> values) {
