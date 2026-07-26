@@ -38,7 +38,8 @@ import java.util.List;
 /**
  * AgentTools —— 组装编码 Agent 用的 {@link ChatClient} 的工厂。
  *
- * <p>把 6 个社区工具（FileSystem/Shell/Grep/Glob/TodoWrite/SmartWebFetch）用 {@link ToolEventCallback} 装饰后
+ * <p>把社区工具（FileSystem/Shell/Grep/Glob/TodoWrite/SmartWebFetch）与自写的 WebSearch（博查，
+ * 仅在配了 BOCHA_API_KEY 时注册）用 {@link ToolEventCallback} 装饰后
  * 注册进 ChatClient，并配上 {@link SessionMemoryAdvisor} 会话记忆与 {@link AgentEnvironment} 环境系统提示。
  *
  * <p><b>网页获取（SmartWebFetch）</b>：{@link SmartWebFetchTool} 抓取网页→转 Markdown→用一个「裸」ChatClient
@@ -107,6 +108,9 @@ public final class AgentTools {
     /** 项目指令注入的 param 键；与 SYSTEM_TEMPLATE 里的 {PROJECT_INSTRUCTIONS} 占位符对应。 */
     private static final String PROJECT_INSTRUCTIONS_KEY = "PROJECT_INSTRUCTIONS";
 
+    /** 搜索指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {WEB_SEARCH_GUIDE} 占位符对应。 */
+    private static final String WEB_SEARCH_GUIDE_KEY = "WEB_SEARCH_GUIDE";
+
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
      * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
@@ -127,6 +131,7 @@ public final class AgentTools {
             - 当需求含糊、或需要用户在多个实现方案之间拍板时，用 AskUserQuestionTool 向用户提问（一次 1–4 个问题，
               每问 2–4 个选项，可单选或多选）；不要在信息不足时自行臆测方向。
             - 回答简洁，聚焦用户的目标本身。
+            {WEB_SEARCH_GUIDE}
 
             关于工作边界（请务必遵守）：
             - 所有工具（文件读写 / Shell / Grep / Glob）在技术上都未被限制在项目根目录内，没有强制沙箱。
@@ -203,7 +208,8 @@ public final class AgentTools {
                 .answersValidation(true)   // UI 顺序问询保证答案完整，故校验开着也不会触发异常
                 .build();
 
-        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：7 个 @Tool 对象转 ToolCallback。
+        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：@Tool 对象转 ToolCallback。
+        // 数量不固定：WebSearch 是条件注册（BOCHA_API_KEY 配了才有），故用 rawTools 列表而非定长参数。
         // Skill 工具本身已是 ToolCallback（非 @Tool 对象），单独追加进列表；随后统一用 ToolEventCallback 装饰，
         // 使「技能被调用」也在 TUI 显示为一行工具活动。
         // TodoWrite 不直接注册库工具：其入参双层 todos 嵌套让模型频繁绑定失败（见 TodoWriteToolAdapter 类注释）。
@@ -213,8 +219,17 @@ public final class AgentTools {
                 ToolCallbacks.from(new TodoWriteToolAdapter(todo))[0],
                 ToolCallbacks.from(todo)[0].getToolDefinition().description());
 
+        // 网络搜索（博查）：BOCHA_API_KEY 配了才注册。没配则工具根本不存在——模型看不到、
+        // 也不会去调一个不存在的工具（系统提示的搜索指引段同步为空串，见 Task 7）。
+        BochaWebSearchTool webSearch =
+                createWebSearchTool(System.getenv("BOCHA_API_KEY"), System.getenv("BOCHA_SEARCH_COUNT"));
+
+        List<Object> rawTools = new ArrayList<>(List.of(fs, sh, grep, glob, webFetch, askTool));
+        if (webSearch != null) {
+            rawTools.add(webSearch);
+        }
         List<ToolCallback> all = new ArrayList<>(Arrays.asList(
-                ToolCallbacks.from(fs, sh, grep, glob, webFetch, askTool)));
+                ToolCallbacks.from(rawTools.toArray())));
         all.add(todoCallback);      // 薄适配器版 TodoWrite（名仍为 "TodoWrite"）
         all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
 
@@ -313,6 +328,10 @@ public final class AgentTools {
         // 记忆系统提示：渲染一次供所有 provider 共用（注入记忆根路径；见 MemoryPrompt 为何不走 ST 渲染）
         String autoMemoryPrompt = MemoryPrompt.render(memoryDir(root).toString());
 
+        // 搜索指引：与工具注册状态严格同步——工具没注册就不给模型任何搜索提示，
+        // 否则模型会去调一个不存在的工具。
+        String webSearchGuide = webSearchGuide(webSearch != null);
+
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
         java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
@@ -328,7 +347,8 @@ public final class AgentTools {
                             // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
                             .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel())
                             .param(AUTO_MEMORY_KEY, autoMemoryPrompt)
-                            .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions))
+                            .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions)
+                            .param(WEB_SEARCH_GUIDE_KEY, webSearchGuide))
                     .defaultTools(toolsWithTask)
                     // memoryAdvisor（会话记忆）+ 空流守卫（order +1001，紧邻 memoryAdvisor 内侧）：修复切 gpt 时
                     // SessionMemoryAdvisor.after() 因模型空流拿不到 session id 而抛 No session ID（见 SessionIdStreamGuardAdvisor）。
@@ -359,6 +379,39 @@ public final class AgentTools {
         } catch (NumberFormatException e) {
             return 4;
         }
+    }
+
+    /**
+     * 按 env 决定是否创建博查搜索工具：{@code apiKey} 空即返回 null（不注册）。
+     * env 的<b>读取</b>在这里，<b>解析语义</b>（回退/钳制）在 {@link BochaWebSearchTool#resolveResultCount}——
+     * 与 {@code ModelListEnv.parse} 一样把 env 值作为参数传入，测试才能不依赖真实环境变量。
+     */
+    /**
+     * 搜索指引段：仅在 WebSearch 工具真被注册时才有内容，否则空串——模型看不到指引，
+     * 也就不会去调一个不存在的工具。
+     *
+     * <p>正文<b>不得含花括号</b>：它作为 param 值注入（与 AUTO_MEMORY / PROJECT_INSTRUCTIONS 同法），
+     * 花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示渲染。
+     */
+    static String webSearchGuide(boolean enabled) {
+        if (!enabled) {
+            return "";
+        }
+        return """
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 WebSearch 搜索，
+                  拿到标题、网址和摘要；需要网页原文细节时，再把该网址交给 webFetch 抓取。
+                - WebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
+                  只有明确需要「最近一天 / 最近一周」的最新消息时才用。
+                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+    }
+
+    static BochaWebSearchTool createWebSearchTool(String apiKey, String countEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return null;
+        }
+        return BochaWebSearchTool.builder(apiKey)
+                .resultCount(BochaWebSearchTool.resolveResultCount(countEnv))
+                .build();
     }
 
     /**
