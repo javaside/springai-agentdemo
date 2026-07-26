@@ -7,10 +7,12 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** BochaWebSearchTool 离线单测：用 JDK 内置 HttpServer 起本地 stub，不发真实网络请求。 */
@@ -129,5 +131,66 @@ class BochaWebSearchToolTest {
             assertTrue(out.contains("标题二 — b.com\n"),
                     "第二条无日期，站点名后不应留下悬空的 ' · '，实际=" + out);
         }
+    }
+
+    @Test
+    void resolveResultCountFallsBackAndClamps() {
+        assertEquals(8, BochaWebSearchTool.resolveResultCount(null), "缺失应回退 8");
+        assertEquals(8, BochaWebSearchTool.resolveResultCount("  "), "空白应回退 8");
+        assertEquals(8, BochaWebSearchTool.resolveResultCount("abc"), "非数字应回退 8");
+        assertEquals(1, BochaWebSearchTool.resolveResultCount("0"), "低于下界应钳到 1");
+        assertEquals(50, BochaWebSearchTool.resolveResultCount("999"), "高于上界应钳到 50");
+        assertEquals(20, BochaWebSearchTool.resolveResultCount(" 20 "), "合法值应生效（允许两侧空白）");
+    }
+
+    @Test
+    void resultCountReachesRequestBody() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).resultCount(20).build();
+
+            tool.webSearch("q", null, null);
+
+            assertTrue(stub.lastBody.contains("\"count\":20"), "实际=" + stub.lastBody);
+        }
+    }
+
+    @Test
+    void joinsIncludeDomainsWithPipe() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            tool.webSearch("q", null, List.of("docs.spring.io", " github.com "));
+
+            assertTrue(stub.lastBody.contains("\"include\":\"docs.spring.io|github.com\""),
+                    "域名应用 | 连接并去掉两侧空白，实际=" + stub.lastBody);
+        }
+    }
+
+    @Test
+    void omitsIncludeWhenEmpty() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            tool.webSearch("q", null, List.of());
+
+            assertFalse(stub.lastBody.contains("include"), "空域名列表不应带 include 字段，实际=" + stub.lastBody);
+        }
+    }
+
+    @Test
+    void truncatesIncludeDomainsAt100() {
+        List<String> many = new ArrayList<>();
+        for (int i = 0; i < 150; i++) {
+            many.add("d" + i + ".com");
+        }
+
+        String joined = BochaWebSearchTool.joinInclude(many);
+
+        assertEquals(100, joined.split("\\|").length, "超过 100 个域名应截断取前 100");
+        assertTrue(joined.startsWith("d0.com|"), "应保留前 100 个，实际开头=" + joined.substring(0, 20));
+        assertFalse(joined.contains("d100.com"), "第 101 个及之后应被丢弃");
     }
 }

@@ -38,6 +38,9 @@ public final class BochaWebSearchTool {
     static final int DEFAULT_COUNT = 8;
     static final int MAX_COUNT = 50;
 
+    /** 博查侧 include 域名上限；超出部分截断（截断比让整次搜索失败合理）。 */
+    private static final int MAX_INCLUDE_DOMAINS = 100;
+
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
             new ParameterizedTypeReference<>() { };
 
@@ -86,6 +89,11 @@ public final class BochaWebSearchTool {
         body.put("freshness", (freshness == null || freshness.isBlank()) ? "noLimit" : freshness.trim());
         body.put("summary", true);
         body.put("count", resultCount);
+
+        String includeParam = joinInclude(include);
+        if (!includeParam.isEmpty()) {
+            body.put("include", includeParam);
+        }
 
         Map<String, Object> response = restClient.post()
                 .uri(SEARCH_PATH)
@@ -147,6 +155,43 @@ public final class BochaWebSearchTool {
 
     private static String str(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    /**
+     * 解析 {@code BOCHA_SEARCH_COUNT}：缺失 / 非数字回退 {@link #DEFAULT_COUNT}，越界钳到 {@code [1, MAX_COUNT]}。
+     * 形状照 {@code AgentTools.resolveSubagentConcurrency}。env 由 AgentTools 读取，这里只负责解析语义。
+     */
+    static int resolveResultCount(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_COUNT;
+        }
+        try {
+            return Math.min(MAX_COUNT, Math.max(1, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException e) {
+            return DEFAULT_COUNT;
+        }
+    }
+
+    /** 域名列表拼成博查要的 {@code a.com|b.com}；跳过空白项，超过 {@link #MAX_INCLUDE_DOMAINS} 个则截断。 */
+    static String joinInclude(List<String> include) {
+        if (include == null || include.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int kept = 0;
+        for (String domain : include) {
+            if (domain == null || domain.isBlank()) {
+                continue;
+            }
+            if (kept > 0) {
+                sb.append('|');
+            }
+            sb.append(domain.trim());
+            if (++kept == MAX_INCLUDE_DOMAINS) {
+                break;
+            }
+        }
+        return sb.toString();
     }
 
     /** 链式构造；{@code apiKey} 必填非空（是否创建工具由 AgentTools 按 env 决定）。 */
