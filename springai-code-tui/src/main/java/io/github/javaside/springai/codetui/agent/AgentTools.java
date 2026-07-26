@@ -111,6 +111,42 @@ public final class AgentTools {
     /** 搜索指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {WEB_SEARCH_GUIDE} 占位符对应。 */
     private static final String WEB_SEARCH_GUIDE_KEY = "WEB_SEARCH_GUIDE";
 
+    /** Brave 工具的注册名——库版是 {@code WebSearch}，与博查工具撞名，必须改写。 */
+    static final String BRAVE_TOOL_NAME = "BraveWebSearch";
+
+    /**
+     * Brave 默认条数。比博查的 8 保守：Brave 免费档 2000 次/月，更该省。
+     *
+     * <p><b>它只约束网页结果</b>：库版 {@code parseResults} 还会把 Brave 响应里的 videos 段一并解析进来，
+     * 不受 {@code count} 限制（实测 count=3 → 3 条网页 + 6 条视频）。{@code parseResults} 是私有的，
+     * 本项目改不了；要滤掉视频噪音只能在工具返回值上再包一层解析。
+     */
+    static final int BRAVE_DEFAULT_COUNT = 5;
+
+    /** Brave 单次条数上限。 */
+    static final int BRAVE_MAX_COUNT = 20;
+
+    /** Brave 总超时。库版自建 RestClient 不暴露 requestFactory，只能在工具层兜（见 TimeLimitedToolCallback）。 */
+    private static final java.time.Duration BRAVE_TIMEOUT = java.time.Duration.ofSeconds(20);
+
+    /**
+     * 替换库版 Brave 工具的描述。库里那段写死了「Allows Claude to search」（串了别家产品名）
+     * 和「Web search is only available in the US」（实测国内直连可达，这句是错的），都不适用。
+     * 这里改成中文，并写明与 BochaWebSearch 的分工，以及 allowedDomains 那个配额坑。
+     */
+    private static final String BRAVE_DESCRIPTION = """
+            用 Brave 搜索引擎搜索互联网，返回网页标题、网址与简短描述。
+
+            用法：
+            - 主打英文内容：英文技术文档、GitHub issue、Stack Overflow、英文新闻优先用它。
+              中文内容、国内站点、中文技术社区请改用 BochaWebSearch。
+            - 它只返回简短描述，不含长摘要。需要网页原文细节时，把结果里的网址交给 webFetch 抓取。
+            - 不要用 allowedDomains 限定域名：它是拿到结果之后在客户端过滤的，被过滤掉的结果照样
+              消耗了配额条数。想限定站点请把 site:example.com 直接写进搜索词。
+            - 搜索最新资料时在搜索词里带上年份，例如「React documentation 2026」。
+            - 引用了搜索结果，请在回答末尾用 markdown 链接列出实际参考的网址（Sources）。
+            """;
+
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
      * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
@@ -215,14 +251,20 @@ public final class AgentTools {
         // TodoWrite 不直接注册库工具：其入参双层 todos 嵌套让模型频繁绑定失败（见 TodoWriteToolAdapter 类注释）。
         // 改注册薄适配器（入参 List<TodoItem>、schema 单层），并把库工具那套完整的面向模型描述原样移植过来，
         // 使模型看到的使用指引与升级前一致——唯一变化只是入参 schema 的形状。
-        ToolCallback todoCallback = describedAs(
+        ToolCallback todoCallback = new RenamedToolCallback(
                 ToolCallbacks.from(new TodoWriteToolAdapter(todo))[0],
+                null,   // 保持适配器自己的注册名 TodoWrite
                 ToolCallbacks.from(todo)[0].getToolDefinition().description());
 
         // 网络搜索（博查）：BOCHA_API_KEY 配了才注册。没配则工具根本不存在——模型看不到、
         // 也不会去调一个不存在的工具（系统提示的搜索指引段同步为空串，见 Task 7）。
         BochaWebSearchTool webSearch =
                 createWebSearchTool(System.getenv("BOCHA_API_KEY"), System.getenv("BOCHA_SEARCH_COUNT"));
+
+        // Brave 搜索（库版 BraveWebSearchTool）：BRAVE_API_KEY 配了才注册。与博查共存，
+        // 由模型按内容语言自选（分工写在各自的工具描述里）。
+        ToolCallback braveWebSearch =
+                createBraveWebSearchTool(System.getenv("BRAVE_API_KEY"), System.getenv("BRAVE_SEARCH_COUNT"));
 
         List<Object> rawTools = new ArrayList<>(List.of(fs, sh, grep, glob, webFetch, askTool));
         if (webSearch != null) {
@@ -232,6 +274,9 @@ public final class AgentTools {
                 ToolCallbacks.from(rawTools.toArray())));
         all.add(todoCallback);      // 薄适配器版 TodoWrite（名仍为 "TodoWrite"）
         all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
+        if (braveWebSearch != null) {
+            all.add(braveWebSearch);   // 已是 ToolCallback（非 @Tool 对象），故不进 rawTools
+        }
 
         // MCP 工具不并入此列表：由 McpRegistry 自行装饰，CodingAgent/SubagentRunner 每回合取快照注入（见 build javadoc）。
 
@@ -330,7 +375,7 @@ public final class AgentTools {
 
         // 搜索指引：与工具注册状态严格同步——工具没注册就不给模型任何搜索提示，
         // 否则模型会去调一个不存在的工具。
-        String webSearchGuide = webSearchGuide(webSearch != null);
+        String webSearchGuide = webSearchGuide(webSearch != null, braveWebSearch != null);
 
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
@@ -387,22 +432,40 @@ public final class AgentTools {
      * 与 {@code ModelListEnv.parse} 一样把 env 值作为参数传入，测试才能不依赖真实环境变量。
      */
     /**
-     * 搜索指引段：仅在 WebSearch 工具真被注册时才有内容，否则空串——模型看不到指引，
-     * 也就不会去调一个不存在的工具。
+     * 搜索指引段：按实际注册了哪些搜索工具四态渲染——都没注册就返回空串，模型看不到指引，
+     * 也就不会去调不存在的工具。
      *
      * <p>正文<b>不得含花括号</b>：它作为 param 值注入（与 AUTO_MEMORY / PROJECT_INSTRUCTIONS 同法），
      * 花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示渲染。
      */
-    static String webSearchGuide(boolean enabled) {
-        if (!enabled) {
-            return "";
+    static String webSearchGuide(boolean bocha, boolean brave) {
+        if (bocha && brave) {
+            return """
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时先搜索，别凭记忆臆断外部事实。
+                  两个搜索工具按内容语言分工：中文内容、国内站点、中文技术社区用 BochaWebSearch（返回长摘要，
+                  常常一次就够）；英文技术文档、GitHub issue、英文新闻用 BraveWebSearch（只返回简短描述）。
+                - 拿到网址后，需要网页原文细节就把该网址交给 webFetch 抓取。
+                - BochaWebSearch 的 freshness 一般不要传（默认不限时间效果最好）；
+                  BraveWebSearch 不要用 allowedDomains 限定域名（客户端过滤，白烧配额），改把 site:xxx 写进搜索词。
+                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
         }
-        return """
-                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 WebSearch 搜索，
+        if (bocha) {
+            return """
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 BochaWebSearch 搜索，
                   拿到标题、网址和摘要；需要网页原文细节时，再把该网址交给 webFetch 抓取。
-                - WebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
+                - BochaWebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
                   只有明确需要「最近一天 / 最近一周」的最新消息时才用。
                 - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+        }
+        if (brave) {
+            return """
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 BraveWebSearch 搜索，
+                  拿到标题、网址和简短描述；需要网页原文细节时，再把该网址交给 webFetch 抓取。
+                - BraveWebSearch 不要用 allowedDomains 限定域名（它是拿到结果后在客户端过滤的，白烧配额），
+                  想限定站点就把 site:xxx 直接写进搜索词。
+                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+        }
+        return "";
     }
 
     static BochaWebSearchTool createWebSearchTool(String apiKey, String countEnv) {
@@ -412,6 +475,44 @@ public final class AgentTools {
         return BochaWebSearchTool.builder(apiKey)
                 .resultCount(BochaWebSearchTool.resolveResultCount(countEnv))
                 .build();
+    }
+
+    /**
+     * 解析 {@code BRAVE_SEARCH_COUNT}：缺失 / 非数字回退 {@link #BRAVE_DEFAULT_COUNT}，
+     * 越界钳到 {@code [1, BRAVE_MAX_COUNT]}。形状照 {@link #resolveSubagentConcurrency}。
+     */
+    static int resolveBraveResultCount(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return BRAVE_DEFAULT_COUNT;
+        }
+        try {
+            return Math.min(BRAVE_MAX_COUNT, Math.max(1, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException e) {
+            return BRAVE_DEFAULT_COUNT;
+        }
+    }
+
+    /**
+     * 按 env 决定是否创建 Brave 搜索工具：{@code apiKey} 空即返回 null（不注册）。
+     *
+     * <p>直接复用库版 {@code BraveWebSearchTool}（不重写响应解析），外面套两层补它的硬缺陷：
+     * {@link RenamedToolCallback} 改注册名 + 换描述，{@link TimeLimitedToolCallback} 兜总超时。
+     *
+     * <p><b>能力退化</b>：库版 baseUrl 是硬编码常量，无法指向本地 stub，故 Brave 的响应解析
+     * <b>无法离线单测</b>——那半边的正确性只能靠 {@code BraveWebSearchSmokeTest} 真机冒烟保证。
+     * 我们能离线测的只有自己写的外壳（改名、描述、超时、门控）。
+     */
+    static ToolCallback createBraveWebSearchTool(String apiKey, String countEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return null;
+        }
+        org.springaicommunity.agent.tools.BraveWebSearchTool tool =
+                org.springaicommunity.agent.tools.BraveWebSearchTool.builder(apiKey.trim())
+                        .resultCount(resolveBraveResultCount(countEnv))
+                        .build();
+        ToolCallback raw = ToolCallbacks.from(tool)[0];
+        return new TimeLimitedToolCallback(
+                new RenamedToolCallback(raw, BRAVE_TOOL_NAME, BRAVE_DESCRIPTION), BRAVE_TIMEOUT);
     }
 
     /**
@@ -505,28 +606,6 @@ public final class AgentTools {
         } finally {
             System.setOut(original);
         }
-    }
-
-    /** 包一层，仅把 {@link ToolDefinition} 的 description 换成给定文本（name / inputSchema 原样），调用透传委托。 */
-    private static ToolCallback describedAs(ToolCallback delegate, String description) {
-        return new DescribedToolCallback(delegate, description);
-    }
-
-    /** 借用另一处描述、其余全透传的 {@link ToolCallback} 装饰器（用于把库工具的完整描述移植到适配器上）。 */
-    private static final class DescribedToolCallback implements ToolCallback {
-        private final ToolCallback delegate;
-        private final ToolDefinition definition;
-
-        DescribedToolCallback(ToolCallback delegate, String description) {
-            this.delegate = delegate;
-            ToolDefinition d = delegate.getToolDefinition();
-            this.definition = ToolDefinition.builder()
-                    .name(d.name()).description(description).inputSchema(d.inputSchema()).build();
-        }
-
-        @Override public ToolDefinition getToolDefinition() { return definition; }
-        @Override public String call(String toolInput) { return delegate.call(toolInput); }
-        @Override public String call(String toolInput, ToolContext toolContext) { return delegate.call(toolInput, toolContext); }
     }
 
     private static String statusMarker(Todos.Status status) {

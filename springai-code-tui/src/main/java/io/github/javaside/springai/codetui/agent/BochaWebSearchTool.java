@@ -79,7 +79,7 @@ public final class BochaWebSearchTool {
         return new Builder(apiKey);
     }
 
-    @Tool(name = "WebSearch", description = """
+    @Tool(name = "BochaWebSearch", description = """
             搜索互联网，返回网页标题、网址、摘要、站点名与发布时间。
 
             用法：
