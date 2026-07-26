@@ -1,22 +1,25 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
+import io.modelcontextprotocol.client.transport.customizer.McpSyncHttpClientRequestCustomizer;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.util.Map;
 import java.util.Optional;
 
 /**
  * 传输接缝：把 {@link McpServerConfig} 变体映射为 SDK 的 {@link McpClientTransport}。
  *
- * <p>这是加新传输的<b>唯一分型点</b>（设计文档 §5 扩展点）：将来接入 SSE / Streamable HTTP，
- * 只需在此加一个分支，用 mcp-core 现成的 {@code HttpClientSseClientTransport} /
- * {@code HttpClientStreamableHttpTransport}（基于 JDK HttpClient，无新依赖）。
- * {@link McpClientManager} 与其余流程<b>零改动</b>。
+ * <p>这是加新传输的<b>唯一分型点</b>（设计文档 §5 扩展点）。已落地 stdio 与 Streamable HTTP；
+ * SSE 仍未实现——旧标准、官方已 deprecated，要加只需在此再补一个分支，用 mcp-core 现成的
+ * {@code HttpClientSseClientTransport}（基于 JDK HttpClient，无新依赖）。
+ * 加传输时 {@link McpClientManager} 与其余流程<b>零改动</b>——Streamable HTTP 这次即是明证。
  *
  * <p>构造失败或传输未实现 → 记 WARN、返回 {@link Optional#empty()}（降级，不抛）。
  */
@@ -35,6 +38,21 @@ public final class McpTransportFactory {
                         .env(stdio.env())
                         .build();
                 return Optional.of(new StdioClientTransport(params, McpJsonDefaults.getMapper()));
+            }
+            if (config instanceof McpServerConfig.HttpServerConfig http) {
+                URI uri = URI.create(http.url());
+                HttpClientStreamableHttpTransport.Builder builder =
+                        HttpClientStreamableHttpTransport.builder(baseUriOf(uri))
+                                .connectTimeout(http.timeoutMs())
+                                .jsonMapper(McpJsonDefaults.getMapper());
+                String endpoint = endpointOf(uri);
+                if (endpoint != null) {
+                    builder.endpoint(endpoint);
+                }
+                if (!http.headers().isEmpty()) {
+                    builder.httpRequestCustomizer(headerCustomizer(http.headers()));
+                }
+                return Optional.of(builder.build());
             }
             log.warn("MCP server '{}' 传输类型未实现，跳过。", config.name());
             return Optional.empty();
@@ -65,5 +83,16 @@ public final class McpTransportFactory {
         }
         String query = uri.getRawQuery();
         return query == null ? path : path + "?" + query;
+    }
+
+    /**
+     * 把配置里的 headers 逐条加到每个出站请求上。
+     *
+     * <p>抽成独立方法是为了<b>能直接单测</b>：真机冒烟证明不了它——实测 Context7 在 initialize
+     * 阶段不校验 API key，headers 全部丢失它照样返回 200 与完整 serverInfo。
+     */
+    static McpSyncHttpClientRequestCustomizer headerCustomizer(Map<String, String> headers) {
+        return (requestBuilder, method, uri, body, context) ->
+                headers.forEach(requestBuilder::header);
     }
 }
