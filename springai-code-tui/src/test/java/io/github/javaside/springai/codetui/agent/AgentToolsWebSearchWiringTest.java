@@ -64,28 +64,50 @@ class AgentToolsWebSearchWiringTest {
     }
 
     @Test
-    void guideIsEmptyWhenNoTool() {
-        assertEquals("", AgentTools.webSearchGuide(false),
-                "未注册搜索工具时，系统提示不应出现任何搜索相关指引");
+    void guideIsEmptyWhenNeitherToolRegistered() {
+        assertEquals("", AgentTools.webSearchGuide(false, false),
+                "两家都没注册时，系统提示不应出现任何搜索相关指引");
     }
 
     @Test
-    void guideMentionsWebSearchAndFetchHandoff() {
-        String guide = AgentTools.webSearchGuide(true);
+    void guideCoversBochaOnly() {
+        String guide = AgentTools.webSearchGuide(true, false);
 
-        assertTrue(guide.contains("WebSearch"), "应点名工具，实际=" + guide);
+        assertTrue(guide.contains("BochaWebSearch"), "应点名博查工具，实际=" + guide);
+        assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
         assertTrue(guide.contains("webFetch"), "应说明与 webFetch 的分工，实际=" + guide);
-        assertTrue(guide.contains("freshness"), "应提醒 freshness 一般别传，实际=" + guide);
+    }
+
+    @Test
+    void guideCoversBraveOnly() {
+        String guide = AgentTools.webSearchGuide(false, true);
+
+        assertTrue(guide.contains("BraveWebSearch"), "应点名 Brave 工具，实际=" + guide);
+        assertFalse(guide.contains("BochaWebSearch"), "博查没注册就不该提它，实际=" + guide);
+        assertTrue(guide.contains("webFetch"), "应说明与 webFetch 的分工，实际=" + guide);
+    }
+
+    @Test
+    void guideExplainsDivisionWhenBothRegistered() {
+        String guide = AgentTools.webSearchGuide(true, true);
+
+        assertTrue(guide.contains("BochaWebSearch"), "实际=" + guide);
+        assertTrue(guide.contains("BraveWebSearch"), "实际=" + guide);
+        assertTrue(guide.contains("中文"), "应讲清中文走哪家，实际=" + guide);
+        assertTrue(guide.contains("英文"), "应讲清英文走哪家，实际=" + guide);
         assertTrue(guide.contains("Sources"), "应要求列出来源，实际=" + guide);
     }
 
     /** 指引段作为 param 值注入，正文里的花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示。 */
     @Test
-    void guideContainsNoTemplateBraces() {
-        String guide = AgentTools.webSearchGuide(true);
-
-        assertTrue(!guide.contains("{") && !guide.contains("}"),
-                "指引正文不得含花括号，实际=" + guide);
+    void noGuideVariantContainsTemplateBraces() {
+        for (boolean bocha : new boolean[]{false, true}) {
+            for (boolean brave : new boolean[]{false, true}) {
+                String guide = AgentTools.webSearchGuide(bocha, brave);
+                assertTrue(!guide.contains("{") && !guide.contains("}"),
+                        "指引正文不得含花括号（bocha=" + bocha + ", brave=" + brave + "），实际=" + guide);
+            }
+        }
     }
 
     @Test

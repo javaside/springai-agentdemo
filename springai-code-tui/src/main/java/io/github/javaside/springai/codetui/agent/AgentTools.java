@@ -369,7 +369,7 @@ public final class AgentTools {
 
         // 搜索指引：与工具注册状态严格同步——工具没注册就不给模型任何搜索提示，
         // 否则模型会去调一个不存在的工具。
-        String webSearchGuide = webSearchGuide(webSearch != null);
+        String webSearchGuide = webSearchGuide(webSearch != null, braveWebSearch != null);
 
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
@@ -426,22 +426,40 @@ public final class AgentTools {
      * 与 {@code ModelListEnv.parse} 一样把 env 值作为参数传入，测试才能不依赖真实环境变量。
      */
     /**
-     * 搜索指引段：仅在 WebSearch 工具真被注册时才有内容，否则空串——模型看不到指引，
-     * 也就不会去调一个不存在的工具。
+     * 搜索指引段：按实际注册了哪些搜索工具四态渲染——都没注册就返回空串，模型看不到指引，
+     * 也就不会去调不存在的工具。
      *
      * <p>正文<b>不得含花括号</b>：它作为 param 值注入（与 AUTO_MEMORY / PROJECT_INSTRUCTIONS 同法），
      * 花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示渲染。
      */
-    static String webSearchGuide(boolean enabled) {
-        if (!enabled) {
-            return "";
+    static String webSearchGuide(boolean bocha, boolean brave) {
+        if (bocha && brave) {
+            return """
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时先搜索，别凭记忆臆断外部事实。
+                  两个搜索工具按内容语言分工：中文内容、国内站点、中文技术社区用 BochaWebSearch（返回长摘要，
+                  常常一次就够）；英文技术文档、GitHub issue、英文新闻用 BraveWebSearch（只返回简短描述）。
+                - 拿到网址后，需要网页原文细节就把该网址交给 webFetch 抓取。
+                - BochaWebSearch 的 freshness 一般不要传（默认不限时间效果最好）；
+                  BraveWebSearch 不要用 allowedDomains 限定域名（客户端过滤，白烧配额），改把 site:xxx 写进搜索词。
+                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
         }
-        return """
+        if (bocha) {
+            return """
                 - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 BochaWebSearch 搜索，
                   拿到标题、网址和摘要；需要网页原文细节时，再把该网址交给 webFetch 抓取。
                 - BochaWebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
                   只有明确需要「最近一天 / 最近一周」的最新消息时才用。
                 - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+        }
+        if (brave) {
+            return """
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 BraveWebSearch 搜索，
+                  拿到标题、网址和简短描述；需要网页原文细节时，再把该网址交给 webFetch 抓取。
+                - BraveWebSearch 不要用 allowedDomains 限定域名（它是拿到结果后在客户端过滤的，白烧配额），
+                  想限定站点就把 site:xxx 直接写进搜索词。
+                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+        }
+        return "";
     }
 
     static BochaWebSearchTool createWebSearchTool(String apiKey, String countEnv) {
