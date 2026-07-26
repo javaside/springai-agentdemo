@@ -24,9 +24,12 @@
 
 淘汰的备选：
 
-- **复用库里现成的 `BraveWebSearchTool`**：`api.search.brave.com` 国内直连大概率不通，库里没有
-  代理配置口子；且其 `@Tool` 描述写死了「Claude」和「Web search is only available in the US」，
-  两条都不适用（描述可用现有 `describedAs()` 换掉，但网络可达性无解）。
+- **复用库里现成的 `BraveWebSearchTool`**：其 `@Tool` 描述写死了「Claude」和「Web search is only
+  available in the US」，两条都不适用；且库版 Builder 只有 `resultCount`，没有 baseUrl（离线单测做不了）
+  也没有超时配置。
+  > **2026-07-26 更正**：本条原先还写着「`api.search.brave.com` 国内直连大概率不通」，那是**未经验证的猜测**，
+  > 实测可达（`curl` → `HTTP 422 · 1.59s`，422 因未带 key，说明请求到达了服务端）。该理由不成立，已删除。
+  > Brave 后来作为第二家搜索后端接入，见 `2026-07-26-brave-search-design.md`。
 - **抽象出 `SearchProvider` 注册表**（对齐 `LlmProvider` / `ProviderRegistry`）：抽象层现在没有
   第二个消费者。真要加第二家时，从方案 A 提取抽象是十分钟的事。YAGNI。
 - **走 MCP 外挂博查 server**：MCP 工具的描述由 server 决定、改不动，没法在描述里写「先 WebSearch
