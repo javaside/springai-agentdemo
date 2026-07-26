@@ -108,6 +108,9 @@ public final class AgentTools {
     /** 项目指令注入的 param 键；与 SYSTEM_TEMPLATE 里的 {PROJECT_INSTRUCTIONS} 占位符对应。 */
     private static final String PROJECT_INSTRUCTIONS_KEY = "PROJECT_INSTRUCTIONS";
 
+    /** 搜索指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {WEB_SEARCH_GUIDE} 占位符对应。 */
+    private static final String WEB_SEARCH_GUIDE_KEY = "WEB_SEARCH_GUIDE";
+
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
      * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
@@ -128,6 +131,7 @@ public final class AgentTools {
             - 当需求含糊、或需要用户在多个实现方案之间拍板时，用 AskUserQuestionTool 向用户提问（一次 1–4 个问题，
               每问 2–4 个选项，可单选或多选）；不要在信息不足时自行臆测方向。
             - 回答简洁，聚焦用户的目标本身。
+            {WEB_SEARCH_GUIDE}
 
             关于工作边界（请务必遵守）：
             - 所有工具（文件读写 / Shell / Grep / Glob）在技术上都未被限制在项目根目录内，没有强制沙箱。
@@ -324,6 +328,10 @@ public final class AgentTools {
         // 记忆系统提示：渲染一次供所有 provider 共用（注入记忆根路径；见 MemoryPrompt 为何不走 ST 渲染）
         String autoMemoryPrompt = MemoryPrompt.render(memoryDir(root).toString());
 
+        // 搜索指引：与工具注册状态严格同步——工具没注册就不给模型任何搜索提示，
+        // 否则模型会去调一个不存在的工具。
+        String webSearchGuide = webSearchGuide(webSearch != null);
+
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
         java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
@@ -339,7 +347,8 @@ public final class AgentTools {
                             // 每回合 submit 会用实际所选模型再覆盖此 param（见 CodingAgent.submit）。
                             .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel())
                             .param(AUTO_MEMORY_KEY, autoMemoryPrompt)
-                            .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions))
+                            .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions)
+                            .param(WEB_SEARCH_GUIDE_KEY, webSearchGuide))
                     .defaultTools(toolsWithTask)
                     // memoryAdvisor（会话记忆）+ 空流守卫（order +1001，紧邻 memoryAdvisor 内侧）：修复切 gpt 时
                     // SessionMemoryAdvisor.after() 因模型空流拿不到 session id 而抛 No session ID（见 SessionIdStreamGuardAdvisor）。
@@ -377,6 +386,25 @@ public final class AgentTools {
      * env 的<b>读取</b>在这里，<b>解析语义</b>（回退/钳制）在 {@link BochaWebSearchTool#resolveResultCount}——
      * 与 {@code ModelListEnv.parse} 一样把 env 值作为参数传入，测试才能不依赖真实环境变量。
      */
+    /**
+     * 搜索指引段：仅在 WebSearch 工具真被注册时才有内容，否则空串——模型看不到指引，
+     * 也就不会去调一个不存在的工具。
+     *
+     * <p>正文<b>不得含花括号</b>：它作为 param 值注入（与 AUTO_MEMORY / PROJECT_INSTRUCTIONS 同法），
+     * 花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示渲染。
+     */
+    static String webSearchGuide(boolean enabled) {
+        if (!enabled) {
+            return "";
+        }
+        return """
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 WebSearch 搜索，
+                  拿到标题、网址和摘要；需要网页原文细节时，再把该网址交给 webFetch 抓取。
+                - WebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
+                  只有明确需要「最近一天 / 最近一周」的最新消息时才用。
+                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+    }
+
     static BochaWebSearchTool createWebSearchTool(String apiKey, String countEnv) {
         if (apiKey == null || apiKey.isBlank()) {
             return null;

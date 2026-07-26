@@ -61,4 +61,29 @@ class AgentToolsWebSearchWiringTest {
         assertTrue("WebSearch".equals(decorated.getToolDefinition().name()),
                 "装饰后注册名不能变，实际=" + decorated.getToolDefinition().name());
     }
+
+    @Test
+    void guideIsEmptyWhenNoTool() {
+        assertEquals("", AgentTools.webSearchGuide(false),
+                "未注册搜索工具时，系统提示不应出现任何搜索相关指引");
+    }
+
+    @Test
+    void guideMentionsWebSearchAndFetchHandoff() {
+        String guide = AgentTools.webSearchGuide(true);
+
+        assertTrue(guide.contains("WebSearch"), "应点名工具，实际=" + guide);
+        assertTrue(guide.contains("webFetch"), "应说明与 webFetch 的分工，实际=" + guide);
+        assertTrue(guide.contains("freshness"), "应提醒 freshness 一般别传，实际=" + guide);
+        assertTrue(guide.contains("Sources"), "应要求列出来源，实际=" + guide);
+    }
+
+    /** 指引段作为 param 值注入，正文里的花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示。 */
+    @Test
+    void guideContainsNoTemplateBraces() {
+        String guide = AgentTools.webSearchGuide(true);
+
+        assertTrue(!guide.contains("{") && !guide.contains("}"),
+                "指引正文不得含花括号，实际=" + guide);
+    }
 }
