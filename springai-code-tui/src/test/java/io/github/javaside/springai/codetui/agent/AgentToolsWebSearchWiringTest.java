@@ -32,14 +32,14 @@ class AgentToolsWebSearchWiringTest {
 
     /** 注册名取 @Tool 注解而非方法名；子 agent 的 allow/deny 按注册名精确匹配，写错会静默失效。 */
     @Test
-    void registeredToolNameIsWebSearch() {
+    void registeredToolNameIsBochaWebSearch() {
         BochaWebSearchTool tool = AgentTools.createWebSearchTool("fake-key", null);
 
         List<String> names = Arrays.stream(ToolCallbacks.from(tool))
                 .map(c -> c.getToolDefinition().name()).toList();
 
-        assertEquals(List.of("WebSearch"), names,
-                "注册名必须恰好是 WebSearch（方法名是 webSearch，两者不同），实际=" + names);
+        assertEquals(List.of("BochaWebSearch"), names,
+                "两家共存后改用对称命名，避免模型把某一家当默认搜索。实际=" + names);
     }
 
     @Test
@@ -58,7 +58,7 @@ class AgentToolsWebSearchWiringTest {
 
         ToolCallback decorated = new ToolEventCallback(raw, new ConversationState());
 
-        assertTrue("WebSearch".equals(decorated.getToolDefinition().name()),
+        assertTrue("BochaWebSearch".equals(decorated.getToolDefinition().name()),
                 "装饰后注册名不能变，实际=" + decorated.getToolDefinition().name());
     }
 

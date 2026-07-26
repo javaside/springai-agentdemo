@@ -399,9 +399,9 @@ public final class AgentTools {
             return "";
         }
         return """
-                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 WebSearch 搜索，
+                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 BochaWebSearch 搜索，
                   拿到标题、网址和摘要；需要网页原文细节时，再把该网址交给 webFetch 抓取。
-                - WebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
+                - BochaWebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
                   只有明确需要「最近一天 / 最近一周」的最新消息时才用。
                 - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
     }
