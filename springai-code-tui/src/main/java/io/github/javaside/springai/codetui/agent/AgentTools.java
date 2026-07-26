@@ -111,6 +111,36 @@ public final class AgentTools {
     /** 搜索指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {WEB_SEARCH_GUIDE} 占位符对应。 */
     private static final String WEB_SEARCH_GUIDE_KEY = "WEB_SEARCH_GUIDE";
 
+    /** Brave 工具的注册名——库版是 {@code WebSearch}，与博查工具撞名，必须改写。 */
+    static final String BRAVE_TOOL_NAME = "BraveWebSearch";
+
+    /** Brave 默认条数。比博查的 8 保守：Brave 免费档 2000 次/月，更该省。 */
+    static final int BRAVE_DEFAULT_COUNT = 5;
+
+    /** Brave 单次条数上限。 */
+    static final int BRAVE_MAX_COUNT = 20;
+
+    /** Brave 总超时。库版自建 RestClient 不暴露 requestFactory，只能在工具层兜（见 TimeLimitedToolCallback）。 */
+    private static final java.time.Duration BRAVE_TIMEOUT = java.time.Duration.ofSeconds(20);
+
+    /**
+     * 替换库版 Brave 工具的描述。库里那段写死了「Allows Claude to search」（串了别家产品名）
+     * 和「Web search is only available in the US」（实测国内直连可达，这句是错的），都不适用。
+     * 这里改成中文，并写明与 BochaWebSearch 的分工，以及 allowedDomains 那个配额坑。
+     */
+    private static final String BRAVE_DESCRIPTION = """
+            用 Brave 搜索引擎搜索互联网，返回网页标题、网址与简短描述。
+
+            用法：
+            - 主打英文内容：英文技术文档、GitHub issue、Stack Overflow、英文新闻优先用它。
+              中文内容、国内站点、中文技术社区请改用 BochaWebSearch。
+            - 它只返回简短描述，不含长摘要。需要网页原文细节时，把结果里的网址交给 webFetch 抓取。
+            - 不要用 allowedDomains 限定域名：它是拿到结果之后在客户端过滤的，被过滤掉的结果照样
+              消耗了配额条数。想限定站点请把 site:example.com 直接写进搜索词。
+            - 搜索最新资料时在搜索词里带上年份，例如「React documentation 2026」。
+            - 引用了搜索结果，请在回答末尾用 markdown 链接列出实际参考的网址（Sources）。
+            """;
+
     /**
      * 系统提示：把自己定位成编码 Agent。内嵌 3 个 {@link AgentEnvironment} 占位符
      * （键名与下面 {@code .param(...)} 一致：ENVIRONMENT_INFO / GIT_STATUS / AGENT_MODEL）。
@@ -413,6 +443,44 @@ public final class AgentTools {
         return BochaWebSearchTool.builder(apiKey)
                 .resultCount(BochaWebSearchTool.resolveResultCount(countEnv))
                 .build();
+    }
+
+    /**
+     * 解析 {@code BRAVE_SEARCH_COUNT}：缺失 / 非数字回退 {@link #BRAVE_DEFAULT_COUNT}，
+     * 越界钳到 {@code [1, BRAVE_MAX_COUNT]}。形状照 {@link #resolveSubagentConcurrency}。
+     */
+    static int resolveBraveResultCount(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return BRAVE_DEFAULT_COUNT;
+        }
+        try {
+            return Math.min(BRAVE_MAX_COUNT, Math.max(1, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException e) {
+            return BRAVE_DEFAULT_COUNT;
+        }
+    }
+
+    /**
+     * 按 env 决定是否创建 Brave 搜索工具：{@code apiKey} 空即返回 null（不注册）。
+     *
+     * <p>直接复用库版 {@code BraveWebSearchTool}（不重写响应解析），外面套两层补它的硬缺陷：
+     * {@link RenamedToolCallback} 改注册名 + 换描述，{@link TimeLimitedToolCallback} 兜总超时。
+     *
+     * <p><b>能力退化</b>：库版 baseUrl 是硬编码常量，无法指向本地 stub，故 Brave 的响应解析
+     * <b>无法离线单测</b>——那半边的正确性只能靠 {@code BraveWebSearchSmokeTest} 真机冒烟保证。
+     * 我们能离线测的只有自己写的外壳（改名、描述、超时、门控）。
+     */
+    static ToolCallback createBraveWebSearchTool(String apiKey, String countEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return null;
+        }
+        org.springaicommunity.agent.tools.BraveWebSearchTool tool =
+                org.springaicommunity.agent.tools.BraveWebSearchTool.builder(apiKey.trim())
+                        .resultCount(resolveBraveResultCount(countEnv))
+                        .build();
+        ToolCallback raw = ToolCallbacks.from(tool)[0];
+        return new TimeLimitedToolCallback(
+                new RenamedToolCallback(raw, BRAVE_TOOL_NAME, BRAVE_DESCRIPTION), BRAVE_TIMEOUT);
     }
 
     /**
