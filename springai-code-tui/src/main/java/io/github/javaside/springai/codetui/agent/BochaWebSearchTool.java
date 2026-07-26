@@ -84,6 +84,10 @@ public final class BochaWebSearchTool {
                     "只在这些域名内搜索，可选。例如 [\"docs.spring.io\", \"github.com\"]。")
             List<String> include) {
 
+        if (query == null || query.isBlank()) {
+            return "搜索词为空，请给出要搜索的内容。";
+        }
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("query", query.trim());
         body.put("freshness", (freshness == null || freshness.isBlank()) ? "noLimit" : freshness.trim());
@@ -101,7 +105,12 @@ public final class BochaWebSearchTool {
                 .retrieve()
                 .body(MAP_TYPE);
 
-        return render(query, extractValues(response));
+        List<Map<String, Object>> values = extractValues(response);
+        if (values.isEmpty()) {
+            return "没搜到「" + query.trim() + "」的相关结果。建议换一组关键词或同义词，"
+                    + "或去掉 freshness 时间限制再试一次。";
+        }
+        return render(query.trim(), values);
     }
 
     @SuppressWarnings("unchecked")

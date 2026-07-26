@@ -29,6 +29,17 @@ class BochaWebSearchToolTest {
              ]}}
             """;
 
+    private static final String ZERO_RESULTS = """
+            {"_type":"SearchResponse","webPages":{"totalEstimatedMatches":0,"value":[]}}
+            """;
+
+    /** 只有标题与 URL 的极简结果：siteName 与 datePublished 都缺，用于覆盖 meta 整段省略的分支。 */
+    private static final String BARE_RESULT = """
+            {"_type":"SearchResponse","webPages":{"value":[
+              {"name":"极简标题","url":"https://bare.com/x","snippet":"极简片段"}
+            ]}}
+            """;
+
     /** 本地 stub server：固定返回给定状态码与响应体，并记录收到的请求数与最后一次请求体。 */
     private static final class StubServer implements AutoCloseable {
         private final HttpServer server;
@@ -192,5 +203,59 @@ class BochaWebSearchToolTest {
         assertEquals(100, joined.split("\\|").length, "超过 100 个域名应截断取前 100");
         assertTrue(joined.startsWith("d0.com|"), "应保留前 100 个，实际开头=" + joined.substring(0, 20));
         assertFalse(joined.contains("d100.com"), "第 101 个及之后应被丢弃");
+    }
+
+    @Test
+    void blankQueryShortCircuitsWithoutRequest() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("   ", null, null);
+
+            assertEquals(0, stub.requests.get(), "空搜索词不应发出请求（省额度）");
+            assertTrue(out.contains("搜索词为空"), "应返回可读提示，实际=" + out);
+        }
+    }
+
+    @Test
+    void nullQueryShortCircuitsWithoutRequest() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch(null, null, null);
+
+            assertEquals(0, stub.requests.get(), "null 搜索词不应发出请求，也不应 NPE");
+            assertTrue(out.contains("搜索词为空"), "实际=" + out);
+        }
+    }
+
+    @Test
+    void zeroResultsReturnsActionableTextWithoutThrowing() throws Exception {
+        try (StubServer stub = new StubServer(200, ZERO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("一个不存在的东西", null, null);
+
+            assertTrue(out.contains("没搜到"), "零结果应是正常返回而非异常，实际=" + out);
+            assertTrue(out.contains("freshness"), "应提示可去掉时间限制重试，实际=" + out);
+        }
+    }
+
+    @Test
+    void omitsWholeMetaSegmentWhenSiteAndDateMissing() throws Exception {
+        try (StubServer stub = new StubServer(200, BARE_RESULT)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("q", null, null);
+
+            assertTrue(out.contains("1. 极简标题\n"),
+                    "站点与日期都缺时，标题后不应出现悬空的 ' — '，实际=" + out);
+            assertTrue(out.contains("https://bare.com/x"), "URL 仍应输出，实际=" + out);
+            assertTrue(out.contains("极简片段"), "snippet 仍应作为正文输出，实际=" + out);
+        }
     }
 }
