@@ -38,7 +38,8 @@ import java.util.List;
 /**
  * AgentTools —— 组装编码 Agent 用的 {@link ChatClient} 的工厂。
  *
- * <p>把 6 个社区工具（FileSystem/Shell/Grep/Glob/TodoWrite/SmartWebFetch）用 {@link ToolEventCallback} 装饰后
+ * <p>把社区工具（FileSystem/Shell/Grep/Glob/TodoWrite/SmartWebFetch）与自写的 WebSearch（博查，
+ * 仅在配了 BOCHA_API_KEY 时注册）用 {@link ToolEventCallback} 装饰后
  * 注册进 ChatClient，并配上 {@link SessionMemoryAdvisor} 会话记忆与 {@link AgentEnvironment} 环境系统提示。
  *
  * <p><b>网页获取（SmartWebFetch）</b>：{@link SmartWebFetchTool} 抓取网页→转 Markdown→用一个「裸」ChatClient
@@ -203,7 +204,8 @@ public final class AgentTools {
                 .answersValidation(true)   // UI 顺序问询保证答案完整，故校验开着也不会触发异常
                 .build();
 
-        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：7 个 @Tool 对象转 ToolCallback。
+        // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：@Tool 对象转 ToolCallback。
+        // 数量不固定：WebSearch 是条件注册（BOCHA_API_KEY 配了才有），故用 rawTools 列表而非定长参数。
         // Skill 工具本身已是 ToolCallback（非 @Tool 对象），单独追加进列表；随后统一用 ToolEventCallback 装饰，
         // 使「技能被调用」也在 TUI 显示为一行工具活动。
         // TodoWrite 不直接注册库工具：其入参双层 todos 嵌套让模型频繁绑定失败（见 TodoWriteToolAdapter 类注释）。
@@ -213,8 +215,17 @@ public final class AgentTools {
                 ToolCallbacks.from(new TodoWriteToolAdapter(todo))[0],
                 ToolCallbacks.from(todo)[0].getToolDefinition().description());
 
+        // 网络搜索（博查）：BOCHA_API_KEY 配了才注册。没配则工具根本不存在——模型看不到、
+        // 也不会去调一个不存在的工具（系统提示的搜索指引段同步为空串，见 Task 7）。
+        BochaWebSearchTool webSearch =
+                createWebSearchTool(System.getenv("BOCHA_API_KEY"), System.getenv("BOCHA_SEARCH_COUNT"));
+
+        List<Object> rawTools = new ArrayList<>(List.of(fs, sh, grep, glob, webFetch, askTool));
+        if (webSearch != null) {
+            rawTools.add(webSearch);
+        }
         List<ToolCallback> all = new ArrayList<>(Arrays.asList(
-                ToolCallbacks.from(fs, sh, grep, glob, webFetch, askTool)));
+                ToolCallbacks.from(rawTools.toArray())));
         all.add(todoCallback);      // 薄适配器版 TodoWrite（名仍为 "TodoWrite"）
         all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
 
@@ -359,6 +370,20 @@ public final class AgentTools {
         } catch (NumberFormatException e) {
             return 4;
         }
+    }
+
+    /**
+     * 按 env 决定是否创建博查搜索工具：{@code apiKey} 空即返回 null（不注册）。
+     * env 的<b>读取</b>在这里，<b>解析语义</b>（回退/钳制）在 {@link BochaWebSearchTool#resolveResultCount}——
+     * 与 {@code ModelListEnv.parse} 一样把 env 值作为参数传入，测试才能不依赖真实环境变量。
+     */
+    static BochaWebSearchTool createWebSearchTool(String apiKey, String countEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return null;
+        }
+        return BochaWebSearchTool.builder(apiKey)
+                .resultCount(BochaWebSearchTool.resolveResultCount(countEnv))
+                .build();
     }
 
     /**
