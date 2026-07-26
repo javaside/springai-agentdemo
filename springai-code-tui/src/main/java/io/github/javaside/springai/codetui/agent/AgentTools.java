@@ -215,8 +215,9 @@ public final class AgentTools {
         // TodoWrite 不直接注册库工具：其入参双层 todos 嵌套让模型频繁绑定失败（见 TodoWriteToolAdapter 类注释）。
         // 改注册薄适配器（入参 List<TodoItem>、schema 单层），并把库工具那套完整的面向模型描述原样移植过来，
         // 使模型看到的使用指引与升级前一致——唯一变化只是入参 schema 的形状。
-        ToolCallback todoCallback = describedAs(
+        ToolCallback todoCallback = new RenamedToolCallback(
                 ToolCallbacks.from(new TodoWriteToolAdapter(todo))[0],
+                null,   // 保持适配器自己的注册名 TodoWrite
                 ToolCallbacks.from(todo)[0].getToolDefinition().description());
 
         // 网络搜索（博查）：BOCHA_API_KEY 配了才注册。没配则工具根本不存在——模型看不到、
@@ -505,28 +506,6 @@ public final class AgentTools {
         } finally {
             System.setOut(original);
         }
-    }
-
-    /** 包一层，仅把 {@link ToolDefinition} 的 description 换成给定文本（name / inputSchema 原样），调用透传委托。 */
-    private static ToolCallback describedAs(ToolCallback delegate, String description) {
-        return new DescribedToolCallback(delegate, description);
-    }
-
-    /** 借用另一处描述、其余全透传的 {@link ToolCallback} 装饰器（用于把库工具的完整描述移植到适配器上）。 */
-    private static final class DescribedToolCallback implements ToolCallback {
-        private final ToolCallback delegate;
-        private final ToolDefinition definition;
-
-        DescribedToolCallback(ToolCallback delegate, String description) {
-            this.delegate = delegate;
-            ToolDefinition d = delegate.getToolDefinition();
-            this.definition = ToolDefinition.builder()
-                    .name(d.name()).description(description).inputSchema(d.inputSchema()).build();
-        }
-
-        @Override public ToolDefinition getToolDefinition() { return definition; }
-        @Override public String call(String toolInput) { return delegate.call(toolInput); }
-        @Override public String call(String toolInput, ToolContext toolContext) { return delegate.call(toolInput, toolContext); }
     }
 
     private static String statusMarker(Todos.Status status) {
