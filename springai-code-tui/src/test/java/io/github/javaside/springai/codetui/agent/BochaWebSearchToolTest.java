@@ -421,6 +421,25 @@ class BochaWebSearchToolTest {
     }
 
     @Test
+    void keepsUsableResultsWhenArrayHasJunkElements() throws Exception {
+        String mixed = """
+                {"webPages":{"value":[
+                  {"name":"合法标题","url":"https://ok.com/1","snippet":"合法片段","siteName":"ok.com"},
+                  "junk"
+                ]}}
+                """;
+        try (StubServer stub = new StubServer(200, mixed)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("q", null, null);
+
+            assertTrue(out.contains("合法标题"), "有可识别结果时不应因个别脏元素整体失败，实际=" + out);
+            assertTrue(out.contains("找到 1 条结果"), "脏元素应被丢弃且不计入条数，实际=" + out);
+        }
+    }
+
+    @Test
     void emptyBodyThrowsInsteadOfNpe() throws Exception {
         try (StubServer stub = new StubServer(204, "")) {
             BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
