@@ -255,6 +255,11 @@ public final class AgentTools {
         BochaWebSearchTool webSearch =
                 createWebSearchTool(System.getenv("BOCHA_API_KEY"), System.getenv("BOCHA_SEARCH_COUNT"));
 
+        // Brave 搜索（库版 BraveWebSearchTool）：BRAVE_API_KEY 配了才注册。与博查共存，
+        // 由模型按内容语言自选（分工写在各自的工具描述里）。
+        ToolCallback braveWebSearch =
+                createBraveWebSearchTool(System.getenv("BRAVE_API_KEY"), System.getenv("BRAVE_SEARCH_COUNT"));
+
         List<Object> rawTools = new ArrayList<>(List.of(fs, sh, grep, glob, webFetch, askTool));
         if (webSearch != null) {
             rawTools.add(webSearch);
@@ -263,6 +268,9 @@ public final class AgentTools {
                 ToolCallbacks.from(rawTools.toArray())));
         all.add(todoCallback);      // 薄适配器版 TodoWrite（名仍为 "TodoWrite"）
         all.add(reloadableSkill);   // 始终注册可重载 Skill 代理（支持运行期 /reload 从零热加载）
+        if (braveWebSearch != null) {
+            all.add(braveWebSearch);   // 已是 ToolCallback（非 @Tool 对象），故不进 rawTools
+        }
 
         // MCP 工具不并入此列表：由 McpRegistry 自行装饰，CodingAgent/SubagentRunner 每回合取快照注入（见 build javadoc）。
 

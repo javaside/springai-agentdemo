@@ -126,4 +126,15 @@ class AgentToolsWebSearchWiringTest {
         assertTrue(description.contains("英文"), "应说明它主打英文内容（与博查分工），实际=" + description);
         assertTrue(description.contains("site:"), "应提示用 site: 运算符而非 allowedDomains，实际=" + description);
     }
+
+    /** 完整装饰链之后注册名仍须是 BraveWebSearch——中间任何一层丢了改名，工具分发就会撞上博查。 */
+    @Test
+    void braveKeepsRenamedNameThroughFullDecorationChain() {
+        ToolCallback brave = AgentTools.createBraveWebSearchTool("fake-key", null);
+
+        ToolCallback decorated = new ToolEventCallback(brave, new ConversationState());
+
+        assertEquals("BraveWebSearch", decorated.getToolDefinition().name(),
+                "装饰链末端的注册名，实际=" + decorated.getToolDefinition().name());
+    }
 }
