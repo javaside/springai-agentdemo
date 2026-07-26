@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -18,7 +19,8 @@ import java.util.Map;
  * 合并为 {@link McpServerConfig} 列表。项目级同名项覆盖用户级。
  *
  * <p><b>降级契约</b>：文件缺失 / JSON 非法 / 单条缺必填字段 / 未知 {@code type}
- * → 视为空或跳过该条，记 WARN，<b>绝不抛异常</b>（照 {@code SkillCatalog} 风格）。仅 stdio 传输本期落地。
+ * → 视为空或跳过该条，记 WARN，<b>绝不抛异常</b>（照 {@code SkillCatalog} 风格）。
+ * stdio 与 Streamable HTTP 两种传输已落地，sse 仍跳过。
  * 「被 {@code enabled:false} 关闭 → 跳过」仅适用 {@link #load(Path)}；{@link #loadAll(Path)} 保留禁用项。
  */
 public final class McpConfigLoader {
@@ -124,19 +126,32 @@ public final class McpConfigLoader {
     /** 解析单条；不合法则记 WARN 并返回 null（跳过）。 */
     private static McpServerConfig parseEntry(String name, JsonNode node) {
         String type = node.has("type") ? node.get("type").asString() : "stdio";
-        if (!"stdio".equals(type)) {
-            log.warn("MCP server '{}' 传输 type='{}' 暂未支持，跳过。", name, type);
-            return null;
-        }
+        boolean enabled = !node.has("enabled") || node.get("enabled").asBoolean();
+        Duration timeout = node.has("timeoutMs")
+                ? Duration.ofMillis(node.get("timeoutMs").asLong()) : DEFAULT_TIMEOUT;
+        return switch (type) {
+            case "stdio" -> parseStdio(name, node, enabled, timeout);
+            // "http" 对齐 Claude Code 生态的写法，"streamable-http" 是规范全称，两种都认
+            case "http", "streamable-http" -> parseHttp(name, node, enabled, timeout);
+            case "sse" -> {
+                log.warn("MCP server '{}' 的 sse 传输暂未支持（远程 server 请改用 type=http 的 "
+                        + "Streamable HTTP），跳过。", name);
+                yield null;
+            }
+            default -> {
+                log.warn("MCP server '{}' 传输 type='{}' 未知，跳过。", name, type);
+                yield null;
+            }
+        };
+    }
+
+    private static McpServerConfig parseStdio(String name, JsonNode node,
+                                              boolean enabled, Duration timeout) {
         JsonNode commandNode = node.get("command");
         if (commandNode == null || commandNode.asString().isBlank()) {
             log.warn("MCP server '{}' 缺 command，跳过。", name);
             return null;
         }
-        boolean enabled = !node.has("enabled") || node.get("enabled").asBoolean();
-        Duration timeout = node.has("timeoutMs")
-                ? Duration.ofMillis(node.get("timeoutMs").asLong()) : DEFAULT_TIMEOUT;
-
         List<String> args = new ArrayList<>();
         JsonNode argsNode = node.get("args");
         if (argsNode != null && argsNode.isArray()) {
@@ -149,5 +164,37 @@ public final class McpConfigLoader {
         }
         return new McpServerConfig.StdioServerConfig(name, enabled, timeout,
                 commandNode.asString(), List.copyOf(args), Map.copyOf(env));
+    }
+
+    private static McpServerConfig parseHttp(String name, JsonNode node,
+                                             boolean enabled, Duration timeout) {
+        JsonNode urlNode = node.get("url");
+        if (urlNode == null || urlNode.asString().isBlank()) {
+            log.warn("MCP server '{}' 缺 url，跳过。", name);
+            return null;
+        }
+        String url = urlNode.asString().trim();
+        if (!isAbsoluteHttpUrl(url)) {
+            log.warn("MCP server '{}' 的 url 非法（需 http/https 绝对地址）：{}，跳过。", name, url);
+            return null;
+        }
+        return new McpServerConfig.HttpServerConfig(name, enabled, timeout, url, Map.of());
+    }
+
+    /**
+     * URL 是否是可用的 http/https 绝对地址。
+     *
+     * <p><b>不能只靠 {@code URI.create} 抛异常来判非法</b>：{@code URI.create("foo")} 并不抛，
+     * 它返回 scheme 与 authority 均为 null 的相对 URI，拿去构造 transport 会在连接期才炸出难懂的错。
+     */
+    static boolean isAbsoluteHttpUrl(String raw) {
+        try {
+            URI uri = URI.create(raw);
+            String scheme = uri.getScheme();
+            return ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                    && uri.getAuthority() != null && !uri.getAuthority().isBlank();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 }
