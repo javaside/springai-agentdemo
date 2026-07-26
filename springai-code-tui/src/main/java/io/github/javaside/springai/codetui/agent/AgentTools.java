@@ -114,7 +114,13 @@ public final class AgentTools {
     /** Brave 工具的注册名——库版是 {@code WebSearch}，与博查工具撞名，必须改写。 */
     static final String BRAVE_TOOL_NAME = "BraveWebSearch";
 
-    /** Brave 默认条数。比博查的 8 保守：Brave 免费档 2000 次/月，更该省。 */
+    /**
+     * Brave 默认条数。比博查的 8 保守：Brave 免费档 2000 次/月，更该省。
+     *
+     * <p><b>它只约束网页结果</b>：库版 {@code parseResults} 还会把 Brave 响应里的 videos 段一并解析进来，
+     * 不受 {@code count} 限制（实测 count=3 → 3 条网页 + 6 条视频）。{@code parseResults} 是私有的，
+     * 本项目改不了；要滤掉视频噪音只能在工具返回值上再包一层解析。
+     */
     static final int BRAVE_DEFAULT_COUNT = 5;
 
     /** Brave 单次条数上限。 */
