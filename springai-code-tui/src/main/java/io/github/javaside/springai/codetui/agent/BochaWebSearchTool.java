@@ -3,10 +3,15 @@ package io.github.javaside.springai.codetui.agent;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
+import java.net.ProxySelector;
+import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,8 +53,16 @@ public final class BochaWebSearchTool {
     private final int resultCount;
 
     private BochaWebSearchTool(String apiKey, String baseUrl, int resultCount) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(CONNECT_TIMEOUT);
+        // 不用 SimpleClientHttpRequestFactory：它把请求体流式发出，而 HttpURLConnection 在「流式请求体 + 401」
+        // 这一组合下会把 error stream 丢成 null（请求体已流出去、没法重放做认证握手，JDK 索性弃掉响应体）。
+        // 实测 403/429/503 都能拿到 body，唯独 401 空——而 401 = key 无效恰是最需要看到博查原文的一档，
+        // 塌成光秃秃的 "HTTP 401" 就没了排查价值。JdkClientHttpRequestFactory 各档都能拿到 body；
+        // 代价是 java.net.http 默认不认 http.proxyHost 等系统代理属性，故显式补 ProxySelector 保持行为等价。
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(CONNECT_TIMEOUT)
+                .proxy(ProxySelector.getDefault())
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
         factory.setReadTimeout(READ_TIMEOUT);
         this.restClient = RestClient.builder()
                 .requestFactory(factory)
@@ -99,11 +112,7 @@ public final class BochaWebSearchTool {
             body.put("include", includeParam);
         }
 
-        Map<String, Object> response = restClient.post()
-                .uri(SEARCH_PATH)
-                .body(body)
-                .retrieve()
-                .body(MAP_TYPE);
+        Map<String, Object> response = execute(body);
 
         List<Map<String, Object>> values = extractValues(response);
         if (values.isEmpty()) {
@@ -113,11 +122,49 @@ public final class BochaWebSearchTool {
         return render(query.trim(), values);
     }
 
+    /**
+     * 发请求并转译错误。<b>不重试</b>：失败绝大多数是 key / 额度 / 限流问题，重试只烧额度并拖长回合，
+     * 模型自己会换词再试。<b>不塌错误</b>：状态码与博查返回的原文必须透传，否则无法定位是哪一类失败。
+     */
+    private Map<String, Object> execute(Map<String, Object> body) {
+        try {
+            return restClient.post()
+                    .uri(SEARCH_PATH)
+                    .body(body)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, (request, response) -> {
+                        String detail = new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8).trim();
+                        throw new IllegalStateException("博查搜索失败：HTTP "
+                                + response.getStatusCode().value()
+                                + (detail.isEmpty() ? "" : "，响应：" + preview(detail)));
+                    })
+                    .body(MAP_TYPE);
+        } catch (IllegalStateException e) {
+            throw e;                       // onStatus 里已转译过，原样抛出
+        } catch (RestClientException e) {
+            throw new IllegalStateException("博查搜索连不上（网络不通或超时）：" + e.getMessage(), e);
+        }
+    }
+
+    /** 截断超长文本，避免把整页响应塞进错误消息。 */
+    private static String preview(String raw) {
+        return raw.length() <= 300 ? raw : raw.substring(0, 300) + "…";
+    }
+
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> extractValues(Map<String, Object> response) {
-        Object pages = response.get("webPages");
+        if (response == null) {
+            throw new IllegalStateException("博查搜索失败：响应为空");
+        }
+        // 博查部分版本把 SearchResponse 包在 data 字段下，两种形状都要认。
+        Map<String, Object> payload = response;
+        if (response.get("data") instanceof Map<?, ?> data) {
+            payload = (Map<String, Object>) data;
+        }
+        Object pages = payload.get("webPages");
         if (!(pages instanceof Map<?, ?> pageMap)) {
-            return List.of();
+            throw new IllegalStateException("博查搜索失败：响应缺少 webPages 字段，响应片段："
+                    + preview(String.valueOf(response)));
         }
         Object value = pageMap.get("value");
         if (!(value instanceof List<?> list)) {

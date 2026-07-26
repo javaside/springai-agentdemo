@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** BochaWebSearchTool 离线单测：用 JDK 内置 HttpServer 起本地 stub，不发真实网络请求。 */
@@ -38,6 +39,14 @@ class BochaWebSearchToolTest {
             {"_type":"SearchResponse","webPages":{"value":[
               {"name":"极简标题","url":"https://bare.com/x","snippet":"极简片段"}
             ]}}
+            """;
+
+    /** 博查在部分版本里把 SearchResponse 包在 data 字段下，解析须兼容两种形状。 */
+    private static final String WRAPPED_IN_DATA = """
+            {"code":200,"log_id":"abc","msg":null,
+             "data":{"_type":"SearchResponse","webPages":{"value":[
+               {"name":"包装标题","url":"https://c.com/3","snippet":"包装片段","siteName":"c.com"}
+             ]}}}
             """;
 
     /** 本地 stub server：固定返回给定状态码与响应体，并记录收到的请求数与最后一次请求体。 */
@@ -256,6 +265,90 @@ class BochaWebSearchToolTest {
                     "站点与日期都缺时，标题后不应出现悬空的 ' — '，实际=" + out);
             assertTrue(out.contains("https://bare.com/x"), "URL 仍应输出，实际=" + out);
             assertTrue(out.contains("极简片段"), "snippet 仍应作为正文输出，实际=" + out);
+        }
+    }
+
+    @Test
+    void clientErrorCarriesStatusCodeAndBody() throws Exception {
+        try (StubServer stub = new StubServer(401, "{\"code\":401,\"msg\":\"invalid api key\"}")) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("bad-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> tool.webSearch("q", null, null));
+
+            assertTrue(ex.getMessage().contains("401"), "错误消息须含状态码，实际=" + ex.getMessage());
+            assertTrue(ex.getMessage().contains("invalid api key"),
+                    "错误消息须透传博查原文（否则分不清 key 无效/余额不足/限流），实际=" + ex.getMessage());
+        }
+    }
+
+    @Test
+    void serverErrorCarriesStatusCode() throws Exception {
+        try (StubServer stub = new StubServer(503, "{\"msg\":\"service unavailable\"}")) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> tool.webSearch("q", null, null));
+
+            assertTrue(ex.getMessage().contains("503"), "实际=" + ex.getMessage());
+        }
+    }
+
+    @Test
+    void unreachableHostReportsConnectionFailure() {
+        // 127.0.0.1:1 上没有监听者，连接立即被拒。
+        BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                .baseUrl("http://127.0.0.1:1").build();
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> tool.webSearch("q", null, null));
+
+        assertTrue(ex.getMessage().contains("连不上"),
+                "连接失败与服务端错误应措辞可区分，实际=" + ex.getMessage());
+    }
+
+    @Test
+    void parsesResponseWrappedInDataField() throws Exception {
+        try (StubServer stub = new StubServer(200, WRAPPED_IN_DATA)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("q", null, null);
+
+            assertTrue(out.contains("包装标题"), "应兼容 data 包装的响应形状，实际=" + out);
+            assertTrue(out.contains("https://c.com/3"), "实际=" + out);
+        }
+    }
+
+    @Test
+    void malformedResponseThrowsWithPreview() throws Exception {
+        try (StubServer stub = new StubServer(200, "{\"unexpected\":\"shape\"}")) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> tool.webSearch("q", null, null));
+
+            assertTrue(ex.getMessage().contains("webPages"),
+                    "响应形状不对时应点明缺什么字段，实际=" + ex.getMessage());
+            assertTrue(ex.getMessage().contains("unexpected"),
+                    "错误消息应带响应片段便于排查，实际=" + ex.getMessage());
+        }
+    }
+
+    @Test
+    void emptyBodyThrowsInsteadOfNpe() throws Exception {
+        try (StubServer stub = new StubServer(204, "")) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> tool.webSearch("q", null, null));
+
+            assertTrue(ex.getMessage().contains("响应为空"),
+                    "空响应体应抛可读异常而非 NPE，实际=" + ex.getMessage());
         }
     }
 }
