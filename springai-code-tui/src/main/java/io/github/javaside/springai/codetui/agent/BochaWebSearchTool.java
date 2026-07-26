@@ -118,12 +118,24 @@ public final class BochaWebSearchTool {
             String url = str(item.get("url"));
             String site = str(item.get("siteName"));
             String date = shortDate(str(item.get("datePublished")));
+            // summary 仅在请求 summary:true 且博查生成成功时返回；snippet 恒有，作为兜底。
             String text = str(item.get("summary"));
+            if (text.isEmpty()) {
+                text = str(item.get("snippet"));
+            }
 
             sb.append('\n').append(index++).append(". ").append(title.isEmpty() ? url : title);
-            sb.append(" — ").append(site).append(" · ").append(date);
+            String meta = site;
+            if (!date.isEmpty()) {
+                meta = meta.isEmpty() ? date : meta + " · " + date;
+            }
+            if (!meta.isEmpty()) {
+                sb.append(" — ").append(meta);
+            }
             sb.append('\n').append("   ").append(url).append('\n');
-            sb.append("   ").append(text).append('\n');
+            if (!text.isEmpty()) {
+                sb.append("   ").append(text).append('\n');
+            }
         }
         return sb.toString();
     }

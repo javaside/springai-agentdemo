@@ -104,4 +104,30 @@ class BochaWebSearchToolTest {
                     "显式 freshness 应原样透传（不做本地白名单校验），实际=" + stub.lastBody);
         }
     }
+
+    @Test
+    void fallsBackToSnippetWhenSummaryMissing() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("Spring AI 工具调用", null, null);
+
+            assertTrue(out.contains("短片段二"),
+                    "第二条无 summary，应退回 snippet，实际=" + out);
+        }
+    }
+
+    @Test
+    void omitsDateSegmentWhenDateMissing() throws Exception {
+        try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
+            BochaWebSearchTool tool = BochaWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("Spring AI 工具调用", null, null);
+
+            assertTrue(out.contains("标题二 — b.com\n"),
+                    "第二条无日期，站点名后不应留下悬空的 ' · '，实际=" + out);
+        }
+    }
 }
