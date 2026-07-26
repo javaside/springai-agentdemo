@@ -6,7 +6,7 @@
 
 **Architecture:** 新增单个 `@Tool` 类 `BochaWebSearchTool`（HTTP → 解析 → Markdown，不碰 LLM 与文件系统），在 `AgentTools.build` 里按 env 门控接入既有装饰链（`MediaExternalizingCallback` + `ToolEventCallback`），主 agent 与 `general-purpose` 子 agent 自动获得。系统提示新增一个 param 注入的指引段，无 key 时为空串。
 
-**Tech Stack:** Java 17、Spring Framework 7.0.8（`RestClient` + `SimpleClientHttpRequestFactory`）、Spring AI 2.0（`@Tool` / `@ToolParam` / `ToolCallbacks`）、JUnit 5、JDK 内置 `com.sun.net.httpserver.HttpServer` 做测试 stub。
+**Tech Stack:** Java 17、Spring Framework 7.0.8（`RestClient` + `JdkClientHttpRequestFactory`）、Spring AI 2.0（`@Tool` / `@ToolParam` / `ToolCallbacks`）、JUnit 5、JDK 内置 `com.sun.net.httpserver.HttpServer` 做测试 stub。
 
 **Spec:** `docs/superpowers/specs/2026-07-26-web-search-design.md`
 
@@ -693,6 +693,14 @@ git commit -m "feat: 空搜索词短路不发请求、零结果返回可操作�
 ---
 
 ### Task 5: 错误透传与响应包装兼容
+
+> **实施期偏离记录（已批准，`374b4c8`）**：Task 1 里选的 `SimpleClientHttpRequestFactory` 是**计划的错误**。
+> 实测它把请求体流式发出，而 `HttpURLConnection` 在「流式请求体 + 401」下会把 error stream 丢成 null
+> （403/429/503 都正常，唯独 401 空）。401 = key 无效正是本任务最要透传原文的一档，与「不塌错误」直接冲突。
+> 故改用 `JdkClientHttpRequestFactory`（connect 挂 `HttpClient.Builder`、read 挂 factory），并显式补
+> `.proxy(ProxySelector.getDefault())`——`java.net.http` 默认不认 `http.proxyHost` 系统属性，
+> 漏掉即**静默**失去代理。另补一条 204/空体用例覆盖 `extractValues` 的 null 守卫（此前只有代码没有测试）。
+> 下面各步骤的代码块保留原样作为历史记录；实际落地以本说明与提交为准。
 
 三件事：① HTTP 错误必须带**状态码和博查返回的原文**（不能塌成「搜索失败」，否则分不清 key 无效 / 余额不足 / 限流）；② 连不上与服务端错误分开措辞；③ 兼容博查可能的 `{"code":200,"data":{...}}` 外层包装。
 

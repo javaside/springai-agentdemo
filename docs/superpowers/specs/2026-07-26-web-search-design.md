@@ -58,7 +58,8 @@
 | 构造 | 私有构造 + `builder(apiKey)`，链式 `.resultCount(n)` / `.baseUrl(url)` |
 | `baseUrl` | 只给 builder，**不给 env**——唯一用途是测试打本地 stub server |
 | 门控 | `BOCHA_API_KEY` 非空才注册；为空则工具不存在、系统提示指引段为空串 |
-| HTTP 客户端 | Spring `RestClient`，类内常量超时 connect 10s / read 20s |
+| HTTP 客户端 | Spring `RestClient` + `JdkClientHttpRequestFactory`，类内常量超时 connect 10s / read 20s |
+| 为何不用 `SimpleClientHttpRequestFactory` | 实施期实测发现：它把请求体流式发出，而 `HttpURLConnection` 在「流式请求体 + 401」这一组合下会把 error stream 丢成 null（请求体已流出、无法重放做认证握手，JDK 索性弃掉响应体）。403/429/503 都能拿到 body，**唯独 401 空**——而 401 = key 无效恰是最需要看到博查原文的一档，塌成光秃秃的 `HTTP 401` 就没了排查价值，与下面「不塌错误」的决策直接冲突。代价是 `java.net.http` 默认不认 `http.proxyHost` 等系统代理属性，故显式补 `ProxySelector.getDefault()` 保持行为等价 |
 | 超时来源 | **不接 `LlmTimeouts`**——那套是 LLM 语义（read 默认 300s，等的是流式块间隔）；搜索是一次性 REST 调用，超 20s 就该失败，套用等于挂死 |
 | `summary` | 恒为 `true` |
 | 重试 | 不做（见「错误处理」） |
