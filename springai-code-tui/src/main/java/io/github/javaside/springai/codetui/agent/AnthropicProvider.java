@@ -19,12 +19,14 @@ import java.util.List;
 public final class AnthropicProvider implements LlmProvider {
 
     private static final int MAX_TOKENS = 8192;   // Anthropic 必填；可调
-    // 2026-07 在售编号：fable-5 / sonnet-5 / opus-4-8 / haiku-4-5（旧 sonnet-4-5、opus-4-5 是不存在的跳号）。
+    // 2026-07 在售编号：opus-5 / fable-5 / sonnet-5 / haiku-4-5，opus-4-8 转 legacy 仍可用
+    //（旧 sonnet-4-5、opus-4-5 是不存在的跳号）。ID 即 pinned snapshot，无日期后缀不是浮动别名。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("claude-opus-4-8",  "claude-opus-4-8",  "最强推理 · 默认"),
-            new ModelOption("claude-fable-5",   "claude-fable-5",   "最新旗舰"),
+            new ModelOption("claude-opus-5",    "claude-opus-5",    "复杂 agentic 编码 · 默认"),
+            new ModelOption("claude-fable-5",   "claude-fable-5",   "最强旗舰 · 长时程 agent"),
             new ModelOption("claude-sonnet-5",  "claude-sonnet-5",  "均衡 · 日常编码"),
-            new ModelOption("claude-haiku-4-5", "claude-haiku-4-5", "快 · 便宜"));
+            new ModelOption("claude-haiku-4-5", "claude-haiku-4-5", "快 · 便宜"),
+            new ModelOption("claude-opus-4-8",  "claude-opus-4-8",  "上代 opus"));
 
     private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
 

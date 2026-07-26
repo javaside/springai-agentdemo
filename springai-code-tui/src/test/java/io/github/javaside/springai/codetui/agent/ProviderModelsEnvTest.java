@@ -55,7 +55,7 @@ class ProviderModelsEnvTest {
 
     @Test
     void anthropic_noEnv_builtInDefault() {
-        assertEquals("claude-opus-4-8", new AnthropicProvider("key", null, null).defaultModel());
+        assertEquals("claude-opus-5", new AnthropicProvider("key", null, null).defaultModel());
     }
 
     @Test

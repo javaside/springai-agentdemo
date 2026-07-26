@@ -30,7 +30,7 @@ class CodingAgentModelSwitchTest {
     void selectModelSwitchesProviderAndCurrentModel() {
         CodingAgent a = agentWithRegistry();
         assertEquals("deepseek-v4-pro", a.currentModel());
-        a.selectModel("claude-opus-4-8");
-        assertEquals("claude-opus-4-8", a.currentModel());
+        a.selectModel("claude-opus-5");
+        assertEquals("claude-opus-5", a.currentModel());
     }
 }

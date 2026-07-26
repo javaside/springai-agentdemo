@@ -55,7 +55,7 @@ mvn -pl springai-code-tui -am package
 export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役，默认 deepseek-v4-pro，另有 v4-flash 非思考款）
 # export ZHIPU_API_KEY=你的key           # 智谱 GLM（默认 glm-5.2，另有 glm-5.1/glm-5-turbo；OpenAI 兼容通路）
 # export DASHSCOPE_API_KEY=你的key       # 通义千问（默认 qwen3.7-max，另有 3.7-plus/3.6-flash/qwen3-coder-next；OpenAI 兼容通路）
-# export ANTHROPIC_API_KEY=你的key       # Anthropic（默认 claude-opus-4-8，另有 fable-5/sonnet-5/haiku-4-5）
+# export ANTHROPIC_API_KEY=你的key       # Anthropic（默认 claude-opus-5，另有 fable-5/sonnet-5/haiku-4-5/opus-4-8）
 # export OPENAI_API_KEY=你的key          # OpenAI（默认 gpt-5.6-sol，另有 terra/luna）
 # 各 provider 可选自定义 base url：DEEPSEEK_BASE_URL / ZHIPU_BASE_URL / DASHSCOPE_BASE_URL / ANTHROPIC_BASE_URL / OPENAI_BASE_URL
 # 各 provider 可选自定义模型清单（逗号分隔，首项为默认模型；不配则用内置清单）：

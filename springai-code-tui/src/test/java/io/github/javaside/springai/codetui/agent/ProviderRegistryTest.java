@@ -28,10 +28,10 @@ class ProviderRegistryTest {
     void selectCrossProviderModelSwitchesActive() {
         ProviderRegistry reg = new ProviderRegistry(List.of(
                 new DeepSeekProvider("k"), new AnthropicProvider("k")));
-        reg.select("claude-opus-4-8");
+        reg.select("claude-opus-5");
         assertEquals("anthropic", reg.active().id());
-        assertEquals("claude-opus-4-8", reg.activeModelId());
-        assertEquals("claude-opus-4-8", reg.activeChatOptions().getModel());
+        assertEquals("claude-opus-5", reg.activeModelId());
+        assertEquals("claude-opus-5", reg.activeChatOptions().getModel());
     }
 
     @Test

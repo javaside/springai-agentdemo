@@ -81,7 +81,7 @@ class ProviderTimeoutRuntimeTest {
             var client = com.anthropic.client.okhttp.AnthropicOkHttpClient.builder()
                     .apiKey("fake").baseUrl("http://127.0.0.1:" + port).timeout(t).maxRetries(0).build();
             var params = com.anthropic.models.messages.MessageCreateParams.builder()
-                    .model("claude-opus-4-8").maxTokens(16).addUserMessage("hi").build();
+                    .model("claude-opus-5").maxTokens(16).addUserMessage("hi").build();
             assertTimesOutAround2s("Anthropic(AnthropicOkHttpClient)", () -> client.messages().create(params));
         });
     }
