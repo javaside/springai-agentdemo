@@ -6,7 +6,7 @@
 
 **Architecture:** 新增单个 `@Tool` 类 `BochaWebSearchTool`（HTTP → 解析 → Markdown，不碰 LLM 与文件系统），在 `AgentTools.build` 里按 env 门控接入既有装饰链（`MediaExternalizingCallback` + `ToolEventCallback`），主 agent 与 `general-purpose` 子 agent 自动获得。系统提示新增一个 param 注入的指引段，无 key 时为空串。
 
-**Tech Stack:** Java 17、Spring Framework 7.0.5（`RestClient` + `SimpleClientHttpRequestFactory`）、Spring AI 2.0（`@Tool` / `@ToolParam` / `ToolCallbacks`）、JUnit 5、JDK 内置 `com.sun.net.httpserver.HttpServer` 做测试 stub。
+**Tech Stack:** Java 17、Spring Framework 7.0.8（`RestClient` + `SimpleClientHttpRequestFactory`）、Spring AI 2.0（`@Tool` / `@ToolParam` / `ToolCallbacks`）、JUnit 5、JDK 内置 `com.sun.net.httpserver.HttpServer` 做测试 stub。
 
 **Spec:** `docs/superpowers/specs/2026-07-26-web-search-design.md`
 
