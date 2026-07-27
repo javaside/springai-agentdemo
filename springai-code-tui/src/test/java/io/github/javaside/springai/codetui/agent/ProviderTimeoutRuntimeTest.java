@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -26,13 +29,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ProviderTimeoutRuntimeTest {
 
-    /** 起一个接受连接后不回包的 server，把 port 交给 body 执行，测完关闭。 */
+    /**
+     * 起一个接受连接后不回包的 server，把 port 交给 body 执行，测完关闭。
+     *
+     * <p><b>已接受的 socket 必须持有强引用</b>：{@link Socket} 带 cleaner，一旦被 GC 就会关闭连接，
+     * 客户端会立刻收到 EOF 而不是等到读超时——本方法的全部意义就是「挂住不回」，连接被提前关掉
+     * 就测不到超时了。曾因 accept 结果只赋给局部变量而在 CI 的 JDK 17 上偶发失败（230ms 就返回，
+     * 而 JDK 21 正常）；两代 JDK 的 cleaner 时机不同，本地跑不出来。
+     */
     private void withHungServer(Consumer<Integer> body) throws Exception {
         AtomicBoolean stop = new AtomicBoolean(false);
+        List<Socket> accepted = Collections.synchronizedList(new ArrayList<>());
         try (ServerSocket server = new ServerSocket(0)) {
             Thread accepter = new Thread(() -> {
                 while (!stop.get()) {
-                    try { Socket s = server.accept(); /* 挂住不回 */ }
+                    try { accepted.add(server.accept()); /* 挂住不回，且保持引用防 GC 关连接 */ }
                     catch (Exception e) { return; }
                 }
             });
@@ -42,6 +53,11 @@ class ProviderTimeoutRuntimeTest {
                 body.accept(server.getLocalPort());
             } finally {
                 stop.set(true);
+                synchronized (accepted) {
+                    for (Socket s : accepted) {
+                        try { s.close(); } catch (Exception ignored) { /* 清理阶段，忽略 */ }
+                    }
+                }
             }
         }
     }
