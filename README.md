@@ -1,4 +1,52 @@
-# Spring AI 2.0 学习示例
+# Spring AI 2.0 学习示例 & 命令行编码智能体
+
+[![CI](https://github.com/javaside/springai-agentdemo/actions/workflows/ci.yml/badge.svg)](https://github.com/javaside/springai-agentdemo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/javaside/springai-agentdemo?display_name=tag&sort=semver&label=release)](https://github.com/javaside/springai-agentdemo/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/javaside/springai-agentdemo/total?label=downloads)](https://github.com/javaside/springai-agentdemo/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Java](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
+
+**[⬇️ 下载最新版](https://github.com/javaside/springai-agentdemo/releases/latest)** ·
+[变更日志](CHANGELOG.md) ·
+[参与贡献](CONTRIBUTING.md) ·
+[安全策略](SECURITY.md) ·
+[code-tui 详细文档](springai-code-tui/README.md)
+
+---
+
+## ⭐ springai-code-tui —— 本项目的重点
+
+一个**真正能用的命令行编码智能体**：在终端里读写代码、跑测试、查资料、派子 agent 干活。仓库里的其他模块是通往它的教学阶梯，**它才是主角**。
+
+### 下载即用（无需构建）
+
+到 **[Releases](https://github.com/javaside/springai-agentdemo/releases/latest)** 拿自包含运行包，解压后配一个 API Key 就能跑：
+
+```bash
+# macOS / Linux
+tar xzf springai-code-tui-*-dist.tar.gz && cd springai-code-tui-*/
+export DEEPSEEK_API_KEY=你的key
+bin/code-tui                      # Windows 用 bin\code-tui.cmd
+```
+
+包内含启动脚本 + 主 jar + 全部依赖 + `LICENSE`/`NOTICE`/`README`，只需 **JDK 17+**。每版的 SHA-256 校验和见对应[发版说明](CHANGELOG.md)。
+
+> ⚠️ **先读安全声明**：它给智能体开放了本机文件系统与 shell 的实质访问，**不是安全沙箱**。请只在可随意丢弃、且已被版本控制干净纳管的目录中运行。详见 [模块 README 的安全声明](springai-code-tui/README.md) 与 [SECURITY.md](SECURITY.md)。
+
+### 能做什么
+
+| | |
+|---|---|
+| **多 provider** | DeepSeek / 智谱 GLM / 通义千问 / Anthropic / OpenAI，`/model` 运行时切换，模型清单可经 `*_MODELS` 自定义 |
+| **工具** | 文件读写、Shell、Grep/Glob、联网抓取（webFetch）、**联网搜索**（博查中文 + Brave 英文，模型按内容语言自选）、向用户反问 |
+| **子 agent** | `Task` 单个委派 / `ParallelTasks` 并发派发，内置 explore / plan / bash / general-purpose 四类 |
+| **MCP** | 接入外部工具：本地 stdio 子进程 + **远程 Streamable HTTP**（headers 支持 `${ENV_VAR}` 插值），`/mcp` 面板运行期启停 |
+| **上下文** | 事件溯源会话记忆 + 回合感知压缩、跨会话长期记忆、项目指令（`AGENTS.md`）、`-c` 恢复上次会话 |
+| **界面** | 单栏对话式 TUI：流式输出、工具活动行、📋 计划面板、⟐ 任务面板、状态栏 |
+
+---
+
+## 仓库里还有什么
 
 一个面向初学者的 **Spring AI 2.0** 演示项目，由浅入深分三层：
 
@@ -11,7 +59,7 @@
 
 **② 终端基础层** —— `springai-jline-demo`：JLine 3 `Terminal` 接口入门，为终端界面打底。
 
-**③ 综合应用层** —— `springai-code-tui`：把前两层综合成一个**真正能用的命令行编码智能体**（多 provider、子 agent、工具调用、技能、TUI 面板）。
+**③ 综合应用层** —— `springai-code-tui`：把前两层综合成上面那个编码智能体（[回到顶部](#-springai-code-tui--本项目的重点)）。想学「这些零件怎么拼成一个真东西」，读它的源码。
 
 - **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 智谱 GLM / [通义千问](https://bailian.console.aliyun.com/)（百炼）/ Anthropic / OpenAI（各家模型清单可经 `*_MODELS` 环境变量配置，首项为默认模型）
 - **向量模型**：本地 ONNX 模型（无需 API Key，离线运行）—— 因为 DeepSeek 官方 API 只提供对话、不提供向量
