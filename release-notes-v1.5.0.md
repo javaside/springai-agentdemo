@@ -1,0 +1,122 @@
+# springai-agentdemo v1.5.0
+
+在 [v1.4.0](release-notes-v1.4.0.md) 基础上的**功能版**（minor）。核心交付物仍是终端编码智能体 **`springai-code-tui`**。本版三大新增：**联网搜索**（博查 + Brave 两家共存，模型按内容语言自选）、**MCP 远程传输**（Streamable HTTP，可连 Context7 一类远程 server）、**Claude Opus 5 接入并设为 Anthropic 默认模型**。另有一个全新子项目入库：**Chrome 英语句法学习扩展**（源码，不在下载包内）。无破坏性变更，建议所有用户升级。
+
+**下载物仍是两个自包含运行包（解压即用，无需构建）：**
+
+- `springai-code-tui-1.5.0-dist.tar.gz`（macOS / Linux 首选）
+- `springai-code-tui-1.5.0-dist.zip`（Windows 首选）
+
+两者内容一致：启动脚本（`bin/`）+ 主 jar + 全部运行期依赖（`lib/`）+ `LICENSE`/`NOTICE`/`README`。运行时界面版本标识为 **`v1.5.0`**。
+
+> 完整功能全景与⚠️安全声明见 [v1.3.0 发布说明](release-notes-v1.3.0.md) 与 [v1.0.0 发布说明](release-notes-v1.0.0.md)；本文只列出相对 v1.4.0 的变化。
+
+---
+
+## ✨ 新功能
+
+### 联网搜索：`BochaWebSearch` + `BraveWebSearch`
+
+智能体补上了「找 URL」这一步——此前只有 `webFetch`（已知网址抓正文），现在能先搜再抓。两家**可共存**，由模型按内容语言自选，各自独立门控：
+
+| 工具 | 启用条件 | 定位 |
+| --- | --- | --- |
+| `BochaWebSearch` | `BOCHA_API_KEY` | 中文内容、国内站点、中文技术社区；返回长摘要，常常一次就够 |
+| `BraveWebSearch` | `BRAVE_API_KEY` | 英文技术文档、GitHub issue、英文新闻；返回简短描述 |
+
+- **都不配则两个工具都不注册**，系统提示里也不出现任何搜索相关字样——模型不会去调一个不存在的工具。行为与升级前完全一致。
+- 条数由 `BOCHA_SEARCH_COUNT`（默认 8，范围 `[1,50]`）/ `BRAVE_SEARCH_COUNT`（默认 5，范围 `[1,20]`）控制，**不暴露给模型**，避免模型乱开条数烧搜索额度。
+- 系统提示的搜索指引按两家的注册状态**四态渲染**（都无 / 只有博查 / 只有 Brave / 两家都有）。
+- 两家真机均已验证。
+
+> ⚠️ **`BraveWebSearch` 的查询词发往 Brave（美国公司），属于数据出境**，与博查（国内服务、内容合规过滤）性质不同。按需自行取舍是否配置该 key，详见 code-tui README 的安全边界章节。
+
+### MCP 远程传输：Streamable HTTP
+
+MCP 从「只能连本地 stdio 子进程」扩展到**可连远程 server**：
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": { "Authorization": "Bearer ${CONTEXT7_API_KEY}" }
+    }
+  }
+}
+```
+
+- `type` 认 `"http"` 与 `"streamable-http"` 两种拼写；`"sse"`（旧标准，官方已 deprecated）暂未支持，配了会记 WARN 并跳过。
+- **`headers` 的值支持 `${ENV_VAR}` 插值**：token 留在环境变量里，配置文件只写引用，便于多机共用同一份 `mcp.json`。引用了未定义的变量 → **整条 server 跳过并记 WARN**，而不是带着字面量 `${TOKEN}` 去请求（那只会换来一个看不懂的 401）。
+- `url` 写完整端点地址，内部拆成 baseUri + endpoint 两段；非 `http`/`https` 绝对地址会在解析期被跳过。
+- 已有的 `/mcp` 运行期管理、工具名前缀、失败隔离、子 agent 注入等机制**全部适用**——`McpClientManager` / `McpRegistry` / `/mcp` 面板一行未改，印证了 v1.3.0 留下的传输扩展点。
+- 真机验证：连 Context7 完成握手并拉到工具列表。
+
+### Claude Opus 5
+
+Anthropic 新增 `claude-opus-5` 并**设为该家默认模型**（1M 上下文 / 128k 输出）。清单调整为 `claude-opus-5`（默认）/ `claude-fable-5` / `claude-sonnet-5` / `claude-haiku-4-5` / `claude-opus-4-8`（上代，保留）。`ANTHROPIC_MODELS` 仍可自定义覆盖。
+
+### 新子项目：Chrome 英语句法学习扩展（源码）
+
+`english-syntax-extension/` —— Manifest V3 扩展，把网页英文正文按句法成分标注并提供详解面板，支持多模型 profile、分析缓存导入导出、纯缓存离线查看、成分详解预加载等。**独立 npm 项目，Maven 不构建它，也不在本次下载包内**；构建与测试见 `english-syntax-extension/README.md`。
+
+---
+
+## 🔧 工程
+
+- 全模块版本号 1.4.0 → **1.5.0**。
+- 全量测试：`springai-code-tui` **537 用例通过**，相对 v1.4.0 的 460 条新增 77 条：
+
+  | 来源 | 条数 |
+  | --- | --- |
+  | 博查搜索工具（解析/渲染/降级/钳制/错误透传） | 26 |
+  | 搜索工具接线、注册名、系统提示指引四态 | 15 |
+  | `RenamedToolCallback` + `TimeLimitedToolCallback` | 8 |
+  | `${ENV_VAR}` 插值 | 7 |
+  | MCP 配置解析（http 变体、非法 URL、插值接入） | +7 |
+  | MCP 传输构造与 URL 拆分、鉴权头落头 | +9 |
+  | 真机冒烟（博查 / Brave / MCP HTTP，均 env 门控） | 3 |
+  | MCP 工具快照注入回归（`8813a1b`，随扩展分支合入） | 2 |
+- 三组 spec + 实施计划入库（`docs/superpowers/`）：网络搜索接入、第二家搜索后端 Brave、MCP Streamable HTTP 传输。
+- 新增两个通用工具装饰器：`RenamedToolCallback`（改注册名 + 换描述）与 `TimeLimitedToolCallback`（给没有自带超时的库工具兜总超时）。
+- `-Pdist` 产出 1.5.0 运行包。
+
+---
+
+## 📦 仓库模块
+
+| 模块 | 说明 |
+| --- | --- |
+| **springai-code-tui** ⭐ | 终端编码智能体（**本次发布的可下载运行物**）。 |
+| springai-core-demo | Spring AI 原始 API 教学。 |
+| springai-agent-demo | 智能体教学：工具调用、多步 agent、会话记忆等。 |
+| springai-boot-demo | Spring Boot 自动装配版对照。 |
+| springai-jline-demo | JLine 终端交互基础示例。 |
+| english-syntax-extension | Chrome 英语句法学习扩展（独立 npm 项目，非 Maven 模块）。 |
+
+> demo 模块与扩展请 clone 源码后按各自 README 构建；下载包只含 `springai-code-tui`。
+
+---
+
+## 🔐 校验（SHA-256）
+
+```
+5945d693bda324dd02f2351f6e9b3ef72b0a95b3a1fe217cfea5dd81abe1d20b  springai-code-tui-1.5.0-dist.tar.gz
+5b41b9a51bd8ac09e1a92da47b36e74d6ab8e763aa38bafcd44b72eecb0f9d91  springai-code-tui-1.5.0-dist.zip
+```
+
+```bash
+shasum -a 256 -c <<'EOF'
+5945d693bda324dd02f2351f6e9b3ef72b0a95b3a1fe217cfea5dd81abe1d20b  springai-code-tui-1.5.0-dist.tar.gz
+5b41b9a51bd8ac09e1a92da47b36e74d6ab8e763aa38bafcd44b72eecb0f9d91  springai-code-tui-1.5.0-dist.zip
+EOF
+```
+
+---
+
+## 📄 许可
+
+[Apache License 2.0](LICENSE)。发布包内随附 `LICENSE` 与 `NOTICE`（含所分发第三方库：Spring AI / Spring Boot / spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）。本版未引入新的第三方依赖——两个搜索工具与 MCP HTTP 传输均复用既有依赖树（`spring-web`、`spring-ai-agent-utils`、`mcp-core`）。
+
+**环境**：JDK 17+，macOS / Linux / Windows。
