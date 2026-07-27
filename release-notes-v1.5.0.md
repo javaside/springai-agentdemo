@@ -100,13 +100,13 @@ Anthropic 新增 `claude-opus-5` 并**设为该家默认模型**（1M 上下文 
 
 ```
 5945d693bda324dd02f2351f6e9b3ef72b0a95b3a1fe217cfea5dd81abe1d20b  springai-code-tui-1.5.0-dist.tar.gz
-5b41b9a51bd8ac09e1a92da47b36e74d6ab8e763aa38bafcd44b72eecb0f9d91  springai-code-tui-1.5.0-dist.zip
+5bc9db096d5cd7323dc809cf37364eea226c6112de3a356163d45dfcb774545f  springai-code-tui-1.5.0-dist.zip
 ```
 
 ```bash
 shasum -a 256 -c <<'EOF'
 5945d693bda324dd02f2351f6e9b3ef72b0a95b3a1fe217cfea5dd81abe1d20b  springai-code-tui-1.5.0-dist.tar.gz
-5b41b9a51bd8ac09e1a92da47b36e74d6ab8e763aa38bafcd44b72eecb0f9d91  springai-code-tui-1.5.0-dist.zip
+5bc9db096d5cd7323dc809cf37364eea226c6112de3a356163d45dfcb774545f  springai-code-tui-1.5.0-dist.zip
 EOF
 ```
 
