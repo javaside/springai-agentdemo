@@ -7,11 +7,12 @@ import java.util.Map;
 /**
  * 单个 MCP server 的不可变配置，按传输类型分型（sealed）。
  *
- * <p>本期只实现 {@link StdioServerConfig}；SSE / Streamable HTTP 是预留的扩展变体
- * （见设计文档 §5 扩展点）。公共访问器 {@link #name()} / {@link #enabled()} / {@link #timeoutMs()}
+ * <p>已实现 {@link StdioServerConfig}（本地子进程）与 {@link HttpServerConfig}（远程 Streamable HTTP）；
+ * SSE 仍未实现。公共访问器 {@link #name()} / {@link #enabled()} / {@link #timeoutMs()}
  * 供 {@link McpClientManager} 以传输无关的方式处理。
  */
-public sealed interface McpServerConfig permits McpServerConfig.StdioServerConfig {
+public sealed interface McpServerConfig
+        permits McpServerConfig.StdioServerConfig, McpServerConfig.HttpServerConfig {
 
     /** server 逻辑名（配置里的键；用于工具名前缀与日志）。 */
     String name();
@@ -31,6 +32,18 @@ public sealed interface McpServerConfig permits McpServerConfig.StdioServerConfi
      */
     record StdioServerConfig(String name, boolean enabled, Duration timeoutMs,
                              String command, List<String> args, Map<String, String> env)
+            implements McpServerConfig {
+    }
+
+    /**
+     * Streamable HTTP 传输配置：连接远程 MCP server。
+     *
+     * @param url     完整端点 URL（如 {@code https://mcp.context7.com/mcp}）；
+     *                由 {@link McpTransportFactory} 拆成 baseUri + endpoint 两段喂给 SDK
+     * @param headers 请求头，值已在 loader 完成 {@code ${ENV_VAR}} 插值；可空 → 空 map
+     */
+    record HttpServerConfig(String name, boolean enabled, Duration timeoutMs,
+                            String url, Map<String, String> headers)
             implements McpServerConfig {
     }
 }

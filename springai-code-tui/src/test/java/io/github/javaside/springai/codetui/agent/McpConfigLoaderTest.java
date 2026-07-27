@@ -160,4 +160,112 @@ class McpConfigLoaderTest {
         assertEquals(1, configs.size());          // 类型非法条被跳过，好的保留
         assertEquals("good", configs.get(0).name());
     }
+
+    @Test
+    void parsesHttpServer(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "ctx7": { "type": "http", "url": "https://mcp.context7.com/mcp", "timeoutMs": 30000 }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size());
+        McpServerConfig.HttpServerConfig http = (McpServerConfig.HttpServerConfig) configs.get(0);
+        assertEquals("ctx7", http.name());
+        assertTrue(http.enabled());
+        assertEquals("https://mcp.context7.com/mcp", http.url());
+        assertEquals(Map.of(), http.headers());
+        assertEquals(30000, http.timeoutMs().toMillis());
+    }
+
+    /** "streamable-http" 是规范全称，"http" 是 Claude Code 生态的写法，两种都要认。 */
+    @Test
+    void acceptsStreamableHttpTypeSpelling(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "ctx7": { "type": "streamable-http", "url": "https://h/mcp" }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size());
+        assertTrue(configs.get(0) instanceof McpServerConfig.HttpServerConfig);
+    }
+
+    @Test
+    void httpWithoutUrlIsSkipped(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "bad": { "type": "http" },
+                    "good": { "command": "npx" }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size(), "缺 url 的条目应被跳过，其余条目不受影响");
+        assertEquals("good", configs.get(0).name());
+    }
+
+    /** URI.create("foo") 并不抛异常——它返回 scheme/authority 均为 null 的相对 URI，必须显式校验。 */
+    @Test
+    void malformedUrlsAreSkipped(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "relative": { "type": "http", "url": "foo" },
+                    "wrongScheme": { "type": "http", "url": "ftp://h/x" },
+                    "noAuthority": { "type": "http", "url": "http://" },
+                    "good": { "type": "http", "url": "https://h/mcp" }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size(), "三条非法 URL 都应被跳过，实际=" + configs);
+        assertEquals("good", configs.get(0).name());
+    }
+
+    @Test
+    void sseTypeIsSkipped(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "legacy": { "type": "sse", "url": "https://h/sse" }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertTrue(configs.isEmpty(), "sse 暂未支持，应跳过");
+    }
+
+    @Test
+    void interpolatesHeaderValuesFromEnvironment(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "ctx7": { "type": "http", "url": "https://h/mcp",
+                              "headers": { "X-Path": "prefix-${PATH}", "X-Literal": "no-placeholder" } }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size());
+        McpServerConfig.HttpServerConfig http = (McpServerConfig.HttpServerConfig) configs.get(0);
+        assertEquals("no-placeholder", http.headers().get("X-Literal"), "字面值应原样透传");
+        assertEquals("prefix-" + System.getenv("PATH"), http.headers().get("X-Path"),
+                "${PATH} 应被真实环境变量替换");
+    }
+
+    @Test
+    void headerReferencingUndefinedVariableSkipsWholeServer(@TempDir Path dir) throws Exception {
+        Path project = write(dir, "project.json", """
+                { "mcpServers": {
+                    "bad": { "type": "http", "url": "https://h/mcp",
+                             "headers": { "Authorization": "Bearer ${CODETUI_NO_SUCH_VAR_9F3A}" } },
+                    "good": { "type": "http", "url": "https://h/mcp" }
+                }}""");
+
+        List<McpServerConfig> configs = McpConfigLoader.load(dir.resolve("nope.json"), project);
+
+        assertEquals(1, configs.size(),
+                "引用未定义变量的 server 应整条跳过（带着字面量 ${} 去请求只会拿到看不懂的 401）");
+        assertEquals("good", configs.get(0).name());
+    }
 }
