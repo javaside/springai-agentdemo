@@ -50,11 +50,6 @@ springai-agentdemo                  父工程（聚合 + 版本管理，packagin
         + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ MCP（接入外部工具）+ 计划/任务面板 + 会话压缩
         + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
 
-（另有一个独立子项目，不在 Maven 聚合内）
-english-syntax-extension           【独立 npm 项目】Chrome 英语句法学习扩展（Manifest V3）
-    └── 把网页英文段落替换为逐句句法拆解卡片（成分角色/英文/中文三行对照，点击懒加载详解）
-        模型可配 DeepSeek / 本地 Ollama 等 OpenAI 兼容服务；vitest 单测 + Playwright 真机 E2E
-        构建/测试用 npm（见 english-syntax-extension/README.md），Maven 不会构建它
 ```
 
 > **学习路线建议**：先看 `springai-boot-demo` 的「自动配置揭秘」示例，了解 Boot 帮你创建了哪些 Bean；
@@ -139,6 +134,13 @@ Spring AI 的 API 与模型解耦。换成 OpenAI / 通义 / Ollama 等：
 - [springai-boot-demo/README.md](springai-boot-demo/README.md)
 - [springai-jline-demo/README.md](springai-jline-demo/README.md)
 - [springai-code-tui/README.md](springai-code-tui/README.md)
+
+## 参与与安全
+
+- **变更日志**：[CHANGELOG.md](CHANGELOG.md)（每版发版说明的索引，含下载物与 SHA-256 校验和）
+- **贡献指南**：[CONTRIBUTING.md](CONTRIBUTING.md)（**测试命令必须带 `-pl` 模块作用域**、真机冒烟测试的 env 门控、spec → plan → TDD 的改动流程）
+- **安全策略**：[SECURITY.md](SECURITY.md)。发现漏洞请**不要开公开 issue**，发邮件到 283323279@qq.com。
+  注意其中「已知且被接受的风险」一节——`springai-code-tui` **无沙箱**是设计如此，不作为漏洞受理。
 
 ## 许可
 

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# 安全说明：本 workflow 的 run: 里只使用 matrix.java 这类 workflow 自身定义的可信值，
+# 不引用任何 github.event.* 的不可信输入（issue 标题、PR 描述、提交信息等），
+# 因此不存在 Actions 命令注入面。新增步骤时请保持这一约束。
+
+jobs:
+  build:
+    name: 构建与测试
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: temurin
+          cache: maven
+
+      # 必须带 -pl：整仓 mvn test 会被几个空的 demo 模块打挂（见 CONTRIBUTING.md）。
+      # 需要真实 API key 的冒烟测试全部由 @EnabledIfEnvironmentVariable 门控，
+      # CI 上没有这些变量，它们会自动跳过而非失败。
+      - name: 测试 springai-code-tui
+        run: mvn -B -pl springai-code-tui test
+
+      - name: 编译其余模块
+        run: mvn -B -DskipTests package
+
+      - name: 上传测试报告（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-jdk${{ matrix.java }}
+          path: springai-code-tui/target/surefire-reports/
+          retention-days: 7
+
+  dist:
+    name: 打发布包（冒烟）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      # 只验证 -Pdist 能产出包，不上传——正式发布物由维护者本地构建并附校验和。
+      - name: 构建发布包
+        run: mvn -B -pl springai-code-tui package -Pdist -DskipTests
+
+      - name: 确认产物存在
+        run: ls -lh springai-code-tui/target/*-dist.tar.gz springai-code-tui/target/*-dist.zip

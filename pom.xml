@@ -32,6 +32,28 @@
         </license>
     </licenses>
 
+    <url>https://github.com/javaside/springai-agentdemo</url>
+
+    <scm>
+        <connection>scm:git:https://github.com/javaside/springai-agentdemo.git</connection>
+        <developerConnection>scm:git:https://github.com/javaside/springai-agentdemo.git</developerConnection>
+        <url>https://github.com/javaside/springai-agentdemo</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <developers>
+        <developer>
+            <id>javaside</id>
+            <name>zxh</name>
+            <url>https://github.com/javaside</url>
+        </developer>
+    </developers>
+
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/javaside/springai-agentdemo/issues</url>
+    </issueManagement>
+
     <modules>
         <module>springai-core-demo</module>
         <module>springai-agent-demo</module>

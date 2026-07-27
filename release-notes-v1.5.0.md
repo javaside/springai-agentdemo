@@ -1,6 +1,6 @@
 # springai-agentdemo v1.5.0
 
-在 [v1.4.0](release-notes-v1.4.0.md) 基础上的**功能版**（minor）。核心交付物仍是终端编码智能体 **`springai-code-tui`**。本版三大新增：**联网搜索**（博查 + Brave 两家共存，模型按内容语言自选）、**MCP 远程传输**（Streamable HTTP，可连 Context7 一类远程 server）、**Claude Opus 5 接入并设为 Anthropic 默认模型**。另有一个全新子项目入库：**Chrome 英语句法学习扩展**（源码，不在下载包内）。无破坏性变更，建议所有用户升级。
+在 [v1.4.0](release-notes-v1.4.0.md) 基础上的**功能版**（minor）。核心交付物仍是终端编码智能体 **`springai-code-tui`**。本版三大新增：**联网搜索**（博查 + Brave 两家共存，模型按内容语言自选）、**MCP 远程传输**（Streamable HTTP，可连 Context7 一类远程 server）、**Claude Opus 5 接入并设为 Anthropic 默认模型**。无破坏性变更，建议所有用户升级。
 
 **下载物仍是两个自包含运行包（解压即用，无需构建）：**
 
@@ -57,10 +57,6 @@ MCP 从「只能连本地 stdio 子进程」扩展到**可连远程 server**：
 
 Anthropic 新增 `claude-opus-5` 并**设为该家默认模型**（1M 上下文 / 128k 输出）。清单调整为 `claude-opus-5`（默认）/ `claude-fable-5` / `claude-sonnet-5` / `claude-haiku-4-5` / `claude-opus-4-8`（上代，保留）。`ANTHROPIC_MODELS` 仍可自定义覆盖。
 
-### 新子项目：Chrome 英语句法学习扩展（源码）
-
-`english-syntax-extension/` —— Manifest V3 扩展，把网页英文正文按句法成分标注并提供详解面板，支持多模型 profile、分析缓存导入导出、纯缓存离线查看、成分详解预加载等。**独立 npm 项目，Maven 不构建它，也不在本次下载包内**；构建与测试见 `english-syntax-extension/README.md`。
-
 ---
 
 ## 🔧 工程
@@ -93,9 +89,10 @@ Anthropic 新增 `claude-opus-5` 并**设为该家默认模型**（1M 上下文 
 | springai-agent-demo | 智能体教学：工具调用、多步 agent、会话记忆等。 |
 | springai-boot-demo | Spring Boot 自动装配版对照。 |
 | springai-jline-demo | JLine 终端交互基础示例。 |
-| english-syntax-extension | Chrome 英语句法学习扩展（独立 npm 项目，非 Maven 模块）。 |
 
-> demo 模块与扩展请 clone 源码后按各自 README 构建；下载包只含 `springai-code-tui`。
+> demo 模块请 clone 源码后 `mvn` 运行，见各模块 README；下载包只含 `springai-code-tui`。
+
+> **仓库瘦身**：此前短暂入库的 `english-syntax-extension/`（Chrome 英语句法学习扩展）已迁出到独立仓库，本版起不再包含在本仓库中。它从未随任何发布版分发过。
 
 ---
 
