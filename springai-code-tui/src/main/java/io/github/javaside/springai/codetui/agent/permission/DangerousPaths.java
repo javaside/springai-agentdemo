@@ -40,7 +40,7 @@ import java.util.Set;
  * 用户手写的规则应当保持可预期，而「不可绕过的内置护栏」才是必须堵死的那层。
  *
  * <h2>已知盲区（都是实测出来的，刻意留着，别当成 bug）</h2>
- * 全部盲区的共同点是：<b>危险性不在命令的参数里</b>，本层看不出来，只能靠
+ * 大部分盲区的共同点是：<b>危险性不在命令的参数里</b>，本层看不出来，只能靠
  * 「非只读命令默认 ASK」兜。危险方向是固定的——<b>一旦有人写下宽松的 allow 规则、
  * 或切进 BYPASS，这些就没人拦了</b>。
  * <ul>
@@ -50,9 +50,19 @@ import java.util.Set;
  *       注意 {@code grep} <b>在只读白名单里</b>，故一条 {@code allow:Bash(grep:*)} 就能放它过去。</li>
  *   <li><b>取内容不经文件路径</b>：{@code git show HEAD:secrets.txt}、
  *       {@code git config --get user.password} 从对象库 / 配置里取值，参数不是路径。</li>
- *   <li><b>别的破坏手段</b>：{@code find / -delete}、{@code git clean -xfd}、
- *       {@code chmod -R 777 /}、{@code mkfs}、{@code truncate}。删除类只认
+ *   <li><b>别的破坏手段</b>：{@code find / -delete}、{@code find / -exec rm {} +}、
+ *       {@code git clean -xfd}、{@code chmod -R 777 /}、{@code mkfs}、{@code shred}、
+ *       {@code truncate}、{@code xargs rm -rf < list}。删除类只认
  *       {@link #DELETE_COMMANDS} 里那几个命令名。</li>
+ *   <li><b>家目录内的 PATH 目录</b>：{@code install -m 755 evil ~/.local/bin/git} 落在家目录内，
+ *       故过得了 {@link #WRITABLE_ROOTS} 那道兜底，而它劫持之后的每一次 {@code git}。
+ *       没收的理由是 {@code ~/.local} / {@code ~/bin} 也是日常产物落点，
+ *       收进来会把审批疲劳推到「一律选永久允许」——那比这个洞更危险。</li>
+ *   <li><b>读方向没有对应的白名单兜底</b>：{@code cat /etc/shadow}、
+ *       {@code <root>/secrets.yaml}、{@code credentials.json} 都过。写方向能按
+ *       {@link #WRITABLE_ROOTS} 兜是因为「该往哪写」可穷举，读不行——
+ *       agent 读 {@code /usr/lib}、{@code /etc/hosts} 都是正常的，
+ *       给读加白名单等于每次读系统文件都弹窗。</li>
  *   <li><b>不解析 shell 变量</b>：除 {@code $HOME} 外，变量目标在删除类命令里按「无法核实」
  *       处理（宁可多问），其他位置不追踪。</li>
  * </ul>
@@ -71,11 +81,23 @@ public final class DangerousPaths {
      *
      * <p>与 {@link #SENSITIVE_DIR_SEGMENTS} 的区别在读方向：{@code ~/.ssh} 里有
      * {@code known_hosts} / {@code config} 这类读了无妨的文件（计划明确要求它们不触发），
-     * 故 {@code .ssh} 只在<b>写</b>方向整目录算敏感，读方向单看是不是 {@code id_*}。
-     * 而 {@code .gnupg} / Keychains 里没有「读了无妨」的文件。
+     * 故 {@code .ssh} 不整目录收进来，改由 {@link #SSH_PUBLIC_FILES} 反向豁免。
+     * 而 {@code .gnupg} / Keychains / {@code .docker} 里没有「读了无妨」的文件
+     * （{@code ~/.docker/config.json} 存 registry 的 auth token）。
      */
     private static final Set<String> SECRET_STORE_DIRS =
-            Set.of(".gnupg", ".aws", "keychains");
+            Set.of(".gnupg", ".aws", "keychains", ".docker");
+
+    /**
+     * {@code ~/.ssh} 里读了无妨的文件名——<b>白名单，不是黑名单</b>。
+     *
+     * <p>此前这里是按 {@code id_} 前缀判私钥，那是错的极性：{@code ssh-keygen -f ~/.ssh/deploy}
+     * 生成的私钥就叫 {@code deploy}，{@code ~/.ssh/identity}（SSH1 默认名）同样漏。
+     * 私钥的命名不可穷举，而「读了无妨」的那几个可以，故按后者反向豁免。
+     * 代价是 {@code ~/.ssh/rc} 之类冷门文件会多问一次——本层是 ASK 不是 DENY，方向可接受。
+     */
+    private static final Set<String> SSH_PUBLIC_FILES = Set.of(
+            "known_hosts", "known_hosts2", "config", "authorized_keys", "environment");
 
     /** 写进去就可能被劫持的配置文件名（任意层级——名叫 {@code .zshrc} 的文件不会是普通项目产物）。 */
     private static final Set<String> SHELL_CONFIG_FILES = Set.of(
@@ -95,7 +117,18 @@ public final class DangerousPaths {
      */
     private static final Set<String> AUTO_EXEC_NESTED = Set.of(
             ".vscode/settings.json", ".vscode/tasks.json", ".vscode/launch.json",
-            ".idea/workspace.xml");
+            ".idea/workspace.xml", "fish/config.fish", "fish/conf.d");
+
+    /**
+     * 出现这一段就是「会被系统 / git 自动执行」的目录。
+     *
+     * <p>与 {@link #SHELL_CONFIG_FILES} 同一类风险，只是入口是<b>目录</b>而非固定文件名：
+     * macOS 的 {@code LaunchAgents} / {@code LaunchDaemons} 放进一个 plist 就登录自启，
+     * 而 {@code .githooks} 是 {@code core.hooksPath} 的惯用落点——与 {@code .git/hooks} 等效，
+     * 却因为不在 {@code .git} 里而躲过了那条检查。
+     */
+    private static final Set<String> AUTO_EXEC_DIR_SEGMENTS =
+            Set.of("launchagents", "launchdaemons", ".githooks");
 
     /** 一眼就是密钥/凭据的文件名（任意层级；密钥不因为躺在项目里就不是密钥）。 */
     private static final Set<String> SECRET_FILES = Set.of(
@@ -126,6 +159,20 @@ public final class DangerousPaths {
     /** {@code /dev} 下写了也无妨的几个（重定向到它们是日常操作）。 */
     private static final Set<String> HARMLESS_DEVICES =
             Set.of("null", "stdout", "stderr", "stdin", "tty", "zero", "random", "urandom");
+
+    /**
+     * 写方向<b>可以</b>落地的区域——项目根、家目录、临时目录。
+     *
+     * <p><b>这一条是白名单而非黑名单，刻意如此</b>：{@code /etc/sudoers}（写进去就是提权）、
+     * {@code /usr/local/bin/git}（劫持 PATH 上的每一次调用）、{@code /Library/…} 这类落点
+     * 按文件名列永远列不全，而「agent 干活该往哪写」是可穷举的——项目内、家目录内、临时目录。
+     * 其余位置都是系统级写入，问一次。
+     *
+     * <p>本检查放在所有具名检查<b>之后</b>，故家目录内的 {@code .ssh} / {@code .zshrc}
+     * 仍由前面那些条命中（它们在白名单区内，但危险性另有来源）。
+     */
+    private static final Set<String> WRITABLE_ROOTS = Set.of(
+            "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/dev");
 
     /** 删除类命令。 */
     private static final Set<String> DELETE_COMMANDS = Set.of("rm", "rmdir", "shred", "srm");
@@ -193,6 +240,11 @@ public final class DangerousPaths {
         if (SHELL_CONFIG_FILES.contains(name)) {
             return "写入 shell / 工具配置 " + name + "（会影响之后在这台机器上执行的所有命令）：" + target;
         }
+        for (String dir : AUTO_EXEC_DIR_SEGMENTS) {
+            if (segs.contains(dir)) {
+                return "写入 " + dir + "/（这个目录里的文件会被系统 / git 自动执行）：" + target;
+            }
+        }
         int codetui = segs.indexOf(".codetui");
         if (codetui >= 0 && !inAgentWorkspace(segs, codetui)) {
             return "写入 .codetui/ 配置（agent 正在修改自己的权限 / MCP 配置）：" + target;
@@ -201,7 +253,39 @@ public final class DangerousPaths {
         if (segs.size() == 2 && segs.get(0).equals("dev") && !HARMLESS_DEVICES.contains(segs.get(1))) {
             return "写入裸设备 " + target + "（会绕过文件系统直接覆写整块磁盘）";
         }
+        // 兜底（白名单）：不在项目 / 家目录 / 临时目录内的写，都是系统级写入
+        if (isOutsideWritableRoots(target, root)) {
+            return "写入项目与家目录之外的系统位置（可能提权或劫持之后的命令）：" + target;
+        }
         return null;
+    }
+
+    /**
+     * 目标是否落在 {@link #WRITABLE_ROOTS} 与项目根 / 家目录之外。
+     *
+     * <p>相对路径按 {@code root} 解析（{@code ToolTargets} 交来的已是绝对路径，
+     * 这里只是不把「没有 root」当成放行）。{@code root == null} 时只认家目录与白名单区。
+     */
+    private static boolean isOutsideWritableRoots(Path target, Path root) {
+        Path abs = target.isAbsolute()
+                ? target.normalize()
+                : (root == null ? null : root.resolve(target).normalize());
+        if (abs == null) {
+            return false;            // 无从判定，交给别的检查，别在这里制造假阳性
+        }
+        if (root != null && abs.startsWith(root.normalize())) {
+            return false;
+        }
+        String home = System.getProperty("user.home");
+        if (home != null && !home.isBlank() && abs.startsWith(Path.of(home).normalize())) {
+            return false;
+        }
+        for (String w : WRITABLE_ROOTS) {
+            if (abs.startsWith(Path.of(w))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 读检查；命中返回原因，否则 null。参数含义同 {@link #checkWrite}。 */
@@ -221,8 +305,8 @@ public final class DangerousPaths {
                 return "读取 " + dir + "/ 里的文件（整个目录都是凭据与密钥）：" + target;
             }
         }
-        if (segs.contains(".ssh") && name.startsWith("id_")) {
-            return "读取 SSH 私钥：" + target;     // known_hosts / config 不在此列
+        if (segs.contains(".ssh") && !SSH_PUBLIC_FILES.contains(name)) {
+            return "读取 ~/.ssh 里的非公开文件（私钥不只叫 id_*）：" + target;
         }
         String nested = nestedName(segs);
         if (nested != null && SENSITIVE_NESTED.contains(nested)) {

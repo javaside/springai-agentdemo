@@ -334,4 +334,60 @@ class DangerousPathsTest {
         assertNotNull(DangerousPaths.checkCommand("rm -rf / # ${x}", ROOT));
         assertNotNull(DangerousPaths.checkCommand("cat ~/.ssh/id_rsa; echo $(date)", ROOT));
     }
+
+    @Test
+    @DisplayName("~/.ssh 的私钥不止叫 id_*——白名单已知无妨的那几个，其余一律问")
+    void sshPrivateKeysAreNotOnlyNamedIdSomething() {
+        // 按 id_ 前缀判定是错的极性：ssh-keygen -f ~/.ssh/deploy 生成的私钥就叫 deploy，
+        // ~/.ssh/identity（SSH1 默认名）同样漏。私钥的命名不可穷举，
+        // 而「读了无妨」的那几个可以，故按后者反向豁免。
+        assertNotNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "identity"), ROOT));
+        assertNotNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "deploy"), ROOT));
+        assertNotNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "work_key"), ROOT));
+        assertNotNull(DangerousPaths.checkCommand("cat ~/.ssh/identity", ROOT));
+        // 计划明确要求的两个豁免仍然豁免
+        assertNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "known_hosts"), ROOT));
+        assertNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "config"), ROOT));
+    }
+
+    @Test
+    @DisplayName("被劫持的执行入口不止 shell rc：LaunchAgents / fish / .githooks")
+    void hijackableExecutionEntryPoints() {
+        assertNotNull(DangerousPaths.checkWrite(
+                Path.of(HOME, "Library", "LaunchAgents", "evil.plist"), ROOT),
+                "LaunchAgents 落盘即登录自启");
+        assertNotNull(DangerousPaths.checkWrite(
+                Path.of("/Library/LaunchDaemons/evil.plist"), ROOT));
+        assertNotNull(DangerousPaths.checkWrite(
+                Path.of(HOME, ".config", "fish", "config.fish"), ROOT),
+                "fish 的 rc 不叫 .fishrc，但作用与 .zshrc 相同");
+        assertNotNull(DangerousPaths.checkWrite(ROOT.resolve(".githooks/pre-commit"), ROOT),
+                "core.hooksPath 指向的目录与 .git/hooks 等效，却不在 .git 里");
+        assertNotNull(DangerousPaths.checkCommand("echo x > ~/.config/fish/config.fish", ROOT));
+        // 普通项目文件不受影响
+        assertNull(DangerousPaths.checkWrite(ROOT.resolve("src/Main.java"), ROOT));
+        assertNull(DangerousPaths.checkWrite(ROOT.resolve("Makefile"), ROOT));
+    }
+
+    @Test
+    @DisplayName("写到项目与家目录之外的系统位置——白名单临时目录之外一律问")
+    void writesOutsideWorkspaceAreSystemLevel() {
+        // sudo tee /etc/sudoers 是提权本身；这类落点靠列文件名永远列不全，
+        // 故反过来按「不在可写区内」判定（可写区可穷举，危险落点不可）。
+        assertNotNull(DangerousPaths.checkWrite(Path.of("/etc/sudoers"), ROOT));
+        assertNotNull(DangerousPaths.checkWrite(Path.of("/etc/passwd"), ROOT));
+        assertNotNull(DangerousPaths.checkWrite(Path.of("/usr/local/bin/git"), ROOT),
+                "往 PATH 目录里放同名程序 = 劫持之后的每一次调用");
+        assertNotNull(DangerousPaths.checkWrite(Path.of("/opt/homebrew/bin/mvn"), ROOT));
+        assertNotNull(DangerousPaths.checkCommand("sudo tee /etc/sudoers", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("echo x > /etc/sudoers", ROOT));
+
+        // 可写区内不该多问：项目内、家目录内的普通文件、临时目录
+        assertNull(DangerousPaths.checkWrite(ROOT.resolve("target/classes/A.class"), ROOT));
+        assertNull(DangerousPaths.checkWrite(Path.of(HOME, "notes.md"), ROOT));
+        assertNull(DangerousPaths.checkWrite(Path.of("/tmp/build.log"), ROOT));
+        assertNull(DangerousPaths.checkWrite(Path.of("/private/tmp/x"), ROOT));
+        assertNull(DangerousPaths.checkWrite(Path.of("/dev/null"), ROOT));
+        assertNull(DangerousPaths.checkCommand("echo x > /tmp/build.log", ROOT));
+    }
 }
