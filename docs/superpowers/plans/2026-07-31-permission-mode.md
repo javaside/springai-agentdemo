@@ -4839,6 +4839,17 @@ git commit -m "feat(permission): SubmitHandler 权限门面与 --dangerously-ski
 
 ### Task 14: 审批面板与按键
 
+> **来自 Task 10 的三条移交**（模态队列已落地，`afc1fd7` + `94d549c`）：
+>
+> 1. **溢出要让用户看得见**。队列上限 8，第 9 个请求会立刻拿到 `DENY`——线程一定醒（活性没问题），
+>    但 UI 侧目前**完全沉默**，用户不知道有个工具被拒过。面板须在溢出时往输出流写一行可见提示。
+> 2. **`peekModal()` 返回的引用不保证还在队列里**——别的线程可能已经 `clearModals()` 了。
+>    现实里 `drain()` 只在 UI 线程跑、且用 `pa != activeAsk` 幂等，撞不上；
+>    但这是**调用方**要守的约定，队列本身不保证。写面板时按此假设。
+> 3. **摘除按引用而非 equals**。`removeModal` 用的是 `removeIf(m -> m == r)`：
+>    两个请求类型都是 record（逐分量 equals），分量全同时用 `remove(r)` 会摘掉**另一个**请求，
+>    被误摘的线程永久 park。面板持有请求引用时同理——**认引用，别认相等**。
+
 **Files:**
 - Modify: `.../ui/CodeTuiView.java`
 - Test: `.../ui/CodeTuiViewPermissionTest.java`
