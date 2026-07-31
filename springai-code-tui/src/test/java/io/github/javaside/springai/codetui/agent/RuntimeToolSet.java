@@ -77,9 +77,17 @@ public final class RuntimeToolSet {
      * 但换通道注册的那天，本 helper 会<b>静默少枚举</b>、整个完整性套件空转全绿——
      * 正是它要防的那种失效，且完全不可见。故宁可炸。
      *
-     * <p>（Spring AI 1.x 还有第三个通道 {@code defaultToolNames(String...)} / {@code getToolNames()}，
-     * 本项目用的 2.0.0 已<b>删除</b>该 API——经 {@code javap} 核对 2.0.0 jar，
-     * {@code DefaultChatClientRequestSpec} 上只有上述两个工具通道，故无需为它加断言。）
+     * <p><b>第三个通道在本项目不存在，别照 1.x 文档补断言</b>：{@code defaultToolNames(String...)} /
+     * {@code getToolNames()} 是 Spring AI <b>1.x</b> 的通道，2.0.0 已删除该 API。
+     * 本项目解析到的是 2.0.0（{@code pom.xml} 的 {@code spring-ai.version}，经
+     * {@code mvn -pl springai-code-tui dependency:tree -Dincludes=org.springframework.ai:spring-ai-client-chat}
+     * 确认为 {@code spring-ai-client-chat:jar:2.0.0:compile}），故本方法只断言上面那一个兄弟通道。
+     *
+     * <p><b>核对时务必认准解析到的那个 jar</b>：{@code ~/.m2} 里同时缓存着 1.0.x / 1.1.x / 2.0.0 十几个版本
+     * （多是别的项目留下的），随手 {@code javap} 一个 1.1.4 的 jar 会看到 {@code getToolNames()} 赫然在列，
+     * 从而得出「三个通道都在」的相反结论。最不会看错的判据是拿真实 classpath 编一下：
+     * {@code javac -cp <test-classpath> } 一句 {@code s.getToolNames();} 在本项目报
+     * 「找不到符号: 方法 getToolNames()」——即该通道根本写不出来，无从断言。
      */
     private static List<ToolCallback> assembledTools(Path root) {
         ProviderRegistry registry = new ProviderRegistry(List.of(new DeepSeekProvider("fake-key")));
