@@ -1084,7 +1084,7 @@ public final class ToolTargets {
     private ToolTargets() {
     }
 
-    public static String extract(String toolName, String toolInput) {
+    public static String extract(String toolName, String toolInput, Path root) {
         ToolRegistry.Entry entry = ToolRegistry.lookup(toolName);
         if (entry.category() == ToolCategory.UNKNOWN) {
             return toolInput;                       // 未登记：整串入参即目标
@@ -1093,15 +1093,89 @@ public final class ToolTargets {
             return null;
         }
         try {
-            JsonNode root = MAPPER.readTree(toolInput);
-            JsonNode v = root.get(entry.targetField());
+            JsonNode node = MAPPER.readTree(toolInput);
+            JsonNode v = node.get(entry.targetField());
             // Jackson 3 的 asString() 对非文本节点会抛，必须先判 isString
-            return (v != null && v.isString()) ? v.stringValue() : null;
+            if (v == null || !v.isString()) {
+                return null;
+            }
+            String raw = v.stringValue();
+            if (raw.isBlank()) {
+                return null;                        // 空目标无法核实 → 引擎落保守 ASK
+            }
+            return entry.pathTarget() ? resolvePath(raw, root) : raw;
         } catch (RuntimeException e) {
             return null;
         }
     }
+
+    /**
+     * 把路径目标解析成<b>可判定</b>的形式：相对路径按项目根解析，再 {@code normalize()}。
+     *
+     * <p><b>为什么必须在这里做</b>：{@code PermissionRule.globMatches} 只 {@code normalize()}，
+     * 而 {@code Path.of("../../etc/passwd").normalize()} 是<b>空操作</b>——相对路径的 {@code ..}
+     * 只有相对某个基准解析后才消得掉。不做这一步，deny 规则形同虚设（已实测）：
+     * <pre>
+     * deny /etc/**  vs /etc/passwd            → true
+     * deny /etc/**  vs ../../../../etc/passwd → false   ← 同一个文件，deny 被绕过
+     * deny **&#47;.env vs .env                    → false
+     * </pre>
+     * 而相对路径确实会到达工具：{@code AgentTools} 构造 {@code FileSystemTools} 时<b>不设</b>
+     * {@code allowedDirectory}（空列表即放行任何路径），JVM 工作目录又恰是项目根，
+     * 故 {@code ../../etc/passwd} 会落到 root 之外的真实文件上。
+     *
+     * <p>仍<b>只</b> {@code normalize()}、不 {@code toRealPath()}：后者会让「写一个尚不存在的文件」
+     * 直接失败。符号链接不解析这一点，仍按 {@code PermissionRule} 的契约由 deny 规则与
+     * {@code DangerousPaths} 兜。{@code ~/…} 不展开——{@code FileSystemTools} 也不展开，
+     * 保持一致则它只是解析不到文件，而不会变成一条逃逸路径。
+     */
+    private static String resolvePath(String raw, Path root) {
+        try {
+            Path p = Path.of(raw);
+            if (!p.isAbsolute() && root != null) {
+                p = root.resolve(p);
+            }
+            return p.normalize().toString();
+        } catch (RuntimeException e) {
+            return null;                            // 非法路径字符 → 无法核实
+        }
+    }
 }
+```
+
+> ⚠ **`root` 参数不是可选的**（Task 2 实施中发现，已实测）：原计划的 2 参签名在结构上
+> **无法**履行 `PermissionRule` 契约里那句「由 `ToolTargets` 负责交出已规范化的路径」——
+> 没有基准就消不掉相对路径的 `..`。唯一消费方 `PermissionEngine`（Task 7）本就持有 root，
+> 透传是零成本。`root == null` 时退化为原样返回，供无根的单测使用。
+>
+> 这条同时关系到 Task 4：`DangerousPaths` 被定位成「不可绕过的内置护栏」，
+> 它拿到的是同一个目标串——不在这里解析，那道护栏也是漏的。
+
+补两个测试（放在 `ToolTargetsTest`，与原有 6 个并列）：
+
+```java
+    @Test
+    void relativePathIsResolvedAgainstRoot() {
+        Path root = Path.of("/work/proj");
+        assertEquals("/etc/passwd",
+                ToolTargets.extract("Write", "{\"filePath\":\"../../etc/passwd\"}", root),
+                "相对路径的 .. 必须按 root 解析掉，否则 deny /etc/** 形同虚设");
+        assertEquals("/work/proj/src/Main.java",
+                ToolTargets.extract("Read", "{\"filePath\":\"src/Main.java\"}", root));
+        assertEquals("/etc/hosts",
+                ToolTargets.extract("Read", "{\"filePath\":\"/etc/hosts\"}", root),
+                "绝对路径只 normalize，不再拼 root");
+    }
+
+    @Test
+    void nonPathTargetsAreNotResolved() {
+        Path root = Path.of("/work/proj");
+        assertEquals("git status",
+                ToolTargets.extract("Bash", "{\"command\":\"git status\"}", root),
+                "命令不是路径，不得被当路径解析");
+        assertNull(ToolTargets.extract("Write", "{\"filePath\":\"   \"}", root),
+                "空白目标无法核实，返回 null 让引擎落保守 ASK");
+    }
 ```
 
 > ⚠ **实施注意**：本项目用的是 Jackson 3（`tools.jackson.databind`）。上面的 `isString()` / `stringValue()`
