@@ -1461,6 +1461,16 @@ git commit -m "feat(permission): Bash 命令分段与只读判定（拆不动就
 
 ### Task 4: DangerousPaths（内置不可绕过检查）
 
+> **来自 Task 2 的两条实测提醒**（`ToolTargets` 现按 root 解析路径目标，`839071d`）：
+>
+> 1. **本检查拿到的目标已是解析后的绝对路径**，六种绕过拼写（`../../etc/passwd`、
+>    `./../../etc/passwd`、`src/../../../etc/passwd` 等）都会收敛成 `/etc/passwd`。
+>    这正是本检查能被称作「不可绕过」的前提——修好之前它同样是可绕过的。
+> 2. **别把危险规则写成 `~/.ssh/**`**：`~` 刻意不展开，与 root 解析组合后
+>    `~/.ssh/id_rsa` 会变成 `/work/proj/~/.ssh/id_rsa` 这样的无意义路径（对访问是失败关闭的，
+>    因为 `FileSystemTools` 同样打不开它），但**写成 `~/…` 的危险规则将永不触发**。
+>    危险路径一律按解析后的绝对形式比较，或在比较前自行展开 `~`。
+
 **Files:**
 - Create: `.../agent/permission/DangerousPaths.java`
 - Test: `.../agent/permission/DangerousPathsTest.java`
