@@ -3624,6 +3624,47 @@ git commit -m "feat(permission): 模态请求 sealed 类型与 listener 接缝�
 
 ---
 
+### Task 9R: 排空循环的健壮性（审查 Important + 2 Minor）
+
+- [ ] **Step 1: `PermissionRequest` 紧凑构造器加 `Objects.requireNonNull(responder)`**
+
+现状是无保护直通：record 静默接受 `null` responder，NPE 要到 `cancel()` 时才炸。
+**实测后果**：模态队列 `[A, B]`，A 的 responder 抛异常 → `cancelCurrent()` 的排空循环在 A 处中断 →
+**B 的工具线程永远不被唤醒**，且 NPE 沿 `synchronized` 的 `cancelCurrent()` 传到 UI 线程的 Esc 处理器。
+一行下游 bug 就能制造出本任务专门要防的那种挂死。
+
+在构造期失败（发生在工具线程上、只影响那一次调用）远好于在排空期失败。
+
+- [ ] **Step 2: `ModalRequest.cancel()` 补契约句**
+
+明确写明「实现**不得抛异常**」——这才使 Task 10 用 try/catch 包住每个元素成为**契约兜底**
+而非防御性编程。
+
+- [ ] **Step 3: 修正 `PermissionResponder` / `ModalRequest` 里「满了就丢」的错误描述**
+
+javadoc 称 capacity-1 + `offer` 意味着「满了就丢」。**实测是错的**：工具线程消费掉第一个结果后
+队列即空，迟到的 `CANCEL` 会被**入队而非丢弃**。今天无害只因消费方恰好只 poll 一次。
+
+改写为：**一次性消费方 + 非阻塞 `offer`；消费方只读一次，故后续信号被忽略**。
+这条必须改准——Task 11 的实现者会照着它写，若理解成「丢弃」而写了重试循环或重新武装 handoff，
+就会消费到陈旧的 `CANCEL`、杀掉用户刚批准的回合。
+
+- [ ] **Step 4: `AgentListener.onPermissionRequested` 补两句**
+
+现有 javadoc 只说「必须应答」，没说：
+- **不得调 `super`**：默认实现会先应答 DENY，用户真实的 `ALLOW_ONCE` 被丢弃（实测 responder 被调 2 次、
+  线程拿到 DENY）。而「务必应答」的措辞恰恰会诱导 Task 14 写出 `super.onPermissionRequested(...)`。
+- **不得阻塞**：`ConversationState` 的 listener 方法是 `synchronized`，与 `drainPending()` /
+  `cancelCurrent()` 共用同一把锁，回调里阻塞会冻住整个 TUI 而不只是一个工具线程。
+
+- [ ] **Step 5: 跑测试确认全绿并提交**
+
+```bash
+git commit -m "fix(permission): 模态请求拒绝 null responder，修正一次性消费的契约描述"
+```
+
+---
+
 ### Task 10: ConversationState 模态队列重构
 
 **Files:**
@@ -3900,6 +3941,20 @@ git commit -m "refactor(ui): pendingAsk 单字段改为模态请求队列（问�
 ---
 
 ### Task 11: PermissionCallback（最外层拦截器 + 阻塞握手）
+
+> **来自 Task 9 审查的两条硬约束**（实测得出，双审档任务须逐条验证）：
+>
+> 1. **每次调用必须分配全新的 handoff**。Task 9 的类型层**不阻止**多个 `PermissionRequest`
+>    共用一个 responder——实测过：两个请求共用一个 handoff 时，`r1.cancel()` 发出的 `CANCEL`
+>    被**等在 r2 上的线程消费掉了**。请求间不串响应，唯一保证来自本任务「一次调用一个 handoff」。
+>    Task 9 自己的 `concurrentRequestsWakeIndependently` 用的是两个独立替身，
+>    **构造上就不可能失败**，因此这条并未被上游钉住，必须在这里钉。
+> 2. **`take()` / `poll()` 会清掉中断标志，必须重新置位**——照 `UserQuestionBridge.handle()` 的做法。
+>    否则工具线程被中断后，中断信号在这里被吞掉，上层看不到取消。
+>
+> 另注意 Task 9R 已修正的契约：capacity-1 的 handoff 是**一次性消费**（消费方只读一次，
+> 后续信号被忽略），**不是**「满了就丢」。别照旧描述写重试循环或重新武装 handoff——
+> 那会消费到陈旧的 `CANCEL`，杀掉用户刚批准的回合。
 
 **Files:**
 - Create: `.../agent/PermissionCallback.java`
