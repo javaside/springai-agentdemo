@@ -1277,6 +1277,15 @@ git commit -m "fix(permission): MemoryRename 目标字段纠正；漏传 root �
 > 还须校验每条登记的 `targetField` **确实存在于该工具的入参 schema 中**
 > （`ToolCallback.getToolDefinition().inputSchema()` 里查 properties）。
 > 否则「名字对、字段错」这一类登记错误永远抓不到。
+>
+> **实施时两个已知坑**（Task 2R 全表审计后确认，22 条里仅 `MemoryRename` 一处错）：
+> - **不能假设命名风格**：同一个类里 `Read`/`Write` 用 `filePath`（驼峰），
+>   而 `Edit` 用 `old_string`（蛇形）。走 `inputSchema()` 时必须**逐字比对字面量**，
+>   不能靠驼峰/蛇形互转去猜。
+> - **`BraveWebSearch` 是唯一一条靠推断而非读源确定的**：库侧工具是
+>   `@Tool(name = "WebSearch")`、参数 `query`，本项目用 `RenamedToolCallback` 改了名。
+>   改名包装器只换名字不换 schema，故 `query` 几乎必然正确——但请对**活的 callback**
+>   实际核一次，这正是本测试该抓的东西。
 
 ---
 
