@@ -2411,6 +2411,118 @@ git commit -m "feat(permission): permissions.json 两层加载与降级契约"
 
 ---
 
+### Task 5R: 项目层不得放宽（1 Critical + 2 Important + 3 Minor）
+
+> **贯穿原则（本次确立，后续任务照此）**：`~/.codetui/` 是**用户自己**的配置，
+> `<root>/.codetui/` 是**仓库带来**的配置。clone 一个仓库不得让 agent 变得更宽松。
+> 项目层只能**收紧**。
+>
+> 这条原则此前只落实在 `defaultMode:"BYPASS"` 一处，而同样风险的另外两条路是开着的。
+
+- [ ] **Step 1: 先写失败测试**
+
+```java
+    @Test
+    void projectLayerCannotGrantBlanketAllow() {          // Critical
+        write(projectFile, "{\"allow\":[\"*\"]}");
+        PermissionConfig c = PermissionConfigLoader.load(null, projectFile);
+        assertTrue(c.rules().isEmpty(), "项目层的通配放行等价于 BYPASS，必须拒绝");
+
+        write(projectFile, "{\"allow\":[\"Bash(*)\",\"Write(*)\"]}");
+        assertTrue(PermissionConfigLoader.load(null, projectFile).rules().isEmpty(),
+                "整工具放行同样不可由仓库配置声明");
+
+        // 收窄型的项目级放行仍须接受——这正是「允许，永久」写入的形态
+        write(projectFile, "{\"allow\":[\"Bash(mvn test:*)\"]}");
+        assertEquals(1, PermissionConfigLoader.load(null, projectFile).rules().size());
+    }
+
+    @Test
+    void userLayerMayGrantBlanketAllow() {                // 对照：用户自己的配置不受此限
+        write(userFile, "{\"allow\":[\"Bash(*)\"]}");
+        assertEquals(1, PermissionConfigLoader.load(userFile, null).rules().size());
+    }
+
+    @Test
+    void projectLayerCannotRaiseDefaultMode() {           // Important 2
+        write(userFile, "{\"defaultMode\":\"DEFAULT\"}");
+        write(projectFile, "{\"defaultMode\":\"ACCEPT_EDITS\"}");
+        assertEquals(PermissionMode.DEFAULT,
+                PermissionConfigLoader.load(userFile, projectFile).defaultMode(),
+                "项目层只能收紧，不能把用户选的 DEFAULT 抬成 ACCEPT_EDITS");
+    }
+
+    @Test
+    void projectLayerMayLowerDefaultMode() {
+        write(userFile, "{\"defaultMode\":\"ACCEPT_EDITS\"}");
+        write(projectFile, "{\"defaultMode\":\"DEFAULT\"}");
+        assertEquals(PermissionMode.DEFAULT,
+                PermissionConfigLoader.load(userFile, projectFile).defaultMode(),
+                "收紧方向允许");
+    }
+
+    @Test
+    void duplicateKeysRejectWholeFile() {                 // Important 3
+        write(userFile, "{\"deny\":[\"Bash(rm -rf /:*)\"],\"allow\":[\"Read(*)\"],\"deny\":[]}");
+        assertTrue(PermissionConfigLoader.load(userFile, null).rules().isEmpty(),
+                "重复键会让人读到一条实际不生效的 deny，整文件按非法处理");
+    }
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+- [ ] **Step 3: `add()` 拒绝项目层的通配放行（Critical）**
+
+在解析单条规则后、加入列表前：
+
+```java
+        if (scope == RuleScope.PROJECT && behavior == PermissionBehavior.ALLOW
+                && ("*".equals(r.toolName()) || r.pattern() == null)) {
+            log.warn("已忽略项目级配置里的通配放行 '{}'——仓库带来的配置不得整工具/全工具放行"
+                    + "（等价于 --dangerously-skip-permissions）。需要的话请写成具体形态，"
+                    + "或放进用户级 ~/.codetui/permissions.json。", dsl);
+            return;
+        }
+```
+
+判据：`pattern == null` 即「该工具全部调用」，`toolName == "*"` 即「全部工具」。
+两者都不是 `suggest()` 会生成的形态（它只生成收窄的前缀/路径规则），
+所以拒绝它们**不影响「允许，永久」的正常工作流**，也不影响团队共享
+`{"allow":["Bash(mvn test:*)"]}` 这类合理配置。用户级不受此限——那是用户自己的机器。
+
+- [ ] **Step 4: `defaultMode` 改为只许收紧（Important 2）**
+
+严格程度：`DEFAULT` 严于 `ACCEPT_EDITS`。项目层给出的值只有在**不比用户层宽**时才采纳，
+否则记 WARN 并保留用户层的值。（`BYPASS` 在两层都已被拒，不参与比较。）
+
+> 这一条原计划与 spec 都明确写的是「项目层覆盖用户层」，属**计划/spec 层面的缺陷**：
+> 它与同一份 spec 里「BYPASS 只能来自命令行」的立场自相矛盾——两者是同一个威胁模型，
+> 只差一级。
+
+- [ ] **Step 5: 开启重复键检测（Important 3）**
+
+`MAPPER` 启用 `StreamReadFeature.STRICT_DUPLICATE_DETECTION`。`readTree` 会抛，
+被既有的 catch 转成「整文件跳过 + WARN」——安全方向。
+理由：Jackson 默认末键胜出，于是人读文件看到一条 deny 在生效、运行时它并不存在，
+**而这个文件是 agent 可写的**。
+
+- [ ] **Step 6: 三个 Minor**
+
+- **未识别的顶层字段记 WARN**：`{"Deny":[...]}` / `{"denies":[...]}` 现在零规则零日志。
+  其余每条跳过路径都有 WARN，唯独这里没有——一个拼错大小写的 `deny` 就是一条**隐形缺失的禁令**。
+- **`toolName` 对 `ToolRegistry` 交叉校验**：`Bahs(rm:*)` / `bash(rm:*)`（小写）都能解析成
+  永久失效的死规则。命中不到任何已知工具名时记 WARN。
+- **`load((Path) null)` 的 NPE**：`:59` 的 `root.resolve` 未判空，而两参重载能容忍 null。
+  当前无生产调用点，但补一行判空是零成本。
+
+- [ ] **Step 7: 跑测试确认全绿并提交**
+
+```bash
+git commit -m "fix(permission): 项目层配置只能收紧——拒通配放行、defaultMode 不得上抬、重复键按非法处理"
+```
+
+---
+
 ### Task 6: 「允许，永久」规则回写
 
 **Files:**
