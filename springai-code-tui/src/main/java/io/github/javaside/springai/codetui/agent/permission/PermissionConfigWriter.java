@@ -13,6 +13,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.UUID;
 
 /**
@@ -122,6 +123,7 @@ public final class PermissionConfigWriter {
             // 临时文件名带随机后缀：两个进程同时回写时不会写进同一个 tmp 再各自 move 出半个 JSON
             tmp = file.resolveSibling(file.getFileName() + "." + UUID.randomUUID() + ".tmp");
             Files.writeString(tmp, MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root));
+            copyPosixPermissions(file, tmp);
             try {
                 Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (AtomicMoveNotSupportedException e) {
@@ -179,6 +181,33 @@ public final class PermissionConfigWriter {
                 && dsl.equals(parsed.toDsl())
                 && parsed.toolName().equals(rule.toolName())
                 && java.util.Objects.equals(parsed.pattern(), rule.pattern());
+    }
+
+    /**
+     * 把原文件的 POSIX 权限位抄到临时文件上，避免 move 之后权限被 umask 放宽。
+     *
+     * <p>「写临时文件再 move」的副作用是新文件的权限来自 umask，而不是被替换掉的那个文件：
+     * 一个特意 {@code chmod 600} 的 {@code permissions.json} 回写一次就变成 {@code rw-r--r--}
+     * （实测如此）。<b>这个文件本身就是授权</b>，同机器上的其他账号能读到它，
+     * 就能知道这个项目里 agent 被放开了哪些命令；每次「允许，永久」都悄悄放宽一次它自己的权限，
+     * 方向正好是反的。故 move 之前先把原权限抄过去，move 完就是原来的模样。
+     *
+     * <p>失败不影响回写成败：抄不动权限顶多是权限位没跟上，比为此丢掉这条已批准的规则好。
+     * 非 POSIX 文件系统（Windows）取不到 view，直接跳过。
+     */
+    private static void copyPosixPermissions(Path from, Path to) {
+        try {
+            if (!Files.isRegularFile(from)) {
+                return;                           // 新建的文件没有「原权限」可继承，交给 umask
+            }
+            PosixFileAttributeView view = Files.getFileAttributeView(from, PosixFileAttributeView.class);
+            if (view == null) {
+                return;                           // 非 POSIX 文件系统
+            }
+            Files.setPosixFilePermissions(to, view.readAttributes().permissions());
+        } catch (Exception e) {
+            log.debug("权限配置回写：沿用原文件权限位失败（{}），改由 umask 决定。", e.getMessage());
+        }
     }
 
     private static void cleanup(Path tmp) {
