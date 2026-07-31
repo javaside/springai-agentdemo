@@ -73,10 +73,14 @@ class ToolRegistryCompletenessTest {
     }
 
     /**
-     * 每条登记的判定目标字段都得真在该工具的入参 schema 里。
+     * 每条登记的判定目标字段都得真在该工具的入参 schema 里；非 INTERNAL 的还必须<b>有</b>目标字段。
      *
      * <p><b>只能逐字比对字面量，不能靠命名风格推断</b>：同一个库类里 {@code Read}/{@code Write} 用
      * {@code filePath}（驼峰），而 {@code Edit} 用 {@code old_string}（蛇形），驼峰/蛇形互转必猜错。
+     *
+     * <p><b>本方法的界限</b>：只校验字段<b>存在</b>，不校验<b>语义正确</b>——把 {@code Grep} 的
+     * 目标字段改成 {@code "glob"}（真实存在但意思不对）照样全绿。这是本方法固有的边界，
+     * 别把「字段已校验」读成「字段是对的」。
      */
     @Test
     @DisplayName("每条登记的 targetField 都存在于该工具的入参 schema 里")
@@ -85,9 +89,16 @@ class ToolRegistryCompletenessTest {
         List<String> bad = new ArrayList<>();
 
         for (String name : new TreeSet<>(ToolRegistry.registeredNames())) {
-            String field = ToolRegistry.lookup(name).targetField();
+            ToolRegistry.Entry entry = ToolRegistry.lookup(name);
+            String field = entry.targetField();
             if (field == null) {
-                continue;   // 无目标字段（INTERNAL 类多为此），判定目标改用整串入参
+                // 只有 INTERNAL（恒放行、判定目标改用整串入参）才允许没有目标字段。
+                // 其余类别若登记成 null，就是「有权限判定、却没有判定对象」——三条断言全过而实际无护栏。
+                if (entry.category() != ToolCategory.INTERNAL) {
+                    bad.add(name + " 类别是 " + entry.category()
+                            + " 却没有 targetField——非 INTERNAL 的工具必须有判定目标，否则规则匹配无从谈起");
+                }
+                continue;
             }
             ToolCallback callback = runtime.get(name);
             if (callback == null) {
@@ -100,7 +111,7 @@ class ToolRegistryCompletenessTest {
         }
 
         assertTrue(bad.isEmpty(),
-                "以下登记的目标字段在工具入参 schema 里不存在（提取恒为 null，判定目标一片空白）：\n"
+                "以下登记的目标字段有问题（提取恒为 null，判定目标一片空白）：\n"
                         + String.join("\n", bad));
     }
 

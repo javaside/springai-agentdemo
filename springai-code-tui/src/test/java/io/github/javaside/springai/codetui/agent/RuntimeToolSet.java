@@ -26,6 +26,13 @@ import java.util.Map;
  * 但登记表必须常备这两条，否则配了 key 的机器上它们会落进 UNKNOWN。故这里用
  * {@code AgentTools} 自己那两个工厂方法拿假 key 各造一个补进来——仍是同一套构造逻辑，不是另抄一份。
  *
+ * <p><b>这条补齐带一个已知缺口</b>：两个搜索工具是<b>无条件</b>补进来的，故它们豁免于
+ * 「僵尸条目」检查——实测把 {@code AgentTools.build()} 里的 {@code if (webSearch != null)} 整段删掉
+ * （工具真的从产品里消失了），完整性测试仍 3/3 全绿。实践中这个洞很窄：改名仍会被抓到，
+ * 删掉工厂方法本身是编译错误，只有「删调用点却留着工厂」这一种改法会漏。
+ * 换来的是无 key 机器（CI）与有 key 机器枚举一致，这个取舍值得——但别把本 helper
+ * 读成「搜索工具的存在性也被钉住了」。
+ *
  * <p><b>MCP 工具刻意不在内</b>：它们运行期才知道，兜底 UNKNOWN→ASK 就是为它们准备的，
  * 故 build() 传 {@code mcpRegistry = null}。
  */
@@ -61,7 +68,19 @@ public final class RuntimeToolSet {
         return byName;
     }
 
-    /** 从 {@link AgentTools#build} 产出的 ChatClient 上取回它实际注册的 defaultTools。 */
+    /**
+     * 从 {@link AgentTools#build} 产出的 ChatClient 上取回它实际注册的 defaultTools。
+     *
+     * <p><b>为什么还要断言另一个通道为空</b>：{@code getToolCallbacks()} 只是工具注册通道之一，
+     * 兄弟是 {@code getToolCallbackProviders()}（由 {@code defaultToolCallbacks(ToolCallbackProvider...)} 填充）。
+     * 今天 {@code AgentTools} 只用 {@code .defaultTools(...)}，全部落进 toolCallbacks，故枚举完整；
+     * 但换通道注册的那天，本 helper 会<b>静默少枚举</b>、整个完整性套件空转全绿——
+     * 正是它要防的那种失效，且完全不可见。故宁可炸。
+     *
+     * <p>（Spring AI 1.x 还有第三个通道 {@code defaultToolNames(String...)} / {@code getToolNames()}，
+     * 本项目用的 2.0.0 已<b>删除</b>该 API——经 {@code javap} 核对 2.0.0 jar，
+     * {@code DefaultChatClientRequestSpec} 上只有上述两个工具通道，故无需为它加断言。）
+     */
     private static List<ToolCallback> assembledTools(Path root) {
         ProviderRegistry registry = new ProviderRegistry(List.of(new DeepSeekProvider("fake-key")));
         ChatClient client = AgentTools.build(registry, root, new StubListener()).client();
@@ -73,6 +92,13 @@ public final class RuntimeToolSet {
                     "取不到装配期工具列表：ChatClient 实现已不是 DefaultChatClient（实际 spec="
                             + spec.getClass().getName() + "）。"
                             + "这会让登记表完整性测试失去唯一的真实来源，必须先修好枚举方式，不能改成手抄工具名。");
+        }
+        if (!defaultSpec.getToolCallbackProviders().isEmpty()) {
+            throw new IllegalStateException(
+                    "有工具改走 ToolCallbackProvider 通道注册了（provider 数="
+                            + defaultSpec.getToolCallbackProviders().size()
+                            + "），本 helper 只枚举 getToolCallbacks()，会静默少枚举——"
+                            + "必须同步扩展本方法把 provider 里的工具也展开，否则完整性测试形同虚设。");
         }
         return defaultSpec.getToolCallbacks();
     }

@@ -323,4 +323,15 @@ class DangerousPathsTest {
         assertNotNull(DangerousPaths.checkRead(ROOT.resolve(".env.production"), ROOT),
                 "只有模板豁免，真实环境文件照旧");
     }
+
+    @Test
+    @DisplayName("拆分器拆不动时不能跟着放弃——那正是危险动作藏身的地方")
+    void unparseableCommandsStillGetChecked() {
+        // 实测：这几条 BashCommandSplitter.split() 都是 parseable=false 且 segments() 为空，
+        // 若本层直接采信它的分段结果，里面真实的 rm -rf / 就一段都扫不到。
+        assertNotNull(DangerousPaths.checkCommand("foo; rm -rf /; echo $(x)", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("echo 'a && b'; rm -rf /", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("rm -rf / # ${x}", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("cat ~/.ssh/id_rsa; echo $(date)", ROOT));
+    }
 }

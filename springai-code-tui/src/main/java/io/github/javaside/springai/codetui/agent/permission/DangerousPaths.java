@@ -269,7 +269,7 @@ public final class DangerousPaths {
         if (command == null || command.isBlank()) {
             return null;
         }
-        for (String seg : lenientSplit(command)) {
+        for (String seg : segmentsToCheck(command)) {
             String hit = checkSegment(seg, root);
             if (hit != null) {
                 return hit;
@@ -559,10 +559,36 @@ public final class DangerousPaths {
     }
 
     /**
-     * 按分隔符宽松拆段——只为「在每一段上找命令头」，故与
-     * {@link BashCommandSplitter#split} 的职责不同：那边拆不动时会整条判 {@code parseable=false}
-     * 并交回人工，<b>本方法绝不放弃</b>，因为放弃就等于放行（本层是不可绕过的那层）。
-     * 分隔符定义仍取 {@link BashCommandSplitter#isSeparatorChar} 那一份唯一清单。
+     * 拆出所有<b>需要逐段检查</b>的片段。
+     *
+     * <p>先走 {@link BashCommandSplitter#split}——那是 Task 3 的组件、经过 2231 例对抗性 fuzz，
+     * 「什么算一条命令」以它为准，本类不另立定义（两个组件对此给出不同答案，
+     * 在本项目已经制造过两个 Critical）。
+     *
+     * <p><b>但它 {@code parseable=false} 时 {@code segments()} 是空的</b>（实测：
+     * {@code foo; rm -rf /; echo $(x)} 拆出 0 段，里面那条真的 {@code rm -rf /} 就没人看了）。
+     * 对拆分器而言这是正确的失败关闭——它的调用方会因此 ASK；
+     * <b>但对本层不是</b>：本层跑在 allow 规则与模式默认之前，返回 null 等于放行。
+     * 故拆不动时改用宽松拆分（只按 {@link BashCommandSplitter#isSeparatorChar} 断句、绝不放弃），
+     * 并把整条原串也扫一遍——<b>宁可多问，绝不因为看不懂就放过</b>。
+     *
+     * <p>分隔符清单仍然只有一份，在 {@code BashCommandSplitter} 那边。
+     */
+    private static List<String> segmentsToCheck(String command) {
+        List<String> out = new ArrayList<>();
+        BashCommandSplitter.Split split = BashCommandSplitter.split(command);
+        if (split.parseable()) {
+            out.addAll(split.segments());
+        } else {
+            out.addAll(lenientSplit(command));
+        }
+        out.add(command.trim());        // 整条也扫：分隔符藏在引号里时，拆出的段可能把目标切碎
+        return out;
+    }
+
+    /**
+     * 宽松拆段——只在 {@link BashCommandSplitter#split} 拆不动时兜底。
+     * 与它的区别只有一条：<b>本方法绝不放弃</b>，因为在本层放弃就等于放行。
      */
     private static List<String> lenientSplit(String command) {
         List<String> segs = new ArrayList<>();
@@ -576,8 +602,6 @@ public final class DangerousPaths {
             }
         }
         addSegment(segs, cur);
-        // 整条也扫一遍：万一分隔符出现在引号里，拆出来的段可能把目标切碎
-        segs.add(command.trim());
         return segs;
     }
 
