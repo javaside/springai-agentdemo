@@ -910,6 +910,13 @@ Task 7 因此必须按段判定，两个方向**故意不对称**：
    > 「自动生成的规则由 `PermissionEngine` 保证不会停在非字母数字字符上」。
    > 该承诺目前只在计划里成立。7R 若落空，那段 javadoc 就从「已知限制」变成**误导性文档**。
 3. **载入路径工具的 `:*` 规则时记 WARN**（N3）——那是一条恒不命中的静默失效规则。
+5. **`suggest()` 生成的规则必须能 round-trip**（Task 6 实测）：`PermissionConfigWriter.append`
+   会把 `toDsl()` 的结果重新 `parse` 回来逐字段比对，不一致就**拒绝写盘、退化成会话级**
+   （返回 false + WARN，方向安全）。因此 `suggest()` 不得产出**前后带空格的 pattern**
+   或**含 `(` 的工具名**，否则「允许，永久」会静默变成「仅本次」。
+   已知会 round-trip 变宽的例子：字面量 pattern `"*"` → `Read(*)` → parse 回来是
+   **pattern=null（该工具全部调用）**，一条单段路径授权变成整个工具的通行证。
+   **`suggest()` 侧要有自己的测试**，别只靠 writer 那道backstop。
 4. **UNKNOWN 工具（含全部 MCP）的「永久允许」只生成 `工具名(*)`**，不得把整串入参 JSON
    写成 pattern（Task 2 审查 Minor 3）：那条规则下次必然不命中（payload 每次都变），
    于是反复弹窗 → 用户转而去开 BYPASS。载入 UNKNOWN 工具的带 pattern 规则时同样记 WARN。
