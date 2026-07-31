@@ -1,0 +1,653 @@
+package io.github.javaside.springai.codetui.agent.permission;
+
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * 内置不可绕过检查：<b>排在 allow 规则之前，任何 allow 规则盖不住，BYPASS 模式下也照样触发</b>。
+ *
+ * <p>命中后引擎强制 <b>ASK 而非 DENY</b>——本层是护栏不是牢笼，人确认了就该能做。
+ * 正因为结论是「问一次」而不是「不许」，本层的取舍一律偏严：
+ * <b>误报的代价是用户多按一次键，漏报的代价是密钥泄露或磁盘清空</b>。
+ *
+ * <p>每个方法返回<b>人话原因</b>（直接显示在审批面板上）或 {@code null}（未命中）。
+ *
+ * <h2>为什么按「路径结构」匹配，而不是按「家目录前缀」</h2>
+ * 判据是<b>路径里有没有名为 {@code .ssh} 的一段</b>，而不是 {@code startsWith(home + "/.ssh")}。
+ * 后者有三个已实测的漏法，且都不是靠 {@code toRealPath()} 能补的：
+ * <ol>
+ *   <li>macOS 的 firmlink：{@code /System/Volumes/Data/Users/zxh/.ssh/id_rsa} 与
+ *       {@code ~/.ssh/id_rsa} 是同一份文件，但 {@code toRealPath()} 实测<b>不会</b>把前者收敛成后者
+ *       （两者各自 real 到自己）；</li>
+ *   <li>{@code ~} 刻意不展开（{@code ToolTargets} 的契约），与 root 解析组合后
+ *       {@code ~/.ssh/id_rsa} 变成 {@code <root>/~/.ssh/id_rsa}——前缀比较永不命中；</li>
+ *   <li>别人的家目录（{@code /Users/someone/.ssh/id_rsa}）本来也不该随便读写。</li>
+ * </ol>
+ * 结构匹配一次盖住三种，且不需要访问文件系统（判定必须对「尚不存在的文件」也成立）。
+ *
+ * <h2>为什么恒按大小写不敏感比较</h2>
+ * macOS 的 APFS 默认大小写不敏感：{@code Write {"filePath":"<root>/.ENV"}} 实测写的就是 {@code .env}，
+ * 而 {@code **}{@code /.env} 这样的模式匹配不上 {@code .ENV}。{@code .GIT/config}、{@code .SSH/} 同理。
+ *
+ * <p>计划原文建议「启动时探一次文件系统敏感性，敏感盘上保持原样比较」。<b>这里刻意不那么做</b>：
+ * 探测只换来「大小写敏感盘上 {@code /etc/PASSWD} 不多问一次」，却引入一个新的失效模式——
+ * 探测结果一旦判错，这层不可绕过的护栏就被静默削弱。本层结论是 ASK 不是 DENY，这笔交易是单向的。
+ *
+ * <p><b>只在本类做不敏感比较</b>，不改 {@link PermissionRule} 的通用 glob 语义：
+ * 用户手写的规则应当保持可预期，而「不可绕过的内置护栏」才是必须堵死的那层。
+ *
+ * <h2>已知盲区（都是实测出来的，刻意留着，别当成 bug）</h2>
+ * 全部盲区的共同点是：<b>危险性不在命令的参数里</b>，本层看不出来，只能靠
+ * 「非只读命令默认 ASK」兜。危险方向是固定的——<b>一旦有人写下宽松的 allow 规则、
+ * 或切进 BYPASS，这些就没人拦了</b>。
+ * <ul>
+ *   <li><b>目标是 cwd 而非显式路径</b>：{@code cd / && rm -rf *} 的删除目标只是 {@code *}，
+ *       危险性来自前一段的 {@code cd}。本层逐段判定，不跟踪段间的 cwd 变化。</li>
+ *   <li><b>整目录扫描</b>：{@code grep -R AKIA ~} 拿整个家目录当输入，目标本身不是密钥路径。
+ *       注意 {@code grep} <b>在只读白名单里</b>，故一条 {@code allow:Bash(grep:*)} 就能放它过去。</li>
+ *   <li><b>取内容不经文件路径</b>：{@code git show HEAD:secrets.txt}、
+ *       {@code git config --get user.password} 从对象库 / 配置里取值，参数不是路径。</li>
+ *   <li><b>别的破坏手段</b>：{@code find / -delete}、{@code git clean -xfd}、
+ *       {@code chmod -R 777 /}、{@code mkfs}、{@code truncate}。删除类只认
+ *       {@link #DELETE_COMMANDS} 里那几个命令名。</li>
+ *   <li><b>不解析 shell 变量</b>：除 {@code $HOME} 外，变量目标在删除类命令里按「无法核实」
+ *       处理（宁可多问），其他位置不追踪。</li>
+ * </ul>
+ *
+ * <p><b>这些盲区不该靠往清单里加词来补</b>——本项目已有三次「黑名单在没人列到的那一项上失守」的记录。
+ * 真正的兜底是决策顺序：非只读命令一律 ASK。本层只负责把<b>能结构化判定</b>的那部分咬死。
+ */
+public final class DangerousPaths {
+
+    /** 路径里出现这一段就算敏感目录（任意层级，凭据/密钥所在）。 */
+    private static final Set<String> SENSITIVE_DIR_SEGMENTS =
+            Set.of(".ssh", ".aws", ".kube", ".gnupg", ".docker", "keychains");
+
+    /**
+     * <b>整个目录都是秘密</b>的那几个——读里面任何一个文件都要问。
+     *
+     * <p>与 {@link #SENSITIVE_DIR_SEGMENTS} 的区别在读方向：{@code ~/.ssh} 里有
+     * {@code known_hosts} / {@code config} 这类读了无妨的文件（计划明确要求它们不触发），
+     * 故 {@code .ssh} 只在<b>写</b>方向整目录算敏感，读方向单看是不是 {@code id_*}。
+     * 而 {@code .gnupg} / Keychains 里没有「读了无妨」的文件。
+     */
+    private static final Set<String> SECRET_STORE_DIRS =
+            Set.of(".gnupg", ".aws", "keychains");
+
+    /** 写进去就可能被劫持的配置文件名（任意层级——名叫 {@code .zshrc} 的文件不会是普通项目产物）。 */
+    private static final Set<String> SHELL_CONFIG_FILES = Set.of(
+            ".gitconfig", ".gitmodules", ".zshrc", ".bashrc", ".zshenv",
+            ".zprofile", ".bash_profile", ".profile", ".npmrc");
+
+    /** 「父目录名 / 文件名」形态的敏感配置（构建工具会读它们里的凭据与镜像地址）。 */
+    private static final Set<String> SENSITIVE_NESTED = Set.of(
+            ".m2/settings.xml", ".gradle/gradle.properties", ".kube/config",
+            "gh/hosts.yml", "gh/config.yml");
+
+    /**
+     * 写进去会「在别处被自动执行」的配置（父目录名 / 文件名形态）。
+     *
+     * <p>它们不是密钥，危险性在于<b>落盘即等于取得执行权</b>：编辑器打开项目就跑
+     * {@code .vscode/tasks.json} 的任务，推一次分支就跑 workflow。
+     */
+    private static final Set<String> AUTO_EXEC_NESTED = Set.of(
+            ".vscode/settings.json", ".vscode/tasks.json", ".vscode/launch.json",
+            ".idea/workspace.xml");
+
+    /** 一眼就是密钥/凭据的文件名（任意层级；密钥不因为躺在项目里就不是密钥）。 */
+    private static final Set<String> SECRET_FILES = Set.of(
+            "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+            "credentials", "secring.gpg", ".netrc", ".pgpass", ".pypirc", ".git-credentials");
+
+    /**
+     * 私钥 / 证书的扩展名。
+     *
+     * <p>刻意<b>不</b>收 {@code .pub}——公钥就是给人看的，收了只会制造无谓的审批。
+     * {@code .pem} 有可能是纯公钥证书链，仍然收：本层是 ASK 不是 DENY，宁可多问一次。
+     */
+    private static final Set<String> SECRET_EXTENSIONS = Set.of(
+            ".key", ".pem", ".p12", ".pfx", ".jks", ".keystore", ".ppk", ".asc");
+
+    /** {@code .codetui} 下属于 agent 自己工作区、不算危险的子目录。 */
+    private static final Set<String> CODETUI_WORKSPACE = Set.of("memory", "sessions", "artifacts");
+
+    /**
+     * {@code .env} 的模板形态——按约定<b>不含</b>真实秘密，是提交进仓库给人抄的。
+     *
+     * <p>收在这里是为了不制造无谓审批：spec 把「审批疲劳导致用户一律选永久允许」列为
+     * 本层要防的风险，那么本层自己就不该在日常文件上反复弹窗。
+     */
+    private static final Set<String> ENV_TEMPLATES =
+            Set.of(".env.example", ".env.sample", ".env.template", ".env.dist");
+
+    /** {@code /dev} 下写了也无妨的几个（重定向到它们是日常操作）。 */
+    private static final Set<String> HARMLESS_DEVICES =
+            Set.of("null", "stdout", "stderr", "stdin", "tty", "zero", "random", "urandom");
+
+    /** 删除类命令。 */
+    private static final Set<String> DELETE_COMMANDS = Set.of("rm", "rmdir", "shred", "srm");
+
+    /**
+     * 只是「把真正的命令包一层」的前缀词，剥掉后再看首词是什么。
+     *
+     * <p>{@code env} / {@code xargs} / {@code nice} 都是命令启动器，实测
+     * {@code env rm -rf /} 曾整条漏过（首词是 {@code env}，不在删除类清单里）。
+     */
+    private static final Set<String> COMMAND_WRAPPERS = Set.of(
+            "sudo", "doas", "time", "nohup", "command", "exec", "builtin", "eval",
+            "env", "xargs", "nice", "ionice", "stdbuf", "setsid", "timeout");
+
+    /** 把文件内容写到参数所指位置、但不经 {@code >} 重定向的命令。 */
+    private static final Set<String> WRITER_COMMANDS = Set.of("tee", "dd", "install");
+
+    /** 会把整个目录原样搬走 / 打包带走的命令（拿 {@code ~/.ssh} 当参数就是在搬密钥）。 */
+    private static final Set<String> BULK_COPY_COMMANDS = Set.of(
+            "mv", "cp", "rsync", "tar", "zip", "scp", "base64", "openssl", "curl", "wget");
+
+    private DangerousPaths() {
+    }
+
+    // ── 路径检查 ────────────────────────────────────────────────────────
+
+    /**
+     * 写检查；命中返回原因，否则 null。
+     *
+     * @param target 已由 {@code ToolTargets} 解析并规范化的目标路径，可为 null
+     * @param root   项目根。<b>路径检查本身不需要它</b>（判据全是路径结构，见类注释），
+     *               保留是为了与 {@link #checkRead} / {@link #checkCommand} 的签名一致，
+     *               且 {@code checkCommand} 解析相对目标时确实要用
+     */
+    public static String checkWrite(Path target, Path root) {
+        if (target == null) {
+            return null;
+        }
+        List<String> segs = segments(target);
+        String name = segs.isEmpty() ? "" : segs.get(segs.size() - 1);
+
+        // 密钥/凭据：读危险的，写同样危险（覆写密钥也是破坏）
+        String secret = checkSecretFile(segs, name);
+        if (secret != null) {
+            return secret;
+        }
+        for (String dir : SENSITIVE_DIR_SEGMENTS) {
+            if (segs.contains(dir)) {
+                return "写入敏感目录 " + dir + "/（凭据与密钥所在）：" + target;
+            }
+        }
+        if (segs.contains(".git")) {
+            return "写入 .git/ 内部（可能改写仓库历史，或装上会在下次 git 操作时执行的 hook）：" + target;
+        }
+        String nested = nestedName(segs);
+        if (nested != null && SENSITIVE_NESTED.contains(nested)) {
+            return "写入构建工具的敏感配置 " + nested + "（含仓库凭据/镜像地址）：" + target;
+        }
+        if (nested != null && AUTO_EXEC_NESTED.contains(nested)) {
+            return "写入 " + nested + "（这类配置会被编辑器 / CI 自动执行，等于取得执行权）：" + target;
+        }
+        if (segs.contains(".github") && segs.contains("workflows")) {
+            return "写入 GitHub Actions workflow（推送后会在 CI 上执行）：" + target;
+        }
+        if (SHELL_CONFIG_FILES.contains(name)) {
+            return "写入 shell / 工具配置 " + name + "（会影响之后在这台机器上执行的所有命令）：" + target;
+        }
+        int codetui = segs.indexOf(".codetui");
+        if (codetui >= 0 && !inAgentWorkspace(segs, codetui)) {
+            return "写入 .codetui/ 配置（agent 正在修改自己的权限 / MCP 配置）：" + target;
+        }
+        // 裸设备：dd of=/dev/disk0 会直接覆写整块盘，绕过一切文件语义
+        if (segs.size() == 2 && segs.get(0).equals("dev") && !HARMLESS_DEVICES.contains(segs.get(1))) {
+            return "写入裸设备 " + target + "（会绕过文件系统直接覆写整块磁盘）";
+        }
+        return null;
+    }
+
+    /** 读检查；命中返回原因，否则 null。参数含义同 {@link #checkWrite}。 */
+    public static String checkRead(Path target, Path root) {
+        if (target == null) {
+            return null;
+        }
+        List<String> segs = segments(target);
+        String name = segs.isEmpty() ? "" : segs.get(segs.size() - 1);
+
+        String secret = checkSecretFile(segs, name);
+        if (secret != null) {
+            return secret;
+        }
+        for (String dir : SECRET_STORE_DIRS) {
+            if (segs.contains(dir)) {
+                return "读取 " + dir + "/ 里的文件（整个目录都是凭据与密钥）：" + target;
+            }
+        }
+        if (segs.contains(".ssh") && name.startsWith("id_")) {
+            return "读取 SSH 私钥：" + target;     // known_hosts / config 不在此列
+        }
+        String nested = nestedName(segs);
+        if (nested != null && SENSITIVE_NESTED.contains(nested)) {
+            return "读取含凭据的配置 " + nested + "：" + target;
+        }
+        return null;
+    }
+
+    /** 密钥/凭据文件名（读写通用）。 */
+    private static String checkSecretFile(List<String> segs, String name) {
+        if (SECRET_FILES.contains(name)) {
+            return "访问密钥 / 凭据文件 " + name + "（内容即秘密本身）";
+        }
+        if ((name.equals(".env") || name.startsWith(".env.")) && !ENV_TEMPLATES.contains(name)) {
+            return "访问 " + name + "（按约定存放 API key 等秘密）";
+        }
+        if (segs.contains(".ssh") && name.startsWith("id_")) {
+            return "访问 SSH 私钥 " + name;
+        }
+        // 私钥的扩展名形态：server.key / cert.pem / keystore.p12
+        for (String ext : SECRET_EXTENSIONS) {
+            if (name.endsWith(ext)) {
+                return "访问密钥 / 证书文件 " + name + "（" + ext + " 通常是私钥或凭据）";
+            }
+        }
+        return null;
+    }
+
+    // ── 命令检查 ────────────────────────────────────────────────────────
+
+    /**
+     * 命令检查；命中返回原因，否则 null。
+     *
+     * <p><b>为什么必须逐段扫、且不能只看首词</b>（计划原文只判 {@code command.startsWith("rm ")}，
+     * 已实测下列拼法全部漏过）：{@code ls && rm -rf /}、{@code sudo rm -rf /}、
+     * {@code /bin/rm -rf /}、{@code rm -rf "/"}、{@code rm -rf /*}、{@code rm -rf //}。
+     * 而本层跑在 allow 规则与模式默认<b>之前</b>，一旦漏过，BYPASS 模式或一条
+     * {@code allow:Bash(*)} 就能把它直接执行掉——那正是本层存在的理由失效。
+     *
+     * <p>{@code root} 用来解析相对目标：{@code rm -rf ../..} 在 {@code /work/proj} 下就是 {@code /}，
+     * 不给基准就无从判断（这也是本方法比计划多一个参数的原因）。
+     */
+    public static String checkCommand(String command, Path root) {
+        if (command == null || command.isBlank()) {
+            return null;
+        }
+        for (String seg : lenientSplit(command)) {
+            String hit = checkSegment(seg, root);
+            if (hit != null) {
+                return hit;
+            }
+        }
+        return null;
+    }
+
+    private static String checkSegment(String segment, Path root) {
+        List<String> words = words(segment);
+        if (words.isEmpty()) {
+            return null;
+        }
+        String head = headCommand(words);
+
+        if (DELETE_COMMANDS.contains(head) && hasRecursiveFlag(words)) {
+            String hit = checkDeleteTargets(head, words, root);
+            if (hit != null) {
+                return hit;
+            }
+        }
+        // 重定向落点：echo evil >> ~/.zshrc 的首词是 echo，但它落盘
+        for (String t : redirectionTargets(segment)) {
+            String hit = checkWrite(resolveToken(t, root), root);
+            if (hit != null) {
+                return "命令会写入敏感落点——" + hit;
+            }
+        }
+        // tee / dd 一类：不经 > 就把内容写到参数所指的位置
+        if (WRITER_COMMANDS.contains(head)) {
+            for (String w : words.subList(1, words.size())) {
+                if (isOption(w)) {
+                    continue;
+                }
+                String hit = checkWrite(resolveToken(stripDdPrefix(w), root), root);
+                if (hit != null) {
+                    return head + " 会写入敏感落点——" + hit;
+                }
+            }
+        }
+        // 整目录搬走 / 打包带走：tar cf - ~/.ssh、mv ~/.ssh /tmp/x
+        if (BULK_COPY_COMMANDS.contains(head)) {
+            for (String w : words.subList(1, words.size())) {
+                if (isOption(w)) {
+                    continue;
+                }
+                Path t = resolveToken(stripAtPrefix(w), root);
+                if (t != null && touchesSensitiveDir(t)) {
+                    return head + " 会整体搬走 / 打包密钥目录 " + t + "（等同于把密钥带出这台机器）";
+                }
+            }
+        }
+        // 命令参数里出现密钥路径：cat ~/.ssh/id_rsa 一类
+        for (String w : words) {
+            if (isOption(w)) {
+                continue;
+            }
+            String hit = checkRead(resolveToken(stripAtPrefix(w), root), root);
+            if (hit != null) {
+                return "命令会读取密钥 / 凭据——" + hit;
+            }
+        }
+        return null;
+    }
+
+    /** 路径是不是就是某个敏感目录本身（{@code ~/.ssh}），而不是它里面的某个文件。 */
+    private static boolean touchesSensitiveDir(Path t) {
+        List<String> segs = segments(t);
+        if (segs.isEmpty()) {
+            return false;
+        }
+        return SENSITIVE_DIR_SEGMENTS.contains(segs.get(segs.size() - 1));
+    }
+
+    /** {@code dd of=/dev/disk0} 的 {@code of=} 前缀。 */
+    private static String stripDdPrefix(String w) {
+        int eq = w.indexOf('=');
+        return eq >= 0 ? w.substring(eq + 1) : w;
+    }
+
+    /** {@code curl -d @file} 的 {@code @} 前缀。 */
+    private static String stripAtPrefix(String w) {
+        return w.startsWith("@") ? w.substring(1) : w;
+    }
+
+    /**
+     * 删除类命令的目标是否触到底线。
+     *
+     * <p>判据是<b>结构性</b>的，不是「危险目录清单」——清单永远漏掉没人想到的那一项：
+     * 顶层目录（{@code /}、{@code /usr}、{@code /etc}、任何 {@code /x}）、家目录及其祖先、
+     * 项目根及其祖先、别人的家目录（{@code /Users/x}、{@code /home/x}）。
+     * 项目内的相对目录（{@code rm -rf target}）刻意不算——那是日常操作，由模式默认负责问。
+     */
+    private static String checkDeleteTargets(String head, List<String> words, Path root) {
+        Path home = home();
+        for (String w : words.subList(1, words.size())) {
+            if (isOption(w)) {
+                continue;
+            }
+            String cleaned = stripQuotes(w);
+            if (cleaned.isEmpty()) {
+                continue;
+            }
+            String expanded = expandHome(cleaned, home);
+            if (expanded.indexOf('$') >= 0) {
+                return head + " 递归删除变量目标 " + w + "：展开结果无法核实，不做猜测";
+            }
+            Path t = resolveToken(cleaned, root);
+            if (t == null || !t.isAbsolute()) {
+                continue;                       // 解析不出绝对路径 → 交模式默认去问
+            }
+            if (t.getNameCount() == 0) {
+                return head + " 递归删除文件系统根 " + w + "：会清空整个磁盘";
+            }
+            if (t.getNameCount() == 1) {
+                return head + " 递归删除顶层目录 " + t + "：属于系统或整块数据，不是项目内的目录";
+            }
+            if (home != null && (t.equals(home) || home.startsWith(t))) {
+                return head + " 递归删除家目录 " + t + "：会清空这个账号的全部个人文件";
+            }
+            if (isHomeLike(t)) {
+                return head + " 递归删除某个账号的家目录 " + t + "：会清空该账号的全部个人文件";
+            }
+            if (root != null) {
+                Path r = root.normalize();
+                if (t.equals(r) || r.startsWith(t)) {
+                    return head + " 递归删除 " + t + "：这是整个工作区（或它的上层目录）";
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 是否带递归开关（{@code -r} / {@code -R} / 捆绑短选项 / {@code --recursive}）。 */
+    private static boolean hasRecursiveFlag(List<String> words) {
+        for (String w : words) {
+            if (!isOption(w)) {
+                continue;
+            }
+            if (w.startsWith("--")) {
+                if (w.equals("--recursive") || w.equals("--dir")) {
+                    return true;
+                }
+                continue;
+            }
+            if (w.indexOf('r') >= 0 || w.indexOf('R') >= 0) {
+                return true;                    // -rf / -fr / -rvf / -R 都在此
+            }
+        }
+        return false;
+    }
+
+    /** 剥掉 {@code sudo} / {@code time} 一类包装词与路径前缀，取出真正的命令名。 */
+    private static String headCommand(List<String> words) {
+        for (String w : words) {
+            String c = stripQuotes(w);
+            if (c.startsWith("\\")) {
+                c = c.substring(1);             // \rm 绕过 alias
+            }
+            if (c.isEmpty() || isOption(c) || c.indexOf('=') >= 0) {
+                continue;                       // 选项与 VAR=value 都不是命令名
+            }
+            String base = c.substring(c.lastIndexOf('/') + 1);   // /bin/rm → rm
+            if (COMMAND_WRAPPERS.contains(base)) {
+                continue;
+            }
+            if (isNumeric(base)) {
+                continue;                       // timeout 5 rm …：5 是包装词的参数，不是命令名
+            }
+            return base;
+        }
+        return "";
+    }
+
+    /** 段内引号外的重定向落点（{@code > f}、{@code >>f}、{@code 2> f}、{@code &> f}）。 */
+    private static List<String> redirectionTargets(String segment) {
+        List<String> out = new ArrayList<>();
+        char quote = 0;
+        for (int i = 0; i < segment.length(); i++) {
+            char c = segment.charAt(i);
+            if (quote != 0) {
+                if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                quote = c;
+                continue;
+            }
+            if (c != '>') {
+                continue;
+            }
+            int j = i + 1;
+            while (j < segment.length()
+                    && (segment.charAt(j) == '>' || segment.charAt(j) == '&'
+                        || segment.charAt(j) == '|'          // >| 是 bash 的强制覆写形态
+                        || Character.isWhitespace(segment.charAt(j)))) {
+                j++;
+            }
+            int start = j;
+            while (j < segment.length() && !Character.isWhitespace(segment.charAt(j))) {
+                j++;
+            }
+            if (j > start) {
+                out.add(segment.substring(start, j));
+            }
+            i = j - 1;
+        }
+        return out;
+    }
+
+    /**
+     * 把命令里的一个 token 解析成可判定的绝对路径。
+     *
+     * <p>依次处理：去引号 → 展开 {@code ~} / {@code $HOME} → 去掉尾部通配（{@code /*} 等）
+     * → 相对路径按 root 解析 → {@code normalize()}。
+     * {@code normalize()} 顺带把 {@code //}、{@code /.}、{@code /..} 都收敛成 {@code /}（已实测）。
+     */
+    private static Path resolveToken(String token, Path root) {
+        try {
+            String s = stripQuotes(token);
+            if (s.isEmpty()) {
+                return null;
+            }
+            s = expandHome(s, home());
+            s = stripTrailingGlob(s);
+            if (s.isEmpty() || s.indexOf('$') >= 0) {
+                return null;
+            }
+            Path p = Path.of(s);
+            if (!p.isAbsolute() && root != null) {
+                p = root.resolve(p);
+            }
+            return p.normalize();
+        } catch (RuntimeException e) {
+            return null;                        // 非法路径字符 → 无法核实，交模式默认
+        }
+    }
+
+    /** {@code ~} / {@code ~/x} / {@code $HOME} / {@code ${HOME}} 展开成真实家目录。 */
+    private static String expandHome(String s, Path home) {
+        if (home == null) {
+            return s;
+        }
+        String h = home.toString();
+        if (s.equals("~")) {
+            return h;
+        }
+        if (s.startsWith("~/")) {
+            return h + s.substring(1);
+        }
+        if (s.startsWith("$HOME")) {
+            return h + s.substring("$HOME".length());
+        }
+        if (s.startsWith("${HOME}")) {
+            return h + s.substring("${HOME}".length());
+        }
+        return s;
+    }
+
+    /** 去掉尾部的通配片段：{@code /Users/*} → {@code /Users}，{@code /*} → {@code /}。 */
+    private static String stripTrailingGlob(String s) {
+        int end = s.length();
+        while (end > 0 && (s.charAt(end - 1) == '*' || s.charAt(end - 1) == '?')) {
+            end--;
+        }
+        while (end > 1 && s.charAt(end - 1) == '/') {
+            end--;
+        }
+        return end == s.length() ? s : s.substring(0, end == 0 ? 1 : end);
+    }
+
+    /** 去掉 token 里的全部引号（{@code "$B"/x} 这种半包形态也要拆开看）。 */
+    private static String stripQuotes(String s) {
+        if (s.indexOf('\'') < 0 && s.indexOf('"') < 0) {
+            return s;
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != '\'' && c != '"') {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 按分隔符宽松拆段——只为「在每一段上找命令头」，故与
+     * {@link BashCommandSplitter#split} 的职责不同：那边拆不动时会整条判 {@code parseable=false}
+     * 并交回人工，<b>本方法绝不放弃</b>，因为放弃就等于放行（本层是不可绕过的那层）。
+     * 分隔符定义仍取 {@link BashCommandSplitter#isSeparatorChar} 那一份唯一清单。
+     */
+    private static List<String> lenientSplit(String command) {
+        List<String> segs = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (int i = 0; i < command.length(); i++) {
+            char c = command.charAt(i);
+            if (BashCommandSplitter.isSeparatorChar(c)) {
+                addSegment(segs, cur);
+            } else {
+                cur.append(c);
+            }
+        }
+        addSegment(segs, cur);
+        // 整条也扫一遍：万一分隔符出现在引号里，拆出来的段可能把目标切碎
+        segs.add(command.trim());
+        return segs;
+    }
+
+    private static void addSegment(List<String> segs, StringBuilder cur) {
+        String s = cur.toString().trim();
+        if (!s.isEmpty()) {
+            segs.add(s);
+        }
+        cur.setLength(0);
+    }
+
+    private static boolean isOption(String w) {
+        return w.length() > 1 && w.charAt(0) == '-';
+    }
+
+    /** 纯数字（{@code timeout 5 rm …} 里的 5 是包装词的参数，不是命令名）。 */
+    private static boolean isNumeric(String s) {
+        if (s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            if (!Character.isDigit(s.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<String> words(String segment) {
+        String s = segment == null ? "" : segment.trim();
+        return s.isEmpty() ? List.of() : List.of(s.split("\\s+"));
+    }
+
+    /** 目标是不是「某个账号的家目录」形态（{@code /Users/x}、{@code /home/x}）。 */
+    private static boolean isHomeLike(Path t) {
+        if (t.getNameCount() != 2) {
+            return false;
+        }
+        String top = t.getName(0).toString().toLowerCase(Locale.ROOT);
+        return top.equals("users") || top.equals("home");
+    }
+
+    private static Path home() {
+        try {
+            String h = System.getProperty("user.home");
+            return h == null || h.isBlank() ? null : Path.of(h).normalize();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** 路径各段，<b>一律转小写</b>（大小写不敏感盘上 {@code .ENV} 与 {@code .env} 是同一文件）。 */
+    private static List<String> segments(Path p) {
+        Path n = p.normalize();
+        List<String> out = new ArrayList<>(n.getNameCount());
+        for (int i = 0; i < n.getNameCount(); i++) {
+            out.add(n.getName(i).toString().toLowerCase(Locale.ROOT));
+        }
+        return out;
+    }
+
+    /** 末两段拼成 {@code 父目录/文件名}，供 {@link #SENSITIVE_NESTED} 比对。 */
+    private static String nestedName(List<String> segs) {
+        int n = segs.size();
+        return n < 2 ? null : segs.get(n - 2) + "/" + segs.get(n - 1);
+    }
+
+    /** {@code .codetui} 之后紧跟的那一段是否是 agent 自己的工作区。 */
+    private static boolean inAgentWorkspace(List<String> segs, int codetuiIndex) {
+        int next = codetuiIndex + 1;
+        return next < segs.size() && CODETUI_WORKSPACE.contains(segs.get(next));
+    }
+}
