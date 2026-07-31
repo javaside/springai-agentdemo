@@ -3436,7 +3436,7 @@ git commit -m "test(permission): 登记表完整性比对（漏登记即失败�
 - [ ] **Step 1: `RuntimeToolSet` 断言另外两个注册通道为空**
 
 `getToolCallbacks()` 只是 `DefaultChatClientRequestSpec` 上**三个并行注册通道之一**，
-兄弟是 `getToolNames()`（`defaultToolNames(String...)` 填充）与
+兄弟是（本项目 Spring AI **2.0.0** 上只有一个）
 `getToolCallbackProviders()`（`defaultToolCallbacks(ToolCallbackProvider...)` 填充）。
 今天 `AgentTools` 只用 `.defaultTools(...)`，故枚举完整；但换通道注册的那天，
 本 helper 会**静默少枚举**，整个套件空转通过——正是它要防的失效，且不可见。
