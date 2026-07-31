@@ -1702,12 +1702,24 @@ git commit -m "fix(permission): 不可拆分构造收敛为唯一定义，消除
     @Test
     void separatorSetsCannotDrift() {
         for (char c = 0; c < 128; c++) {
+            String s = String.valueOf(c);
+            if (PermissionRule.hasUnsplittableConstruct(s)) {
+                continue;                    // 反引号：是「不可拆分构造」而非分隔符
+            }
             assertEquals(BashCommandSplitter.isSeparatorChar(c),
-                    PermissionRule.hasShellSeparator(String.valueOf(c)),
+                    PermissionRule.hasShellSeparator(s),
                     "分隔符集合两处不一致，字符：" + (int) c);
         }
     }
 ```
+
+> ⚠ **必须跳过 `hasUnsplittableConstruct` 为真的字符**（Task 3R2 执行中发现，计划初稿写错了）：
+> `hasShellSeparator` = 分隔符 **OR** 不可拆分构造，而反引号是**单字符的不可拆分构造**——
+> 它不把命令切成段，而是让整条命令不可拆，故它**正确地不是**分隔符。
+> 恒等式本身不成立，改任何一份清单都调和不了；跳过后才隔离出真正要比的「分隔符项」。
+>
+> 再补一个测试钉住**跳过集合恰好是 `{反引号}`**、且反引号仍被判为复合——
+> 否则这个豁免将来可能悄悄扩大成一个洞。
 
 （`isSeparatorChar` 需从 private 放宽为包私有。）
 
