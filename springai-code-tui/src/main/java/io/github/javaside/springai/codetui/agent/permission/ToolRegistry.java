@@ -63,7 +63,7 @@ public final class ToolRegistry {
         put("MemoryStrReplace", ToolCategory.INTERNAL, "path", false);
         put("MemoryInsert",     ToolCategory.INTERNAL, "path", false);
         put("MemoryDelete",     ToolCategory.INTERNAL, "path", false);
-        put("MemoryRename",     ToolCategory.INTERNAL, "path", false);
+        put("MemoryRename",     ToolCategory.INTERNAL, "oldPath", false);   // 入参是 oldPath/newPath，没有 path
     }
 
     private ToolRegistry() {

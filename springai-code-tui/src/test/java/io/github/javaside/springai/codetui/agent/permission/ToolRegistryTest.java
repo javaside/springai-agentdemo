@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolRegistryTest {
@@ -49,33 +50,33 @@ class ToolRegistryTest {
     @DisplayName("目标提取：按登记的字段名从入参 JSON 取值")
     void extractTarget() {
         assertEquals("/tmp/a.txt",
-                ToolTargets.extract("Read", "{\"filePath\":\"/tmp/a.txt\",\"limit\":10}", null));
+                ToolTargets.extract("Read", "{\"filePath\":\"/tmp/a.txt\",\"limit\":10}"));
         assertEquals("mvn test",
-                ToolTargets.extract("Bash", "{\"command\":\"mvn test\",\"timeout\":1000}", null));
-        assertEquals("shell_1", ToolTargets.extract("KillShell", "{\"bash_id\":\"shell_1\"}", null));
+                ToolTargets.extract("Bash", "{\"command\":\"mvn test\",\"timeout\":1000}"));
+        assertEquals("shell_1", ToolTargets.extract("KillShell", "{\"bash_id\":\"shell_1\"}"));
     }
 
     @Test
     @DisplayName("目标提取：INTERNAL 无目标字段返回 null；UNKNOWN 返回整串入参")
     void extractForFieldlessTools() {
-        assertNull(ToolTargets.extract("TodoWrite", "{\"todos\":[]}", null));
-        assertEquals("{\"x\":1}", ToolTargets.extract("some_mcp_tool", "{\"x\":1}", null));
+        assertNull(ToolTargets.extract("TodoWrite", "{\"todos\":[]}"));
+        assertEquals("{\"x\":1}", ToolTargets.extract("some_mcp_tool", "{\"x\":1}"));
     }
 
     @Test
     @DisplayName("目标提取：字段缺失 / JSON 非法 → null，绝不抛异常")
     void extractDegradesGracefully() {
-        assertNull(ToolTargets.extract("Read", "{\"other\":1}", null), "缺 filePath");
-        assertNull(ToolTargets.extract("Read", "not json at all", null));
-        assertNull(ToolTargets.extract("Read", null, null));
-        assertNull(ToolTargets.extract("Grep", "{\"pattern\":\"x\"}", null), "Grep 的 path 可选，缺则 null");
+        assertNull(ToolTargets.extract("Read", "{\"other\":1}"), "缺 filePath");
+        assertNull(ToolTargets.extract("Read", "not json at all"));
+        assertNull(ToolTargets.extract("Read", null));
+        assertNull(ToolTargets.extract("Grep", "{\"pattern\":\"x\"}"), "Grep 的 path 可选，缺则 null");
     }
 
     @Test
     @DisplayName("目标提取：非字符串字段（对象/数组/数字）不崩，按文本形式取")
     void extractNonStringField() {
         // Jackson 3 的 asString() 对非文本节点会抛，实现必须自己判 isTextual
-        assertNull(ToolTargets.extract("Read", "{\"filePath\":{\"nested\":1}}", null));
+        assertNull(ToolTargets.extract("Read", "{\"filePath\":{\"nested\":1}}"));
     }
 
     @Test
@@ -101,5 +102,32 @@ class ToolRegistryTest {
                 "命令不是路径，不得被当路径解析");
         assertNull(ToolTargets.extract("Write", "{\"filePath\":\"   \"}", root),
                 "空白目标无法核实，返回 null 让引擎落保守 ASK");
+    }
+
+    @Test
+    @DisplayName("MemoryRename 的目标字段是 oldPath——登记表字段名须与工具实际入参一致")
+    void memoryRenameTargetFieldMatchesActualParam() {
+        // AutoMemoryTools.memoryRename(oldPath, newPath)：没有名为 path 的入参，
+        // 登记成 "path" 会让 extract 恒返回 null、审批面板目标一片空白。
+        assertEquals("oldPath", ToolRegistry.lookup("MemoryRename").targetField());
+        assertEquals("a.md",
+                ToolTargets.extract("MemoryRename", "{\"oldPath\":\"a.md\",\"newPath\":\"b.md\"}"));
+    }
+
+    @Test
+    @DisplayName("~ 刻意不展开：与 FileSystemTools 保持一致，避免变成逃逸路径")
+    void tildeIsLeftUnexpanded() {
+        Path root = Path.of("/work/proj");
+        assertEquals("/work/proj/~/.ssh/id_rsa",
+                ToolTargets.extract("Read", "{\"filePath\":\"~/.ssh/id_rsa\"}", root),
+                "~ 刻意不展开：FileSystemTools 也不展开，保持一致才不会变成逃逸路径");
+    }
+
+    @Test
+    @DisplayName("漏传 root 立即失败，不静默退化成「路径规则全部失效」")
+    void missingRootIsProgrammerError() {
+        assertThrows(NullPointerException.class,
+                () -> ToolTargets.extract("Write", "{\"filePath\":\"a.txt\"}", null),
+                "漏传 root 会让全部路径规则静默失效，必须炸而不是退化");
     }
 }

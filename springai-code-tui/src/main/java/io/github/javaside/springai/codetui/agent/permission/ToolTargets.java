@@ -4,13 +4,15 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.nio.file.Path;
+import java.util.Objects;
 
 /**
  * 从工具入参 JSON 里抽出「判定目标」——面板显示 + 规则匹配 + 危险检查都用它。
  *
  * <p><b>降级契约</b>：JSON 非法 / 字段缺失 / 字段不是字符串 / 目标为空白 → 返回 {@code null}，
- * <b>绝不抛异常</b>。目标为 null 时引擎按「无法核实」处理（带 pattern 的规则不命中，
- * 落到模式默认/兜底 ASK）。
+ * <b>绝不因入参内容抛异常</b>。目标为 null 时引擎按「无法核实」处理（带 pattern 的规则不命中，
+ * 落到模式默认/兜底 ASK）。唯一的例外是 {@code root} 漏传——那是调用方的编程错误，
+ * 不是模型给的脏数据，必须立即失败（见 {@link #extract(String, String, Path)}）。
  *
  * <p><b>UNKNOWN 工具</b>（含全部 MCP 工具）无登记字段，返回<b>整串入参</b>——
  * 面板上原样展示给人看，规则也可用 {@code 工具名(整串)} 精确放行。
@@ -31,10 +33,23 @@ public final class ToolTargets {
      *
      * @param toolName  工具注册名
      * @param toolInput 入参 JSON
-     * @param root      项目根；路径目标按它解析相对路径。{@code null} 时退化为原样返回（无根单测用）
+     * @param root      项目根，<b>不可为 null</b>：路径目标按它解析相对路径。
+     *                  漏传会让全部路径规则静默失效（deny 被相对路径绕过、且无任何日志），
+     *                  故此处直接 {@code NullPointerException} 立即失败，而不是少一层防护
      * @return 判定目标；无法核实一律 {@code null}
+     * @throws NullPointerException root 为 null
      */
     public static String extract(String toolName, String toolInput, Path root) {
+        Objects.requireNonNull(root, "root 不可为 null：漏传会让全部路径规则静默失效");
+        return doExtract(toolName, toolInput, root);
+    }
+
+    /** 无根路径：仅供同包单测验证「不依赖 root 的那部分行为」，生产代码一律走三参重载。 */
+    static String extract(String toolName, String toolInput) {
+        return doExtract(toolName, toolInput, null);
+    }
+
+    private static String doExtract(String toolName, String toolInput, Path root) {
         ToolRegistry.Entry entry = ToolRegistry.lookup(toolName);
         if (entry.category() == ToolCategory.UNKNOWN) {
             return toolInput;                       // 未登记：整串入参即目标
