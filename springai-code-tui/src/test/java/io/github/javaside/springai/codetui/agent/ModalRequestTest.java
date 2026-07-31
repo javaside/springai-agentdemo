@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -202,6 +203,40 @@ class ModalRequestTest {
 
         assertEquals(PermissionOutcome.DENY, tool.awaitOutcome(),
                 "默认实现若是空实现，本断言会在超时后 FAIL（而不是让测试挂死）");
+        tool.assertTerminated();
+    }
+
+    // ── 排空健壮性（Task 9R）──
+
+    @Test
+    @DisplayName("null responder 在构造期就被拒绝，而不是留到排空期炸")
+    void nullResponderRejectedAtConstruction() {
+        NullPointerException e = assertThrows(NullPointerException.class,
+                () -> new PermissionRequest(1L, null, "Bash", "cmd", "{}", "why", null, null),
+                "record 静默接受 null responder 的话，NPE 会推迟到 cancel() 时才炸");
+        assertTrue(e.getMessage() != null && e.getMessage().contains("responder"),
+                "报错须指名 responder，别让排查者去猜哪个字段是 null");
+    }
+
+    @Test
+    @DisplayName("排空循环：一个坏元素不该让它后面的工具线程永久 park")
+    void oneBadRequestDoesNotStrandTheRest() throws Exception {
+        // 复刻 cancelCurrent() 的排空循环：坏元素若能进队列，循环会在它那里中断，
+        // 队列里其后的请求永不被唤醒。构造期拦截使这种队列根本无法被组装出来。
+        Handoff survivor = new Handoff();
+        ToolThread tool = ToolThread.blockOn(survivor);
+        Deque<ModalRequest> queue = new ArrayDeque<>();
+
+        assertThrows(NullPointerException.class,
+                () -> queue.add(new PermissionRequest(1L, null, "Bash", "bad", "{}", "why", null, null)));
+        queue.add(permissionRequest(1L, survivor));
+
+        for (ModalRequest r : queue) {                    // 无 try/catch：契约要求 cancel() 不抛
+            r.cancel();
+        }
+
+        assertEquals(PermissionOutcome.CANCEL, tool.awaitOutcome(),
+                "坏元素没能入队，故排空循环走完全程，后面的工具线程被唤醒");
         tool.assertTerminated();
     }
 

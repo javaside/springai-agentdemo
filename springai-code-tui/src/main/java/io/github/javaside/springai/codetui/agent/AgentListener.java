@@ -60,7 +60,19 @@ public interface AgentListener {
      * <p><b>默认实现直接 DENY 而不是空实现</b>：空实现会让工具线程永久 park，
      * 而它持着回合——整个 agent 静默挂死，无报错也无出口。
      * 任何没有真正接管审批 UI 的落地端（回显桩 / 测试桩）都应该「拒绝并让回合继续」，而不是挂死。
-     * 覆写本方法的实现同样有义务<b>在所有分支上</b>最终应答一次。
+     *
+     * <p>覆写本方法的实现（审批面板）有义务在<b>所有分支上</b>最终应答恰好一次，且须守两条禁令：
+     * <ul>
+     *   <li><b>不得调 {@code super.onPermissionRequested(...)}</b>。默认实现会<b>立即</b>应答 DENY；
+     *       一次性应答口只被消费一次，故工具线程拿到的是 DENY，用户随后真实选择的
+     *       {@code ALLOW_ONCE} 被丢弃（实测 responder 被调 2 次、线程拿到 DENY）。
+     *       「务必应答」的措辞很容易诱导人顺手写一句 {@code super}——这里恰恰不能写。
+     *       接管审批的实现要做的是<b>把请求排进队列</b>，应答留给面板。</li>
+     *   <li><b>不得在本回调里阻塞</b>（等用户选完再返回）。{@code ConversationState} 的 listener 方法是
+     *       {@code synchronized}，与 {@code drainPending()} / {@code cancelCurrent()} 共用同一把锁，
+     *       在回调里阻塞会冻住<b>整个 TUI</b>（连 Esc 都按不动），而不只是一个工具线程。
+     *       本方法必须立刻返回，阻塞由工具线程在应答口上完成。</li>
+     * </ul>
      */
     default void onPermissionRequested(long turnId, PermissionRequest request) {
         request.responder().respond(PermissionOutcome.DENY);

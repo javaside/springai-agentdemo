@@ -24,6 +24,13 @@ public sealed interface ModalRequest permits AskRequest, PermissionRequest {
     /**
      * 统一取消入口：唤醒阻塞在本请求上的工具线程。
      *
+     * <p><b>实现不得抛异常</b>（含 NPE）。调用方是取消期的排空循环，它要遍历整条队列
+     * 逐个唤醒；任何一个元素抛异常都会中断循环，<b>其后所有工具线程永久 park</b>，
+     * 且异常沿 {@code synchronized} 的 {@code cancelCurrent()} 传到 UI 线程的 Esc 处理器。
+     * 故实现须在构造期就把不变量校验完（如 {@link PermissionRequest} 拒绝 null responder），
+     * 而不是把失败留到这里。Task 10 在排空循环里用 try/catch 包住每个元素，
+     * 是对本契约的<b>兜底</b>，不是许可——不能因为有 try/catch 就允许实现抛。
+     *
      * <p><b>活性纪律（本接口不自保）</b>：实现只负责「投一个取消信号」，
      * 它<b>不</b>保证工具线程一定会醒——那取决于应答口的实现与调用方是否真的调了本方法。
      * 两条外部逃生口缺一不可：① 回合取消时 {@code ConversationState.cancelCurrent()} 必须
@@ -32,7 +39,8 @@ public sealed interface ModalRequest permits AskRequest, PermissionRequest {
      * 而它持着回合——整个 agent 静默挂死，无报错也无出口。
      *
      * <p>一请求一个应答口：取消其一不得影响其余 pending 请求（并发审批必须各自独立唤醒）。
-     * 实现须可重复调用且与正常应答竞争安全——「首个信号胜出」，迟到的取消被丢弃。
+     * 实现须可重复调用且与正常应答竞争安全——应答口是<b>一次性消费</b>的
+     * （消费方只读一次），故首个信号胜出、其后的信号被忽略。
      */
     void cancel();
 }
