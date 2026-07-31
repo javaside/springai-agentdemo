@@ -53,6 +53,19 @@ public interface AgentListener {
      */
     void onQuestionAsked(long turnId, AskRequest request);
 
+    /**
+     * 模型调用的某个工具需要人工授权：UI 应把请求排进模态队列、弹审批面板，
+     * 最终经 {@code request.responder()} 应答。落地端会阻塞工具线程直到应答（见 {@code PermissionCallback}）。
+     *
+     * <p><b>默认实现直接 DENY 而不是空实现</b>：空实现会让工具线程永久 park，
+     * 而它持着回合——整个 agent 静默挂死，无报错也无出口。
+     * 任何没有真正接管审批 UI 的落地端（回显桩 / 测试桩）都应该「拒绝并让回合继续」，而不是挂死。
+     * 覆写本方法的实现同样有义务<b>在所有分支上</b>最终应答一次。
+     */
+    default void onPermissionRequested(long turnId, PermissionRequest request) {
+        request.responder().respond(PermissionOutcome.DENY);
+    }
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);

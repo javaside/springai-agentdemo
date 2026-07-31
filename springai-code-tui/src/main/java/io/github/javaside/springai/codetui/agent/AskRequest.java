@@ -10,8 +10,16 @@ import java.util.List;
  * @param questions 顺序问询的问题列表（1–4 个）
  * @param responder UI 应答回调
  */
-public record AskRequest(long turnId, List<QuestionSpec> questions, AskResponder responder) {
+public record AskRequest(long turnId, List<QuestionSpec> questions, AskResponder responder)
+        implements ModalRequest {
+
     public AskRequest {
         questions = List.copyOf(questions);
+    }
+
+    /** {@link ModalRequest} 统一取消入口：转成问询自己的取消语义。 */
+    @Override
+    public void cancel() {
+        responder.cancel();
     }
 }
