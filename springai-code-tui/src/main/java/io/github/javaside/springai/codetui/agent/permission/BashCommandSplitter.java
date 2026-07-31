@@ -26,8 +26,10 @@ import java.util.Set;
  * <p><b>白名单是「首词能不能定性整段」的判断，不是「这个程序平时危不危险」</b>。
  * 故以下实测有逃逸口的命令<b>不</b>在白名单里：{@code find}（{@code -delete} / {@code -exec}）、
  * {@code rg}（{@code --pre} / {@code --hostname-bin} 执行外部程序）、
- * {@code env}（本身就是命令启动器）；{@code git branch -D} 删分支、{@code git remote add} 改配置、
- * {@code git diff --output} 落盘，故 git 子命令白名单另做选项过滤。
+ * {@code env}（本身就是命令启动器）、{@code file}（{@code -C} 编译 magic 库并静默覆盖
+ * cwd 下的 {@code magic.mgc}，实测写入 7.2 MB）；
+ * {@code git branch} / {@code git remote} 因有写形态而整个不算只读
+ * （不再试图按选项区分，理由见 {@link #GIT_READ_ONLY}）。
  * 同理，任何带重定向的段一律不算只读——{@code echo x > ~/.zshrc} 的首词是 {@code echo}，
  * 但它落盘。重定向落点的风险由 {@code DangerousPaths} 兜底，本类只负责不把它谎报成只读。
  */
@@ -46,30 +48,25 @@ public final class BashCommandSplitter {
      * 只读命令白名单（首个词）。
      *
      * <p>入选标准：<b>光看首词就能断定整段无副作用</b>。凡是靠选项能执行外部程序或删文件的
-     * （{@code find} / {@code rg} / {@code env} 等）一律不收，宁可多问一次。
+     * （{@code find} / {@code rg} / {@code env} / {@code file} 等）一律不收，宁可多问一次。
      */
     private static final Set<String> READ_ONLY = Set.of(
             "ls", "cat", "head", "tail", "grep", "wc", "pwd", "echo",
-            "which", "file", "stat", "du", "df", "date", "whoami", "uname", "printenv",
+            "which", "stat", "du", "df", "date", "whoami", "uname", "printenv",
             "cmp", "basename", "dirname", "realpath");
 
-    /** git 的只读子命令。 */
-    private static final Set<String> GIT_READ_ONLY = Set.of(
-            "status", "diff", "log", "show", "branch", "remote", "blame", "describe", "rev-parse");
-
     /**
-     * git 只读子命令下仍会产生副作用的选项，命中即不算只读。
+     * git 的只读子命令。
      *
-     * <p>{@code branch}/{@code remote} 的写操作靠位置参数区分（{@code git branch -D x}、
-     * {@code git remote add}），故另在 {@link #isGitReadOnly} 里按子命令单独挡。
+     * <p><b>刻意不含 {@code branch} / {@code remote}</b>：二者都有写形态，
+     * 而区分写形态需要手写 git 的 parse-options 语言（短选项捆绑、等号形式、位置参数、别名），
+     * 那是打不赢的——实测三种绕过：{@code git branch -df victim}（捆绑，删未合并分支、exit 0、
+     * 只能靠 reflog 找回）、{@code git branch evil}（位置参数即建 ref）、
+     * {@code git branch --set-upstream-to=origin/main}（等号形式，写 {@code branch.*.merge}）。
+     * 故整个移出，走 ASK 多问一次；真正高频的 {@code status/log/diff/show} 不受影响。
      */
-    private static final Set<String> GIT_WRITE_OPTIONS = Set.of(
-            "-D", "-d", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
-            "--edit-description", "--set-upstream-to", "-u", "--unset-upstream", "-f", "--force");
-
-    /** {@code branch} / {@code remote} 的写子命令（位置参数形态）。 */
-    private static final Set<String> GIT_WRITE_SUBCOMMANDS = Set.of(
-            "add", "remove", "rm", "rename", "set-url", "set-head", "set-branches", "prune", "update");
+    private static final Set<String> GIT_READ_ONLY = Set.of(
+            "status", "diff", "log", "show", "blame", "describe", "rev-parse");
 
     /** {@code ACCEPT_EDITS} 下额外放行的文件系统写命令。<b>刻意不含 rm</b>。 */
     private static final Set<String> FS_WRITE = Set.of("mkdir", "touch", "mv", "cp");
@@ -192,30 +189,40 @@ public final class BashCommandSplitter {
         return false;
     }
 
-    /** git 段是否只读：子命令在白名单内，且不带会写的选项 / 位置参数。 */
+    /**
+     * git 段是否只读：子命令在白名单内，且不带 {@code --output}（会落盘）。
+     *
+     * <p>只剩这一条检查。白名单里的子命令都没有写形态，
+     * 曾经用来给 {@code branch} / {@code remote} 兜底的选项、子命令清单已随它们一并删除——
+     * 那些清单是在手写 git 的选项语言，逐个补漏打不赢（见 {@link #GIT_READ_ONLY} 的说明）。
+     *
+     * <p>{@code --output} 用前缀比较是刻意的：等号形式 {@code --output=/tmp/x} 与
+     * 分开形式 {@code --output /tmp/x} 都要挡住。
+     *
+     * <p>{@code git -c … } / {@code git -C … } 这类全局选项前置的形态，
+     * 因 {@code secondWord} 不在白名单里而自动落 ASK，方向正确。
+     */
     private static boolean isGitReadOnly(String segment) {
         String sub = secondWord(segment);
         if (!GIT_READ_ONLY.contains(sub)) {
             return false;
         }
-        List<String> args = words(segment);
-        for (int i = 2; i < args.size(); i++) {
-            String a = args.get(i);
+        for (String a : words(segment)) {
             if (a.startsWith("--output")) {
-                return false;                            // git diff/log --output=F 会落盘
-            }
-            if (GIT_WRITE_OPTIONS.contains(a)) {
-                return false;
-            }
-            if (("branch".equals(sub) || "remote".equals(sub)) && GIT_WRITE_SUBCOMMANDS.contains(a)) {
-                return false;                            // git remote add / branch rename
+                return false;                            // git diff/show/log --output=F 会落盘
             }
         }
         return true;
     }
 
-    /** 分隔符：换行 / 回车与 {@code ; | &} 同级（实测 bash 的换行就是命令分隔）。 */
-    private static boolean isSeparatorChar(char c) {
+    /**
+     * 分隔符：换行 / 回车与 {@code ; | &} 同级（实测 bash 的换行就是命令分隔）。
+     *
+     * <p><b>这是本项目对「命令分隔符」的唯一定义</b>，{@link PermissionRule#hasShellSeparator}
+     * 也走这里（包私有正是为此，外加 {@code SeparatorSetConsistencyTest} 要遍历字符空间验证）。
+     * 分隔符清单正是制造过 C1 与 {@code <(} 两个 Critical 的那一份，不能有第二处。
+     */
+    static boolean isSeparatorChar(char c) {
         return c == ';' || c == '|' || c == '&' || c == '\n' || c == '\r';
     }
 

@@ -165,17 +165,26 @@ public record PermissionRule(String toolName, String pattern,
      * 命令是否含「会引出另一条命令」或「无法可靠拆分」的 shell 结构。
      * 含则前缀规则一律不命中（失败关闭）。
      *
-     * <p>只认命令链接、替换与不可拆分构造：{@code ; | &}、换行，
-     * 以及 {@link #hasUnsplittableConstruct} 的那一份清单。<b>不</b>认<b>普通</b>重定向
-     * {@code > <}——它不引出新命令，其落点风险由 {@code DangerousPaths} 负责。
+     * <p>两份清单都<b>不</b>在这里定义，本方法只是把它们并起来：
+     * 分隔符归 {@link BashCommandSplitter#isSeparatorChar}，
+     * 不可拆分构造归 {@link #hasUnsplittableConstruct}。
+     * 分隔符那份正是制造过 C1 与 {@code <(} 两个 Critical 的清单，
+     * 曾在此处与 splitter 各存一份（内容碰巧相等，故无 exploit）——
+     * 漂移方向是固定的：只往 splitter 那侧加字符，这里仍判「简单」，
+     * 第 5 步放行后第 6 步永远不会跑。{@code SeparatorSetConsistencyTest} 遍历字符空间钉住它。
+     *
+     * <p><b>不</b>认<b>普通</b>重定向 {@code > <}——它不引出新命令，
+     * 其落点风险由 {@code DangerousPaths} 负责。
      * 但 {@code <(} / {@code >(} 是<b>进程替换</b>，恰是「重定向不引出命令」不成立的那一种，
-     * 故已由那份清单拦下。
+     * 故已由不可拆分构造那份清单拦下。
      */
     static boolean hasShellSeparator(String command) {
-        return command.indexOf(';') >= 0 || command.indexOf('|') >= 0
-                || command.indexOf('&') >= 0
-                || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0
-                || hasUnsplittableConstruct(command);
+        for (int i = 0; i < command.length(); i++) {
+            if (BashCommandSplitter.isSeparatorChar(command.charAt(i))) {
+                return true;
+            }
+        }
+        return hasUnsplittableConstruct(command);
     }
 
     /**

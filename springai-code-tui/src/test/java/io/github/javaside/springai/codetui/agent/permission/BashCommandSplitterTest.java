@@ -184,4 +184,32 @@ class BashCommandSplitterTest {
         assertFalse(BashCommandSplitter.split("echo ${x@P}").parseable());
         assertTrue(BashCommandSplitter.split("echo $HOME").parseable(), "裸 $VAR 只是取值，不会再解析出分隔符");
     }
+
+    @Test
+    @DisplayName("git 的写形态一律不算只读（实测：短选项捆绑 / 位置参数 / 等号形式都能绕过逐 token 检查）")
+    void gitWriteFormsAreNotReadOnly() {
+        assertFalse(BashCommandSplitter.isReadOnly("git branch -df victim"),
+                "短选项捆绑 -df 会删未合并分支（实测数据丢失）");
+        assertFalse(BashCommandSplitter.isReadOnly("git branch -Dq x"));
+        assertFalse(BashCommandSplitter.isReadOnly("git branch -dr origin/foo"));
+        assertFalse(BashCommandSplitter.isReadOnly("git branch evil"),
+                "位置参数即创建分支");
+        assertFalse(BashCommandSplitter.isReadOnly("git branch --set-upstream-to=origin/main"),
+                "等号形式会写 branch.*.merge / .remote");
+        assertFalse(BashCommandSplitter.isReadOnly("git remote add evil http://x"));
+        // 仍应放行的只读形态
+        assertTrue(BashCommandSplitter.isReadOnly("git status"));
+        assertTrue(BashCommandSplitter.isReadOnly("git log --oneline -5"));
+        assertTrue(BashCommandSplitter.isReadOnly("git diff HEAD~1"));
+        assertFalse(BashCommandSplitter.isReadOnly("git diff --output=/tmp/x"));
+    }
+
+    @Test
+    @DisplayName("file 移出只读白名单（file -C 会静默覆盖 cwd 下的 magic.mgc，实测 7.2MB）")
+    void fileCommandIsNotReadOnly() {
+        assertFalse(BashCommandSplitter.isReadOnly("file -C -m /dev/null"),
+                "file -C 会编译并覆盖 magic.mgc（实测写入 7.2MB）");
+        assertFalse(BashCommandSplitter.isReadOnly("file x.txt"),
+                "整体移出白名单，不区分选项");
+    }
 }
