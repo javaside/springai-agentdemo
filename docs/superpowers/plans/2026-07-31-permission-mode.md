@@ -842,6 +842,21 @@ git commit -m "fix(permission): 进程替换按复合命令拒绝，补齐分隔
 
 ### Task 7R: 决策顺序配套修订（并入 Task 7 实现，不单独提交）
 
+> **来自 Task 3R 的残留分歧提醒**（已由 `residualDivergenceIsOnlyUnbalancedQuotesAndIsHarmless` 钉住）：
+> 谓词统一后仍有一类不对称——`split` 因**引号不配对 / 反斜杠转义**返回 `parseable=false`，
+> 而 `hasShellSeparator` 完全不建模引号，故仍判「简单」。于是 `Bash(echo:*)`
+> 会在第 5 步放行 `echo it's fine`，而 splitter 本会要求人工确认。
+>
+> **当前无害，论证是结构性的而非枚举性的**：要从一个串里引出第二条命令，必须出现
+> `; | &`、换行，或 `` $( ` <( >( ${ `` 之一；而 `hasShellSeparator` 是**不区分引号的字面扫描**，
+> 上述任一字符出现在任何位置（引号内、反斜杠后、任何地方）都会让它判为复合。
+> 因此凡是它称作「简单」的串，**可证不含任何串联构造**，放行它就只放行了那一条命令。
+> bash 本身还有第二层拦截：`bash -c "echo it's fine"` 直接以 `unexpected EOF` 退出，根本不执行。
+>
+> **Task 7 接线时需留意**：第 5 步与第 6 步的顺序在此处变成具体代码。
+> 真正彻底消除这类不对称需要一个**区分空白与引号的分词器**，那超出期 1 范围；
+> 若将来让 `hasShellSeparator` 变得引号敏感，上述那条测试会立刻变红——那是设计意图，不是误报。
+
 Task 1R 让 `matches` 对多段命令**不命中**，落回 ASK——安全但会误伤 `git status && git log` 这类无害组合。
 Task 7 因此必须按段判定，两个方向**故意不对称**：
 
