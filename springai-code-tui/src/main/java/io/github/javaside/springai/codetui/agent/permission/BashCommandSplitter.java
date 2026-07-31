@@ -9,9 +9,10 @@ import java.util.Set;
  *
  * <p><b>本类的安全底线是「拆不动就问」</b>：解析器只要不确定语义就返回
  * {@code parseable=false}，引擎据此直接 ASK——宁可烦用户一次，绝不放行未知语义。
- * 触发条件：命令替换 {@code $(...)}、算术展开 {@code $((...))}、反引号、
- * 进程替换 {@code <(...)} / {@code >(...)}、花括号展开 {@code ${...}}、
- * 引号内出现分隔符、引号不配对。
+ * 触发条件：{@link PermissionRule#hasUnsplittableConstruct} 认定的不可拆分构造
+ * （命令替换 {@code $(...)}、算术展开 {@code $((...))}、反引号、
+ * 进程替换 {@code <(...)} / {@code >(...)}、花括号展开 {@code ${...}}），
+ * 以及引号内出现分隔符、引号不配对。
  *
  * <p><b>与 {@link PermissionRule#hasShellSeparator} 的一致性契约</b>：本类拆出的任何一段，
  * 都不得再被 {@code hasShellSeparator} 判为复合命令——否则前缀规则（跑在决策顺序更前面、
@@ -19,6 +20,8 @@ import java.util.Set;
  * 由此 {@code \n} / {@code \r} 必须与 {@code ; | &} 同等对待：
  * 实测 {@code bash -c 'echo hi\nrm -rf /'} 会执行第二条命令，若当作单段，
  * 首词 {@code echo} 命中只读白名单就把 {@code rm -rf /} 一起放行了。
+ * <b>不可拆分构造的清单只有一份，在 {@code PermissionRule} 那边</b>：本类曾自留一份，
+ * 已漂移出 {@code ${} 一处分歧（{@code PredicateConsistencyTest} 是这条契约的钉子）。
  *
  * <p><b>白名单是「首词能不能定性整段」的判断，不是「这个程序平时危不危险」</b>。
  * 故以下实测有逃逸口的命令<b>不</b>在白名单里：{@code find}（{@code -delete} / {@code -exec}）、
@@ -80,7 +83,7 @@ public final class BashCommandSplitter {
         if (command == null || command.isBlank()) {
             return new Split(List.of(), true);
         }
-        if (hasUnparseableConstruct(command)) {
+        if (PermissionRule.hasUnsplittableConstruct(command)) {
             return new Split(List.of(), false);
         }
         StringBuilder cur = new StringBuilder();
@@ -155,7 +158,10 @@ public final class BashCommandSplitter {
     /**
      * 段是否「单一、且副作用范围就等于首词语义」——不含复合结构、不含重定向。
      *
-     * <p>重定向不引出新命令，所以它不算分隔符（{@link PermissionRule#hasShellSeparator} 的既有约定），
+     * <p>{@link PermissionRule#hasShellSeparator} 已<b>包含</b>
+     * {@link PermissionRule#hasUnsplittableConstruct}（唯一定义在那边），故这里查一次即可。
+     *
+     * <p>重定向不引出新命令，所以它不算分隔符（{@code hasShellSeparator} 的既有约定），
      * 但它<b>确实</b>让 {@code echo} 这类只读命令落盘，故不能算进只读 / 自动放行白名单。
      */
     private static boolean isSingleSideEffectFreeSegment(String segment) {
@@ -163,9 +169,6 @@ public final class BashCommandSplitter {
             return false;
         }
         if (PermissionRule.hasShellSeparator(segment)) {
-            return false;
-        }
-        if (hasUnparseableConstruct(segment)) {
             return false;
         }
         return !hasUnquotedRedirection(segment);
@@ -209,19 +212,6 @@ public final class BashCommandSplitter {
             }
         }
         return true;
-    }
-
-    /**
-     * 是否含无法可靠拆分的结构。
-     *
-     * <p>{@code $(} 顺带覆盖了算术展开 {@code $((...))}；{@code ${} 单列，
-     * 因为 bash 的 {@code ${x@P}} 会对取到的值再做一轮提示符展开（可执行命令替换）。
-     * 裸 {@code $VAR} 不在此列：实测其展开结果不会被重新解析出分隔符。
-     */
-    private static boolean hasUnparseableConstruct(String c) {
-        return c.contains("$(") || c.indexOf('`') >= 0
-                || c.contains("<(") || c.contains(">(")
-                || c.contains("${");
     }
 
     /** 分隔符：换行 / 回车与 {@code ; | &} 同级（实测 bash 的换行就是命令分隔）。 */

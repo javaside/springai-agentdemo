@@ -19,8 +19,9 @@ import java.nio.file.PathMatcher;
  *
  * <p><b>匹配契约（已知边界，调用方必须知道）：</b>
  * <ul>
- *   <li><b>前缀规则只对单段命令生效</b>：目标含 {@code ; | & `}、{@code $(}、{@code <(}、{@code >(}
- *       或换行（含 {@code \r}）时一律不命中，
+ *   <li><b>前缀规则只对单段命令生效</b>：目标含 {@code ; | &}、换行（含 {@code \r}），
+ *       或 {@link #hasUnsplittableConstruct} 认定的不可拆分构造（{@code ` $( <( >( ${}）
+ *       时一律不命中，
  *       落回 ASK。命令是否需要按段授权由 {@link PermissionEngine} 负责（COMMAND 类别先拆分再逐段判定）。</li>
  *   <li><b>不做空白归一</b>：{@code rm  -rf /}（双空格）、{@code  rm -rf /}（前导空格）
  *       不命中 {@code Bash(rm -rf /:*)}。故 <b>DSL 的 deny 是尽力而为，真正的护栏是
@@ -141,19 +142,40 @@ public record PermissionRule(String toolName, String pattern,
     }
 
     /**
-     * 命令是否含「会引出另一条命令」的 shell 结构。含则前缀规则一律不命中（失败关闭）。
+     * 是否含<b>无法可靠拆分</b>的 shell 结构（命令替换 {@code $(} / 算术展开 {@code $((} /
+     * 反引号 / 进程替换 {@code <( >(} / {@code ${...}} 展开）。
      *
-     * <p>只认命令链接与替换：{@code ; | & ` $( <( >( } 与换行。<b>不</b>认<b>普通</b>重定向
+     * <p><b>这是本项目对「不可拆分构造」的唯一定义</b>，{@link #hasShellSeparator} 与
+     * {@link BashCommandSplitter} 都必须走这里。此前两处各维护一份字符清单，
+     * 已漂移出 {@code ${} 一处分歧——而分歧的危险方向是固定的：
+     * 更严格的组件跑在决策顺序更后面（allow 规则第 5 步、命令拆分第 6 步），
+     * 于是永远轮不到它。清单只能有一份。
+     *
+     * <p>{@code $(} 顺带覆盖了算术展开 {@code $((...))}；{@code ${} 单列，
+     * 因为 bash 的 {@code ${x@P}} 会对取到的值再做一轮提示符展开（可执行命令替换）。
+     * 裸 {@code $VAR} 不在此列：实测其展开结果不会被重新解析出分隔符。
+     */
+    static boolean hasUnsplittableConstruct(String c) {
+        return c.contains("$(") || c.indexOf('`') >= 0
+                || c.contains("<(") || c.contains(">(")
+                || c.contains("${");
+    }
+
+    /**
+     * 命令是否含「会引出另一条命令」或「无法可靠拆分」的 shell 结构。
+     * 含则前缀规则一律不命中（失败关闭）。
+     *
+     * <p>只认命令链接、替换与不可拆分构造：{@code ; | &}、换行，
+     * 以及 {@link #hasUnsplittableConstruct} 的那一份清单。<b>不</b>认<b>普通</b>重定向
      * {@code > <}——它不引出新命令，其落点风险由 {@code DangerousPaths} 负责。
      * 但 {@code <(} / {@code >(} 是<b>进程替换</b>，恰是「重定向不引出命令」不成立的那一种，
-     * 故必须算分隔符（与 {@code BashCommandSplitter} 对复合命令的判定保持一致）。
+     * 故已由那份清单拦下。
      */
     static boolean hasShellSeparator(String command) {
         return command.indexOf(';') >= 0 || command.indexOf('|') >= 0
-                || command.indexOf('&') >= 0 || command.indexOf('`') >= 0
-                || command.contains("$(")
-                || command.contains("<(") || command.contains(">(")   // N1：进程替换会执行命令
-                || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0;
+                || command.indexOf('&') >= 0
+                || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0
+                || hasUnsplittableConstruct(command);
     }
 
     /**
