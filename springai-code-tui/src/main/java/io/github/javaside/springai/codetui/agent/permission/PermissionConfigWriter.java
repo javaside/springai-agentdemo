@@ -2,8 +2,10 @@ package io.github.javaside.springai.codetui.agent.permission;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -47,7 +49,19 @@ import java.util.UUID;
 public final class PermissionConfigWriter {
 
     private static final Logger log = LoggerFactory.getLogger(PermissionConfigWriter.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /**
+     * 必须与 {@link PermissionConfigLoader} 用同一套解析开关——重复键检测尤其不能只开在读侧。
+     *
+     * <p>只开读侧会留下一条比原问题更糟的路：读侧把重复键文件判非法（规则全丢），
+     * 写侧却用 Jackson 默认的<b>末键胜出</b>把它读成一棵「正常」的树，追加一条规则后
+     * <b>原样重写回磁盘</b>——那条被末键覆盖掉的 deny 就此从文件里<b>真正消失</b>，
+     * 且 {@code append} 返回 true，用户被告知「永久允许」成功，毫不知情。
+     * 读侧的拒绝是临时的（改回文件即恢复），写侧这一下是不可逆的。
+     */
+    private static final ObjectMapper MAPPER = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .build();
 
     /** 进程内串行化读-改-写，防并行审批丢更新（见类注释「并发」）。 */
     private static final Object LOCK = new Object();

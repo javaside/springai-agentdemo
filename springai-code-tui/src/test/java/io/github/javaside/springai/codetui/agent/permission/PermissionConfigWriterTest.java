@@ -109,6 +109,21 @@ class PermissionConfigWriterTest {
     }
 
     @Test
+    @DisplayName("既有文件有重复键 → 返回 false，不把被末键覆盖掉的 deny 永久抹掉")
+    void duplicateKeysInExistingFileDegrade(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("permissions.json");
+        // Jackson 默认末键胜出：第一条 deny 被静默丢弃。写侧若用默认 mapper，
+        // 就会把这棵「已经缺了一条 deny」的树原样重写回磁盘——那条禁令从文件里真正消失，
+        // 而 append 返回 true，用户被告知「永久允许」成功。读侧拒绝是可逆的，这一下不是。
+        String orig = "{\"deny\":[\"Bash(rm -rf /:*)\"],\"allow\":[\"Read(src/**)\"],\"deny\":[]}";
+        Files.writeString(file, orig);
+
+        assertFalse(PermissionConfigWriter.append(file, allow("Bash(mvn test:*)")),
+                "重复键与 JSON 非法同档，不得落盘");
+        assertEquals(orig, Files.readString(file), "失败时不得改动原文件，deny 必须还在");
+    }
+
+    @Test
     @DisplayName("既有 allow 字段不是数组 → 返回 false，不顶掉用户写的内容")
     void nonArrayFieldDegrades(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("permissions.json");
