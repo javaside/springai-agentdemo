@@ -196,6 +196,7 @@ class PermissionRuleTest {
         PermissionRule r = PermissionRule.parse(
                 "Bash(ls:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
         assertFalse(r.matches("Bash", "ls | sh", false, ROOT), "单独的 | 必须被拦");
+        assertFalse(r.matches("Bash", "ls ; sh", false, ROOT), "单独的 ; 必须被拦");
         assertFalse(r.matches("Bash", "ls \r sh", false, ROOT), "单独的 \\r 必须被拦");
         assertFalse(r.matches("Bash", "ls & sh", false, ROOT));
     }
@@ -222,5 +223,10 @@ class PermissionRuleTest {
                 PermissionBehavior.ALLOW, RuleScope.SESSION);
         assertFalse(star.matches("Write", "notesXYZ.md", true, ROOT),
                 "转义后的 * 不得再当通配符");
+        PermissionRule q = PermissionRule.parse(
+                "Write(" + PermissionRule.escapeGlob("a?.md") + ")",
+                PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(q.matches("Write", "aX.md", true, ROOT),
+                "转义后的 ? 不得再当单字符通配符");
     }
 }
