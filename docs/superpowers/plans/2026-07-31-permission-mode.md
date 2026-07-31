@@ -910,6 +910,11 @@ Task 7 因此必须按段判定，两个方向**故意不对称**：
    > 「自动生成的规则由 `PermissionEngine` 保证不会停在非字母数字字符上」。
    > 该承诺目前只在计划里成立。7R 若落空，那段 javadoc 就从「已知限制」变成**误导性文档**。
 3. **载入路径工具的 `:*` 规则时记 WARN**（N3）——那是一条恒不命中的静默失效规则。
+6. **别把已被 deny 的规则写成「永久允许」**（Task 6 审查 Minor 7）：
+   往 `permissions.json` 追加一条 DSL 与现有 deny 相同的 ALLOW 会成功写入并返回 true，
+   但 deny 在决策顺序里更靠前，那条规则**永远不会生效**——用户被告知「永久」，实际每次照样被拦。
+   `addPersistentRule` 前须先查 deny 命中：命中就别写，改为告诉用户「已被 deny 规则 X 禁止」。
+
 5. **`suggest()` 生成的规则必须能 round-trip**（Task 6 实测）：`PermissionConfigWriter.append`
    会把 `toDsl()` 的结果重新 `parse` 回来逐字段比对，不一致就**拒绝写盘、退化成会话级**
    （返回 false + WARN，方向安全）。因此 `suggest()` 不得产出**前后带空格的 pattern**
