@@ -17,6 +17,20 @@ import java.nio.file.PathMatcher;
  * <p>「目标是不是路径」由调用方（{@link ToolRegistry.Entry#pathTarget()}）给定，<b>不</b>由类别推断——
  * {@code BashOutput} 是 READ_ONLY 但目标是 {@code bash_id}，不是路径。
  *
+ * <p><b>匹配契约（已知边界，调用方必须知道）：</b>
+ * <ul>
+ *   <li><b>前缀规则只对单段命令生效</b>：目标含 {@code ; | & `}、{@code $(} 或换行时一律不命中，
+ *       落回 ASK。命令是否需要按段授权由 {@link PermissionEngine} 负责（COMMAND 类别先拆分再逐段判定）。</li>
+ *   <li><b>不做空白归一</b>：{@code rm  -rf /}（双空格）、{@code  rm -rf /}（前导空格）
+ *       不命中 {@code Bash(rm -rf /:*)}。故 <b>DSL 的 deny 是尽力而为，真正的护栏是
+ *       {@code DangerousPaths} 的内置检查</b>（它在决策顺序里位于 allow 规则之前，不可绕过）。</li>
+ *   <li><b>路径匹配区分大小写</b>：{@code /etc/**} 不命中 {@code /ETC/passwd}，
+ *       而 macOS 的 APFS 默认大小写不敏感、二者是同一文件。deny 方向会漏。</li>
+ *   <li><b>只 {@code normalize()} 不 {@code toRealPath()}</b>：符号链接不解析
+ *       （{@code toRealPath} 会让「写一个尚不存在的文件」直接失败）。
+ *       <b>由 {@code ToolTargets} 负责交出已规范化的路径</b>。</li>
+ * </ul>
+ *
  * @param toolName 工具注册名；{@code "*"} 匹配任意工具
  * @param pattern  内容模式；{@code null} = 该工具全部调用
  * @param behavior 命中后的结论
@@ -46,7 +60,10 @@ public record PermissionRule(String toolName, String pattern,
             return null;
         }
         String pat = s.substring(open + 1, s.length() - 1).trim();
-        if (pat.isEmpty() || "*".equals(pat)) {
+        if (pat.isEmpty()) {
+            return null;                                // I2：空括号是非法 DSL，不是「全部」
+        }
+        if ("*".equals(pat)) {
             return new PermissionRule(tool, null, behavior, scope);
         }
         return new PermissionRule(tool, pat, behavior, scope);
@@ -76,12 +93,75 @@ public record PermissionRule(String toolName, String pattern,
             return false;
         }
         if (pattern.endsWith(":*")) {
-            return target.startsWith(pattern.substring(0, pattern.length() - 2));
+            if (pathTarget) {
+                return false;                           // I4：路径目标不吃前缀语义
+            }
+            if (hasShellSeparator(target)) {
+                return false;                           // C1：多段命令一律不吃前缀规则
+            }
+            String prefix = pattern.substring(0, pattern.length() - 2).trim();
+            if (prefix.isEmpty()) {
+                return false;                           // I2：空前缀不放行一切
+            }
+            return matchesPrefix(target, prefix);        // I3：词边界（分隔符即边界，见 matchesPrefix）
         }
         if (pathTarget) {
             return globMatches(pattern, target, root);
         }
         return pattern.equals(target);
+    }
+
+    /**
+     * 前缀是否在<b>词边界</b>上命中目标。
+     *
+     * <p>{@code ls} 停在字母上 → 必须整串相等或后接空格，故不授权 {@code lsof}；
+     * {@code rm -rf /} 停在 {@code /} 上 → 该分隔符本身就是边界，
+     * 可直接接续，故仍命中 {@code rm -rf /var/tmp/x}。
+     */
+    private static boolean matchesPrefix(String target, String prefix) {
+        if (!target.startsWith(prefix)) {
+            return false;
+        }
+        if (target.length() == prefix.length()) {
+            return true;                                 // 整串相等
+        }
+        char last = prefix.charAt(prefix.length() - 1);
+        if (!Character.isLetterOrDigit(last) && last != '_') {
+            return true;                                 // 前缀已停在分隔符上
+        }
+        return target.charAt(prefix.length()) == ' ';    // 否则必须落在空格上
+    }
+
+    /**
+     * 命令是否含「会引出另一条命令」的 shell 结构。含则前缀规则一律不命中（失败关闭）。
+     *
+     * <p>只认命令链接与替换：{@code ; | & ` $( } 与换行。<b>不</b>认重定向 {@code > <}——
+     * 重定向不会引出新命令，其落点风险由 {@code DangerousPaths} 负责。
+     */
+    static boolean hasShellSeparator(String command) {
+        return command.indexOf(';') >= 0 || command.indexOf('|') >= 0
+                || command.indexOf('&') >= 0 || command.indexOf('`') >= 0
+                || command.contains("$(")
+                || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0;
+    }
+
+    /**
+     * 把字面路径转义成只匹配它自己的 glob（供「允许，永久」按具体文件生成规则）。
+     *
+     * <p>不转义会出事：{@code report[2026].md} 里的 {@code [2026]} 被 glob 读成字符类，
+     * 生成的规则<b>永不命中被批准的那个文件</b>，反而放开了 {@code report0/2/6.md}。
+     */
+    public static String escapeGlob(String literal) {
+        StringBuilder sb = new StringBuilder(literal.length() + 8);
+        for (int i = 0; i < literal.length(); i++) {
+            char c = literal.charAt(i);
+            if (c == '\\' || c == '*' || c == '?' || c == '['
+                    || c == ']' || c == '{' || c == '}') {
+                sb.append('\\');
+            }
+            sb.append(c);
+        }
+        return sb.toString();
     }
 
     /**
