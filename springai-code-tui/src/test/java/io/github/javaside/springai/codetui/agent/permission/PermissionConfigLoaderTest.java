@@ -11,6 +11,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PermissionConfigLoaderTest {
@@ -35,7 +36,8 @@ class PermissionConfigLoaderTest {
 
         PermissionConfig cfg = PermissionConfigLoader.load(user, project);
 
-        assertEquals(PermissionMode.ACCEPT_EDITS, cfg.defaultMode(), "defaultMode 项目层覆盖用户层");
+        assertEquals(PermissionMode.DEFAULT, cfg.defaultMode(),
+                "项目层只能收紧：ACCEPT_EDITS 比用户层的 DEFAULT 宽，不采纳");
         assertTrue(hasRule(cfg.rules(), "Read(*)", PermissionBehavior.ALLOW));
         assertTrue(hasRule(cfg.rules(), "Bash(mvn test:*)", PermissionBehavior.ALLOW));
         assertTrue(hasRule(cfg.rules(), "Bash(git push:*)", PermissionBehavior.ASK));
@@ -76,12 +78,14 @@ class PermissionConfigLoaderTest {
         Path user = dir.resolve("user.json");
         Path project = dir.resolve("project.json");
         Files.writeString(user, "{ this is not json");
+        // 项目层用收窄形态：Read(*) 作为项目层通配放行现已被拒（见 projectLayerCannotGrantBlanketAllow），
+        // 而本例要钉的是「一层坏了另一层照常」，不是规则形态
         Files.writeString(project, """
-                {"allow":["Read(*)"]}""");
+                {"allow":["Read(src/**)"]}""");
 
         PermissionConfig cfg = PermissionConfigLoader.load(user, project);
         assertEquals(1, cfg.rules().size());
-        assertTrue(hasRule(cfg.rules(), "Read(*)", PermissionBehavior.ALLOW));
+        assertTrue(hasRule(cfg.rules(), "Read(src/**)", PermissionBehavior.ALLOW));
     }
 
     @Test
@@ -146,5 +150,138 @@ class PermissionConfigLoaderTest {
         assertEquals(PermissionMode.ACCEPT_EDITS, cfg.defaultMode(),
                 "项目层非法值应回落到用户层，而非一路跌到 DEFAULT");
         assertNotEquals(PermissionMode.BYPASS, cfg.defaultMode());
+    }
+
+    // ── 项目层不得放宽（Task 5R）────────────────────────────────────────
+    //
+    // 贯穿原则：~/.codetui/ 是用户自己的配置，<root>/.codetui/ 是仓库带来的配置。
+    // clone 一个仓库不得让 agent 变得更宽松——项目层只能收紧。
+
+    @Test
+    @DisplayName("Critical：项目层的通配放行等价于 BYPASS，必须拒绝")
+    void projectLayerCannotGrantBlanketAllow(@TempDir Path dir) throws Exception {
+        Path project = dir.resolve("project.json");
+
+        // 全工具全放行：一条 ALLOW 命中在决策顺序第 5 步短路掉 BYPASS 在第 6 步做的事
+        Files.writeString(project, "{\"allow\":[\"*\"]}");
+        assertTrue(PermissionConfigLoader.load(null, project).rules().isEmpty(),
+                "项目层的 \"*\" 必须被拒绝");
+
+        // 整工具放行：pattern == null 即「该工具全部调用」
+        Files.writeString(project, "{\"allow\":[\"Bash(*)\",\"Write(*)\"]}");
+        assertTrue(PermissionConfigLoader.load(null, project).rules().isEmpty(),
+                "整工具放行同样不可由仓库配置声明");
+
+        // 裸工具名是 Bash(*) 的另一种写法，同样拒绝
+        Files.writeString(project, "{\"allow\":[\"Bash\"]}");
+        assertTrue(PermissionConfigLoader.load(null, project).rules().isEmpty(),
+                "裸工具名等价于 Bash(*)，不能从这条路绕过去");
+
+        // 收窄型的项目级放行仍须接受——这正是「允许，永久」写入的形态
+        Files.writeString(project, "{\"allow\":[\"Bash(mvn test:*)\"]}");
+        assertEquals(1, PermissionConfigLoader.load(null, project).rules().size(),
+                "团队共享的收窄型 allow 必须照常生效");
+    }
+
+    @Test
+    @DisplayName("Critical 续：项目层的全域路径 glob 也是通配放行的一种写法")
+    void projectLayerCannotGrantUniversalGlobAllow(@TempDir Path dir) throws Exception {
+        Path project = dir.resolve("project.json");
+        // 这几个 glob 实测命中 /etc/passwd、~/.ssh/id_rsa、~/.aws/credentials——
+        // 与 Write(*) 的杀伤面完全一致，只是换了个写法躲开 pattern==null 判据
+        for (String pat : new String[]{"**", "/**", "**/*", "/**/*", "*/**", "**/**", "~/**"}) {
+            Files.writeString(project, "{\"allow\":[\"Write(" + pat + ")\"]}");
+            assertTrue(PermissionConfigLoader.load(null, project).rules().isEmpty(),
+                    "项目层 Write(" + pat + ") 覆盖整个文件系统，必须拒绝");
+        }
+        // 真正收窄的路径 glob 照常接受
+        Files.writeString(project, "{\"allow\":[\"Write(src/**)\",\"Read(**/*.java)\"]}");
+        assertEquals(2, PermissionConfigLoader.load(null, project).rules().size(),
+                "收窄到子目录/扩展名的 glob 是正常用法");
+    }
+
+    @Test
+    @DisplayName("对照：用户自己的配置不受通配放行限制")
+    void userLayerMayGrantBlanketAllow(@TempDir Path dir) throws Exception {
+        Path user = dir.resolve("user.json");
+        Files.writeString(user, "{\"allow\":[\"Bash(*)\"]}");
+        assertEquals(1, PermissionConfigLoader.load(user, null).rules().size(),
+                "~/.codetui/ 是用户自己的机器，限制只针对仓库带来的配置");
+
+        Files.writeString(user, "{\"allow\":[\"*\",\"Write(**)\"]}");
+        assertEquals(2, PermissionConfigLoader.load(user, null).rules().size());
+    }
+
+    @Test
+    @DisplayName("项目层的 deny / ask 不受限——它们只会收紧")
+    void projectLayerMayStillDenyAndAskBroadly(@TempDir Path dir) throws Exception {
+        Path project = dir.resolve("project.json");
+        Files.writeString(project, "{\"deny\":[\"Bash(*)\",\"*\"],\"ask\":[\"Write(**)\"]}");
+        assertEquals(3, PermissionConfigLoader.load(null, project).rules().size(),
+                "通配的 deny/ask 是收紧方向，照常生效");
+    }
+
+    @Test
+    @DisplayName("Important：项目层不能把用户选的 DEFAULT 抬成 ACCEPT_EDITS")
+    void projectLayerCannotRaiseDefaultMode(@TempDir Path dir) throws Exception {
+        Path user = dir.resolve("user.json");
+        Path project = dir.resolve("project.json");
+        Files.writeString(user, "{\"defaultMode\":\"DEFAULT\"}");
+        Files.writeString(project, "{\"defaultMode\":\"ACCEPT_EDITS\"}");
+        assertEquals(PermissionMode.DEFAULT,
+                PermissionConfigLoader.load(user, project).defaultMode(),
+                "项目层只能收紧，不能把用户选的 DEFAULT 抬成 ACCEPT_EDITS");
+    }
+
+    @Test
+    @DisplayName("Important 续：用户层没写时，项目层也不能抬——缺省即 DEFAULT")
+    void projectLayerCannotRaiseAbsentUserMode(@TempDir Path dir) throws Exception {
+        Path project = dir.resolve("project.json");
+        Files.writeString(project, "{\"defaultMode\":\"ACCEPT_EDITS\"}");
+        assertEquals(PermissionMode.DEFAULT,
+                PermissionConfigLoader.load(dir.resolve("none.json"), project).defaultMode(),
+                "没有用户层文件 = 用户取默认的 DEFAULT，项目层同样抬不动");
+    }
+
+    @Test
+    @DisplayName("收紧方向允许：项目层 DEFAULT 压过用户层 ACCEPT_EDITS")
+    void projectLayerMayLowerDefaultMode(@TempDir Path dir) throws Exception {
+        Path user = dir.resolve("user.json");
+        Path project = dir.resolve("project.json");
+        Files.writeString(user, "{\"defaultMode\":\"ACCEPT_EDITS\"}");
+        Files.writeString(project, "{\"defaultMode\":\"DEFAULT\"}");
+        assertEquals(PermissionMode.DEFAULT,
+                PermissionConfigLoader.load(user, project).defaultMode(), "收紧方向允许");
+    }
+
+    @Test
+    @DisplayName("Important：重复键让人读到一条不生效的 deny，整文件按非法处理")
+    void duplicateKeysRejectWholeFile(@TempDir Path dir) throws Exception {
+        Path user = dir.resolve("user.json");
+        Files.writeString(user,
+                "{\"deny\":[\"Bash(rm -rf /:*)\"],\"allow\":[\"Read(*)\"],\"deny\":[]}");
+        assertTrue(PermissionConfigLoader.load(user, null).rules().isEmpty(),
+                "重复键会让人读到一条实际不生效的 deny，整文件按非法处理");
+    }
+
+    @Test
+    @DisplayName("Minor：未识别的顶层字段记 WARN 而非静默——拼错的 deny 是隐形缺失的禁令")
+    void unknownTopLevelKeysAreNotSilentlyDropped(@TempDir Path dir) throws Exception {
+        Path user = dir.resolve("user.json");
+        Files.writeString(user, "{\"Deny\":[\"Bash(rm -rf /:*)\"],\"denies\":[],\"allow\":[\"Read(*)\"]}");
+        // 拼错的字段本身仍旧无效（不猜用户意图），但合法字段照常生效
+        PermissionConfig cfg = PermissionConfigLoader.load(user, null);
+        assertEquals(1, cfg.rules().size());
+        assertTrue(hasRule(cfg.rules(), "Read(*)", PermissionBehavior.ALLOW));
+        assertFalse(cfg.rules().stream().anyMatch(r -> r.behavior() == PermissionBehavior.DENY),
+                "大小写拼错的 Deny 不该被当成 deny 生效——但必须已记 WARN");
+    }
+
+    @Test
+    @DisplayName("Minor：load((Path) null) 不 NPE")
+    void loadWithNullRootDegrades() {
+        PermissionConfig cfg = PermissionConfigLoader.load((Path) null);
+        assertNotNull(cfg);
+        assertEquals(PermissionMode.DEFAULT, cfg.defaultMode());
     }
 }

@@ -124,7 +124,10 @@ class PermissionConfigWriterTest {
         Path file = dir.resolve("permissions.json");
         Files.writeString(file, "  \n");
 
-        assertTrue(PermissionConfigWriter.append(file, allow("Read(*)")));
+        // 用收窄形态：Read(*) 作为项目层规则读回时会被当通配放行拒掉
+        // （见 PermissionConfigLoaderTest.projectLayerCannotGrantBlanketAllow），
+        // 而本例要钉的是「空白文件也能正常写入」，与规则形态无关
+        assertTrue(PermissionConfigWriter.append(file, allow("Read(src/**)")));
         PermissionConfig cfg = PermissionConfigLoader.load(dir.resolve("none.json"), file);
         assertEquals(1, cfg.rules().size());
     }
