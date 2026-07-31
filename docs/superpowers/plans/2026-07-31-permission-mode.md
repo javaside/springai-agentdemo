@@ -1660,6 +1660,135 @@ git commit -m "fix(permission): 不可拆分构造收敛为唯一定义，消除
 
 ---
 
+### Task 3R2: 白名单内容修正（1 Critical + 4 Important）
+
+> 审查结论：**解析机制是好的**（2231 例差分模糊 + 真实 bash 执行，0 次逃逸；
+> 欠拆分在结构上不可能，所有解析失败都落在「多拆一段」的更严格一侧）。
+> **出问题的全在白名单内容，不在解析。**
+
+- [ ] **Step 1: 先写失败测试**（追加进 `BashCommandSplitterTest`）
+
+```java
+    @Test
+    void gitWriteFormsAreNotReadOnly() {
+        assertFalse(BashCommandSplitter.isReadOnly("git branch -df victim"),
+                "短选项捆绑 -df 会删未合并分支（实测数据丢失）");
+        assertFalse(BashCommandSplitter.isReadOnly("git branch -Dq x"));
+        assertFalse(BashCommandSplitter.isReadOnly("git branch -dr origin/foo"));
+        assertFalse(BashCommandSplitter.isReadOnly("git branch evil"),
+                "位置参数即创建分支");
+        assertFalse(BashCommandSplitter.isReadOnly("git branch --set-upstream-to=origin/main"),
+                "等号形式会写 branch.*.merge / .remote");
+        assertFalse(BashCommandSplitter.isReadOnly("git remote add evil http://x"));
+        // 仍应放行的只读形态
+        assertTrue(BashCommandSplitter.isReadOnly("git status"));
+        assertTrue(BashCommandSplitter.isReadOnly("git log --oneline -5"));
+        assertTrue(BashCommandSplitter.isReadOnly("git diff HEAD~1"));
+        assertFalse(BashCommandSplitter.isReadOnly("git diff --output=/tmp/x"));
+    }
+
+    @Test
+    void fileCommandIsNotReadOnly() {
+        assertFalse(BashCommandSplitter.isReadOnly("file -C -m /dev/null"),
+                "file -C 会编译并覆盖 magic.mgc（实测写入 7.2MB）");
+        assertFalse(BashCommandSplitter.isReadOnly("file x.txt"),
+                "整体移出白名单，不区分选项");
+    }
+```
+
+新建 `SeparatorSetConsistencyTest`：
+
+```java
+    @Test
+    void separatorSetsCannotDrift() {
+        for (char c = 0; c < 128; c++) {
+            assertEquals(BashCommandSplitter.isSeparatorChar(c),
+                    PermissionRule.hasShellSeparator(String.valueOf(c)),
+                    "分隔符集合两处不一致，字符：" + (int) c);
+        }
+    }
+```
+
+（`isSeparatorChar` 需从 private 放宽为包私有。）
+
+- [ ] **Step 2: 跑测试确认失败**
+
+- [ ] **Step 3: git 白名单收窄——不再手写解析 git 的选项语言**
+
+`branch` 与 `remote` **整个移出** `GIT_READ_ONLY`：
+
+```java
+    private static final Set<String> GIT_READ_ONLY = Set.of(
+            "status", "diff", "log", "show", "blame", "describe", "rev-parse");
+```
+
+`GIT_WRITE_SUBCOMMANDS` 整个删除（对 `branch` 本就是死条件——`add`/`rename` 之流根本不是
+`git branch` 的子命令）。`GIT_WRITE_OPTIONS` 也删除：它存在的唯一理由就是给 `branch` 兜底。
+`isGitReadOnly` 只保留一条按前缀的检查：
+
+```java
+    private static boolean isGitReadOnly(String segment) {
+        String sub = secondWord(segment);
+        if (!GIT_READ_ONLY.contains(sub)) {
+            return false;
+        }
+        for (String a : words(segment)) {
+            if (a.startsWith("--output")) {
+                return false;                    // git diff/show/log --output=F 会落盘
+            }
+        }
+        return true;
+    }
+```
+
+> **为什么是收窄而不是把解析补全**：审查用真实 git 实测出三种绕过（短选项捆绑 `-df`、
+> 位置参数 `git branch evil`、等号形式 `--set-upstream-to=`），根因是本方法在
+> **手写解析 git 的 parse-options 语言**——那个语言支持捆绑、等号、位置参数与别名，
+> 逐个补漏是打不赢的。`git branch` / `git remote` 从此走 ASK，多问一次；
+> 而 `git status/log/diff/show` 这些真正高频的只读操作不受影响。
+>
+> `git -c …` / `git -C …` 这类全局选项前置的形态，因 `secondWord` 不在白名单里而自动落 ASK，
+> 方向正确，无需额外处理。
+
+- [ ] **Step 4: `file` 移出只读白名单**
+
+从 `READ_ONLY` 里删掉 `"file"`。理由与既有的 `find` / `rg` / `env` 排除同源，
+且它违反了本类自己写下的入选标准「光看首词就能断定整段无副作用」：
+`file -C -m X` 会编译 magic 库并**静默覆盖** cwd 下的 `magic.mgc`（实测写入 7.2 MB）。
+
+- [ ] **Step 5: 分隔符集合也收敛为唯一定义（Task 3R 只做了一半）**
+
+Task 3R 合并了「不可拆分构造」清单，但**分隔符清单仍是两份**：
+`PermissionRule.hasShellSeparator` 里的 `; | & \n \r`，与 `BashCommandSplitter.isSeparatorChar`。
+而分隔符清单恰恰是制造过 C1 与 `<(` 两个 Critical 的那一份。
+
+`hasShellSeparator` 改为消费 `isSeparatorChar`，与它消费 `hasUnsplittableConstruct` 的方式一致：
+
+```java
+    static boolean hasShellSeparator(String command) {
+        for (int i = 0; i < command.length(); i++) {
+            if (BashCommandSplitter.isSeparatorChar(command.charAt(i))) {
+                return true;
+            }
+        }
+        return hasUnsplittableConstruct(command);
+    }
+```
+
+> `PredicateConsistencyTest` 抓不到这类回归——它的 `SAMPLES` 是固定字面量数组，
+> 只往一侧加字符它照样全绿。故 Step 1 的 `SeparatorSetConsistencyTest` 遍历字符空间。
+
+- [ ] **Step 6: 跑测试确认全绿** —— `BashCommandSplitterTest`、`SeparatorSetConsistencyTest`、
+`PredicateConsistencyTest`、`PermissionRuleTest`、`ToolRegistryTest` 全部重跑。
+
+- [ ] **Step 7: 提交**
+
+```bash
+git commit -m "fix(permission): git 白名单收窄至无写形态的子命令，file 移出只读，分隔符集合合并"
+```
+
+---
+
 ### Task 4: DangerousPaths（内置不可绕过检查）
 
 > **来自 Task 2 的两条实测提醒**（`ToolTargets` 现按 root 解析路径目标，`839071d`）：
