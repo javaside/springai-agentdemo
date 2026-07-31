@@ -620,9 +620,51 @@ git commit -m "feat(permission): 权限枚举与规则 DSL（解析/匹配/回�
             if (prefix.isEmpty()) {
                 return false;                           // I2：空前缀不放行一切
             }
-            return target.equals(prefix)                // I3：词边界
-                    || target.startsWith(prefix + " ");
+            return matchesPrefix(target, prefix);       // I3：词边界
         }
+```
+
+- [ ] **Step 4b: 词边界的正确定义（Task 1R 执行中暴露，勿简化）**
+
+朴素的 `startsWith(prefix + " ")` 会打掉计划原有的第 3 个测试：
+`Bash(rm -rf /:*)` 应命中 `rm -rf /var/tmp/x`，但 `/` 后面直接接 `var`、没有空格。
+
+两条语义都必须成立，且**不能**靠「DENY 用宽松、ALLOW 用严格」来调和——
+behavior 语义不属于匹配原语，同一条规则换个 behavior 就换含义会让后续任务全得记住这个例外。
+
+真正的规律：**前缀停在词中间才需要空格；前缀已经停在分隔符上就不需要。**
+
+```java
+    /**
+     * 前缀是否在<b>词边界</b>上命中目标。
+     *
+     * <p>{@code ls} 停在字母上 → 必须整串相等或后接空格，故不授权 {@code lsof}；
+     * {@code rm -rf /} 停在 {@code /} 上 → 该分隔符本身就是边界，
+     * 可直接接续，故仍命中 {@code rm -rf /var/tmp/x}。
+     */
+    private static boolean matchesPrefix(String target, String prefix) {
+        if (!target.startsWith(prefix)) {
+            return false;
+        }
+        if (target.length() == prefix.length()) {
+            return true;                                 // 整串相等
+        }
+        char last = prefix.charAt(prefix.length() - 1);
+        if (!Character.isLetterOrDigit(last) && last != '_') {
+            return true;                                 // 前缀已停在分隔符上
+        }
+        return target.charAt(prefix.length()) == ' ';    // 否则必须落在空格上
+    }
+```
+
+对应补一条断言进 `prefixRuleRespectsTokenBoundary`，把这个规律钉住：
+
+```java
+        // 前缀停在分隔符上时，允许直接接续（否则 rm -rf / 拦不住 rm -rf /var/tmp/x）
+        PermissionRule rm = PermissionRule.parse(
+                "Bash(rm -rf /:*)", PermissionBehavior.DENY, RuleScope.USER);
+        assertTrue(rm.matches("Bash", "rm -rf /var/tmp/x", false, ROOT));
+        assertFalse(rm.matches("Bash", "rmdir /var/tmp/x", false, ROOT));
 ```
 
 - [ ] **Step 5: 补两个 helper**
