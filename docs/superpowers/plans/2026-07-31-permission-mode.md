@@ -1185,7 +1185,14 @@ public final class ToolTargets {
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=ToolRegistryTest`
-Expected: PASS（6 个测试全绿）
+Expected: PASS（**8** 个测试全绿——原 6 个 + `root` 修订新增的 2 个）
+
+> ⚠ **Step 1 的 6 个测试块写于 `root` 参数修订之前**，其中调用的是 2 参 `extract`，
+> 对新签名编译不过。照实改成传第三参 `null`（即文档化的「无根退化」）即可，
+> 这 6 个断言的语义不变：其中只有 `extractTarget` 会走到路径分支，而它用的是绝对路径
+> `/tmp/a.txt`，任何 root 下结果都相同；其余五个在到达 `resolvePath` 前就返回了。
+>
+> 另：上面的 `ToolTargets` 代码块**漏了** `import java.nio.file.Path;`，照补。
 
 - [ ] **Step 6: 提交**
 
