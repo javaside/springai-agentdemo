@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** ConversationState 对 AskRequest 的落地：正常回合存入、迟到回合丢弃并 cancel、clear 清空。 */
+/** ConversationState 对 AskRequest 的落地：正常回合入模态队列、迟到回合丢弃并 cancel、移除后清空。 */
 class ConversationStateAskTest {
 
     private static AskRequest req(long turnId, AtomicBoolean cancelled) {
@@ -33,7 +33,7 @@ class ConversationStateAskTest {
         s.onTurnStarted(7);                       // acceptingTurnId = 7
         AskRequest r = req(7, new AtomicBoolean());
         s.onQuestionAsked(7, r);
-        assertSame(r, s.pendingAsk(), "当前回合的问询应被存入 pendingAsk");
+        assertSame(r, s.peekModal(), "当前回合的问询应进模态队列");
     }
 
     @Test
@@ -42,16 +42,17 @@ class ConversationStateAskTest {
         s.onTurnStarted(9);                       // 当前回合是 9
         AtomicBoolean cancelled = new AtomicBoolean();
         s.onQuestionAsked(8, req(8, cancelled));  // 迟到回合 8
-        assertNull(s.pendingAsk(), "迟到回合不应弹面板");
+        assertNull(s.peekModal(), "迟到回合不应弹面板");
         assertTrue(cancelled.get(), "迟到问询应被 cancel 以唤醒工具线程");
     }
 
     @Test
-    void clearPendingAsk_resets() {
+    void removeModal_resets() {
         ConversationState s = new ConversationState();
         s.onTurnStarted(1);
-        s.onQuestionAsked(1, req(1, new AtomicBoolean()));
-        s.clearPendingAsk();
-        assertNull(s.pendingAsk());
+        AskRequest r = req(1, new AtomicBoolean());
+        s.onQuestionAsked(1, r);
+        s.removeModal(r);
+        assertNull(s.peekModal());
     }
 }

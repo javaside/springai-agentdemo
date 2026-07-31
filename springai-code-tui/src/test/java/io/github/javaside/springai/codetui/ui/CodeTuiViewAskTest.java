@@ -58,7 +58,7 @@ class CodeTuiViewAskTest {
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));     // 高亮 A→B
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));    // 选 B
         assertEquals(Map.of("选哪个?", "B"), got.get());
-        assertNull(s.pendingAsk(), "答完应清除 pendingAsk");
+        assertNull(s.peekModal(), "答完应从模态队列摘除");
     }
 
     @Test
@@ -86,7 +86,7 @@ class CodeTuiViewAskTest {
         v.tickForTest();
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));
         assertTrue(cancelled.get(), "Esc 应触发 responder.cancel");
-        assertNull(s.pendingAsk());
+        assertNull(s.peekModal());
     }
 
     @Test
@@ -100,7 +100,7 @@ class CodeTuiViewAskTest {
         CodeTuiView v = view(s);
         v.tickForTest();                                   // 侦测到畸形问询
         assertTrue(cancelled.get(), "空选项问询应被自动取消");
-        assertNull(s.pendingAsk(), "畸形问询应从 state 摘除，避免反复重入");
+        assertNull(s.peekModal(), "畸形问询应从 state 摘除，避免反复重入");
         // 必须走完整回合取消（与 Esc 同路径）：清空排队 + notice，使 doOnCancel 回滚会话、不残留 tool_calls。
         assertEquals("问询格式无效，已取消当前回合", s.notice(), "畸形降级应给出取消提示（证明走了 cancelTurnFor）");
         // 进模态后若误入，下面这次 ↑ 会除零抛异常；不抛即证明未入模态。
@@ -207,7 +207,7 @@ class CodeTuiViewAskTest {
         v.feedKeyForTest(KeyEvent.ofChar('x'));
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));  // 子模式里 Esc 仍取消整回合
         assertTrue(cancelled.get(), "自由文本里 Esc 应取消整回合");
-        assertNull(s.pendingAsk());
+        assertNull(s.peekModal());
     }
 
     @Test

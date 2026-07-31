@@ -2,6 +2,9 @@ package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.AgentListener;
 import io.github.javaside.springai.codetui.agent.AskRequest;
+import io.github.javaside.springai.codetui.agent.ModalRequest;
+import io.github.javaside.springai.codetui.agent.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.PermissionRequest;
 import dev.tamboui.text.CharWidth;
 import org.springframework.ai.chat.messages.Message;
 
@@ -22,6 +25,12 @@ import java.util.List;
  *
  * 并发：写在 Reactor 线程、读/drain 在渲染线程；复合操作 {@code synchronized}、标志 {@code volatile}；
  * 每个带 turnId 的写入先做迟到过滤（{@link #onTurnStarted} 例外——它设定 acceptingTurnId）。
+ *
+ * <p><b>活性责任（本类是别人的逃生口）</b>：模态请求队列里每一个元素背后都<b>阻塞着一个工具线程</b>，
+ * 而那个线程持着回合。故凡是让请求离队的路径都必须应答它一次：入队失败（迟到 / 队满）由入队方法当场应答，
+ * 已入队的由 {@link #clearModals()}（{@link #cancelCurrent()} / {@link #resetForNewSession()} 调）唤醒，
+ * 正常处理完的由 UI 应答后调 {@link #removeModal}。漏任一条就是工具线程永久 park ——
+ * 整个 agent 静默挂死，无报错也无出口（见 {@code ModalRequest#cancel()} 的活性纪律）。
  */
 public final class ConversationState implements AgentListener {
     public enum Status { IDLE, THINKING, RUNNING_TOOL }
@@ -85,8 +94,13 @@ public final class ConversationState implements AgentListener {
     private volatile long compactStartNanos = 0L;
     private volatile String compactReason = "";
 
-    // ── AskUserQuestion 瞬态：待作答的问询（渲染线程读、工具线程写；迟到过滤后置入） ──
-    private volatile AskRequest pendingAsk;
+    // ── 模态请求队列（问询 + 审批共用；渲染线程读、工具线程写；迟到过滤后置入） ──
+    // 为何是队列而非单字段：ParallelTasks 下多个子 agent 线程可能同时判出 ASK，
+    // 单个 volatile 字段会让后来者覆盖前者、被覆盖的那个工具线程永久 park。
+    private final Deque<ModalRequest> modals = new ArrayDeque<>();
+
+    /** 队列上限：防失控回合塞爆队列；超出的请求直接被拒（DENY，回合继续）。 */
+    static final int MODAL_QUEUE_CAP = 8;
 
     // ── 输入缓冲 ────────────────────────────────────────────────────────
     public synchronized void typeChar(char c) { notice = ""; input.append(c); }
@@ -125,6 +139,7 @@ public final class ConversationState implements AgentListener {
      * 不动会话事件（那是 {@link io.github.javaside.springai.codetui.agent.CodingAgent#clearContext()} 的职责）。
      */
     public synchronized void resetForNewSession() {
+        clearModals();      // 别把待处理模态留给新会话：它们背后各有一个 park 着的工具线程
         todo.clear();
         subtasks.clear();
         pending.clear();
@@ -141,10 +156,49 @@ public final class ConversationState implements AgentListener {
     public String activeToolSummary() { return activeToolSummary; }
     public long acceptingTurnId() { return acceptingTurnId; }
 
-    /** 当前待作答的问询（无则 null）；渲染线程读。 */
-    public AskRequest pendingAsk() { return pendingAsk; }
-    /** 清除待作答问询（UI 答完/取消后调）。 */
-    public void clearPendingAsk() { this.pendingAsk = null; }
+    /** 队首模态请求（无则 null）；渲染线程读，<b>不出队</b>。 */
+    public synchronized ModalRequest peekModal() { return modals.peek(); }
+
+    /**
+     * 按<b>身份</b>移除一个已处理完的模态请求（答完 / 批完 / 取消后由 UI 调）。
+     *
+     * <p>不用 {@code Deque.remove(Object)}：它按 {@code equals} 找，而 {@link AskRequest} /
+     * {@link PermissionRequest} 都是 record（逐分量 equals），分量恰好相同的两个请求会让它摘错人——
+     * 被误摘的那个请求再无人应答，其工具线程永久 park。
+     *
+     * <p>不负责应答：调用方（UI）已经应答过了。要「移除并唤醒」用 {@link #clearModals()}。
+     */
+    public synchronized void removeModal(ModalRequest r) {
+        modals.removeIf(m -> m == r);
+    }
+
+    /** 是否有待处理模态（计入 {@link #isBusy()}）。 */
+    public synchronized boolean hasModal() { return !modals.isEmpty(); }
+
+    /**
+     * 入队；队列已满返回 false（调用方负责应答，绝不能静默丢弃——丢了就是永久 park）。
+     */
+    private boolean offerModal(ModalRequest r) {
+        if (modals.size() >= MODAL_QUEUE_CAP) return false;
+        modals.add(r);
+        return true;
+    }
+
+    /**
+     * 唤醒并清空全部待处理模态（取消回合 / 开新会话）。
+     *
+     * <p>先清队列再逐个 {@code cancel()}：① 应答口可能回调进本类（{@code synchronized} 可重入），
+     * 边遍历边改会 {@code ConcurrentModificationException}；② 万一某个 {@code cancel()} 抛异常，
+     * 队列也已经是干净的，不会把剩下的请求留在里面反复重试。
+     * 被唤醒的工具线程随后要抢本类的锁写迟到事件——它们会等到本方法所在的 {@code synchronized}
+     * 块（{@link #cancelCurrent()} / {@link #resetForNewSession()}）走完，那时 acceptingTurnId 已复位，迟到写入自然被过滤。
+     */
+    public synchronized void clearModals() {
+        if (modals.isEmpty()) return;
+        List<ModalRequest> doomed = new ArrayList<>(modals);
+        modals.clear();
+        for (ModalRequest r : doomed) r.cancel();
+    }
 
     // ── 压缩状态读取（渲染线程用） ──
     public boolean isCompacting() { return compacting; }
@@ -152,8 +206,8 @@ public final class ConversationState implements AgentListener {
     /** 距压缩开始的经过纳秒（用于状态行计时）。 */
     public long compactElapsedNanos() { return compacting ? System.nanoTime() - compactStartNanos : 0L; }
 
-    /** 「忙」= 有活跃回合或正在压缩：此时不应发起新回合（排队）、也不应触发手动压缩。 */
-    public boolean isBusy() { return !isIdle() || compacting; }
+    /** 「忙」= 有活跃回合 / 正在压缩 / 有待处理模态：此时不应发起新回合（排队）、也不应触发手动压缩。 */
+    public boolean isBusy() { return !isIdle() || compacting || hasModal(); }
 
     /** 渲染线程调用：取走并清空「待 println」的定稿行。 */
     public synchronized List<OutputLine> drainPending() {
@@ -185,8 +239,14 @@ public final class ConversationState implements AgentListener {
     /** live 区显示：在建助手行的当前残行（未换行段）。 */
     public synchronized String streaming() { return streaming.toString(); }
 
-    /** Esc 取消当前回合：定稿在建行、acceptingTurnId=-1、状态回 IDLE。 */
+    /**
+     * Esc 取消当前回合：唤醒全部待处理模态、定稿在建行、acceptingTurnId=-1、状态回 IDLE。
+     *
+     * <p>{@link #clearModals()} 放在最前：它是本方法里唯一会调用外部代码的一步，
+     * 排在前面保证后续任何一步抛异常都不会把请求连同其阻塞的工具线程留在队列里（漏了就是永久 park）。
+     */
     public synchronized void cancelCurrent() {
+        clearModals();                 // 必须最先做：漏了这步，阻塞中的工具线程永久 park
         flushStreaming();
         acceptingTurnId = -1L;
         activeTool = "";
@@ -345,12 +405,22 @@ public final class ConversationState implements AgentListener {
 
     @Override
     public synchronized void onQuestionAsked(long turnId, AskRequest request) {
-        if (turnId != acceptingTurnId) {
-            // 迟到：回合已被取消/切换。桥侧的 take() 靠取消路径唤醒，这里直接丢弃不弹面板。
-            request.responder().cancel();
-            return;
+        if (turnId != acceptingTurnId || !offerModal(request)) {
+            // 迟到（回合已取消/切换）或队列已满：桥侧的 take() 靠取消路径唤醒，这里直接取消不弹面板。
+            request.cancel();
         }
-        this.pendingAsk = request;
+    }
+
+    /**
+     * 审批请求入队。<b>迟到与队满一律 DENY 而非 CANCEL</b>：
+     * 拒绝让模型自寻替代、回合继续；CANCEL 会中断整个回合，语义过重。
+     * 两条路径都<b>必须</b>应答——静默丢弃就是工具线程永久 park。
+     */
+    @Override
+    public synchronized void onPermissionRequested(long turnId, PermissionRequest request) {
+        if (turnId != acceptingTurnId || !offerModal(request)) {
+            request.responder().respond(PermissionOutcome.DENY);
+        }
     }
 
     @Override

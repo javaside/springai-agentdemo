@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.ui;
 import io.github.javaside.springai.codetui.agent.AskRequest;
 import io.github.javaside.springai.codetui.agent.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.McpRegistry;
+import io.github.javaside.springai.codetui.agent.ModalRequest;
 import io.github.javaside.springai.codetui.agent.ModelOption;
 import io.github.javaside.springai.codetui.agent.OptionSpec;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
@@ -212,8 +213,9 @@ public final class CodeTuiView extends InlineApp {
             printer.streamingLine(row);
         }
         // 侦测到新问询（身份不同）→ 进入作答态并复位到第一问。
-        AskRequest pa = state.pendingAsk();
-        if (pa != null && pa != activeAsk) {
+        // 队首若是 PermissionRequest 则本 Task 暂不处理（审批面板见 Task 14）。
+        ModalRequest head = state.peekModal();
+        if (head instanceof AskRequest pa && pa != activeAsk) {
             if (isAnswerable(pa)) {
                 activeAsk = pa;
                 askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
@@ -222,7 +224,7 @@ public final class CodeTuiView extends InlineApp {
                 // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
                 // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消整回合。
                 // 必须与 Esc 走同一 cancelTurnFor：只 responder.cancel、不 dispose 回滚，会残留悬空 tool_calls → 下条 400。
-                state.clearPendingAsk();
+                state.removeModal(pa);
                 cancelTurnFor(pa, "问询格式无效，已取消当前回合");
             }
         }
@@ -683,7 +685,7 @@ public final class CodeTuiView extends InlineApp {
         }
         if (cmd.equals("/clear")) {                  // 换新空会话：旧会话留盘可 -c 恢复
             inputState.clear();
-            if (state.isBusy()) {                    // 回合中 或 压缩中：拒绝（isBusy = !isIdle || compacting）
+            if (state.isBusy()) {                    // 回合中 / 压缩中 / 有待处理模态：拒绝（见 isBusy）
                 state.setNotice("忙碌中，无法清空");
                 return;
             }
@@ -1107,11 +1109,12 @@ public final class CodeTuiView extends InlineApp {
         state.setNotice(notice);
     }
 
-    /** 清作答态并从 state 摘除 pendingAsk（避免 drain 再次进入）。 */
+    /** 清作答态并从 state 的模态队列摘除该问询（避免 drain 再次进入）。 */
     private void clearAskState() {
+        AskRequest done = activeAsk;                 // 先取引用再置 null：否则 removeModal(null) 摘不掉，drain 会反复重入
         activeAsk = null; askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
         askFreeText = false; askInput.clear();
-        state.clearPendingAsk();
+        state.removeModal(done);
     }
 
     /** 作答面板：进度 + header + 问题文本 + 逐项选项（单选 ❯ 高亮）。 */
