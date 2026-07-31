@@ -863,8 +863,17 @@ Task 7 因此必须按段判定，两个方向**故意不对称**：
 2. **不得为解释器生成裸程序名前缀**。`commandPrefix` 在第二个词是 flag 时会塌成程序名，
    于是批准 `python -c "print(1)"` 生成 `Bash(python:*)`，它命中
    `python -c "__import__('os').system('rm -rf /tmp/x')"`（已实测，且串内无分隔符，N1 的守卫也拦不住）。
-   `python` `python3` `bash` `sh` `zsh` `perl` `ruby` `node` `env` `xargs` 等一律不提供前缀建议，
-   只提供「本次允许」。
+   名单**不能只列解释器，要列「能执行任意命令的工具」**——同一个坑，不同的二进制。
+   以下已实测仍会命中前缀规则（串内无任何 shell 分隔符，N1 的守卫拦不住）：
+   `find . -exec rm -rf {} +`（`+` 形式连 `;` 都不需要）、`awk 'BEGIN{system("id")}'`、`xargs rm -rf`。
+
+   名单：`python` `python3` `bash` `sh` `zsh` `perl` `ruby` `node` `env`
+   `xargs` `find` `awk` `make` `git`（`-c` / `!alias`）`ssh` `timeout` `nohup` `nice`
+   `tar`（`--checkpoint-action`）`rsync`（`-e`）。一律不提供前缀建议，只提供「本次允许」。
+
+   > ⚠ **这三条约束是不可协商的**：`PermissionRule` 的类契约已经**书面承诺**
+   > 「自动生成的规则由 `PermissionEngine` 保证不会停在非字母数字字符上」。
+   > 该承诺目前只在计划里成立。7R 若落空，那段 javadoc 就从「已知限制」变成**误导性文档**。
 3. **载入路径工具的 `:*` 规则时记 WARN**（N3）——那是一条恒不命中的静默失效规则。
 
 ---
