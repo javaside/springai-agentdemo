@@ -19,7 +19,8 @@ import java.nio.file.PathMatcher;
  *
  * <p><b>匹配契约（已知边界，调用方必须知道）：</b>
  * <ul>
- *   <li><b>前缀规则只对单段命令生效</b>：目标含 {@code ; | & `}、{@code $(} 或换行时一律不命中，
+ *   <li><b>前缀规则只对单段命令生效</b>：目标含 {@code ; | & `}、{@code $(}、{@code <(}、{@code >(}
+ *       或换行（含 {@code \r}）时一律不命中，
  *       落回 ASK。命令是否需要按段授权由 {@link PermissionEngine} 负责（COMMAND 类别先拆分再逐段判定）。</li>
  *   <li><b>不做空白归一</b>：{@code rm  -rf /}（双空格）、{@code  rm -rf /}（前导空格）
  *       不命中 {@code Bash(rm -rf /:*)}。故 <b>DSL 的 deny 是尽力而为，真正的护栏是
@@ -29,6 +30,13 @@ import java.nio.file.PathMatcher;
  *   <li><b>只 {@code normalize()} 不 {@code toRealPath()}</b>：符号链接不解析
  *       （{@code toRealPath} 会让「写一个尚不存在的文件」直接失败）。
  *       <b>由 {@code ToolTargets} 负责交出已规范化的路径</b>。</li>
+ *   <li><b>{@code :*} 前缀语义只对命令生效</b>：路径目标上的 {@code :*} 规则
+ *       （如 {@code Write(/etc/:*)}）<b>恒不命中</b>——写成 {@code Write(/etc/**)}。
+ *       {@link PermissionEngine} 载入此类规则时须记 WARN，否则是一条静默失效的 deny。</li>
+ *   <li><b>前缀停在分隔符上时匹配任意续接</b>：{@code Bash(rm -rf /tmp/:*)} 并非
+ *       「限于 /tmp 内」的授权，它同样命中 {@code rm -rf /tmp/../home/user}。
+ *       手写此类规则请让前缀停在完整词上；自动生成的规则由
+ *       {@link PermissionEngine} 保证不会停在非字母数字字符上。</li>
  * </ul>
  *
  * @param toolName 工具注册名；{@code "*"} 匹配任意工具
@@ -135,13 +143,16 @@ public record PermissionRule(String toolName, String pattern,
     /**
      * 命令是否含「会引出另一条命令」的 shell 结构。含则前缀规则一律不命中（失败关闭）。
      *
-     * <p>只认命令链接与替换：{@code ; | & ` $( } 与换行。<b>不</b>认重定向 {@code > <}——
-     * 重定向不会引出新命令，其落点风险由 {@code DangerousPaths} 负责。
+     * <p>只认命令链接与替换：{@code ; | & ` $( <( >( } 与换行。<b>不</b>认<b>普通</b>重定向
+     * {@code > <}——它不引出新命令，其落点风险由 {@code DangerousPaths} 负责。
+     * 但 {@code <(} / {@code >(} 是<b>进程替换</b>，恰是「重定向不引出命令」不成立的那一种，
+     * 故必须算分隔符（与 {@code BashCommandSplitter} 对复合命令的判定保持一致）。
      */
     static boolean hasShellSeparator(String command) {
         return command.indexOf(';') >= 0 || command.indexOf('|') >= 0
                 || command.indexOf('&') >= 0 || command.indexOf('`') >= 0
                 || command.contains("$(")
+                || command.contains("<(") || command.contains(">(")   // N1：进程替换会执行命令
                 || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0;
     }
 
