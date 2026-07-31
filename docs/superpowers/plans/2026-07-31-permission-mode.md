@@ -29,7 +29,7 @@
 依据：`EventParser.parseCSI` 对 `'Z'` 有显式分支 `KeyEvent.ofKey(KeyCode.TAB, KeyModifiers.SHIFT, bindings)`；
 `JLineBackend` 走 `terminal.enterRawMode()` + `NonBlockingReader`，原始字节不被 JLine keymap 吞掉。
 
-**由此暴露的必修坑（Task 14 处理）**：`CodeTuiView` 现有两处 Tab 处理只判 `k.code() == KeyCode.TAB`——
+**由此暴露的必修坑（Task 15 处理）**：`CodeTuiView` 现有两处 Tab 处理只判 `k.code() == KeyCode.TAB`——
 `:645`（斜杠菜单补全）与 `:918`（MCP 面板展开）——**会把 Shift+Tab 一起吃掉**，必须补 `!k.hasShift()` 守卫。
 
 ---
