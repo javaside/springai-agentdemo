@@ -3431,6 +3431,41 @@ git commit -m "test(permission): 登记表完整性比对（漏登记即失败�
 
 ---
 
+### Task 8R: 防止完整性测试静默变空转（审查 3 Minor）
+
+- [ ] **Step 1: `RuntimeToolSet` 断言另外两个注册通道为空**
+
+`getToolCallbacks()` 只是 `DefaultChatClientRequestSpec` 上**三个并行注册通道之一**，
+兄弟是 `getToolNames()`（`defaultToolNames(String...)` 填充）与
+`getToolCallbackProviders()`（`defaultToolCallbacks(ToolCallbackProvider...)` 填充）。
+今天 `AgentTools` 只用 `.defaultTools(...)`，故枚举完整；但换通道注册的那天，
+本 helper 会**静默少枚举**，整个套件空转通过——正是它要防的失效，且不可见。
+
+在既有的 `IllegalStateException` 旁边加两条断言：两个兄弟通道必须为空，非空即抛，
+消息里写明「工具改走 X 通道注册了，本 helper 必须同步扩展，否则完整性测试形同虚设」。
+
+- [ ] **Step 2: `targetField == null` 的跳过限定为 INTERNAL**
+
+现在的跳过是无条件的，于是将来某个 `FILE_WRITE` / `COMMAND` 工具若登记成
+`targetField = null`，三条断言全过，而它**根本没有判定目标**。
+只有 `INTERNAL`（恒放行、无需目标）才允许为 null。
+
+- [ ] **Step 3: 给 `RuntimeToolSet` 的类 javadoc 补一句已知缺口**
+
+两个搜索工具由本 helper **无条件补齐**，故它们豁免于僵尸条目检查：
+实测把 `AgentTools.build()` 里的 `if (webSearch != null)` 整段去掉——工具真的从产品里消失了，
+套件仍 3/3 全绿。实践中很窄（改名仍会被抓、删工厂是编译错误，只有「删调用点但留工厂」会漏），
+这个取舍换来的是无 key 机器（CI）与有 key 机器的枚举一致，值得；
+但 javadoc 现在只讲了补齐的好处、没讲这个洞，读的人会过度信任它。
+
+- [ ] **Step 4: 跑测试确认全绿并提交**
+
+> **不在本任务范围**（记录以免被误读）：字段**存在性**不等于**正确性**——
+> `Grep` 的 `targetField` 改成 `"glob"`（真实存在但语义错）仍会全绿。
+> 这是本方法固有的界限，不是缺陷；别把「字段已校验」读成「字段是对的」。
+
+---
+
 ### Task 9: 模态请求类型（sealed）与 listener 接缝
 
 **Files:**
