@@ -17,6 +17,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -228,6 +229,30 @@ class ConversationStateModalQueueTest {
         assertNull(s.peekModal());
         // 注意：不断言 isBusy()==false —— resetForNewSession 刻意不动 status（回合状态归 cancelCurrent 管），
         // 这里只钉「模态被唤醒且清空」这一条活性契约。
+    }
+
+    /**
+     * 队列 {@code [A, B]}，A 的 responder 违约抛异常：B <b>仍必须</b>被唤醒，
+     * 且异常不得沿 {@code synchronized} 的 {@code cancelCurrent()} 传到 UI 线程的 Esc 处理器。
+     * 一个坏元素不得殃及它后面的每一个——这正是本类要防的那种挂死。
+     */
+    @Test
+    @DisplayName("排空循环容忍违约的 cancel()：坏元素不得殃及它后面的请求")
+    void throwingCancelDoesNotStrandTheRest() {
+        ConversationState s = started(1L);
+        List<PermissionOutcome> sink = new CopyOnWriteArrayList<>();
+        PermissionRequest bad = new PermissionRequest(1L, null, "Bash", "boom", "{}", "why", null,
+                o -> { throw new IllegalStateException("responder 违约抛异常"); });
+        PermissionRequest good = perm(1L, sink);
+
+        s.onPermissionRequested(1L, bad);
+        s.onPermissionRequested(1L, good);
+
+        assertDoesNotThrow(s::cancelCurrent, "异常不得传到 UI 线程的 Esc 处理器");
+
+        assertEquals(List.of(PermissionOutcome.CANCEL), sink,
+                "排在坏元素后面的请求必须照样被唤醒（漏了就是永久 park）");
+        assertNull(s.peekModal(), "队列仍应被清空");
     }
 
     /**

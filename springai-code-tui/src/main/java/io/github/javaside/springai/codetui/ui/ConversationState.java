@@ -6,6 +6,8 @@ import io.github.javaside.springai.codetui.agent.ModalRequest;
 import io.github.javaside.springai.codetui.agent.PermissionOutcome;
 import io.github.javaside.springai.codetui.agent.PermissionRequest;
 import dev.tamboui.text.CharWidth;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
 
 import java.util.ArrayDeque;
@@ -33,6 +35,9 @@ import java.util.List;
  * 整个 agent 静默挂死，无报错也无出口（见 {@code ModalRequest#cancel()} 的活性纪律）。
  */
 public final class ConversationState implements AgentListener {
+    /** 日志只落文件（logback 无 CONSOLE appender）——任何 stdout 输出都会撕裂内联 TUI 画面。 */
+    private static final Logger log = LoggerFactory.getLogger(ConversationState.class);
+
     public enum Status { IDLE, THINKING, RUNNING_TOOL }
 
     /**
@@ -192,12 +197,24 @@ public final class ConversationState implements AgentListener {
      * 队列也已经是干净的，不会把剩下的请求留在里面反复重试。
      * 被唤醒的工具线程随后要抢本类的锁写迟到事件——它们会等到本方法所在的 {@code synchronized}
      * 块（{@link #cancelCurrent()} / {@link #resetForNewSession()}）走完，那时 acceptingTurnId 已复位，迟到写入自然被过滤。
+     *
+     * <p><b>逐个 try/catch 是契约兜底，不是防御性编程</b>：{@code ModalRequest.cancel()} 明文规定
+     * 实现不得抛异常。但队列 {@code [A, B]} 里若 A 违约抛了，不兜底就会：① B 的工具线程<b>永不被唤醒</b>
+     * ——正是本类要防的那种挂死；② 异常沿 {@code synchronized} 的 {@link #cancelCurrent()} 传到 UI 线程的
+     * Esc 处理器。一个坏元素不得殃及它后面的每一个。故记日志后继续排空。
      */
     public synchronized void clearModals() {
         if (modals.isEmpty()) return;
         List<ModalRequest> doomed = new ArrayList<>(modals);
         modals.clear();
-        for (ModalRequest r : doomed) r.cancel();
+        for (ModalRequest r : doomed) {
+            try {
+                r.cancel();
+            } catch (RuntimeException e) {
+                // 违约的实现（如 null responder 引发的 NPE）：吞掉并继续，保证后面的元素照样被唤醒。
+                log.warn("模态请求 cancel() 抛异常（违反 ModalRequest.cancel() 契约），继续唤醒其余请求", e);
+            }
+        }
     }
 
     // ── 压缩状态读取（渲染线程用） ──
@@ -415,6 +432,10 @@ public final class ConversationState implements AgentListener {
      * 审批请求入队。<b>迟到与队满一律 DENY 而非 CANCEL</b>：
      * 拒绝让模型自寻替代、回合继续；CANCEL 会中断整个回合，语义过重。
      * 两条路径都<b>必须</b>应答——静默丢弃就是工具线程永久 park。
+     *
+     * <p><b>不阻塞</b>（契约要求）：本方法与 {@link #drainPending()} / {@link #cancelCurrent()}
+     * 共用同一把监视器锁，这里一旦阻塞冻住的是<b>整个 TUI</b>而不只是一个工具线程。
+     * 实现只做 O(1) 的入队判断；应答走的是消费方一次性、非阻塞的 handoff，故必然立即返回。
      */
     @Override
     public synchronized void onPermissionRequested(long turnId, PermissionRequest request) {
