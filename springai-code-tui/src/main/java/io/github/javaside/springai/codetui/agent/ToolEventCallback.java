@@ -54,13 +54,15 @@ public final class ToolEventCallback implements ToolCallback {
         }
     }
 
-    private static String extractTaskId(ToolContext ctx) {
+    /** 包私有：{@link PermissionCallback} 在本装饰器<b>外层</b>也要取 taskId，复用同一份实现避免漂移。 */
+    static String extractTaskId(ToolContext ctx) {
         if (ctx == null) return null;
         Object v = ctx.getContext().get(TASK_ID_KEY);
         return (v instanceof String s) ? s : null;
     }
 
-    private static long extractTurnId(ToolContext ctx) {
+    /** 包私有：{@link PermissionCallback} 在本装饰器<b>外层</b>取 turnId（那时 ThreadLocal 还没压入）。 */
+    static long extractTurnId(ToolContext ctx) {
         if (ctx == null) return -1L;
         Object v = ctx.getContext().get(TURN_ID_KEY);   // getContext():Map<String,Object>（已核实）
         return (v instanceof Long l) ? l : -1L;
