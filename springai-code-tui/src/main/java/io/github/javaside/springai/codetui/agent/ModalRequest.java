@@ -3,8 +3,9 @@ package io.github.javaside.springai.codetui.agent;
 /**
  * 一次需要抢占 UI 焦点的模态请求。
  *
- * <p><b>为何要统一</b>：问询（{@link AskRequest}）与审批（{@link PermissionRequest}）竞争同一个输入焦点，
- * 各搞一套状态必然互相覆盖。二者统一进 {@code ConversationState} 的模态请求队列，UI 逐个弹。
+ * <p><b>为何要统一</b>：问询（{@link AskRequest}）、审批（{@link PermissionRequest}）与计划审批
+ * （{@link PlanRequest}）竞争同一个输入焦点，各搞一套状态必然互相覆盖。
+ * 三者统一进 {@code ConversationState} 的模态请求队列，UI 逐个弹。
  *
  * <p><b>sealed 的包约束</b>：本项目无 {@code module-info}（unnamed module），
  * permitted 子类型必须与本接口<b>同包</b>——这就是 {@link PermissionRequest} 放在
@@ -12,11 +13,12 @@ package io.github.javaside.springai.codetui.agent;
  *
  * <p><b>穷尽分支怎么写</b>：本模块编译在 {@code maven.compiler.release=17}，
  * 而按类型模式 {@code switch}（JEP 441）要 21，故消费方一律用
- * {@code if (r instanceof AskRequest a) … else if (r instanceof PermissionRequest p) …}。
+ * {@code if (r instanceof AskRequest a) … else if (r instanceof PermissionRequest p) …
+ * else if (r instanceof PlanRequest pl) …}。
  * sealed 在 17 上照常生效（禁止外部实现、{@code getPermittedSubclasses} 可读），
  * 只是穷尽性由人保证而非编译器——新增子类型时须手动巡查所有 instanceof 链。
  */
-public sealed interface ModalRequest permits AskRequest, PermissionRequest {
+public sealed interface ModalRequest permits AskRequest, PermissionRequest, PlanRequest {
 
     /** 发起该请求的回合（供 UI 迟到过滤）。 */
     long turnId();

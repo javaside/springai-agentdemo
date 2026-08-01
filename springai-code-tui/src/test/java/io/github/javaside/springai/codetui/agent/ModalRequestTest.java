@@ -38,18 +38,22 @@ class ModalRequestTest {
     // ── 类型层：sealed 家族与统一取消入口 ──
 
     @Test
-    @DisplayName("AskRequest 与 PermissionRequest 都是 ModalRequest，可放进同一个队列")
-    void bothAreModalRequests() {
+    @DisplayName("问询 / 审批 / 计划审批都是 ModalRequest，可放进同一个队列")
+    void allKindsAreModalRequests() {
         AskRequest ask = new AskRequest(7L, List.of(), noopAskResponder());
         PermissionRequest perm = permissionRequest(7L, o -> { });
+        PlanRequest plan = new PlanRequest(7L, "# 计划", (o, f) -> { });
 
         assertInstanceOf(ModalRequest.class, ask);
         assertInstanceOf(ModalRequest.class, perm);
+        assertInstanceOf(ModalRequest.class, plan);
 
-        // 真正的用途：Task 10 要把两者塞进同一条模态请求队列
+        // 真正的用途：Task 10 要把三者塞进同一条模态请求队列
         Deque<ModalRequest> queue = new ArrayDeque<>();
         queue.add(ask);
         queue.add(perm);
+        queue.add(plan);
+        assertEquals(7L, queue.poll().turnId());
         assertEquals(7L, queue.poll().turnId());
         assertEquals(7L, queue.poll().turnId());
     }
@@ -81,23 +85,33 @@ class ModalRequestTest {
     }
 
     @Test
-    @DisplayName("sealed 生效：家族恰好是 AskRequest | PermissionRequest，外部无法再加实现")
+    @DisplayName("sealed 生效：外部无法再加实现（家族名单由 everyPermittedSubtypeIsHandled 钉住）")
     void sealedFamilyIsClosed() {
         // 计划原文用 `switch (r) { case AskRequest a -> …; case PermissionRequest p -> … }` 断言穷尽性，
         // 但按类型模式 switch 是 JEP 441（Java 21），本模块编译在 release=17，编译不过。
         // sealed 本身在 17 上完全生效，故改为直接对着 permitted 名单断言——
-        // 这比原写法更强：原写法只证「这两个分支能编译」，本断言还钉住「不会有第三个」。
-        Class<?>[] permitted = ModalRequest.class.getPermittedSubclasses();
+        // 这比原写法更强：原写法只证「这些分支能编译」，名单断言还钉住「不会多出一个没人处理的成员」。
         assertTrue(ModalRequest.class.isSealed(), "ModalRequest 必须是 sealed，否则外部可绕开模态队列纪律");
-        assertEquals(2, permitted.length, "模态家族只应有问询与审批两员；新增成员须巡查所有 instanceof 分发点");
-        assertEquals(Set.of(AskRequest.class, PermissionRequest.class), Set.of(permitted));
     }
 
     @Test
-    @DisplayName("消费方按 instanceof 分发两类模态（release=17 下穷尽性由人保证）")
-    void instanceofDispatchCoversBothKinds() {
+    @DisplayName("permits 列表全覆盖——新增子类型忘了改消费方时这里报警")
+    void everyPermittedSubtypeIsHandled() {
+        Class<?>[] permitted = ModalRequest.class.getPermittedSubclasses();
+        assertEquals(3, permitted.length,
+                "ModalRequest 新增/删除了子类型。Java 17 没有类型模式 switch，穷尽性由人保证——"
+                        + "请巡查全部 instanceof 链：CodeTuiView 的模态分派、本测试、ModalRequest 类注释里的示例");
+        assertEquals(Set.of("AskRequest", "PermissionRequest", "PlanRequest"),
+                java.util.Arrays.stream(permitted).map(Class::getSimpleName)
+                        .collect(java.util.stream.Collectors.toSet()));
+    }
+
+    @Test
+    @DisplayName("消费方按 instanceof 分发三类模态（release=17 下穷尽性由人保证）")
+    void instanceofDispatchCoversAllKinds() {
         assertEquals("ask", kindOf(new AskRequest(1L, List.of(), noopAskResponder())));
         assertEquals("permission", kindOf(permissionRequest(1L, o -> { })));
+        assertEquals("plan", kindOf(new PlanRequest(1L, "# 计划", (o, f) -> { })));
     }
 
     /** Task 10/15 里 UI drain 的分发形状：sealed 保证这条链已覆盖全部成员。 */
@@ -106,6 +120,8 @@ class ModalRequestTest {
             return "ask";
         } else if (r instanceof PermissionRequest) {
             return "permission";
+        } else if (r instanceof PlanRequest) {
+            return "plan";
         }
         throw new AssertionError("sealed 家族出现了未处理的成员: " + r.getClass());
     }
