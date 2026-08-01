@@ -11,6 +11,7 @@ import io.github.javaside.springai.codetui.agent.PermissionRequest;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.SkillInfo;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
@@ -129,6 +130,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
             new SlashCommand("/reload",  "重新扫描技能目录（新增/删除的 SKILL.md 生效）"),
             new SlashCommand("/mcp",     "管理 MCP 服务器（启用/禁用）"),
+            new SlashCommand("/permissions", "查看权限模式与生效规则"),
             new SlashCommand("/continue", "继续执行上一批未完成的计划"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
@@ -183,6 +185,15 @@ public final class CodeTuiView extends InlineApp {
      * 当成退出键，导致「往输入框里打或粘贴含 q 的文本（如某些技能名）就整个退出」。
      * 输入框需要能输入任意字符，故退出只保留 Ctrl+C（与 Claude Code 一致）。{@link #onInputKey} 里也已
      * 不再依赖 {@code isQuit()}，双保险。
+     *
+     * <p><b>同时解绑焦点导航（Tab / Shift+Tab）</b>——不解绑则这两个键<b>根本到不了输入框</b>。
+     * pty 实机抓到的现实：{@code EventRouter.routeKeyEvent} 把焦点导航排在最前，
+     * {@code isFocusPrevious()/isFocusNext()} 命中后即便 {@code focusPrevious()} 失败
+     * （本应用只有输入框一个可聚焦元素，next/prev 都回到自己 → 返回 false），它也<b>直接 return
+     * UNHANDLED</b>，不会继续下发给焦点元素。后果有两条，都是实机才看得见的：
+     * ① {@code Shift+Tab} 切不了权限模式；② 斜杠菜单的 Tab 补全与 MCP 面板的 Tab 展开
+     * <b>一直是死的</b>（此前无人实机验过 Tab，单测走 {@code InputBox.handleKeyEvent} 绕过了路由器）。
+     * 本应用没有多元素焦点链，焦点导航本就无意义，整组解绑即可，两个键随之落到 {@link #onInputKey}。
      */
     @Override
     protected InlineTuiConfig configure(int height) {
@@ -190,6 +201,8 @@ public final class CodeTuiView extends InlineApp {
         return base.toBuilder()
                 .bindings(base.bindings().toBuilder()
                         .rebind(KeyTrigger.ctrl('c'), Actions.QUIT)   // 整组替换：只剩 Ctrl+C，去掉 q/Q
+                        .unbind(Actions.FOCUS_NEXT)                   // 让裸 Tab 落到输入框（补全/展开）
+                        .unbind(Actions.FOCUS_PREVIOUS)               // 让 Shift+Tab 落到输入框（权限模式循环）
                         .build())
                 .build();
     }
@@ -426,6 +439,13 @@ public final class CodeTuiView extends InlineApp {
         // 修复：真实输入走 inputState 编辑器、不再触发旧 typeChar 清 notice，导致取消长回合（如子 agent）
         // 后 notice 永久占据状态栏；这里补回「下次按键即清」的既定行为。
         if (!state.notice().isEmpty()) state.setNotice("");
+        // Shift+Tab 循环权限模式（期 0 已 pty 实测：ESC[Z → code=TAB + SHIFT，与裸 Tab 可区分）。
+        // 放在最前：模态/菜单激活时也应能切模式（模式只影响后续判定，不动任何 pending 请求）；
+        // 但必须晚于上面那句「按任意键清 notice」，否则本次设的 notice 当场被清掉、用户看不到反馈。
+        if (k.code() == KeyCode.TAB && k.hasShift()) {
+            state.setNotice("权限模式：" + onSubmit.cyclePermissionMode().label());
+            return EventResult.HANDLED;
+        }
         if (activePermission != null) return onPermissionKey(k);   // 审批模态优先于一切文本编辑（背后 park 着工具线程）
         if (activeAsk != null) return onAskKey(k);      // 作答模态：全部按键交给它，屏蔽文本编辑
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
@@ -494,6 +514,9 @@ public final class CodeTuiView extends InlineApp {
             EventResult r = recallNext();
             if (r.isHandled()) return r;
         }
+        // 没有菜单可补全时的裸 Tab：吞掉。configure() 解绑焦点导航后它才会走到这里，
+        // 放行下去 textArea 会往输入框插一个制表符（对话框里没人想要）。也不复位补全/回溯态：它不是编辑键。
+        if (k.code() == KeyCode.TAB || k.isChar('\t')) return EventResult.HANDLED;
         slashDismissed = false;          // 其余键将落到编辑器改动文本 → 让补全菜单随新前缀重新出现
         slashIndex = 0;
         histIndex = history.size();       // 非 ↑↓ 的按键（含左右移动/编辑）退出回溯态
@@ -665,7 +688,8 @@ public final class CodeTuiView extends InlineApp {
         if (k.isCancel()) { slashDismissed = true; return EventResult.HANDLED; }
         if (k.code() == KeyCode.UP)   { slashIndex = (slashIndex - 1 + n) % n; return EventResult.HANDLED; }
         if (k.code() == KeyCode.DOWN) { slashIndex = (slashIndex + 1) % n;     return EventResult.HANDLED; }
-        if (k.code() == KeyCode.TAB || k.isChar('\t')) { inputState.setText(m.get(slashIndex).name()); return EventResult.HANDLED; }
+        // !hasShift()：Shift+Tab 也是 code=TAB，不加守卫就会被补全吃掉、切不了权限模式
+        if ((k.code() == KeyCode.TAB || k.isChar('\t')) && !k.hasShift()) { inputState.setText(m.get(slashIndex).name()); return EventResult.HANDLED; }
         if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
             inputState.setText(m.get(slashIndex).name());
             submitInput();                        // 复用分发：/model→选择器，/help→帮助
@@ -754,6 +778,11 @@ public final class CodeTuiView extends InlineApp {
             inputState.clear();
             if (busy()) { state.setNotice("忙碌中，无法管理 MCP"); return; }
             openMcpPicker();
+            return;
+        }
+        if (cmd.equals("/permissions")) {       // 只读报告：任何时刻都可查（含审批期间），不打断
+            inputState.clear();
+            printPermissions();
             return;
         }
         if (cmd.equals("/continue")) {               // 续跑：上一批计划被 Esc/报错中断后，据会话里保留的 todo 从首个未完成项接着做
@@ -938,7 +967,8 @@ public final class CodeTuiView extends InlineApp {
         for (int i = 0; i < n && i < 9; i++) {
             if (k.isChar((char) ('1' + i))) { pickIndex = i; mcpExpanded = false; return EventResult.HANDLED; }
         }
-        if (k.code() == KeyCode.TAB || k.isChar('\t')) { mcpExpanded = !mcpExpanded; return EventResult.HANDLED; }
+        // !hasShift()：同 onSlashMenuKey，别把 Shift+Tab（权限模式循环）当成展开键
+        if ((k.code() == KeyCode.TAB || k.isChar('\t')) && !k.hasShift()) { mcpExpanded = !mcpExpanded; return EventResult.HANDLED; }
         if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n') || k.isChar(' ')) {
             toggleMcp(list.get(pickIndex));
             return EventResult.HANDLED;
@@ -1302,6 +1332,30 @@ public final class CodeTuiView extends InlineApp {
         for (SlashCommand c : COMMANDS) state.pushInfo("  " + c.name() + "   " + c.desc());
         state.pushInfo("快捷键：Enter 发送 · \\+Enter 换行 · Esc 取消 · Ctrl+C 退出");
         state.pushInfo("编辑：Ctrl+A/E 行首尾 · Ctrl/Alt+←→ 按词跳 · Ctrl+W 删前词 · Ctrl+U/K 删至行首/尾");
+        state.pushInfo("权限：Shift+Tab 切换模式 · /permissions 查看规则");
+    }
+
+    /**
+     * {@code /permissions}：把当前模式、生效规则、内置底线打进 scrollback（灰色信息行）。
+     *
+     * <p>只读——改规则走审批面板的「允许，永久」或直接编辑 {@code .codetui/permissions.json}
+     * （交互式编辑规则不在本期范围）。
+     */
+    private void printPermissions() {
+        state.pushInfo("权限模式：" + onSubmit.permissionMode().label() + "（Shift+Tab 循环切换）");
+        List<PermissionRule> rules = onSubmit.permissionRules();
+        if (rules.isEmpty()) {
+            state.pushInfo("  当前没有自定义规则。可在 .codetui/permissions.json 配置，"
+                    + "或在审批面板选「允许，永久」自动写入。");
+        } else {
+            state.pushInfo("生效规则（deny > ask > allow）：");
+            for (PermissionRule r : rules) {
+                state.pushInfo("  • [" + r.behavior() + "] " + r.toDsl() + "   (" + r.scope() + ")");
+            }
+        }
+        state.pushInfo("内置底线（任何 allow 规则与 BYPASS 都盖不住，命中即询问）：");
+        state.pushInfo("  写 .ssh/.aws/.kube/.gnupg/.git/.codetui 配置、写 shell 启动文件、"
+                + "读私钥与凭据、rm -rf / 或 ~ 或变量目标");
     }
 
     /** /reload：重扫两层技能目录后打一行结果 + 复用 {@link #printSkills} 展示最新清单（运行中增删 SKILL.md 即时生效，无需重启）。 */
