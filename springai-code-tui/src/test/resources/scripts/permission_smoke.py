@@ -136,6 +136,9 @@ class StubModel(BaseHTTPRequestHandler):
     """
 
     requests = []          # (role_of_last_message, kind_of_reply) for assertions
+    # 每次请求<b>发出去的完整 messages</b>。悬空 tool_calls 只能从这里看出来：
+    # 桩不校验消息结构（真实网关才会 400），只断言「下一条消息收到了回复」<b>抓不到</b>那个 bug。
+    sent = []
     lock = threading.Lock()
 
     def log_message(self, fmt, *args):   # silence stderr noise into the pty
@@ -176,6 +179,7 @@ class StubModel(BaseHTTPRequestHandler):
 
         with StubModel.lock:
             StubModel.requests.append((role, kind))
+            StubModel.sent.append(messages)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -540,6 +544,102 @@ def check_plan_approval(session):
     session.write(CTRL_U)
 
 
+def dangling_tool_calls(messages):
+    """一次请求里「有 assistant(tool_calls)、却没有对应 tool 结果」的 tool_call id。
+
+    真实网关对这种历史直接 400（本项目为此做了 doOnCancel 回滚）。桩模型<b>不</b>校验，
+    所以只等一句回复是抓不到回归的——必须自己验消息结构。
+    """
+    answered = set()
+    for m in messages:
+        if m.get("role") == "tool" and m.get("tool_call_id"):
+            answered.add(m["tool_call_id"])
+    dangling = []
+    for m in messages:
+        if m.get("role") == "assistant":
+            for c in (m.get("tool_calls") or []):
+                if c.get("id") and c["id"] not in answered:
+                    dangling.append(c["id"])
+    return dangling
+
+
+def assert_detector_sees_tool_calls():
+    """自检：确认上面那个探测器真的<b>看得见</b> tool_calls。
+
+    桩收到的历史里若一个 assistant(tool_calls) 都没有（字段名换了、消息没带历史…），
+    dangling_tool_calls 会对任何输入返回空 —— 那条断言就成了永远绿的摆设。
+    """
+    with StubModel.lock:
+        seen = [m for msgs in StubModel.sent for m in msgs
+                if m.get("role") == "assistant" and m.get("tool_calls")]
+    if not seen:
+        die("自检失败：桩收到的历史里没有任何 assistant(tool_calls)，"
+            "悬空检测等于没测（多半是消息结构或字段名变了）")
+    probe = [{"role": "assistant", "tool_calls": [{"id": "x"}]}]
+    if dangling_tool_calls(probe) != ["x"]:
+        die("自检失败：dangling_tool_calls 认不出悬空的 tool_call")
+    print("Self-test OK: 历史里确实带 assistant(tool_calls)，悬空检测有鉴别力（%d 条）." % len(seen))
+
+
+def check_plan_cancel_turn(session):
+    """计划面板里按 Esc = 中断本回合，且<b>下一条消息不能 400</b>。
+
+    这条不是为了和批准路径对称，是为了那段历史：Esc 中断后若会话里残留半截的
+    {@code assistant(tool_calls)}，下一条消息直接 400 —— 项目为此专门做了 {@code doOnCancel} 回滚，
+    期 1 的 check_cancel_turn 就是为它写的。计划面板复用同一个 {@code cancelTurnFor}，但走的是
+    <b>一条新的异常路径</b>（PlanRequest.cancel() → PlanOutcome.CANCEL → 桥抛
+    PermissionCancelledException），这一段此前只有单测、没有实机走过。
+
+    Enters with mode=DEFAULT, leaves with mode=DEFAULT.
+    """
+    session.write(SHIFT_TAB)
+    session.pump(0.4)
+    session.write(SHIFT_TAB)                          # DEFAULT -> ACCEPT_EDITS -> PLAN
+    session.wait_for(MODE_PLAN)
+
+    session.write(("再出个方案 " + PLAN_MARKER).encode() + b"\r")
+    session.wait_for(PLAN_PANEL_TITLE, timeout=40)
+    session.pump(0.5)
+
+    session.write(ESC)
+    wait_until(session, lambda: PLAN_PANEL_TITLE not in session.screen_text(),
+               10, "Esc 关闭计划面板并中断回合")
+    # 「已取消当前回合」是走了 cancelTurnFor 的证据：只 responder.cancel 不会打这句，
+    # 而那正是会留下悬空 tool_calls 的写法。
+    session.wait_for("已取消当前回合")
+    session.pump(1.0)
+
+    # 真正的断言在这里：中断之后的下一条消息必须正常收到回复。
+    assert_detector_sees_tool_calls()          # 先证明探测器有鉴别力，再拿它下断言
+    with StubModel.lock:
+        before = len(StubModel.sent)
+    session.write("计划中断之后再说一句".encode() + b"\r")
+    session.wait_for(PLAIN_REPLY, timeout=30)
+    text = session.screen_text()
+    for bad in ("400", "Error", "错误"):
+        if bad in text:
+            die("计划面板 Esc 中断后的下一条消息出错（屏幕含 %r）" % bad, session.screen.display)
+
+    # 屏幕上「收到了回复」<b>不足以</b>证明会话干净：桩来者不拒，真实网关才 400。
+    # 直接验这条消息实际发出去的历史里没有悬空的 tool_calls（即回滚确实生效）。
+    with StubModel.lock:
+        after = StubModel.sent[before:]
+    if not after:
+        die("桩没有收到中断后的那条消息（无从判断会话是否干净）", session.screen.display)
+    for msgs in after:
+        bad_ids = dangling_tool_calls(msgs)
+        if bad_ids:
+            die("中断后的请求里残留悬空 tool_calls %s —— doOnCancel 回滚没生效，"
+                "真实网关会 400（角色序列=%s）"
+                % (bad_ids, [m.get("role") for m in msgs]), session.screen.display)
+    print("计划 Esc 中断 OK: 面板收起、回合结束、下一条消息正常，"
+          "且发出的历史里无悬空 tool_calls（回滚生效）.")
+
+    session.write(SHIFT_TAB)                          # PLAN -> DEFAULT
+    session.pump(0.4)
+    assert_mode_via_report(session, "默认")
+
+
 def check_permissions_report(session):
     session.write(b"/permissions\r")
     session.wait_for(PERM_BOTTOM_LINE)
@@ -786,6 +886,7 @@ def main():
         check_mode_cycle(session)
         check_mode_indicator_persists(session)
         check_plan_approval(session)
+        check_plan_cancel_turn(session)
         check_permissions_report(session)
         check_slash_tab_guard(session)
         check_mcp_tab_guard(session)
