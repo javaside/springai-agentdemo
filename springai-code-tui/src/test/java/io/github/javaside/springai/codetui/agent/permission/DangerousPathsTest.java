@@ -215,6 +215,22 @@ class DangerousPathsTest {
     }
 
     @Test
+    @DisplayName("shell 的 -c 载荷本身是一条命令，须递归检查")
+    void shellDashCPayloadIsCheckedRecursively() {
+        assertNotNull(DangerousPaths.checkCommand("bash -c \"rm -rf /\"", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("sh -c 'rm -rf /'", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("zsh -c \"rm -rf " + HOME + "\"", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("sudo bash -c \"rm -rf /\"", ROOT),
+                "sudo 是包装词，head 会落到 bash 上");
+        assertNotNull(DangerousPaths.checkCommand("/bin/bash -c \"cat /etc/shadow\"", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("bash -lc \"rm -rf /\"", ROOT),
+                "组合短选项 -lc 同样是 -c");
+        // 对照：无害载荷不得误报，否则 shell -c 会变成一律弹窗
+        assertNull(DangerousPaths.checkCommand("bash -c \"ls -la\"", ROOT));
+        assertNull(DangerousPaths.checkCommand("bash -c \"mvn -q test\"", ROOT));
+    }
+
+    @Test
     @DisplayName("只读命令也能一次读光凭据：递归扫描家目录 / 根、以及系统凭据文件")
     void readOnlyCommandsCanStillSweepEverything() {
         // grep 在只读白名单里，DEFAULT 模式下无需任何规则就自动放行——

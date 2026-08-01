@@ -558,8 +558,9 @@ public final class PermissionEngine {
      * 此时面板只剩「本次允许」/「拒绝」。
      *
      * <ul>
-     *   <li><b>命令</b> → 单段且首词安全时给前缀规则 {@code Bash(<前缀>:*)}；多段时给
-     *       <b>整串字面量</b>规则（只命中这一条命令）；首词能执行任意命令、或命令拆不动时 → null；</li>
+     *   <li><b>命令</b> → 单段且首词安全时给前缀规则 {@code Bash(<前缀>:*)}；否则（多段、
+     *       或首词在 {@link #NO_PREFIX_COMMANDS} 里）给<b>整串字面量</b>规则——它逐字相等才命中，
+     *       不可能比被批准的那次更宽；命令拆不动时 → null（那时连「哪些是命令」都不确定）；</li>
      *   <li><b>路径</b> → 该文件<b>本身</b>（最窄授权），且必须 {@link PermissionRule#escapeGlob}——
      *       否则 {@code report[2026].md} 生成的规则永不命中它自己、却放开了别的文件；</li>
      *   <li><b>网络</b> → 域名前缀 {@code WebFetch(https://host/:*)}，<b>结尾的 / 不能省</b>
@@ -590,23 +591,29 @@ public final class PermissionEngine {
         }
     }
 
+    /**
+     * 命令的建议规则：能安全取前缀就给前缀规则，否则退到<b>整串字面量</b>规则。
+     *
+     * <p>字面量规则的 pattern 与命令<b>逐字相等</b>才命中（{@link PermissionRule#matches} 对
+     * 非路径、非 {@code :*} 的 pattern 走整串相等），因此它<b>不可能比被批准的那次调用更宽</b>——
+     * 这正是 Task 7R 第 2 条要防的事（「绝不自动生成比用户批准的更宽的规则」），
+     * 而那条约束的手段是「不给<b>前缀</b>」，不是「什么都不给」。
+     * 于是 {@code python -c "print(1)"} / {@code git push origin main} 这类
+     * 落在 {@link #NO_PREFIX_COMMANDS} 里的命令仍然能「以后不再问」，只是必须一模一样。
+     */
     private PermissionRule commandRule(String toolName, String target, BashCommandSplitter.Split split) {
         if (target == null || split == null || !split.parseable() || split.segments().isEmpty()) {
             return null;                                    // 语义未知：任何规则都是猜的
         }
-        if (split.segments().size() > 1) {
-            // 多段命令没有安全的前缀可取（前缀规则本来也只逐段匹配），只能给整串字面量。
-            // 它逐字相等才命中，不可能放宽——但也只对一模一样的命令管用
-            for (String seg : split.segments()) {
-                if (isNoPrefixCommand(firstWord(seg))) {
-                    return null;
-                }
+        if (split.segments().size() == 1) {
+            String prefix = commandPrefix(split.segments().get(0));
+            if (prefix != null) {
+                return new PermissionRule(toolName, prefix + ":*",
+                        PermissionBehavior.ALLOW, RuleScope.SESSION);
             }
-            return new PermissionRule(toolName, target.trim(), PermissionBehavior.ALLOW, RuleScope.SESSION);
         }
-        String prefix = commandPrefix(split.segments().get(0));
-        return prefix == null ? null
-                : new PermissionRule(toolName, prefix + ":*", PermissionBehavior.ALLOW, RuleScope.SESSION);
+        // 多段命令同样只能给字面量：前缀规则按 7R 是逐段匹配的，本来就帮不上多段命令
+        return new PermissionRule(toolName, target.trim(), PermissionBehavior.ALLOW, RuleScope.SESSION);
     }
 
     private PermissionRule pathRule(String toolName, String target) {
@@ -761,11 +768,6 @@ public final class PermissionEngine {
     private static List<String> words(String segment) {
         String s = segment == null ? "" : segment.trim();
         return s.isEmpty() ? List.of() : List.of(s.split("\\s+"));
-    }
-
-    private static String firstWord(String segment) {
-        List<String> w = words(segment);
-        return w.isEmpty() ? "" : w.get(0);
     }
 
     /** 判定目标进面板/日志前截断——MCP 的整串入参可能有几千字符，会把审批面板撑烂。 */

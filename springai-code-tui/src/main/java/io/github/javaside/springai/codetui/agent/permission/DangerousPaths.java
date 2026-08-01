@@ -194,6 +194,17 @@ public final class DangerousPaths {
             "sudo", "doas", "time", "nohup", "command", "exec", "builtin", "eval",
             "env", "xargs", "nice", "ionice", "stdbuf", "setsid", "timeout");
 
+    /**
+     * shell 解释器——它们的 {@code -c} 载荷是一条完整命令，须递归检查。
+     *
+     * <p>刻意<b>不</b>收 {@code python} / {@code perl} / {@code ruby} / {@code node}：
+     * 它们的载荷不是 shell 语法，本层解析不了。那一类由决策顺序兜——它们不在只读白名单里，
+     * 故模式默认就是 ASK；且 {@code PermissionEngine.suggest} 明确不为解释器生成前缀规则，
+     * 所以也不会被一条 {@code Bash(python:*)} 顺手放过。
+     */
+    private static final Set<String> SHELL_INTERPRETERS =
+            Set.of("bash", "sh", "zsh", "dash", "ksh", "ash");
+
     /** 把文件内容写到参数所指位置、但不经 {@code >} 重定向的命令。 */
     private static final Set<String> WRITER_COMMANDS = Set.of("tee", "dd", "install");
 
@@ -435,6 +446,21 @@ public final class DangerousPaths {
         }
         String head = headCommand(words);
 
+        // shell 的 -c 载荷本身就是一条命令，递归查它。
+        // 不能靠「把 bash 加进 COMMAND_WRAPPERS」了事：那只会让 head 跳到 -c 之后，
+        // 而载荷是带引号的整串，会被按空白切碎，rm 和它的目标就此分家。
+        // 本仓库自己早就知道这件事——BashCommandSplitter 的 javadoc 正是拿
+        // bash -c 'echo hi\nrm -rf /' 当作「换行必须算分隔符」的立论依据。
+        if (SHELL_INTERPRETERS.contains(head)) {
+            String payload = dashCPayload(words);
+            if (payload != null) {
+                String hit = checkCommand(payload, root);
+                if (hit != null) {
+                    return head + " -c 的载荷本身是一条命令——" + hit;
+                }
+            }
+        }
+
         if (DELETE_COMMANDS.contains(head)) {
             if (hasRecursiveFlag(words)) {
                 String hit = checkDeleteTargets(head, words, root);
@@ -565,6 +591,26 @@ public final class DangerousPaths {
             count++;
         }
         return count >= 2 ? last : null;    // 只有一个非选项参数时它是源，不是落点
+    }
+
+    /**
+     * 取 shell 的 {@code -c} 载荷；没有则返回 {@code null}。
+     *
+     * <p>{@code -c} 之后的<b>全部</b>词拼回去再脱引号——载荷通常是带空格的整串
+     * （{@code bash -c "rm -rf /"} 经 {@code words()} 会切成 {@code "rm}、{@code -rf}、{@code /"}）。
+     * 也认 {@code -lc} / {@code -ic} 这类组合短选项。
+     */
+    private static String dashCPayload(List<String> words) {
+        for (int i = 1; i < words.size(); i++) {
+            String w = words.get(i);
+            boolean isDashC = "-c".equals(w)
+                    || (w.startsWith("-") && !w.startsWith("--") && w.endsWith("c"));
+            if (isDashC && i + 1 < words.size()) {
+                String joined = String.join(" ", words.subList(i + 1, words.size())).trim();
+                return stripQuotes(joined);
+            }
+        }
+        return null;
     }
 
     /**
