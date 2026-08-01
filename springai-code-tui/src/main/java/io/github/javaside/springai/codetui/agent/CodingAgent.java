@@ -262,8 +262,10 @@ public final class CodingAgent implements SubmitHandler {
                     // /mcp 启停在下一回合即生效；mcp__ 前缀保证不与内置工具重名。空数组为 no-op。
                     .tools(mcpRegistry == null ? new Object[0] : mcpRegistry.activeTools().toArray())
                     .options(perRequestOptions.mutate())   // 每次请求按当前所选模型覆盖（mutate 回 native builder，保留 maxTokens 等）
-                    // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）
-                    .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, modelGrounding))
+                    // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）；
+                    // {PERMISSION_MODE} 必须每回合重算——模式随 Shift+Tab 运行期变化，而 defaultSystem 是 build 期烘焙的。
+                    .system(s -> s.param(AgentEnvironment.AGENT_MODEL_KEY, modelGrounding)
+                            .param(AgentTools.PERMISSION_MODE_KEY, PermissionModePrompt.of(permissionMode())))
                     .toolContext(Map.of(
                             "turnId", turnId,
                             MediaExternalizingCallback.CAPABILITIES_KEY, capabilitiesSnapshot()))   // 冻结「发起本回合的模型」能力

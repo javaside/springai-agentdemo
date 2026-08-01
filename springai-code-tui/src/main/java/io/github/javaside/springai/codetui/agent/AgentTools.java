@@ -117,6 +117,14 @@ public final class AgentTools {
     /** 搜索指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {WEB_SEARCH_GUIDE} 占位符对应。 */
     private static final String WEB_SEARCH_GUIDE_KEY = "WEB_SEARCH_GUIDE";
 
+    /**
+     * 权限模式提示注入的 param 键；与 SYSTEM_TEMPLATE 里的 {PERMISSION_MODE} 占位符对应。
+     *
+     * <p>公开可见（与上面几个 private 键不同）：模式随 Shift+Tab 运行期变化，
+     * 真实值由 {@code CodingAgent.submit} 每回合覆盖，装配期只填空串占位。
+     */
+    public static final String PERMISSION_MODE_KEY = "PERMISSION_MODE";
+
     /** Brave 工具的注册名——库版是 {@code WebSearch}，与博查工具撞名，必须改写。 */
     static final String BRAVE_TOOL_NAME = "BraveWebSearch";
 
@@ -193,6 +201,8 @@ public final class AgentTools {
             {AUTO_MEMORY}
 
             {PROJECT_INSTRUCTIONS}
+
+            {PERMISSION_MODE}
             """;
 
     /**
@@ -411,7 +421,10 @@ public final class AgentTools {
                             .param(AgentEnvironment.AGENT_MODEL_KEY, provider.defaultModel())
                             .param(AUTO_MEMORY_KEY, autoMemoryPrompt)
                             .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions)
-                            .param(WEB_SEARCH_GUIDE_KEY, webSearchGuide))
+                            .param(WEB_SEARCH_GUIDE_KEY, webSearchGuide)
+                            // 装配期给空串占位；真实值由 CodingAgent.submit 每回合覆盖（merge 语义）。
+                            // 不补默认值则模板渲染时缺 param 会抛。
+                            .param(PERMISSION_MODE_KEY, ""))
                     .defaultTools(toolsWithTask)
                     // memoryAdvisor（会话记忆）+ 空流守卫（order +1001，紧邻 memoryAdvisor 内侧）：修复切 gpt 时
                     // SessionMemoryAdvisor.after() 因模型空流拿不到 session id 而抛 No session ID（见 SessionIdStreamGuardAdvisor）。
