@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -62,6 +63,33 @@ class PermissionStartupTest {
                 "前缀相近的参数不得误判");
         assertFalse(CodeTuiApplication.hasBypassFlag(new String[]{"--dangerously-skip-permissions=false"}),
                 "带值形式不是本参数，不得误判");
+    }
+
+    @Test
+    @DisplayName("--permission-mode 解析：认 plan/default/acceptEdits，大小写不敏感")
+    void parsesPermissionMode() {
+        assertEquals(PermissionMode.PLAN,
+                CodeTuiApplication.startupMode(new String[]{"--permission-mode", "plan"}));
+        assertEquals(PermissionMode.ACCEPT_EDITS,
+                CodeTuiApplication.startupMode(new String[]{"--permission-mode", "acceptEdits"}));
+        assertEquals(PermissionMode.ACCEPT_EDITS,
+                CodeTuiApplication.startupMode(new String[]{"--permission-mode", "ACCEPT_EDITS"}));
+        assertEquals(PermissionMode.DEFAULT,
+                CodeTuiApplication.startupMode(new String[]{"--permission-mode", "default"}));
+        assertEquals(PermissionMode.PLAN,
+                CodeTuiApplication.startupMode(new String[]{"--permission-mode=plan"}), "= 形式也要认");
+    }
+
+    @Test
+    @DisplayName("不给、给错、或想用它进 BYPASS —— 一律回退 null（由调用方落到配置的 defaultMode）")
+    void rejectsBadPermissionMode() {
+        assertNull(CodeTuiApplication.startupMode(new String[]{}));
+        assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode"}), "缺值不得读到越界");
+        assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "banana"}));
+        assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "bypass"}),
+                "BYPASS 只能由 --dangerously-skip-permissions 进；这里认了就等于开了第二个后门");
+        assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-modex", "plan"}),
+                "前缀相近的参数不得误判");
     }
 
     @Test

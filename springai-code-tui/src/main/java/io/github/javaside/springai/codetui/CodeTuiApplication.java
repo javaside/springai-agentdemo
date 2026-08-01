@@ -17,6 +17,8 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.ui.CodeTuiView;
 import io.github.javaside.springai.codetui.ui.ConversationState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.Optional;
@@ -26,6 +28,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * springai-code-tui 入口 —— 接入真实 {@link CodingAgent}，装配模型 / 工具 / TUI 并启动。
  */
 public class CodeTuiApplication {
+
+    private static final Logger log = LoggerFactory.getLogger(CodeTuiApplication.class);
+
+    /** {@code --permission-mode} 的参数名（取值 {@code plan}/{@code default}/{@code acceptEdits}）。 */
+    private static final String PERMISSION_MODE_FLAG = "--permission-mode";
 
     public static void main(String[] args) throws Exception {
         Path root = Path.of(System.getProperty("user.dir")).toAbsolutePath();
@@ -67,12 +74,22 @@ public class CodeTuiApplication {
         // 故没有「引擎还没读到配置就先放行了几次」的窗口。
         boolean skipPermissions = hasBypassFlag(args);
         PermissionConfig permissionConfig = PermissionConfigLoader.load(root);
+        PermissionMode cliMode = startupMode(args);
+        // 优先级：--dangerously-skip-permissions > --permission-mode > 配置文件 defaultMode。
+        // 前者是显式的「我知道我在做什么」，不该被一个同时出现的 --permission-mode plan 悄悄改掉语义。
+        PermissionMode startMode = skipPermissions ? PermissionMode.BYPASS
+                : (cliMode != null ? cliMode : permissionConfig.defaultMode());
         PermissionEngine permissionEngine = new PermissionEngine(root, permissionConfig,
-                skipPermissions ? PermissionMode.BYPASS : permissionConfig.defaultMode(),
-                skipPermissions);
+                startMode, skipPermissions);
         if (skipPermissions) {
             state.pushInfo("⚠ 已启用 --dangerously-skip-permissions：除 deny 规则与内置危险检查外，"
                     + "全部工具调用不再询问。");
+            if (cliMode != null) {
+                state.pushInfo("• 已忽略 --permission-mode " + cliMode.label()
+                        + "：--dangerously-skip-permissions 优先级更高。");
+            }
+        } else if (startMode == PermissionMode.PLAN) {
+            state.pushInfo("⏸ 已进入计划模式：只能读取和探索，产出计划后经你批准才会动手。");
         }
 
         // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
@@ -145,6 +162,52 @@ public class CodeTuiApplication {
             }
         }
         return false;
+    }
+
+    /**
+     * 解析 {@code --permission-mode <值>} 或 {@code --permission-mode=<值>}；无/非法/想进 BYPASS 一律返回 null
+     * （调用方回退到配置文件的 {@code defaultMode}）。
+     *
+     * <p><b>刻意不认 {@code bypass}</b>：BYPASS 的契约是「仅 {@code --dangerously-skip-permissions} 可进」。
+     * 这里认了它，那道显眼的开关就有了一个不显眼的同义词——用户看着命令行以为只是「选了个模式」。
+     *
+     * <p><b>必须整串精确相等</b>：{@code --permission-modex} 这种前缀相近的参数不得误判
+     * （与 {@link #hasBypassFlag} 同纪律）。
+     */
+    static PermissionMode startupMode(String[] args) {
+        String raw = null;
+        for (int i = 0; i < args.length; i++) {
+            String a = args[i];
+            if (PERMISSION_MODE_FLAG.equals(a)) {
+                if (i + 1 >= args.length) {
+                    return null;                       // 缺值：别读到越界，也别猜
+                }
+                raw = args[i + 1];
+                break;
+            }
+            if (a != null && a.startsWith(PERMISSION_MODE_FLAG + "=")) {
+                raw = a.substring(PERMISSION_MODE_FLAG.length() + 1);
+                break;
+            }
+        }
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String v = raw.trim();
+        if (PermissionMode.BYPASS.name().equalsIgnoreCase(v)) {
+            log.warn("--permission-mode 不接受 bypass：全放行只能由 --dangerously-skip-permissions 进。已忽略。");
+            return null;
+        }
+        for (PermissionMode m : PermissionMode.values()) {
+            if (m.name().equalsIgnoreCase(v)) {
+                return m;
+            }
+        }
+        if ("acceptEdits".equalsIgnoreCase(v)) {       // 兼容 Claude Code 风格的小驼峰
+            return PermissionMode.ACCEPT_EDITS;
+        }
+        log.warn("未知 --permission-mode='{}'，已忽略。可选值：default / acceptEdits / plan。", v);
+        return null;
     }
 
 }
