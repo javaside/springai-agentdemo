@@ -17,8 +17,9 @@ import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.UUID;
 
 /**
- * 「允许，永久」的落盘：往 {@code permissions.json} 的 allow/ask/deny 数组追加一条规则，
- * 其余树原样保留（Jackson 树模型读-改-写，未知字段与条目顺序不变）。
+ * {@code permissions.json} 的写侧：{@link #append} 往 allow/ask/deny 数组加一条规则
+ * （「允许，永久」），{@link #remove} 从中删一条（{@code /permissions} 面板）。
+ * 两者都只动目标数组，其余树原样保留（Jackson 树模型读-改-写，未知字段与条目顺序不变）。
  *
  * <p>原子写：先写同目录临时文件再 move（优先 {@code ATOMIC_MOVE}，不支持的文件系统降级普通替换），
  * 防写一半损坏配置（照 {@code McpConfigWriter} / {@code FileSessionRepository} 的既有范式）。
@@ -91,7 +92,6 @@ public final class PermissionConfigWriter {
     }
 
     private static boolean doAppend(Path file, String dsl, PermissionBehavior behavior) {
-        Path tmp = null;
         try {
             ObjectNode root = readRoot(file);
             if (root == null) {
@@ -116,6 +116,99 @@ public final class PermissionConfigWriter {
             }
             array.add(dsl);
 
+            writeAtomically(file, root);
+            return true;
+        } catch (Exception e) {
+            log.warn("权限配置回写失败：{} 规则 '{}'：{}", file, dsl, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 从 allow/ask/deny 数组里删掉一条规则（{@code /permissions} 面板的「删除」）。
+     *
+     * <p><b>与 {@link #append} 的差别只有两处</b>，其余纪律（原子写、保留未知字段与顺序、
+     * JSON 非法就整个不动、与读侧同一套解析开关、静态锁串行化）逐条相同——共用同一份代码，
+     * 不是抄一遍，免得日后只改一边。
+     * <ol>
+     *   <li><b>文件不存在返回 false 且不创建</b>：{@code append} 会建出 {@code .codetui/}
+     *       和文件，删除却没有任何理由凭空造一个空配置出来。</li>
+     *   <li><b>不做 {@code roundTrips} 校验</b>：那道校验防的是「落盘的授权宽于用户批准的那一次」，
+     *       只对写入方向成立。删除是收窄方向，反过来要求它往返一致，只会让一条<b>恰好不能往返的
+     *       规则永远删不掉</b>——而那种规则正是最该让用户删得掉的。这里按<b>字面字符串</b>匹配。</li>
+     * </ol>
+     *
+     * @return 删掉了、或本来就没有 → true；文件不存在 / JSON 非法 / 写失败 → false（原文件不动）
+     */
+    public static boolean remove(Path file, PermissionRule rule) {
+        if (file == null || rule == null) {
+            return false;
+        }
+        String dsl;
+        try {
+            dsl = rule.toDsl();
+        } catch (RuntimeException e) {
+            log.warn("权限配置删除失败：规则无法还原成 DSL（{}）。", e.getMessage());
+            return false;
+        }
+        synchronized (LOCK) {
+            return doRemove(file, dsl, rule.behavior());
+        }
+    }
+
+    private static boolean doRemove(Path file, String dsl, PermissionBehavior behavior) {
+        try {
+            if (!Files.isRegularFile(file)) {
+                // 没有文件就没有可删的规则。这里刻意不复用 readRoot 的「不存在当空树」，
+                // 那会让删除顺手创建出一个空配置文件来。
+                log.debug("权限配置删除：{} 不存在，无事可做。", file);
+                return false;
+            }
+            ObjectNode root = readRoot(file);
+            if (root == null) {
+                return false;                     // 已在 readRoot 记 WARN；原文件一个字节都不动
+            }
+
+            String key = arrayKey(behavior);
+            JsonNode arr = root.get(key);
+            if (arr == null || !arr.isArray()) {
+                // 字段不存在、或被手写成了非数组（加载侧对后者是「记 WARN 并忽略」，
+                // 故那条规则本就没生效）。两种情况下目标状态都已达成，且都不该去动这个文件。
+                return true;
+            }
+            ArrayNode array = (ArrayNode) arr;
+
+            boolean removed = false;
+            for (int i = array.size() - 1; i >= 0; i--) {
+                // 倒着删：正着删会让紧邻的重复项前移到已扫过的下标上，漏掉一条
+                JsonNode n = array.get(i);
+                if (n.isString() && dsl.equals(n.stringValue())) {
+                    array.remove(i);
+                    removed = true;
+                }
+            }
+            if (!removed) {
+                // 幂等：目标状态已达成。无谓重写白改一次 mtime，也白担一次写坏的风险。
+                return true;
+            }
+
+            writeAtomically(file, root);
+            return true;
+        } catch (Exception e) {
+            log.warn("权限配置删除失败：{} 规则 '{}'：{}", file, dsl, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 把改好的树原子地落回 {@code file}：同目录临时文件 → 抄权限位 → {@code ATOMIC_MOVE}。
+     *
+     * <p>{@link #append} 与 {@link #remove} 共用这一份，两边的原子性纪律因此不可能各自漂移。
+     * 失败时清掉临时文件再把异常抛给调用方去记 WARN、返回 false。
+     */
+    private static void writeAtomically(Path file, ObjectNode root) throws Exception {
+        Path tmp = null;
+        try {
             Path parent = file.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);  // 全新项目还没有 .codetui/
@@ -129,11 +222,9 @@ public final class PermissionConfigWriter {
             } catch (AtomicMoveNotSupportedException e) {
                 Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
             }
-            return true;
         } catch (Exception e) {
-            log.warn("权限配置回写失败：{} 规则 '{}'：{}", file, dsl, e.getMessage());
             cleanup(tmp);
-            return false;
+            throw e;
         }
     }
 
