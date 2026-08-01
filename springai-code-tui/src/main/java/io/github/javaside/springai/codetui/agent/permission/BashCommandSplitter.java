@@ -153,6 +153,36 @@ public final class BashCommandSplitter {
     }
 
     /**
+     * 段里<b>长得像路径</b>的参数：跳过首词（那是命令名）与 {@code -} 开头的选项，其余全要。
+     *
+     * <p><b>本方法只做词法，不做策略</b>：不解析 {@code ~}、不展开通配符、不解析相对路径，
+     * 一律原样交出。「在不在工作区内」是 {@link PermissionEngine} 的判断——root 是它才有的知识，
+     * 不下沉到本类（本类的定位是「一条命令长什么样」，不是「这台机器上什么算安全」）。
+     *
+     * <p><b>宁可多判几个</b>：选项的值也会进来（{@code mkdir -m 755 dir} 里的 {@code 755}），
+     * 策略层会把它当相对路径解到工作区内，无害。反过来漏掉一个真实路径，
+     * 就会让越界命令被当成「工作区内的文件操作」放行——<b>误判方向必须是「多问一次」</b>。
+     * {@code cp -t /etc src} 正是这样一条：{@code /etc} 是 {@code -t} 的值，
+     * 按「选项的值跳过」去写就会漏掉它，整条命令被当成工作区内操作。
+     *
+     * @param segment 单段命令；null / 空白 / 只有命令名都返回空列表
+     */
+    public static List<String> pathArguments(String segment) {
+        List<String> words = words(segment);
+        if (words.size() < 2) {
+            return List.of();                       // 只有命令名，没有目标
+        }
+        List<String> out = new ArrayList<>(words.size() - 1);
+        for (String w : words.subList(1, words.size())) {
+            if (w.startsWith("-")) {
+                continue;                           // 选项本身不是路径；它的值下一轮自然进来
+            }
+            out.add(w);
+        }
+        return List.copyOf(out);
+    }
+
+    /**
      * 段是否「单一、且副作用范围就等于首词语义」——不含复合结构、不含重定向。
      *
      * <p>{@link PermissionRule#hasShellSeparator} 已<b>包含</b>

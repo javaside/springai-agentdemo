@@ -76,11 +76,17 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 拦不住 {@code /ETC/passwd} 而那是同一个文件；{@code ln -s /etc x && Write x/passwd}
  * 是符号链接的两步绕过。
  *
- * <p><b>折叠孪生不覆盖的两处</b>（原写法那一路仍然照常匹配，故只是没多拦，不是漏了原有能力）：
- * {@code ~/} 开头的 pattern 由 {@link #fold} 先展开成家目录再折叠——不展开的话
- * {@link PermissionRule#globMatches} 会把大小写原样的 {@code user.home} 拼到已折小写的
- * pattern 上，两边对不齐；<b>相对</b> pattern（{@code Read(src/**)}）折叠后仍走
- * {@code root.relativize}，而折成小写的目标不再 {@code startsWith(root)}，那一路不生效。
+ * <p><b>折叠孪生要对齐的两处「另一边」</b>——两处同一个形状：目标折了、跟它比的那一边没折，
+ * 于是永远对不齐，而表现是一条 deny <b>静默不拦</b>。
+ * <ul>
+ *   <li>{@code ~/} 开头的 pattern 由 {@link #fold} 先展开成家目录再折叠——不展开的话
+ *       {@link PermissionRule#globMatches} 会把大小写原样的 {@code user.home} 拼到已折小写的
+ *       pattern 上；</li>
+ *   <li><b>相对</b> pattern（{@code Read(src/**)}）靠 {@code root.relativize} 才对得上绝对目标，
+ *       故匹配孪生时连 root 一起折（{@link #foldedRoot}）。不折的话
+ *       {@code t.startsWith(root)} 不成立，相对化那条分支根本走不到——
+ *       结果是绝对 pattern 折得了、相对 pattern 折不了，而这个边界对用户是<b>任意的</b>。</li>
+ * </ul>
  *
  * <h2>可变状态与线程</h2>
  * <ul>
@@ -142,6 +148,18 @@ public final class PermissionEngine {
     private static final int DISPLAY_LIMIT = 160;
 
     private final Path root;
+    /**
+     * {@link #root} 的折叠形态，<b>只给折叠孪生的匹配用</b>。
+     *
+     * <p><b>为什么必须有它</b>：{@link PermissionRule#globMatches} 里让相对 pattern
+     * （{@code Write(src/**)}）对绝对目标成立的那条分支，前提是 {@code t.startsWith(root)}。
+     * 折叠孪生匹配时目标整串已折成小写，root 若仍是原大小写，这个前提就不成立，
+     * 相对化那条分支<b>根本走不到</b>——于是绝对 pattern 折得了、相对 pattern 折不了。
+     * 这个边界对用户是任意的，没人能预料，而 {@code src/**} 恰恰是最自然的写法。
+     *
+     * <p>只在这一处用折叠 root：allow 方向与内置检查一律用原 {@link #root}。
+     */
+    private final Path foldedRoot;
     private final boolean bypassAllowed;
     private final List<PermissionRule> fileRules = new CopyOnWriteArrayList<>();
     private final List<PermissionRule> sessionRules = new CopyOnWriteArrayList<>();
@@ -168,6 +186,7 @@ public final class PermissionEngine {
     public PermissionEngine(Path root, PermissionConfig config,
                             PermissionMode startupMode, boolean bypassAllowed) {
         this.root = Objects.requireNonNull(root, "root 不可为 null：漏传会让全部路径规则静默失效").normalize();
+        this.foldedRoot = foldPath(this.root);
         Objects.requireNonNull(config, "config 不可为 null");
         this.bypassAllowed = bypassAllowed;
         this.fileRules.addAll(config.rules());
@@ -469,11 +488,11 @@ public final class PermissionEngine {
     private boolean denyOrAskMatches(PermissionRule rule, String toolName, String target,
                                      List<String> aliases, ToolRegistry.Entry entry,
                                      BashCommandSplitter.Split split) {
-        if (matchesOneTarget(rule, toolName, target, entry, split)) {
+        if (matchesOneTarget(rule, toolName, target, entry, split, root)) {
             return true;
         }
         for (String alias : aliases) {
-            if (matchesOneTarget(rule, toolName, alias, entry, splitOf(entry, alias))) {
+            if (matchesOneTarget(rule, toolName, alias, entry, splitOf(entry, alias), root)) {
                 return true;
             }
         }
@@ -502,7 +521,18 @@ public final class PermissionEngine {
             return false;
         }
         String lower = candidate.toLowerCase(Locale.ROOT);
-        return matchesOneTarget(twin, toolName, lower, entry, splitOf(entry, lower));
+        // root 也要折：相对 pattern 靠 root.relativize 才对得上绝对目标，而目标这边已整串折小写，
+        // 传原大小写的 root 会让 globMatches 里那条相对化分支走不到（见 foldedRoot）
+        return matchesOneTarget(twin, toolName, lower, entry, splitOf(entry, lower), foldedRoot);
+    }
+
+    /** 路径折成小写形态；解析不了就原样返回（绝不抛——这条在判定热路径上）。 */
+    private static Path foldPath(Path p) {
+        try {
+            return Path.of(p.toString().toLowerCase(Locale.ROOT));
+        } catch (RuntimeException e) {
+            return p;
+        }
     }
 
     /**
@@ -593,16 +623,18 @@ public final class PermissionEngine {
      *              （见 {@link #splitOf}），拿原写法的段去配另一种写法会串。
      */
     private boolean matchesOneTarget(PermissionRule rule, String toolName, String target,
-                                     ToolRegistry.Entry entry, BashCommandSplitter.Split split) {
+                                     ToolRegistry.Entry entry, BashCommandSplitter.Split split,
+                                     Path effectiveRoot) {
         if (entry.category() != ToolCategory.COMMAND || split == null) {
-            return rule.matches(toolName, target, entry.pathTarget(), root, separatorSensitive(entry));
+            return rule.matches(toolName, target, entry.pathTarget(), effectiveRoot,
+                    separatorSensitive(entry));
         }
         // deny / ask：整串命中，或任一段命中
-        if (rule.matches(toolName, target, false, root, true)) {
+        if (rule.matches(toolName, target, false, effectiveRoot, true)) {
             return true;
         }
         for (String seg : split.segments()) {
-            if (rule.matches(toolName, seg, false, root, true)) {
+            if (rule.matches(toolName, seg, false, effectiveRoot, true)) {
                 return true;
             }
         }
@@ -784,7 +816,9 @@ public final class PermissionEngine {
             if (BashCommandSplitter.isReadOnly(seg)) {
                 continue;
             }
-            if (mode == PermissionMode.ACCEPT_EDITS && BashCommandSplitter.isFileSystemWrite(seg)) {
+            if (mode == PermissionMode.ACCEPT_EDITS
+                    && BashCommandSplitter.isFileSystemWrite(seg)
+                    && allPathArgsInsideRoot(seg)) {
                 usedFsWrite = true;
                 continue;
             }
@@ -795,6 +829,59 @@ public final class PermissionEngine {
         return PermissionDecision.allow(usedFsWrite
                 ? "自动接受编辑：命令各段都是只读或工作区内的文件操作"
                 : "命令的每一段都在只读白名单内");
+    }
+
+    /**
+     * 这一段里<b>每一个</b>像路径的参数是否都落在工作区内。
+     *
+     * <p><b>为什么必须判</b>：{@code isFileSystemWrite} 只看首词是不是 {@code mkdir}/{@code touch}/
+     * {@code mv}/{@code cp}，完全不看目标在哪，于是 {@code mkdir /etc/evil}、
+     * {@code mv ~/notes.txt /tmp/x} 在 ACCEPT_EDITS 下直接放行——<b>而放行理由写着
+     * 「工作区内的文件操作」</b>。同一档的 {@code Write}/{@code Edit} 是确实判 {@link #insideRoot} 的，
+     * 同一个承诺不该有两种兑现。
+     *
+     * <p>三条规则，取舍方向一律「拿不准就当工作区外」（结论只是多问一次）：
+     * <ul>
+     *   <li><b>{@code ~} 开头一律判区外</b>。这条必须单列：token 字面是 {@code ~/notes.txt}，
+     *       当相对路径解析会得到 {@code <root>/~/notes.txt}——<b>落在工作区内、被错误放行</b>，
+     *       而 shell 实际会把它展开到家目录。展开成家目录再判也不行（那要引入 user.home 的
+     *       信任假设），判区外最省事且方向正确。</li>
+     *   <li><b>含通配符</b>（{@code *} {@code ?} {@code [}）取<b>首个通配符之前的字面前缀</b>判定：
+     *       {@code *.txt} → 前缀为空 → {@code root.resolve("")} = root → 区内；
+     *       {@code ../*.txt} → 前缀 {@code ../} → 区外。不展开通配是刻意的——
+     *       展开要碰文件系统，且判定必须对尚不存在的文件也成立。</li>
+     *   <li>其余：绝对路径按原样，相对路径对 root 解析，再要求 {@link #insideRoot}。</li>
+     * </ul>
+     */
+    private boolean allPathArgsInsideRoot(String segment) {
+        for (String token : BashCommandSplitter.pathArguments(segment)) {
+            if (token.startsWith("~")) {
+                return false;                       // shell 会展开到家目录，当相对路径解析必错
+            }
+            String literal = literalPrefix(token);
+            Path p;
+            try {
+                Path candidate = Path.of(literal);
+                p = (candidate.isAbsolute() ? candidate : root.resolve(candidate)).normalize();
+            } catch (RuntimeException e) {
+                return false;                       // 非法路径字符 = 无法核实，问一次
+            }
+            if (!insideRoot(p)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 首个通配符之前的字面前缀（{@code src/*.java} → {@code src/}；无通配符则原样）。 */
+    private static String literalPrefix(String token) {
+        for (int i = 0; i < token.length(); i++) {
+            char c = token.charAt(i);
+            if (c == '*' || c == '?' || c == '[') {
+                return token.substring(0, i);
+            }
+        }
+        return token;
     }
 
     // ── 建议规则 ────────────────────────────────────────────────────────

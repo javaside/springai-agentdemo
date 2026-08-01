@@ -170,4 +170,55 @@ class PermissionEngineAliasTest {
         assertEquals(PermissionBehavior.DENY,
                 e.decide("Write", writeInput(Path.of("/ETC/passwd"))).behavior());
     }
+
+    // ── 相对 pattern 的折叠 ──────────────────────────────────────────────
+    //
+    // 绝对 pattern 折得了、相对 pattern 折不了，这个边界对用户是<b>任意的</b>——
+    // 没人能预料，而 Write(src/**) 恰恰是最自然的写法。根因在 globMatches：
+    // 折叠孪生匹配时目标已折成小写，若 root 仍传原大小写，t.startsWith(root) 不成立，
+    // 相对化那条分支根本走不到（整条相对 pattern 的路就此断掉）。
+
+    @Test
+    @DisplayName("相对 pattern 也要折叠：deny Read(src/**) 拦得住 <root>/SRC/x.txt")
+    void denyFoldsRelativePattern(@TempDir Path tempDir) throws IOException {
+        Path root = realRoot(tempDir);
+        PermissionEngine e = engine(root,
+                PermissionRule.parse("Read(src/**)", PermissionBehavior.DENY, RuleScope.USER));
+        assertEquals(PermissionBehavior.DENY,
+                e.decide("Read", writeInput(root.resolve("SRC/x.txt"))).behavior(),
+                "相对 pattern 折不了的话，deny Read(src/**) 加个大写 SRC 就绕开了");
+    }
+
+    /**
+     * 反向断言：allow 方向<b>仍然</b>不折叠。
+     *
+     * <p><b>这里刻意用 Write 而不是 Read</b>——虽然上一条 deny 用的是 Read。
+     * Read 是 READ_ONLY，模式默认本来就是 ALLOW，于是「allow 命中」与「allow 不命中」
+     * 两种情况的结论都是 ALLOW，断言<b>不可能失败</b>（正是本类注释警告的那种测试）。
+     * Write 在 DEFAULT 下模式默认是 ASK，allow 一旦命中立刻变 ALLOW，断言才有鉴别力。
+     */
+    @Test
+    @DisplayName("★ 安全支点：相对 pattern 的 allow 仍不折叠——allow Write(src/**) 放行不了 <root>/SRC/x.txt")
+    void allowDoesNotFoldRelativePattern(@TempDir Path tempDir) throws IOException {
+        Path root = realRoot(tempDir);
+        PermissionEngine e = engine(root,
+                PermissionRule.parse("Write(src/**)", PermissionBehavior.ALLOW, RuleScope.USER));
+        assertEquals(PermissionBehavior.ASK,
+                e.decide("Write", writeInput(root.resolve("SRC/x.txt"))).behavior(),
+                "放宽只在 deny/ask 方向；allow 折叠会让一条规则比写下时以为的覆盖面更宽");
+    }
+
+    /**
+     * 上一条的<b>对照组</b>：证明那个 ASK 是「大小写没折」造成的，
+     * 而不是「相对 pattern 的 allow 整个就不工作」。少了这条，上一条会因错误的原因变绿。
+     */
+    @Test
+    @DisplayName("对照：原大小写下相对 pattern 的 allow 照常命中")
+    void allowRelativePatternStillWorksInExactCase(@TempDir Path tempDir) throws IOException {
+        Path root = realRoot(tempDir);
+        PermissionEngine e = engine(root,
+                PermissionRule.parse("Write(src/**)", PermissionBehavior.ALLOW, RuleScope.USER));
+        assertEquals(PermissionBehavior.ALLOW,
+                e.decide("Write", writeInput(root.resolve("src/x.txt"))).behavior());
+    }
 }

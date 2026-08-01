@@ -31,6 +31,13 @@ import java.nio.file.PathMatcher;
  *   <li><b>只 {@code normalize()} 不 {@code toRealPath()}</b>：符号链接不解析
  *       （{@code toRealPath} 会让「写一个尚不存在的文件」直接失败）。
  *       <b>由 {@code ToolTargets} 负责交出已规范化的路径</b>。</li>
+ *   <li><b>上面两条只是<i>本类</i>的语义，不是系统的最终行为</b>：{@link PermissionEngine}
+ *       在其上叠了一层——deny / ask 方向会拿<b>折叠孪生</b>（pattern 与目标一起折小写，
+ *       相对 pattern 连 root 一起折）和 {@link PathAliases} 给出的<b>符号链接解析后</b>写法
+ *       各重试一遍，故这两个洞在 deny / ask 方向上已经补掉；
+ *       <b>allow 方向刻意不重试</b>，本类的精确语义就是它的全部语义。
+ *       这个不对称是有意的：放宽 deny 只是多拦一次，放宽 allow 不可逆。
+ *       实现与理由见 {@code PermissionEngine.denyOrAskMatches} 及该类注释。</li>
  *   <li><b>{@code :*} 前缀语义只对命令生效</b>：路径目标上的 {@code :*} 规则
  *       （如 {@code Write(/etc/:*)}）<b>恒不命中</b>——写成 {@code Write(/etc/**)}。
  *       {@link PermissionEngine} 载入此类规则时须记 WARN，否则是一条静默失效的 deny。</li>
