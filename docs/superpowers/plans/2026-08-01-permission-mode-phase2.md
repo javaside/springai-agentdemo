@@ -2015,3 +2015,53 @@ git commit -m "test(code-tui): 计划模式与计划审批面板的 pty 实机�
 **3. 类型一致性**：`PlanOutcome`（4 值）在 Task 5 定义、Task 6/8/9 消费一致；`PlanResponder.respond(PlanOutcome, String)` 两参签名三处一致；`PlanRequest(long, String, PlanResponder)` 三字段在 Task 5 定义、Task 6 构造、Task 8/9 消费一致；`PermissionModePrompt.of(PermissionMode)` 在 Task 4 定义并被同一 Task 消费；`PlanApprovalBridge.exitPlanModeTool(PlanApprovalBridge)` 在 Task 7 定义与消费。
 
 **4. 已知实施顺序依赖**：Task 2 的 `internalToolsAllowed` 用例**要等 Task 7 登记工具后才转绿**（计划里已写明，禁止改断言凑绿）。Task 5 的 `permits` 一改，`CodeTuiView` 的 instanceof 链就必须同步补分支（Task 9 Step 3），中间不要停在半编译状态。
+
+---
+
+## Task 2 修订（实施期发现，2026-08-01）
+
+**impl-t2 用真实引擎实测发现 PLAN 下结论倒置：**
+
+```
+PLAN 模式、无任何规则：
+  rm -rf ~                       -> ASK    ← 用户能当场批准，真的会执行
+  Write ~/.ssh/authorized_keys   -> ASK    ← 同上
+  mvn test                       -> DENY
+  echo $(whoami)（拆不动）        -> DENY
+```
+
+**根因**：决策顺序第 2 步（内置危险检查）命中即 `askOnly` 提前 return，永远走不到第 6 步的 PLAN 分支。
+第 2 步的初衷是「护栏不是牢笼，人确认了就该能做」——那在另外三档都对；但 PLAN 的立意恰恰是
+「这段时间里根本不可能动手」，而普通写操作已在第 6 步被拒，于是这条初衷**恰好把唯一一道
+可当场批准的口子留给了最危险的那批操作**。
+
+> **计划原文有误导**：Task 2 的背景一节写着「allow 规则排在模式默认之前……是既定语义，
+> 别当 bug 修」。那句只针对 **allow 规则**那一条。第 2 步在 PLAN 下的结论不是既定语义，
+> 是漏考虑了新档位。实施者据此没有擅自修改而是上报——行为正确，是计划的措辞该改。
+
+**修法**（判据：**PLAN 本来就会拒的，危险检查不得把它降级成可批准；只读仍 ASK**）：
+
+```java
+        String danger = builtinDanger(entry, path, target);
+        if (danger != null) {
+            if (mode == PermissionMode.PLAN) {
+                PermissionDecision planned = decideByPlanMode(entry, target);
+                if (planned != null && planned.behavior() == PermissionBehavior.DENY) {
+                    return planned;
+                }
+            }
+            return PermissionDecision.askOnly(danger);
+        }
+```
+
+**为什么只读不一并拒**：`Read ~/.ssh/id_rsa` 在 PLAN 下仍是 ASK。
+PLAN 承诺的是「不会**动手**」，不是「不会读」——只读调查正是这一档要允许的事；
+读密钥逐次确认是内置底线的本职，与模式无关。复用 `decideByPlanMode` 而非另写判断，
+保证「PLAN 会拒什么」只有一处定义。
+
+**新增用例**：`dangerousOpsDeniedNotAsked`（`rm -rf ~` / 写 `authorized_keys` 均为 DENY 且 reason 指路）、
+`readingSecretsStillAsks`（读私钥仍 ASK）。变异实测：注释掉该 PLAN 特例段，前者必须变红。
+
+**连带**：`PermissionEngineTest$Robustness.concurrentDecideAndMutate` 的断言
+「工作区内的写绝不会是 DENY」写在 PLAN 存在之前，需按当时 `mode()` 快照分档断言；
+**不得**弱化成「不抛异常 + reason 非空」——那是把有内容的断言换成几乎不会失败的断言。
