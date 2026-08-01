@@ -326,6 +326,18 @@ public final class PermissionEngine {
         return null;
     }
 
+    /**
+     * 这条 deny 是否遮蔽了那条候选建议规则。
+     *
+     * <p><b>已知缺口：遮蔽只按<i>原写法</i>比，不走折叠孪生也不走 {@link PathAliases}。</b>
+     * 于是 {@code deny Read(/ETC/**)} 遮蔽不了一条针对 {@code /etc/x} 的候选，面板上仍会
+     * 出现「永久允许」按钮。
+     *
+     * <p><b>这不是绕过</b>：deny 在判定顺序第 1 步、allow 在第 5 步，用户真按下去那条 deny
+     * 照样赢。后果是白按一次，并往 {@code permissions.json} 里留下一条<b>永不生效的 allow</b>。
+     * 补它要动建议生成的行为，不在本期范围——写在这里是为了让下一个读到「遮蔽检查」的人
+     * 不会以为它已经覆盖了折叠与别名形态。
+     */
     private boolean shadows(PermissionRule deny, PermissionRule candidate) {
         if (!"*".equals(deny.toolName()) && !deny.toolName().equals(candidate.toolName())) {
             return false;
@@ -350,6 +362,61 @@ public final class PermissionEngine {
             return deny.matches(candidate.toolName(), unescapeGlob(candidate.pattern()), true, root);
         }
         return false;
+    }
+
+    /**
+     * 删一条规则：落盘规则回写对应层文件，会话规则只从内存摘。
+     *
+     * <p><b>必须同步清掉内存规则表与折叠孪生</b>——只改文件不改内存的话，重启前它还在生效，
+     * 而面板已经说删了。<b>面板说删了、实际还拦着，是最坏的一种谎。</b>
+     *
+     * <h2>为什么按 {@code equals} 摘是安全的（这一点值得写下来）</h2>
+     * {@link PermissionRule} 是 record，{@code scope} 是它的<b>分量之一</b>，而
+     * {@link PermissionConfigLoader} 给每一层的规则打的正是那一层的 scope
+     * （用户层 {@link RuleScope#USER}、项目层 {@link RuleScope#PROJECT}）。
+     * 故「两层各有一条同 DSL 的规则」这两条<b>并不 equals</b>——scope 把它们区分开了，
+     * 不存在「按 equals 摘会摘错层」的问题。会话规则同理（{@link RuleScope#SESSION}）。
+     *
+     * <p>但用的是 {@code removeIf} 而<b>不是</b> {@code List.remove(Object)}：后者只摘掉
+     * <b>第一个</b>相等的元素，而 {@link PermissionConfigWriter#remove} 会把文件里<b>全部</b>
+     * 同 DSL 的条目删干净（同一个文件里手写重复是可能的）。两边语义不一致的话，
+     * 文件里删净了、内存里还留一条——正好是上面那句「面板说删了、实际还拦着」。
+     *
+     * <p><b>写盘失败就不从内存摘</b>并记 WARN 返回 false：反过来（内存摘了、文件没删）
+     * 会造成「这次运行不生效、重启后又回来」，比直接告诉用户「没删成」更难排查。
+     *
+     * @return 是否确实删掉了（规则不存在返回 false）
+     */
+    public boolean removeRule(PermissionRule rule) {
+        if (rule == null) {
+            return false;
+        }
+        if (rule.scope() == RuleScope.SESSION) {
+            boolean removed = sessionRules.removeIf(rule::equals);
+            if (removed) {
+                foldedTwins.remove(rule);   // 同上：缓存卫生而非护栏
+            }
+            return removed;
+        }
+        if (!fileRules.contains(rule)) {
+            return false;                   // 不在生效规则里，没有可删的东西
+        }
+        Path file = rule.scope() == RuleScope.USER
+                ? PermissionConfigLoader.userFile()
+                : PermissionConfigLoader.projectFile(root);
+        if (!PermissionConfigWriter.remove(file, rule)) {
+            log.warn("删除规则 '{}' 失败：{} 未能更新，内存里那条保持生效（宁可告诉用户没删成，"
+                    + "也不要造成「这次运行不生效、重启后又回来」）。", rule.toDsl(), file);
+            return false;
+        }
+        boolean removed = fileRules.removeIf(rule::equals);
+        if (removed) {
+            // 缓存卫生，<b>不是</b>正确性护栏：孪生按规则做键、只在匹配「仍在规则表里」的规则时
+            // 经 computeIfAbsent 查到，规则一摘掉它就再也不会被查。留着只是让一个键早已失效的
+            // 条目常驻内存。（实测过：停掉这一行，删 deny 后折叠形态照样不再命中。）
+            foldedTwins.remove(rule);
+        }
+        return removed;
     }
 
     /** {@code /clear} 开新会话时清空会话规则。 */
@@ -873,7 +940,13 @@ public final class PermissionEngine {
         return true;
     }
 
-    /** 首个通配符之前的字面前缀（{@code src/*.java} → {@code src/}；无通配符则原样）。 */
+    /**
+     * 首个通配符之前的字面前缀（{@code src/*.java} → {@code src/}；无通配符则原样）。
+     *
+     * <p><b>刻意只认 {@code *} {@code ?} {@code [}，不认花括号展开 {@code {a,b}}</b>：
+     * {@code cp {../x,y} d} 会被整串当字面路径，解析成一个不存在的怪路径 → 判工作区外 → 多问一次。
+     * 失败方向正确，故不值得为它引入一个花括号配对解析器（那还得处理嵌套与转义）。
+     */
     private static String literalPrefix(String token) {
         for (int i = 0; i < token.length(); i++) {
             char c = token.charAt(i);
