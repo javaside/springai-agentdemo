@@ -5,6 +5,8 @@ import io.github.javaside.springai.codetui.agent.AskRequest;
 import io.github.javaside.springai.codetui.agent.ModalRequest;
 import io.github.javaside.springai.codetui.agent.PermissionOutcome;
 import io.github.javaside.springai.codetui.agent.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.PlanOutcome;
+import io.github.javaside.springai.codetui.agent.PlanRequest;
 import dev.tamboui.text.CharWidth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -451,6 +453,30 @@ public final class ConversationState implements AgentListener {
             pending.add(new OutputLine("⚠ 待审批请求过多（已达上限 " + MODAL_QUEUE_CAP + "），已自动拒绝 "
                     + request.toolName() + "：请先处理面板里的请求", OutputLine.Kind.ERROR));
             request.responder().respond(PermissionOutcome.DENY);
+        }
+    }
+
+    /**
+     * 计划审批请求入队。
+     *
+     * <p><b>迟到 → CANCEL，队满 → KEEP_PLANNING</b>，两条路径都<b>必须</b>应答——静默丢弃
+     * 就是工具线程永久 park。二者刻意不同：迟到的那个回合已经取消/切换，让它抛异常随流丢弃即可；
+     * 而队满只是面板挤，不该因此杀掉整个回合，故给一个能让模型继续下去的答复 + 一行用户看得见的提示
+     * （迟到<b>不</b>提示：那个回合已经没了，再打一行只是噪音）。
+     *
+     * <p><b>不阻塞</b>（契约要求）：本方法与 {@link #drainPending()} / {@link #cancelCurrent()}
+     * 共用同一把监视器锁，这里一旦阻塞冻住的是<b>整个 TUI</b>而不只是一个工具线程。
+     */
+    public synchronized void onPlanSubmitted(long turnId, PlanRequest request) {
+        if (turnId != acceptingTurnId) {
+            request.responder().respond(PlanOutcome.CANCEL, "");
+            return;
+        }
+        if (!offerModal(request)) {
+            pending.add(new OutputLine("⚠ 待处理的模态请求过多（已达上限 " + MODAL_QUEUE_CAP
+                    + "），本次计划未能展示：请先处理面板里的请求", OutputLine.Kind.ERROR));
+            request.responder().respond(PlanOutcome.KEEP_PLANNING,
+                    "（界面繁忙，未能展示计划，请稍后重新提交）");
         }
     }
 
