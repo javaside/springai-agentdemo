@@ -467,6 +467,7 @@ public final class ConversationState implements AgentListener {
      * <p><b>不阻塞</b>（契约要求）：本方法与 {@link #drainPending()} / {@link #cancelCurrent()}
      * 共用同一把监视器锁，这里一旦阻塞冻住的是<b>整个 TUI</b>而不只是一个工具线程。
      */
+    @Override
     public synchronized void onPlanSubmitted(long turnId, PlanRequest request) {
         if (turnId != acceptingTurnId) {
             request.responder().respond(PlanOutcome.CANCEL, "");

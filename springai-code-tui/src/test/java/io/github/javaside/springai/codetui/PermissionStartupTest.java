@@ -90,6 +90,9 @@ class PermissionStartupTest {
                 "BYPASS 只能由 --dangerously-skip-permissions 进；这里认了就等于开了第二个后门");
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-modex", "plan"}),
                 "前缀相近的参数不得误判");
+        assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "--continue"}),
+                "下一个参数是另一个选项时当缺值：否则模式被静默忽略，而 --continue 照常生效，"
+                        + "用户看不出自己漏写了值");
     }
 
     @Test

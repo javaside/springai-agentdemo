@@ -182,6 +182,13 @@ public class CodeTuiApplication {
                 if (i + 1 >= args.length) {
                     return null;                       // 缺值：别读到越界，也别猜
                 }
+                // 下一个参数是另一个选项（如 `--permission-mode --continue`）→ 当缺值处理。
+                // 否则会把 `--continue` 当成模式名，认不出后静默回退——而 hasContinueFlag 仍会
+                // 独立扫到它，于是「模式被忽略、continue 照常生效」，用户看不出自己漏写了值。
+                if (args[i + 1] != null && args[i + 1].startsWith("--")) {
+                    log.warn("--permission-mode 后面跟的是另一个选项（{}），当作没给值处理。", args[i + 1]);
+                    return null;
+                }
                 raw = args[i + 1];
                 break;
             }
