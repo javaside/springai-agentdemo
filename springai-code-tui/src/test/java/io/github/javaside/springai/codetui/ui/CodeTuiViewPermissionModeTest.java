@@ -114,7 +114,7 @@ class CodeTuiViewPermissionModeTest {
 
         assertEquals(3, stub.cycles.get());
         assertEquals(PermissionMode.DEFAULT, stub.mode);
-        assertTrue(state.notice().contains("默认"), "第二次切换的反馈不该被「按任意键清 notice」吃掉，"
+        assertTrue(state.notice().contains("默认"), "最后一次切换的反馈不该被「按任意键清 notice」吃掉，"
                 + "实际 notice：" + state.notice());
     }
 
