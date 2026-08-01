@@ -11,6 +11,7 @@ import io.github.javaside.springai.codetui.agent.PermissionRequest;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.SkillInfo;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoader;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
@@ -1278,8 +1279,12 @@ public final class CodeTuiView extends InlineApp {
             if (outcome == PermissionOutcome.ALLOW_SESSION) {
                 state.pushInfo("✓ 本会话不再询问：" + req.suggested().toDsl());
             } else if (outcome == PermissionOutcome.ALLOW_ALWAYS) {
+                // 打<b>绝对路径</b>而不是「项目 permissions.json」：文件落在 code-tui 启动时的
+                // 工作区，而用户往往在别处找它（且 .codetui/ 通常被 .gitignore，IDE 默认不显示）。
+                // 实地踩过一次——用户以为「选了永久但没写盘」，其实文件就在启动目录下。
                 state.pushInfo("✓ 已记下允许规则：" + req.suggested().toDsl()
-                        + "（写入项目 permissions.json；写盘失败则仅本会话生效）");
+                        + " → " + PermissionConfigLoader.projectFile(root)
+                        + "（写盘失败则仅本会话生效）");
             }
         }
     }

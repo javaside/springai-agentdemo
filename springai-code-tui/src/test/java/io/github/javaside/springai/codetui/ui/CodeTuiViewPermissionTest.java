@@ -145,6 +145,10 @@ class CodeTuiViewPermissionTest {
         assertEquals(List.of(PermissionOutcome.ALLOW_ALWAYS), sink);
         String all = drained(state);
         assertTrue(all.contains("Bash(git push:*)"), "应回显记下的规则，实际：" + all);
+        // 必须打绝对路径：文件落在启动时的工作区，而 .codetui/ 通常被 .gitignore、IDE 默认不显示，
+        // 只说「写入项目 permissions.json」用户会以为没写成（这是实地反馈来的）。
+        assertTrue(all.contains(root.resolve(".codetui").resolve("permissions.json").toString()),
+                "应回显规则文件的绝对路径，实际：" + all);
     }
 
     @Test
