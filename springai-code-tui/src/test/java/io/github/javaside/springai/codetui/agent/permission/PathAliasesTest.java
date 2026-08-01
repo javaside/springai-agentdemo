@@ -7,10 +7,12 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PathAliasesTest {
@@ -74,6 +76,51 @@ class PathAliasesTest {
         assertTrue(PathAliases.of(null).isEmpty());
         assertEquals(1, PathAliases.of(Path.of("relative/x.txt")).size(),
                 "相对路径无从解析，原样返回一个");
+    }
+
+    @Test
+    @DisplayName("目标自己是悬空链接——ln -s <敏感路径> x 再 Write x，是同形状的两步绕过")
+    void danglingSymlinkResolvesToItsTarget(@TempDir Path tmp) throws Exception {
+        Path dir = real(tmp);
+        Path secret = dir.resolve("not-yet/evil.conf");   // 刻意不创建：链接建好时它还不存在
+        Path link = symlink(dir.resolve("x"), secret);
+
+        List<Path> aliases = PathAliases.of(link);
+
+        assertTrue(aliases.contains(link.normalize()), "原写法必须保留：" + aliases);
+        assertTrue(aliases.contains(secret.normalize()),
+                "悬空链接也要解析出 " + secret + "，实际：" + aliases);
+    }
+
+    @Test
+    @DisplayName("链接目标是相对路径——必须相对链接所在目录解析，不是相对 cwd")
+    void relativeSymlinkTargetResolvesAgainstLinkDirectory(@TempDir Path tmp) throws Exception {
+        Path dir = real(tmp);
+        Files.createDirectories(dir.resolve("a"));
+        Files.createDirectories(dir.resolve("b"));
+        // ../b/x 里的 x 同样不存在：这才逼出「读链接内容」而非 toRealPath 那条路
+        Path link = symlink(dir.resolve("a/y"), Path.of("../b/x"));
+
+        List<Path> aliases = PathAliases.of(link);
+
+        Path againstLinkDir = dir.resolve("b/x").normalize();
+        assertTrue(aliases.contains(againstLinkDir),
+                "应解析成 " + againstLinkDir + "（相对链接所在目录），实际：" + aliases);
+        // 若错按 cwd 解析，落点会是 <模块目录>/../b/x，与上面这条根本对不上
+        assertTrue(aliases.stream().allMatch(Path::isAbsolute), "别名必须都是绝对路径：" + aliases);
+    }
+
+    @Test
+    @DisplayName("循环链接不得挂死——a→b、b→a 要在正常时间内返回且不抛")
+    void symlinkCycleTerminates(@TempDir Path tmp) throws Exception {
+        Path dir = real(tmp);
+        Path a = symlink(dir.resolve("a"), dir.resolve("b"));
+        symlink(dir.resolve("b"), dir.resolve("a"));
+
+        List<Path> aliases = assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> PathAliases.of(a), "循环链接把解析转晕了");
+
+        assertTrue(aliases.contains(a.normalize()), "解不开也必须保留原写法：" + aliases);
     }
 
     @Test
