@@ -590,6 +590,11 @@ def check_plan_cancel_turn(session):
     <b>一条新的异常路径</b>（PlanRequest.cancel() → PlanOutcome.CANCEL → 桥抛
     PermissionCancelledException），这一段此前只有单测、没有实机走过。
 
+    <b>已用变异证明这条会红</b>（2026-08-01）：停掉 submit 开头的 trimDanglingToolCalls 后
+    本场景报出悬空的 ExitPlanMode call（那条 assistant 后面没有 tool 结果）。另一半结论同样重要：
+    <b>只</b>停掉 doOnCancel 回滚时两条场景都还是绿的——这条出站属性由「取消时回滚」与
+    「每次 submit 出站前净化」两处共同守，后者才是这条路径上真正兜住的那个。
+
     Enters with mode=DEFAULT, leaves with mode=DEFAULT.
     """
     session.write(SHIFT_TAB)
@@ -629,7 +634,7 @@ def check_plan_cancel_turn(session):
     for msgs in after:
         bad_ids = dangling_tool_calls(msgs)
         if bad_ids:
-            die("中断后的请求里残留悬空 tool_calls %s —— doOnCancel 回滚没生效，"
+            die("中断后的请求里残留悬空 tool_calls %s —— 回滚/出站净化未生效，"
                 "真实网关会 400（角色序列=%s）"
                 % (bad_ids, [m.get("role") for m in msgs]), session.screen.display)
     print("计划 Esc 中断 OK: 面板收起、回合结束、下一条消息正常，"
@@ -823,8 +828,24 @@ def check_cancel_turn(session):
     blow up with a dangling-tool_calls 400.
 
     Entered with the askOnly panel open (see check_askonly_panel).
+
+    <b>断言分两层，结构检查才是主的</b>：屏幕上「收到了回复」<b>证明不了</b>会话干净——
+    桩模型不校验消息结构、来者不拒，真正会 400 的是真实网关，所以那条文本断言在这套冒烟里
+    恒真、永远不会失败（期 1 曾据它把「Esc 后不 400」记成已覆盖，那个结论是空的）。
+    真凭据是 {@link #dangling_tool_calls}：直接看这条消息<b>实际发出去</b>的历史里
+    有没有「assistant(tool_calls) 却没有对应 tool 结果」。
+
+    <b>但这一条至今没能被证伪</b>（2026-08-01 变异实测）：把 doOnCancel 回滚与 submit 开头的
+    trimDanglingToolCalls 双双停掉，本场景<b>仍然绿</b>——历史转储显示被取消的那个 Write 回合的
+    assistant(tool_calls) <b>根本没进会话</b>，也就无所谓悬空。即：这条路径上的 400 风险是被
+    「压根没落盘」挡住的，不是被回滚挡住的。留着它是廉价的回归保险（真出现悬空一定会红），
+    但<b>不要据此宣称「回滚在权限面板这条路上被覆盖了」</b>——计划面板那条
+    (check_plan_cancel_turn) 才是真的会红。
     """
+    assert_detector_sees_tool_calls()          # 先证明探测器有鉴别力，再拿它下断言
     before = len(StubModel.requests)
+    with StubModel.lock:
+        sent_before = len(StubModel.sent)
     session.write(ESC)
     wait_until(session, lambda: PANEL_TITLE_SSH not in session.screen_text(),
                10, "Esc 关闭审批面板并中断回合")
@@ -835,12 +856,20 @@ def check_cancel_turn(session):
     text = session.screen_text()
     with StubModel.lock:
         after = StubModel.requests[before:]
+        sent_after = StubModel.sent[sent_before:]
     for bad in ("400", "Error", "错误"):
         if bad in text:
             die("中断后的下一条消息出错（屏幕含 %r；stub 请求=%s）" % (bad, after),
                 session.screen.display)
-    print("Esc 中断 OK: 回合结束、下一条消息正常（stub 收到 %d 次请求：%s）."
-          % (len(after), after))
+    if not sent_after:
+        die("桩没有收到中断后的那条消息（无从判断会话是否干净）", session.screen.display)
+    for msgs in sent_after:
+        bad_ids = dangling_tool_calls(msgs)
+        if bad_ids:
+            die("中断后的请求里残留悬空 tool_calls %s —— 真实网关会 400（角色序列=%s）"
+                % (bad_ids, [m.get("role") for m in msgs]), session.screen.display)
+    print("Esc 中断 OK: 回合结束、下一条消息正常且发出的历史里无悬空 tool_calls"
+          "（stub 收到 %d 次请求：%s）." % (len(after), after))
 
 
 # ── main ─────────────────────────────────────────────────────────────────
