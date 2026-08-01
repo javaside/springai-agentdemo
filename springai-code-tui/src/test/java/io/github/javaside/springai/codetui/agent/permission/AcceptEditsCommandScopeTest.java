@@ -78,6 +78,14 @@ class AcceptEditsCommandScopeTest {
     }
 
     @Test
+    @DisplayName("★ 等号形态的长选项也要判：cp --target-directory=/etc x → ASK")
+    void longOptionEqualsValueIsJudged(@TempDir Path root) throws IOException {
+        assertEquals(PermissionBehavior.ASK,
+                decide(root, "cp --target-directory=/etc x").behavior(),
+                "-t /etc 拦得住而 --target-directory=/etc 漏过，就是同一个动作只拦住一种拼法");
+    }
+
+    @Test
     @DisplayName("多个目标里只要有一个越界就整段 ASK（mv 的源在区外）")
     void anyOutsideArgumentAsks(@TempDir Path root) throws IOException {
         assertEquals(PermissionBehavior.ASK, decide(root, "mv /tmp/x.txt inside.txt").behavior());

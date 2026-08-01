@@ -13,9 +13,11 @@ import io.github.javaside.springai.codetui.agent.PlanRequest;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.SkillInfo;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoader;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
+import io.github.javaside.springai.codetui.agent.permission.RuleScope;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
@@ -103,6 +105,9 @@ public final class CodeTuiView extends InlineApp {
     private boolean pickingSkill;                                    // /skill 选择器是否激活
     private boolean pickingMcp;                                      // /mcp 管理面板是否激活
     private boolean mcpExpanded;                                     // Tab 展开选中项工具清单
+    private boolean pickingPerms;                                    // /permissions 规则面板是否激活
+    private int permsIndex;                                          // 权限面板高亮项下标
+    private PermissionRule permsPendingDelete;                       // 非 null = 删除确认态（待确认的那条规则）
     private volatile String mcpConnecting;                           // 非 null = 正在后台连接的 server 名（渲染线程读）
     private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
     private AskRequest activeAsk;                                     // 当前正在作答的问询（null=非作答态）
@@ -190,6 +195,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
                 scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
+                scope(pickingPerms, permsPanelChildren()),          // /permissions 规则面板（可删）
                 scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
                 scope(activePermission != null, permissionChildren()),   // 权限审批面板
                 scope(activePlan != null, planChildren()),          // 计划审批面板（正文在 scrollback，面板只放选项）
@@ -489,6 +495,7 @@ public final class CodeTuiView extends InlineApp {
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
         if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
+        if (pickingPerms) return onPermsPanelKey(k);    // 权限规则面板同理
         // 正在浏览历史（histIndex<size）时 ↑↓ 始终翻历史——即使翻到的是一条 /命令、补全菜单也弹出来了，
         // 也不让菜单抢走 ↑↓（否则一遇到 /model 就卡住翻不动）。菜单的 Tab/Enter/Esc 仍照常处理。
         if (histIndex < history.size()) {
@@ -818,9 +825,10 @@ public final class CodeTuiView extends InlineApp {
             openMcpPicker();
             return;
         }
-        if (cmd.equals("/permissions")) {       // 只读报告：任何时刻都可查（含审批期间），不打断
+        if (cmd.equals("/permissions")) {       // 模式与底线进 scrollback，规则清单进面板（可删）
             inputState.clear();
             printPermissions();
+            openPermsPanel();
             return;
         }
         if (cmd.equals("/continue")) {               // 续跑：上一批计划被 Esc/报错中断后，据会话里保留的 todo 从首个未完成项接着做
@@ -1521,27 +1529,147 @@ public final class CodeTuiView extends InlineApp {
     }
 
     /**
-     * {@code /permissions}：把当前模式、生效规则、内置底线打进 scrollback（灰色信息行）。
+     * {@code /permissions}：模式与内置底线进 scrollback，规则清单进{@link #permsPanelChildren 交互面板}。
      *
-     * <p>只读——改规则走审批面板的「允许，永久」或直接编辑 {@code .codetui/permissions.json}
-     * （交互式编辑规则不在本期范围）。
+     * <p><b>为什么两处分开</b>：模式与内置底线是<b>信息</b>（读一遍就够，且底线不可删），
+     * 规则是<b>可操作的列表</b>。把信息也塞进面板只会挤占本就有限的行数；
+     * 把列表留在 scrollback 则没法选中、更没法删。
      */
     private void printPermissions() {
         state.pushInfo("权限模式：" + onSubmit.permissionMode().label() + "（Shift+Tab 循环切换）");
-        List<PermissionRule> rules = onSubmit.permissionRules();
-        if (rules.isEmpty()) {
-            state.pushInfo("  当前没有自定义规则。可在 .codetui/permissions.json 配置，"
-                    + "或在审批面板选「允许，永久」自动写入。");
-        } else {
-            state.pushInfo("生效规则（deny > ask > allow）：");
-            for (PermissionRule r : rules) {
-                state.pushInfo("  • [" + r.behavior() + "] " + r.toDsl() + "   (" + r.scope() + ")");
-            }
-        }
         state.pushInfo("内置底线（任何 allow 规则与 BYPASS 都盖不住，命中即询问）：");
         state.pushInfo("  写 .ssh/.aws/.kube/.gnupg/.git/.codetui 配置、写 shell 启动文件、"
                 + "读私钥与凭据、rm -rf / 或 ~ 或变量目标");
     }
+
+    // ── /permissions 规则面板 ────────────────────────────────────────────
+    /**
+     * 打开权限规则面板。<b>零规则也照常打开</b>——面板会说明规则写在哪，比什么都不弹更有用。
+     */
+    private void openPermsPanel() {
+        permsIndex = 0;
+        permsPendingDelete = null;
+        pickingPerms = true;
+    }
+
+    /**
+     * 面板按键：↑↓/kj 移动、{@code d} 请求删除、Esc 关闭；确认态只认 Enter（确认）/ Esc（取消）。始终 HANDLED。
+     *
+     * <p><b>删除键是 {@code d} 而不是 Enter</b>（与 {@code /mcp} 面板刻意不同）：那边 Enter 切换启用状态，
+     * 是可逆的；删规则不可逆——尤其删 deny 等于<b>放宽权限</b>——不该和「移动光标后顺手回车」共用一个键。
+     */
+    private EventResult onPermsPanelKey(KeyEvent k) {
+        List<PermissionRule> rules = onSubmit.permissionRules();
+        if (permsPendingDelete != null) {                 // 确认态：只认 Enter / Esc，别的键一概忽略
+            if (k.isCancel()) { permsPendingDelete = null; return EventResult.HANDLED; }
+            if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+                confirmPermsDelete();
+                return EventResult.HANDLED;
+            }
+            return EventResult.HANDLED;
+        }
+        if (k.isCancel()) { pickingPerms = false; return EventResult.HANDLED; }
+        int n = rules.size();
+        if (n == 0) return EventResult.HANDLED;          // 空列表：除 Esc 外无事可做（别让 % n 除零）
+        permsIndex = clampIndex(permsIndex, n);
+        if (k.code() == KeyCode.UP || k.isChar('k'))   { permsIndex = (permsIndex - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) { permsIndex = (permsIndex + 1) % n;     return EventResult.HANDLED; }
+        if (k.isChar('d') || k.isChar('D')) {
+            permsPendingDelete = rules.get(permsIndex);  // 只是「请求」——真正的删除在 confirmPermsDelete
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;                       // Enter 等其余键刻意不做任何事
+    }
+
+    /** 确认后才真的删。落盘失败也把结果说清楚——「点了没反应」比报错更难排查。 */
+    private void confirmPermsDelete() {
+        PermissionRule r = permsPendingDelete;
+        permsPendingDelete = null;
+        if (r == null) return;
+        boolean ok = onSubmit.removePermissionRule(r);
+        state.setNotice(ok ? "已删除规则 " + r.toDsl()
+                : "删除失败：" + r.toDsl() + "（规则可能已变化，或配置文件写不进去）");
+        permsIndex = clampIndex(permsIndex, onSubmit.permissionRules().size());
+    }
+
+    /**
+     * 权限面板：标题 + 每条规则一行（behavior / DSL / 来源层），末尾注明内置底线不在此列。
+     * 确认态<b>替换</b>整个列表为一行确认提示——叠加显示会让「要确认什么」淹没在列表里。
+     *
+     * <p>高亮走纯前景 {@code PICK_SEL}（底色条会串到下一项，见 {@code Theme.PICK_SEL} 注释）。
+     */
+    private Element[] permsPanelChildren() {
+        // scope 每帧 eager 求值（非面板态也会进来）：首行判空，否则每帧崩渲染线程
+        if (!pickingPerms) return new Element[0];
+        // 审批/计划/作答模态在前台时按键归它们（见 onInputKey 的分支顺序），此时把面板收起来，
+        // 免得屏幕上并排两个面板、而其中一个根本按不动。
+        if (activePermission != null || activePlan != null || activeAsk != null) return new Element[0];
+        List<PermissionRule> rules = onSubmit.permissionRules();
+        List<Element> els = new ArrayList<>();
+        if (permsPendingDelete != null) {
+            els.add(text("  ⚠ 确认删除 " + permsRuleLabel(permsPendingDelete) + "？"
+                    + deleteConsequence(permsPendingDelete) + " · Enter 确认 · Esc 取消").style(PICK_TITLE));
+            return els.toArray(new Element[0]);
+        }
+        els.add(text("  🔑 权限规则（↑↓ 选择 · d 删除 · Esc 关闭）").style(PICK_TITLE));
+        if (rules.isEmpty()) {
+            els.add(text("    当前没有自定义规则。可在 .codetui/permissions.json 配置，"
+                    + "或在审批面板选「允许，永久」自动写入。").style(PICK_DESC));
+            return els.toArray(new Element[0]);
+        }
+        int sel = clampIndex(permsIndex, rules.size());
+        for (int i = 0; i < rules.size(); i++) {
+            PermissionRule r = rules.get(i);
+            boolean isSel = i == sel;
+            els.add(text("  " + (isSel ? "❯ " : "  ") + permsRuleLabel(r))
+                    .style(isSel ? PICK_SEL : PICK_ITEM));
+        }
+        els.add(text("    ─────────────────────────────────────").style(PICK_DESC));
+        els.add(text("    内置底线不在此列，无法删除").style(PICK_DESC));
+        return els.toArray(new Element[0]);
+    }
+
+    /** 一条规则的显示文本：{@code [DENY] Read(**}{@code /.env)  用户级}。 */
+    private static String permsRuleLabel(PermissionRule r) {
+        return "[" + r.behavior() + "] " + r.toDsl() + "  " + scopeLabel(r.scope());
+    }
+
+    private static String scopeLabel(RuleScope s) {
+        return switch (s) {
+            case USER -> "用户级";
+            case PROJECT -> "项目级";
+            case SESSION -> "本会话";
+        };
+    }
+
+    /**
+     * 删除这条规则的后果，<b>按方向分开说</b>。
+     *
+     * <p>同一个操作在两个方向上的后果完全不对称：删 allow / ask 只是回到「以后再问一次」，
+     * 删 <b>deny</b> 是<b>放宽权限</b>——那条禁令没了之后，原本被拒的调用可能直接被放行。
+     * 提示语因此也不该对称，用户按下 Enter 之前得看见自己在往哪个方向走。
+     */
+    private static String deleteConsequence(PermissionRule r) {
+        return r.behavior() == PermissionBehavior.DENY ? "这会放宽权限" : "以后会重新询问";
+    }
+
+    /**
+     * 面板态的状态行。
+     *
+     * <p><b>必须自己回显 notice</b>：{@link #statusLine} 的面板分支早于通用 notice 分支 return，
+     * 不在这里回显的话，「已删除规则 X」「删除失败」这类反馈<b>永远看不见</b>——而删除恰恰是
+     * 最需要给出确认反馈的操作（同 {@link #askStatusText} 的老账）。
+     */
+    String permsStatusText() {
+        String notice = state.notice();
+        if (notice != null && !notice.isEmpty()) return notice + " · Esc 关闭";
+        return permsPendingDelete != null
+                ? "⚠ 确认删除 · Enter 确认 · Esc 取消"
+                : "🔑 权限规则 · ↑↓ 选择 · d 删除 · Esc 关闭";
+    }
+
+    // 测试钩子
+    boolean pickingPermsForTest() { return pickingPerms; }
 
     /** /reload：重扫两层技能目录后打一行结果 + 复用 {@link #printSkills} 展示最新清单（运行中增删 SKILL.md 即时生效，无需重启）。 */
     private void reloadSkills() {
@@ -1674,6 +1802,7 @@ public final class CodeTuiView extends InlineApp {
         if (activePermission != null) return text(permStatusText()).style(THINK);   // 审批优先：此时别的提示都不该抢
         if (activePlan != null) return text(planStatusText()).style(THINK);
         if (activeAsk != null) return text(askStatusText()).style(THINK);
+        if (pickingPerms) return text(permsStatusText()).style(THINK);
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);

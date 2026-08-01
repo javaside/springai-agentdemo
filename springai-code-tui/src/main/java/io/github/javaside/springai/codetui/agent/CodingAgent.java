@@ -518,6 +518,15 @@ public final class CodingAgent implements SubmitHandler {
         return permissionEngine == null ? List.of() : permissionEngine.effectiveRules();
     }
 
+    /**
+     * 删一条规则（{@code /permissions} 面板）。落盘规则回写对应层文件、会话规则只摘内存，
+     * 两者都由 {@link PermissionEngine#removeRule} 一并处理——面板不该知道规则存在哪。
+     */
+    @Override
+    public boolean removePermissionRule(PermissionRule rule) {
+        return permissionEngine != null && permissionEngine.removeRule(rule);
+    }
+
     /** 当前会话 id（包级可见，供测试断言换会话是否生效）。 */
     String sessionId() {
         return sessionId;

@@ -65,6 +65,13 @@ public interface SubmitHandler {
     /** 循环到下一个模式（Shift+Tab），返回<b>实际</b>生效的新模式（未获授权时可能原地不动）。 */
     default PermissionMode cyclePermissionMode() { return permissionMode(); }
 
-    /** 当前生效的全部规则（{@code /permissions} 只读展示）。 */
+    /** 当前生效的全部规则（{@code /permissions} 面板展示）。 */
     default List<PermissionRule> permissionRules() { return List.of(); }
+
+    /**
+     * 删一条规则（{@code /permissions} 面板用）。默认 false，便于回显桩/测试桩省略。
+     *
+     * <p>落地端须<b>同时</b>更新落盘文件与内存规则表——只改一处会让面板与实际判定分家。
+     */
+    default boolean removePermissionRule(PermissionRule rule) { return false; }
 }

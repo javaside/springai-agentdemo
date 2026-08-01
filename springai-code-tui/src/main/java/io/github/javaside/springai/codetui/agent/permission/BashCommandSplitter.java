@@ -165,6 +165,15 @@ public final class BashCommandSplitter {
      * {@code cp -t /etc src} 正是这样一条：{@code /etc} 是 {@code -t} 的值，
      * 按「选项的值跳过」去写就会漏掉它，整条命令被当成工作区内操作。
      *
+     * <p><b>{@code --opt=value} 形态要取 {@code =} 之后那半</b>：分离形态
+     * （{@code -t /etc}）的值本来就是独立的一个词、自然进候选，而等号形态整个词以 {@code -}
+     * 开头，会被上面那条「选项不是路径」跳过——于是 {@code cp --target-directory=/etc src}
+     * 里的 {@code /etc} 逃过判定，整段被当成工作区内操作放行。同一个动作两种拼法，
+     * 只拦住一种等于没拦。
+     *
+     * <p>只对<b>长</b>选项做：短选项的粘连形态（{@code -t/etc}）不是 POSIX 惯例，
+     * {@code cp} 也不支持，为它切词只会把 {@code -rf} 这类捆绑短选项误切成路径。
+     *
      * @param segment 单段命令；null / 空白 / 只有命令名都返回空列表
      */
     public static List<String> pathArguments(String segment) {
@@ -175,11 +184,28 @@ public final class BashCommandSplitter {
         List<String> out = new ArrayList<>(words.size() - 1);
         for (String w : words.subList(1, words.size())) {
             if (w.startsWith("-")) {
-                continue;                           // 选项本身不是路径；它的值下一轮自然进来
+                String value = longOptionValue(w);
+                if (!value.isEmpty()) {
+                    out.add(value);                 // --target-directory=/etc → /etc
+                }
+                continue;                           // 选项本身不是路径
             }
             out.add(w);
         }
         return List.copyOf(out);
+    }
+
+    /**
+     * 长选项等号形态的值（{@code --output=f} → {@code f}）；不是这个形态则返回空串。
+     *
+     * <p>{@code --foo=} 的值为空，返回空串（没有落点可判）。
+     */
+    private static String longOptionValue(String word) {
+        if (!word.startsWith("--")) {
+            return "";
+        }
+        int eq = word.indexOf('=');
+        return eq < 0 ? "" : word.substring(eq + 1);
     }
 
     /**

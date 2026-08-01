@@ -199,9 +199,13 @@ class CodeTuiViewPermissionModeTest {
 
         String all = String.join("\n",
                 state.drainPending().stream().map(ConversationState.OutputLine::text).toList());
+        // 期 3 起 /permissions 是交互面板：**模式**与**内置底线**仍下沉 scrollback（是信息不是列表），
+        // 而**规则列表进面板**——放 scrollback 只会在规则一多时刷屏，且没法就地删。
+        // 规则那部分的断言在 CodeTuiViewPermissionsPanelTest 里（打屏幕文本）。
         assertTrue(all.contains("默认"), "应显示当前模式，实际：" + all);
-        assertTrue(all.contains("Bash(mvn test:*)"), "应列出生效规则，实际：" + all);
         assertTrue(all.contains("Shift+Tab"), "应说明如何切换模式，实际：" + all);
+        assertTrue(ViewScreen.of(v).contains("Bash(mvn test:*)"),
+                "生效规则应出现在面板上，实际屏幕：\n" + ViewScreen.of(v));
         assertEquals("", v.inputTextForTest(), "命令执行后应清空输入框");
     }
 
@@ -216,8 +220,10 @@ class CodeTuiViewPermissionModeTest {
 
         String all = String.join("\n",
                 state.drainPending().stream().map(ConversationState.OutputLine::text).toList());
-        assertTrue(all.contains("permissions.json"), "应指出规则写在哪，实际：" + all);
         assertTrue(all.contains("内置底线"), "应列出任何 allow 都盖不住的内置检查，实际：" + all);
+        // 「规则写在哪」这条指引随规则列表一起搬进了面板（零规则时它就是面板的全部内容）
+        assertTrue(ViewScreen.of(v).contains("permissions.json"),
+                "零规则时面板要指出规则写在哪，实际屏幕：\n" + ViewScreen.of(v));
     }
 
     @Test

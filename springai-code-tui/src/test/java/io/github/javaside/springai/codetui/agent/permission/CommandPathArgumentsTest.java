@@ -39,6 +39,27 @@ class CommandPathArgumentsTest {
     }
 
     @Test
+    @DisplayName("★ 等号形态的长选项要取 = 之后那半：--target-directory=/etc 里的 /etc 必须出现")
+    void longOptionEqualsValueIsCandidate() {
+        List<String> args = BashCommandSplitter.pathArguments("cp --target-directory=/etc src");
+        assertTrue(args.contains("/etc"),
+                "分离形态 -t /etc 的值自然进候选，等号形态整个词以 - 开头会被跳过——"
+                        + "同一个动作两种拼法，只拦住一种等于没拦");
+        assertTrue(args.contains("src"));
+    }
+
+    @Test
+    @DisplayName("等号形态的边界：--foo= 值为空则跳过；短选项的捆绑形态不切")
+    void longOptionEqualsEdgeCases() {
+        assertEquals(List.of("dst"), BashCommandSplitter.pathArguments("cp --foo= dst"),
+                "值为空，没有落点可判");
+        assertEquals(List.of("a", "b"), BashCommandSplitter.pathArguments("cp -rf a b"),
+                "-rf 是捆绑短选项，不含 =，不得被切成路径");
+        assertEquals(List.of("/etc", "src"),
+                BashCommandSplitter.pathArguments("cp --output=/etc src"));
+    }
+
+    @Test
     @DisplayName("多判几个无害：mkdir -m 755 dir 里的 755 也算候选")
     void overInclusionIsAcceptable() {
         assertEquals(List.of("755", "dir"), BashCommandSplitter.pathArguments("mkdir -m 755 dir"),
