@@ -1,0 +1,73 @@
+package io.github.javaside.springai.codetui.agent;
+
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.function.Consumer;
+
+/**
+ * {@code ExitPlanMode} 的落地端：把工具线程 ↔ UI 线程之间的一次计划审批变成阻塞握手。
+ * 形状照抄 {@link UserQuestionBridge}（一次性队列 + {@code take()}），只是载荷不同。
+ *
+ * <p><b>为何阻塞</b>：工具的 {@code call()} 在工具线程上同步执行，必须返回一个字符串才算执行完毕。
+ * 本桥把计划经 {@link AgentListener#onPlanSubmitted} 交给 UI，然后阻塞在一次性队列上，直到用户选完。
+ *
+ * <p><b>turnId</b>：{@code handle()} 在被 {@link ToolEventCallback} 装饰的工具 call 内同线程同步触发，
+ * 故直接读 {@link ToolEventCallback#currentTurnId()}（与 {@link UserQuestionBridge} 同款）。
+ *
+ * <p><b>切模式发生在工具线程</b>：{@code PermissionEngine.mode} 是 {@code volatile}，
+ * 本来就是按「UI 线程与工具线程都可能写」设计的。这里经构造注入的 {@code modeSwitch} 回调去改，
+ * 而不是直接依赖引擎类型——桥只管握手，不必认识权限包的实现细节。
+ *
+ * <p><b>一次性消费</b>：容量 1 的队列 + 非阻塞 {@code offer} 使「首个信号胜出」，重复/交叉的
+ * respond 均被安全丢弃。每次 {@link #handle} 新建一个 handoff，<b>绝不复用或重新武装</b>——
+ * 复用会让下一次审批读到上一次陈旧的 CANCEL，杀掉用户刚刚批准的计划。
+ *
+ * <p><b>活性依赖（本类不自保）</b>：{@code take()} 无超时，解除阻塞完全靠两条外部逃生口——
+ * ① UI 总会应答（面板保证，且 {@link AgentListener#onPlanSubmitted} 的默认实现也会立刻应答）；
+ * ② 回合被 dispose 时框架中断本线程。二者缺失则线程永久 park，<b>而它持着回合</b>。
+ */
+public final class PlanApprovalBridge {
+
+    private final AgentListener listener;
+    private final Consumer<PermissionMode> modeSwitch;
+
+    public PlanApprovalBridge(AgentListener listener, Consumer<PermissionMode> modeSwitch) {
+        this.listener = listener;
+        this.modeSwitch = modeSwitch;
+    }
+
+    /** 提交一份计划、阻塞到用户选完；返回给模型的字符串。 */
+    public String handle(String plan) {
+        long turnId = ToolEventCallback.currentTurnId();
+        ArrayBlockingQueue<Object[]> handoff = new ArrayBlockingQueue<>(1);
+        PlanResponder responder = (outcome, feedback) ->
+                handoff.offer(new Object[]{outcome, feedback == null ? "" : feedback});
+
+        listener.onPlanSubmitted(turnId, new PlanRequest(turnId, plan, responder));
+
+        Object[] answer;
+        try {
+            answer = handoff.take();                 // 阻塞工具线程直到 UI 应答
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();       // 重新置位：吞掉它上层就再也看不到取消信号
+            throw new PermissionCancelledException();
+        }
+        PlanOutcome outcome = (PlanOutcome) answer[0];
+        String feedback = (String) answer[1];
+        switch (outcome) {
+            case APPROVE_ACCEPT_EDITS:
+                modeSwitch.accept(PermissionMode.ACCEPT_EDITS);
+                return "计划已批准，开始执行。后续工作区内的改动会自动放行，无需逐个确认。";
+            case APPROVE_DEFAULT:
+                modeSwitch.accept(PermissionMode.DEFAULT);
+                return "计划已批准，开始执行。后续每个有副作用的操作仍会逐个请求用户确认。";
+            case KEEP_PLANNING:
+                return "用户希望继续完善计划：" + feedback
+                        + "\n请据此修改方案，然后再次调用 ExitPlanMode 提交。仍处于计划模式，不要动手改。";
+            case CANCEL:
+            default:
+                throw new PermissionCancelledException();
+        }
+    }
+}

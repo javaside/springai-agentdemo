@@ -78,6 +78,24 @@ public interface AgentListener {
         request.responder().respond(PermissionOutcome.DENY);
     }
 
+    /**
+     * 模型经 {@code ExitPlanMode} 提交了一份计划：UI 应把正文渲染进 scrollback、把请求排进模态队列、
+     * 弹三选项面板，最终经 {@code request.responder()} 应答。落地端会阻塞工具线程直到应答
+     * （见 {@link PlanApprovalBridge}）。
+     *
+     * <p><b>默认实现直接「继续完善计划」而不是空实现</b>：空实现会让工具线程永久 park，
+     * 而它持着回合——整个 agent 静默挂死。没有接管计划 UI 的落地端（回显桩 / 测试桩）
+     * 应当给一个能让回合继续下去的答复。
+     *
+     * <p>覆写本方法的实现须守与 {@link #onPermissionRequested} <b>完全相同</b>的两条禁令：
+     * <b>不得调 {@code super}</b>（默认实现会立刻应答，一次性口被消费掉，用户随后的真实选择被丢弃）、
+     * <b>不得在本回调里阻塞</b>（{@code ConversationState} 的 listener 方法是 {@code synchronized}，
+     * 阻塞会冻住整个 TUI）。
+     */
+    default void onPlanSubmitted(long turnId, PlanRequest request) {
+        request.responder().respond(PlanOutcome.KEEP_PLANNING, "（当前界面不支持计划审批）");
+    }
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);
