@@ -175,6 +175,16 @@ public final class McpRegistry {
     }
 
     /**
+     * 本 registry 装饰 MCP 工具时用的权限引擎。
+     *
+     * <p>供 {@code AgentTools.build} 的向后兼容重载取用——让「内置工具与 MCP 工具共用同一个引擎」
+     * 由类型保证，而不是靠调用方记得传对同一个对象。
+     */
+    PermissionEngine permissionEngine() {
+        return permissionEngine;
+    }
+
+    /**
      * 包私供测试断言装饰链（最外层 {@link PermissionCallback}）。
      *
      * <p>运行期 {@code /mcp} 启用的 server 也走这里——故权限层<b>不能</b>改成「装配期一次性包装」，

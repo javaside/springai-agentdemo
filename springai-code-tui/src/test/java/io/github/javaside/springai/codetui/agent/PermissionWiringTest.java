@@ -54,6 +54,9 @@ class PermissionWiringTest {
 
     private static final long TURN = 42L;
 
+    /** 兜底超时（宽给：判据是「线程死了」这个事件，不是墙钟，见 {@link #awaitModal}）。 */
+    private static final long AWAIT_TIMEOUT_MS = 30_000L;
+
     // ── 桩 ──────────────────────────────────────────────────────────────
 
     /** 名字可指定的假工具；记录是否被真正执行（被拒时必须没跑）。 */
@@ -119,7 +122,12 @@ class PermissionWiringTest {
 
     /**
      * 在后台线程上跑一次工具调用（ASK 会阻塞工具线程），等模态请求进队列，断言它带着 {@code TURN}。
-     * <b>不会挂死</b>：turnId 若没传到，请求会被就地 DENY、工具线程立刻返回，这里等到超时即失败。
+     *
+     * <p><b>不会挂死，也不靠等满超时来判失败</b>：turnId 没传到时请求被就地 DENY、工具线程随即返回，
+     * 于是「线程已死且队列里没东西」就是回归的确切信号，{@link #awaitModal} 一看到就返回 null。
+     * 超时只是兜底，故可以给得很宽——曾经给 5s，在「surefire 与 javac 抢 CPU」的那一跑上
+     * 被拖超，红成一次假回归。判据换成事件（线程死了）而不是墙钟之后，慢机器不再误报，
+     * 真回归也不用等满超时。
      */
     private static void assertAskReachesQueue(ToolCallback tool, String toolInput,
                                               ConversationState state, String where) throws Exception {
@@ -128,26 +136,33 @@ class PermissionWiringTest {
         worker.setDaemon(true);
         worker.start();
         try {
-            ModalRequest modal = awaitModal(state);
-            assertNotNull(modal, where + "：审批请求没能进入模态队列——"
+            ModalRequest modal = awaitModal(state, worker);
+            assertNotNull(modal, where + "：工具线程已经跑完，却没在模态队列里留下审批请求——"
                     + "多半是 ToolContext 没传到，turnId 取成了 -1，请求被 acceptingTurnId 过滤后静默 DENY");
             PermissionRequest req = assertInstanceOf(PermissionRequest.class, modal);
             assertEquals(TURN, req.turnId(), where + "：请求带的 turnId 不是发起回合的");
             req.responder().respond(PermissionOutcome.DENY);   // 放工具线程走，别留 park 的线程
         } finally {
-            worker.join(5000);
+            worker.join(AWAIT_TIMEOUT_MS);
             assertFalse(worker.isAlive(), where + "：工具线程没能醒来");
         }
     }
 
-    private static ModalRequest awaitModal(ConversationState state) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 5000;
+    /**
+     * 等模态请求入队。返回 null 有两种情形，都该让调用方失败：
+     * ① 工具线程已经结束却没留下请求（回归的确切信号，秒级发现）；② 超时兜底。
+     */
+    private static ModalRequest awaitModal(ConversationState state, Thread worker) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             ModalRequest r = state.peekModal();
             if (r != null) {
-                return r;
+                return r;      // 先看队列再看线程：请求已入队就算数，哪怕线程随后才结束
             }
-            Thread.sleep(10);
+            if (!worker.isAlive()) {
+                return null;   // 没 park 在应答口上就返回了 = 根本没问，或问了被就地拒了
+            }
+            Thread.sleep(5);
         }
         return null;
     }
@@ -210,6 +225,45 @@ class PermissionWiringTest {
         }
         assertSame(engine, ((PermissionCallback) mcp.decorate(new NoopTool("mcp__s1__ping"))).engine(),
                 "MCP 工具挂在了另一个引擎上");
+    }
+
+    @Test
+    @DisplayName("四参重载也共用 McpRegistry 的引擎（自建第二个 = 切模式只覆盖一半工具，且静默）")
+    void legacyBuildOverloadReusesMcpRegistryEngine(@TempDir Path root) {
+        ConversationState state = new ConversationState();
+        PermissionEngine engine = AgentTools.testEngine(root);
+        McpRegistry mcp = mcpRegistry(root, state, engine);
+        mcp.addConnectedForTest("s1", List.of(mcp.decorate(new NoopTool("mcp__s1__ping"))));
+
+        // 不传 engine 的那个重载：它必须从 mcpRegistry 取，而不是自建一个
+        AgentTools.AgentRuntime rt = AgentTools.build(providers(), root, state, mcp);
+
+        assertSame(engine, rt.permissionEngine(),
+                "四参重载自建了第二个引擎：内置工具与 MCP 工具会挂在不同引擎上");
+        for (ToolCallback t : assembledTools(rt)) {
+            assertSame(engine, ((PermissionCallback) t).engine(),
+                    "内置工具 " + t.getToolDefinition().name() + " 挂在了 MCP 那个之外的引擎上");
+        }
+        for (ToolCallback t : mcp.activeTools()) {
+            assertSame(engine, ((PermissionCallback) t).engine(),
+                    "MCP 工具 " + t.getToolDefinition().name() + " 挂在了内置工具那个之外的引擎上");
+        }
+        // 切一次模式，两侧必须一起变（这正是「两个引擎」会静默失效的地方）
+        PermissionMode after = rt.permissionEngine().cycleMode();
+        assertEquals(after, ((PermissionCallback) mcp.activeTools().get(0)).engine().mode(),
+                "切模式后 MCP 工具读到的还是旧模式：状态栏说一套、工具做另一套");
+    }
+
+    @Test
+    @DisplayName("无 MCP 时四参重载自建引擎（全场只有它一个，无从不一致）")
+    void legacyBuildOverloadWithoutMcpStillWires(@TempDir Path root) {
+        AgentTools.AgentRuntime rt = AgentTools.build(providers(), root, new ConversationState(), null);
+
+        assertNotNull(rt.permissionEngine());
+        for (ToolCallback t : assembledTools(rt)) {
+            assertSame(rt.permissionEngine(), ((PermissionCallback) t).engine(),
+                    "工具 " + t.getToolDefinition().name() + " 没挂在 runtime 暴露的那个引擎上");
+        }
     }
 
     @Test

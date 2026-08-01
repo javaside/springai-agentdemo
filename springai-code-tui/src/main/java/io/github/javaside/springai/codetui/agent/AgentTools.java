@@ -427,14 +427,18 @@ public final class AgentTools {
     }
 
     /**
-     * 向后兼容（<b>测试用</b>）：自建一个隔离的默认引擎（见 {@link #testEngine}）。
+     * 向后兼容重载：<b>engine 取自 {@code mcpRegistry}</b>，没有 MCP 时才自建一个隔离的默认引擎
+     * （见 {@link #testEngine}）。
      *
-     * <p><b>生产别走这条</b>——它建出来的是<b>第二个</b>引擎，与 {@code McpRegistry} 那个不是同一个，
-     * 模式切换只对其中一批工具生效。生产入口是五参重载，引擎由 {@code CodeTuiApplication} 建好传入。
+     * <p><b>为什么不自建</b>：自建就成了<b>第二个</b>引擎——内置工具挂新的、MCP 工具挂
+     * {@code McpRegistry} 里那个旧的。这种错法失效时<b>不报错</b>：用户 Shift+Tab 切到更严的模式，
+     * 状态栏也跟着变了，而 MCP 工具仍按旧模式放行。故这里从 registry 取，让「共用同一个引擎」
+     * 由类型而不是由调用纪律来保证。{@code mcpRegistry == null} 时全场只有这一个引擎，无从不一致。
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
                                       McpRegistry mcpRegistry) {
-        return build(registry, root, listener, mcpRegistry, testEngine(root));
+        return build(registry, root, listener, mcpRegistry,
+                mcpRegistry == null ? testEngine(root) : mcpRegistry.permissionEngine());
     }
 
     /** 向后兼容：无 MCP 支持（等价 registry=null）。现有测试与旧调用走这条。 */
