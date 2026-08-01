@@ -8,6 +8,8 @@ import io.github.javaside.springai.codetui.agent.ModelOption;
 import io.github.javaside.springai.codetui.agent.OptionSpec;
 import io.github.javaside.springai.codetui.agent.PermissionOutcome;
 import io.github.javaside.springai.codetui.agent.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.PlanOutcome;
+import io.github.javaside.springai.codetui.agent.PlanRequest;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.SkillInfo;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
@@ -112,6 +114,10 @@ public final class CodeTuiView extends InlineApp {
     private final TextAreaState askInput = new TextAreaState();       // 「其他」的自定义输入缓冲（单行直存直取）
     private PermissionRequest activePermission;                        // 当前正在审批的请求（null=非审批态）
     private int permOpt;                                              // 审批面板高亮项下标（选项数随 suggested() 变，见 permOptions）
+    private PlanRequest activePlan;                                    // 当前正在审批的计划（null=非计划态）
+    private int planOpt;                                              // 计划面板高亮项下标
+    private boolean planFeedback;                                     // 自由文本子模式（选了「继续完善计划」）
+    private final TextAreaState planInput = new TextAreaState();      // 反馈文本缓冲（单行直存直取，同 askInput）
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
@@ -140,12 +146,24 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/exit",    "退出"));
 
     public CodeTuiView(ConversationState state, SubmitHandler onSubmit, Path root) {
+        this(state, onSubmit, root, null);
+    }
+
+    /**
+     * 测试专用构造：注入记录型 {@link ScrollbackPrinter.Sink}（见其接缝注释「测试=内存列表」）。
+     *
+     * <p>{@code null} = 生产用法，桥接 {@code runner()}。需要这个接缝是因为「计划正文进 scrollback」
+     * 发生在 {@link #drain} 里（非渲染态 {@code runner()} 为 null），只断言面板看不见它。
+     */
+    CodeTuiView(ConversationState state, SubmitHandler onSubmit, Path root, ScrollbackPrinter.Sink testSink) {
         this.state = state;
         this.onSubmit = onSubmit;
         this.root = root;
-        ScrollbackPrinter.Sink sink = new ScrollbackPrinter.Sink() {
-            @Override public void println(Text t)   { runner().println(t); }
-            @Override public void println(String s) { runner().println(s); }
+        // 惰性桥接 runner()：构造时不解引用。判空与 InlineApp.println 自身一致——drain 里的
+        // 计划正文下沉在测试态（未 start，runner()==null）也会跑到，不判空就是每个用例一发 NPE。
+        ScrollbackPrinter.Sink sink = testSink != null ? testSink : new ScrollbackPrinter.Sink() {
+            @Override public void println(Text t)   { var r = runner(); if (r != null) r.println(t); }
+            @Override public void println(String s) { var r = runner(); if (r != null) r.println(s); }
         };
         this.printer = new ScrollbackPrinter(sink, root, this::terminalWidth, CodeTuiView::wrapSegments);
         this.ctxUsage = new ContextUsage(onSubmit::contextStats, state::pushInfo);
@@ -174,6 +192,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
                 scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
                 scope(activePermission != null, permissionChildren()),   // 权限审批面板
+                scope(activePlan != null, planChildren()),          // 计划审批面板（正文在 scrollback，面板只放选项）
                 scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
                 scope(pendingSkill != null, skillTag()),            // 已挂载技能标签：固定在输入框正上方，发送时随消息带走
                 inputElement(),
@@ -242,9 +261,14 @@ public final class CodeTuiView extends InlineApp {
             activePermission = null;
             permOpt = 0;
         }
+        if (activePlan != null && head != activePlan) {   // 同上，计划模态一份（认引用不认相等）
+            resetPlanUi();
+        }
         // 侦测到新模态（身份不同）→ 进入对应模态并复位状态。
         // sealed 的穷尽性在 release=17 由人保证：按类型 switch 要 21，故用 instanceof 链（见 ModalRequest 类注释）。
-        if (head != null && head != activeAsk && head != activePermission) {
+        // ⚠ 新增 ModalRequest 子类型时必须在这里补一条分支：漏了既不是编译错误也没有测试会自动报警，
+        //   而后果是面板永不弹出、工具线程持着回合永久 park（agent 静默挂死）。每条分支都有渲染断言钉着。
+        if (head != null && head != activeAsk && head != activePermission && head != activePlan) {
             if (head instanceof AskRequest pa) {
                 if (isAnswerable(pa)) {
                     activeAsk = pa;
@@ -260,6 +284,12 @@ public final class CodeTuiView extends InlineApp {
             } else if (head instanceof PermissionRequest pr) {
                 activePermission = pr;
                 permOpt = 0;
+            } else if (head instanceof PlanRequest pl) {
+                activePlan = pl;
+                planOpt = 0;
+                planFeedback = false;
+                planInput.clear();
+                printPlan(pl.plan());   // 正文进 scrollback（几十行塞进行内面板会把输入框顶出屏幕）
             }
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
@@ -274,6 +304,9 @@ public final class CodeTuiView extends InlineApp {
 
     /** 测试专用：当前正在审批的请求（null=非审批态）。 */
     PermissionRequest activePermissionForTest() { return activePermission; }
+
+    /** 测试专用：当前正在审批的计划（null=非计划态）。 */
+    PlanRequest activePlanForTest() { return activePlan; }
 
     /**
      * 测试专用：把一个按键喂给输入框按键入口（等价真实按键路由）。
@@ -451,6 +484,7 @@ public final class CodeTuiView extends InlineApp {
             return EventResult.HANDLED;
         }
         if (activePermission != null) return onPermissionKey(k);   // 审批模态优先于一切文本编辑（背后 park 着工具线程）
+        if (activePlan != null) return onPlanKey(k);    // 计划审批模态同理（同一时刻只会有一个模态在前台）
         if (activeAsk != null) return onAskKey(k);      // 作答模态：全部按键交给它，屏蔽文本编辑
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
@@ -1332,6 +1366,142 @@ public final class CodeTuiView extends InlineApp {
                 + " 快选 · Enter 确认 · Esc 中断";
     }
 
+    // ── 计划审批面板（ExitPlanMode） ─────────────────────────────────────
+    /** 计划审批的一个选项：文案 + 选中它喂回工具线程的结果。 */
+    private record PlanOption(String label, String desc, PlanOutcome outcome) {}
+
+    /**
+     * 三个固定选项（顺序即高亮下标，也即数字快选键 1–3）。
+     *
+     * <p>与审批面板不同，这里<b>没有</b>随请求变化的形态：批准后切哪一档、留在 PLAN 继续完善，
+     * 三条路对任何计划都成立。CANCEL 不占选项位——它是 Esc（与「拒绝并中断本回合」同义），
+     * 列出来会让「三选一」变成「四选一」，而计划本就没有「拒绝但回合继续」这种中间态。
+     */
+    private static final List<PlanOption> PLAN_OPTIONS = List.of(
+            new PlanOption("批准，自动接受编辑", "工作区内的改动不再逐个问", PlanOutcome.APPROVE_ACCEPT_EDITS),
+            new PlanOption("批准，逐个确认", "回到默认模式，写操作仍会询问", PlanOutcome.APPROVE_DEFAULT),
+            new PlanOption("继续完善计划", "留在计划模式，把你的反馈带回给模型", PlanOutcome.KEEP_PLANNING));
+
+    /**
+     * 计划审批按键：↑↓/kj 移动、1–3 移动高亮（不隐式确认）、Enter 确认、Esc = 中断本回合。始终 HANDLED。
+     *
+     * <p>选中第三项进<b>自由文本子模式</b>先收一段反馈（照作答面板的「其他」子模式，见 {@link #onAskKey}）：
+     * 子模式内 Esc 只退回选项态——面板仍在、仍能应答，不是死胡同；真要中断在选项态再按一次 Esc。
+     *
+     * <p><b>不得存在「既不应答也不取消」的出口</b>：请求背后 park 着一个持有回合的工具线程，
+     * 面板卡住就是 agent 静默挂死。故本方法的每条路径只有三类结果——移动高亮 / 进出子模式（面板留着）、
+     * 应答并退出、中断回合。
+     */
+    private EventResult onPlanKey(KeyEvent k) {
+        int n = PLAN_OPTIONS.size();
+        planOpt = clampIndex(planOpt, n);
+        if (planFeedback) {   // 自由文本子模式：Esc 退回选项态、Enter 提交、可打印键输入、其余吞掉
+            if (k.isCancel()) { planFeedback = false; planInput.clear(); return EventResult.HANDLED; }
+            if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+                finishPlan(PlanOutcome.KEEP_PLANNING, planInput.text());
+                return EventResult.HANDLED;
+            }
+            if (k.code() == KeyCode.BACKSPACE) { planInput.deleteBackward(); return EventResult.HANDLED; }
+            // insert(String)：用 k.string()（Character.toChars）而非 char，兼容星平面码点（emoji 等）。
+            // ⚠ 不能转交 inputKeys：它绑的是主输入框的 inputState，反馈会打进输入框而 planInput 一直是空的。
+            if (k.code() == KeyCode.CHAR) { planInput.insert(k.string()); return EventResult.HANDLED; }
+            return EventResult.HANDLED;
+        }
+        if (k.isCancel()) { finishPlan(PlanOutcome.CANCEL, ""); return EventResult.HANDLED; }
+        if (k.code() == KeyCode.UP || k.isChar('k'))   { planOpt = (planOpt - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) { planOpt = (planOpt + 1) % n;     return EventResult.HANDLED; }
+        for (int i = 0; i < n; i++) {                    // 1–3 快选（越界数字被下面兜底吞掉，不移动高亮）
+            if (k.isChar((char) ('1' + i))) { planOpt = i; return EventResult.HANDLED; }
+        }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            PlanOption chosen = PLAN_OPTIONS.get(planOpt);
+            if (chosen.outcome() == PlanOutcome.KEEP_PLANNING) {   // 先收反馈，不立刻应答
+                planFeedback = true;
+                planInput.clear();
+                return EventResult.HANDLED;
+            }
+            finishPlan(chosen.outcome(), "");
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;   // 其余键一律吞掉，不落进输入框
+    }
+
+    /**
+     * 应答并退出计划模态；CANCEL 额外走既有回合取消路径。
+     *
+     * <p>与 {@link #finishPermission} 同形：先摘队列（{@code removeModal} 按<b>身份</b>摘——都是 record，
+     * 按 equals 会摘错人、让被误摘者的线程永久 park），CANCEL 分支不自己 respond，交给
+     * {@link #cancelTurnFor} 走 {@code ModalRequest.cancel()}，与问询/审批共用同一套已验证的回滚。
+     */
+    private void finishPlan(PlanOutcome outcome, String feedback) {
+        PlanRequest req = activePlan;
+        resetPlanUi();
+        state.removeModal(req);
+        if (outcome == PlanOutcome.CANCEL) {
+            cancelTurnFor(req, "已取消当前回合");
+            return;
+        }
+        req.responder().respond(outcome, feedback == null ? "" : feedback);
+        // 下沉一行确认（不用 sticky notice：它会一直占着状态栏、遮蔽常态行直到下次按键）。
+        // 措辞不写「已切到 X 模式」：切模式由消费 outcome 的一侧做，这里无从确认它成功了（别臆造既成事实）。
+        switch (outcome) {
+            case APPROVE_ACCEPT_EDITS -> state.pushInfo("✓ 已批准计划 · 自动接受编辑");
+            case APPROVE_DEFAULT      -> state.pushInfo("✓ 已批准计划 · 逐个确认");
+            default                   -> state.pushInfo("✎ 继续完善计划"
+                    + (feedback == null || feedback.isBlank() ? "" : "：" + summarizeOneLine(feedback)));
+        }
+    }
+
+    /** 清计划态（不碰队列）：外部取消后 drain 的「队首已不是它」分支与 {@link #finishPlan} 共用。 */
+    private void resetPlanUi() {
+        activePlan = null;
+        planOpt = 0;
+        planFeedback = false;
+        planInput.clear();
+    }
+
+    /**
+     * 计划正文下沉 scrollback：走<b>既有</b>助手 markdown 路径（{@link ScrollbackPrinter#assistant}）。
+     *
+     * <p><b>必须按 {@code \n} 逐行拆</b>：一个 println = 一个物理行，整块多行字符串会被塌成一行截断
+     * （同 {@code ConversationState.flushStreaming}）。md 渲染器逐行推进代码围栏状态，正是按行喂的。
+     */
+    private void printPlan(String plan) {
+        printer.assistant("");                       // 与上文留白分隔
+        for (String line : plan.split("\n", -1)) printer.assistant(line);
+    }
+
+    /**
+     * 计划面板：标题 + 三个选项；选了「继续完善计划」则改渲染输入提示 + 反馈回显。
+     * 高亮走纯前景 {@link Theme#PICK_SEL}（底色条会串到下一项，见 Theme.PICK_SEL 注释）。
+     */
+    private Element[] planChildren() {
+        // scope 每帧 eager 求值：首行必须判空，否则非计划态每帧崩渲染线程
+        if (activePlan == null) return new Element[0];
+        List<Element> els = new ArrayList<>();
+        els.add(text("  📋 计划待批准（正文见上方）").style(PICK_TITLE));
+        if (planFeedback) {
+            els.add(text("     希望怎么改？Enter 提交 · Esc 返回选项").style(DIM));
+            els.add(text("     ❯ " + planInput.text()).style(PICK_TITLE));
+            return els.toArray(new Element[0]);
+        }
+        int sel = clampIndex(planOpt, PLAN_OPTIONS.size());
+        for (int i = 0; i < PLAN_OPTIONS.size(); i++) {
+            PlanOption o = PLAN_OPTIONS.get(i);
+            boolean isSel = i == sel;
+            els.add(text("  " + (isSel ? "❯ " : "  ") + (i + 1) + ". " + o.label() + "   " + o.desc())
+                    .style(isSel ? PICK_SEL : PICK_DESC));
+        }
+        return els.toArray(new Element[0]);
+    }
+
+    /** 计划审批态状态行文本（包私以便单测断言）：区分选项态与自由文本子模式。 */
+    String planStatusText() {
+        if (activePlan == null) return "";
+        if (planFeedback) return "输入反馈 · Enter 提交 · Esc 返回选项";
+        return "⏸ 计划待批准 · ↑↓ 选择 · 1-3 快选 · Enter 确认 · Esc 中断";
+    }
+
     /** 折叠空白到一行 + 按显示宽度截断（守住「一行内容一物理行」，长命令不撑爆面板）。 */
     private String summarizeOneLine(String s) {
         if (s == null) return "";
@@ -1502,6 +1672,7 @@ public final class CodeTuiView extends InlineApp {
 
     private Element statusLine() {
         if (activePermission != null) return text(permStatusText()).style(THINK);   // 审批优先：此时别的提示都不该抢
+        if (activePlan != null) return text(planStatusText()).style(THINK);
         if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
