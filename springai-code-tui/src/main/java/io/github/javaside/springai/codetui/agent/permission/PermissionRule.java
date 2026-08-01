@@ -92,6 +92,27 @@ public record PermissionRule(String toolName, String pattern,
      * @param root       项目根（相对 glob 对绝对目标时用它相对化）
      */
     public boolean matches(String callTool, String target, boolean pathTarget, Path root) {
+        return matches(callTool, target, pathTarget, root, true);
+    }
+
+    /**
+     * 同上，但由调用方声明「目标有没有可能是一条 shell 命令」。
+     *
+     * <p><b>为什么需要这个开关</b>：{@link #hasShellSeparator} 那道守卫是<b>命令专用</b>的
+     * （防「多段命令被首段的前缀规则整条放行」），可它此前无条件作用于所有非路径目标。
+     * 而 {@code NETWORK_READ} 的域名前缀规则（{@code WebFetch(https://docs.spring.io/:*)}）
+     * 目标是 URL，查询串里的 {@code &} 是再正常不过的字符——
+     * {@code https://x/?a=1&b=2} 会被这道守卫判成「多段命令」而不命中。
+     * allow 方向只是白问一次，<b>deny 方向却是实打实的绕过</b>：
+     * 一条 {@code deny:WebFetch(https://evil.com/:*)} 加个 {@code ?a=1&b=2} 就躲开了。
+     *
+     * @param separatorSensitive 目标可能是 shell 命令（COMMAND 类别、以及判定目标是整串入参的
+     *                           UNKNOWN / MCP 工具）时传 true，保留守卫；
+     *                           url / query / bash_id 这类已知非命令的目标传 false。
+     *                           四参重载一律 true——默认保守。
+     */
+    public boolean matches(String callTool, String target, boolean pathTarget, Path root,
+                           boolean separatorSensitive) {
         if (!"*".equals(toolName) && !toolName.equals(callTool)) {
             return false;
         }
@@ -105,7 +126,7 @@ public record PermissionRule(String toolName, String pattern,
             if (pathTarget) {
                 return false;                           // I4：路径目标不吃前缀语义
             }
-            if (hasShellSeparator(target)) {
+            if (separatorSensitive && hasShellSeparator(target)) {
                 return false;                           // C1：多段命令一律不吃前缀规则
             }
             String prefix = pattern.substring(0, pattern.length() - 2).trim();
@@ -127,7 +148,7 @@ public record PermissionRule(String toolName, String pattern,
      * {@code rm -rf /} 停在 {@code /} 上 → 该分隔符本身就是边界，
      * 可直接接续，故仍命中 {@code rm -rf /var/tmp/x}。
      */
-    private static boolean matchesPrefix(String target, String prefix) {
+    static boolean matchesPrefix(String target, String prefix) {
         if (!target.startsWith(prefix)) {
             return false;
         }
