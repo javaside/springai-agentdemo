@@ -11,6 +11,7 @@ import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.QwenProvider;
 import io.github.javaside.springai.codetui.agent.SessionIds;
 import io.github.javaside.springai.codetui.agent.ZhipuProvider;
+import io.github.javaside.springai.codetui.agent.permission.DangerousPaths;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoader;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
@@ -91,6 +92,10 @@ public class CodeTuiApplication {
         } else if (startMode == PermissionMode.PLAN) {
             state.pushInfo("⏸ 已进入计划模式：只能读取和探索，产出计划后经你批准才会动手。");
         }
+        String rootNotice = overBroadRootNotice(root);
+        if (!rootNotice.isEmpty()) {
+            state.pushInfo(rootNotice);
+        }
 
         // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
         // 运行期 /mcp 可启停（详见 McpRegistry）。连接失败进 error 态、静默降级。
@@ -136,6 +141,20 @@ public class CodeTuiApplication {
         // 消亡（用户报错后立即 /exit 恰落在这 60s 窗口内，故"报过错就卡很久"）。TUI 退出语义即"立即终止"：
         // 会话已按事件原子落盘、无待刷新状态，quit() 也已在 run() 返回前恢复终端，故 System.exit 安全。
         System.exit(exitCode);
+    }
+
+    /**
+     * 过宽工作区的启动提示；正常 root 返回空串。
+     *
+     * <p><b>必须有这一行</b>：过宽时判定会变严格（工作区豁免失效），用户会突然多出很多审批。
+     * 不说明原因的话，表现出来就是「这程序今天怎么老弹窗」——<b>静默变严格与静默失效同样糟</b>。
+     */
+    static String overBroadRootNotice(Path root) {
+        if (!DangerousPaths.isOverBroadRoot(root)) {
+            return "";
+        }
+        return "⚠ 当前工作区过宽（" + root + "）：「工作区内」不再作为豁免依据，"
+                + "涉及系统位置的操作会照常询问。建议切到一个具体的项目目录再运行。";
     }
 
     /** 是否带续跑启动选项（仿 Claude Code 的 -c / --continue）。 */

@@ -345,7 +345,8 @@ public final class DangerousPaths {
         if (abs == null) {
             return false;            // 无从判定，交给别的检查，别在这里制造假阳性
         }
-        if (root != null && abs.startsWith(root.normalize())) {
+        // root 过宽（"/" 或家目录的严格祖先）时不拿它做豁免——否则这条检查对所有路径失效
+        if (root != null && !isOverBroadRoot(root) && abs.startsWith(root.normalize())) {
             return false;
         }
         String home = System.getProperty("user.home");
@@ -358,6 +359,32 @@ public final class DangerousPaths {
             }
         }
         return true;
+    }
+
+    /**
+     * 工作区是否过宽到不能再拿它做「工作区内」豁免。
+     *
+     * <p>判据精确、不是深度启发式：<b>root 是文件系统根，或 root 是家目录的严格祖先</b>。
+     * {@code /work} 不含家目录 → 正常；{@code /Users} 含 {@code /Users/<你>} → 过宽。
+     *
+     * <p><b>家目录本身刻意不算过宽</b>：它另有一条独立的家目录豁免，改这里也不生效——
+     * 要动那条得重新审视「你自己家里的文件不算系统位置」这个设计，不在本期（见 spec §4）。
+     * 写下这句是为了避免一种更坏的结果：<b>以为修好了</b>。
+     */
+    public static boolean isOverBroadRoot(Path root) {
+        if (root == null) {
+            return false;
+        }
+        Path r = root.normalize();
+        if (r.getParent() == null) {
+            return true;                       // 文件系统根
+        }
+        String home = System.getProperty("user.home");
+        if (home == null || home.isBlank()) {
+            return false;
+        }
+        Path h = Path.of(home).normalize();
+        return h.startsWith(r) && !h.equals(r); // 严格祖先
     }
 
     private static String checkReadOne(Path target, Path root) {

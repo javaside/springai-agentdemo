@@ -161,6 +161,16 @@ class PermissionStartupTest {
     }
 
     @Test
+    @DisplayName("过宽 root 要给用户一行提示——静默变严格会让人以为程序坏了")
+    void overBroadRootIsAnnounced() {
+        assertTrue(CodeTuiApplication.overBroadRootNotice(Path.of("/")).contains("工作区"),
+                "root=/ 应有提示");
+        assertEquals("", CodeTuiApplication.overBroadRootNotice(
+                Path.of(System.getProperty("user.home"), "projects", "demo")),
+                "正常 root 不该打扰用户");
+    }
+
+    @Test
     @DisplayName("门面背后就是 AgentRuntime 暴露的那个引擎（UI 切模式要对工具生效）")
     void facadeSharesRuntimeEngine(@TempDir Path root) {
         AgentTools.AgentRuntime rt = AgentTools.build(
