@@ -33,6 +33,7 @@ class CodeTuiViewModeIndicatorTest {
 
     private static final String ACCEPT_TAG = "⏵⏵ 自动接受编辑";
     private static final String BYPASS_TAG = "⚠ 跳过权限检查";
+    private static final String PLAN_TAG = "⏸ 计划模式";
 
     /** 可切到任意档的桩（{@code bypassAllowed} 模拟 --dangerously-skip-permissions 启动）。 */
     private static class Stub implements SubmitHandler {
@@ -71,11 +72,20 @@ class CodeTuiViewModeIndicatorTest {
         assertTrue(screen(v).contains(ACCEPT_TAG),
                 "notice 清掉后模式标识必须仍在状态栏，否则用户无从得知自己在哪一档:\n" + screen(v));
 
-        // 切回 DEFAULT 后标识必须消失——常态不该有噪声，也防「标识粘住不更新」。
+        // 期 2 起是三档循环（DEFAULT → ACCEPT_EDITS → PLAN → DEFAULT），从 ACCEPT_EDITS
+        // 回到 DEFAULT 要按两次 Shift+Tab；中途的 PLAN 也得换上自己的标识，防「标识粘住不更新」。
         v.feedKeyForTest(shiftTab());
         v.feedKeyForTest(KeyEvent.ofChar('b'));
+        assertEquals(PermissionMode.PLAN, stub.mode);
+        assertTrue(screen(v).contains(PLAN_TAG), "切到计划模式后应换成计划模式的标识:\n" + screen(v));
+        assertTrue(!screen(v).contains("⏵⏵"), "已离开「自动接受编辑」，它的标识不该还粘在状态栏");
+
+        // 切回 DEFAULT 后标识必须消失——常态不该有噪声。
+        v.feedKeyForTest(shiftTab());
+        v.feedKeyForTest(KeyEvent.ofChar('c'));
         assertEquals(PermissionMode.DEFAULT, stub.mode);
         assertTrue(!screen(v).contains("⏵⏵"), "切回 DEFAULT 后标识必须消失");
+        assertTrue(!screen(v).contains("⏸"), "切回 DEFAULT 后计划模式标识也必须消失");
     }
 
     @Test
@@ -96,11 +106,13 @@ class CodeTuiViewModeIndicatorTest {
     }
 
     @Test
-    @DisplayName("modeTag：DEFAULT 不显示，其余两档各有独立样式")
+    @DisplayName("modeTag：DEFAULT 不显示，其余三档各有独立样式")
     void modeTagPerMode() {
         assertNull(CodeTuiView.modeTag(PermissionMode.DEFAULT), "常态不占位");
         assertEquals(Theme.MODE_ACCEPT, CodeTuiView.modeTag(PermissionMode.ACCEPT_EDITS).style());
         assertTrue(CodeTuiView.modeTag(PermissionMode.ACCEPT_EDITS).content().contains("自动接受编辑"));
         assertTrue(CodeTuiView.modeTag(PermissionMode.BYPASS).content().contains("跳过权限检查"));
+        assertEquals(Theme.MODE_PLAN, CodeTuiView.modeTag(PermissionMode.PLAN).style());
+        assertTrue(CodeTuiView.modeTag(PermissionMode.PLAN).content().contains("计划模式"));
     }
 }

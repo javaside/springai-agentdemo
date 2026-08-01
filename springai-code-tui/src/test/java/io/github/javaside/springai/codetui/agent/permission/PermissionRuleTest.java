@@ -104,19 +104,8 @@ class PermissionRuleTest {
         assertEquals("TodoWrite(*)", allow("TodoWrite").toDsl(), "无 pattern 统一还原成 (*)");
     }
 
-    @Test
-    @DisplayName("模式循环：DEFAULT → ACCEPT_EDITS → DEFAULT；BYPASS 不在普通循环里")
-    void modeCycle() {
-        assertEquals(PermissionMode.ACCEPT_EDITS, PermissionMode.DEFAULT.next(false));
-        assertEquals(PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS.next(false));
-        assertEquals(PermissionMode.DEFAULT, PermissionMode.BYPASS.next(false),
-                "未开 bypass 时从 BYPASS 只能出去，回不来");
-
-        // 开了 --dangerously-skip-permissions：BYPASS 进循环
-        assertEquals(PermissionMode.ACCEPT_EDITS, PermissionMode.DEFAULT.next(true));
-        assertEquals(PermissionMode.BYPASS, PermissionMode.ACCEPT_EDITS.next(true));
-        assertEquals(PermissionMode.DEFAULT, PermissionMode.BYPASS.next(true));
-    }
+    // 模式循环的断言已迁到 PermissionModeTest——它是 PermissionMode 的专属用例，
+    // 这里留一份副本只会让下次改档位的人漏掉一处（期 2 加 PLAN 时就是这么被绊到的）。
 
     @Test
     void prefixRuleRejectsCompoundCommand() {          // C1

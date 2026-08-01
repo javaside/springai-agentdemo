@@ -101,16 +101,18 @@ class CodeTuiViewPermissionModeTest {
     }
 
     @Test
-    @DisplayName("连按两次回到默认（未授权 BYPASS 时两态循环）")
-    void shiftTabTwiceReturnsToDefault(@TempDir Path root) {
+    @DisplayName("连按三次回到默认（未授权 BYPASS 时三态循环）")
+    void shiftTabThriceReturnsToDefault(@TempDir Path root) {
         ConversationState state = new ConversationState();
         ModeStub stub = new ModeStub();
         CodeTuiView v = new CodeTuiView(state, stub, root);
 
         v.feedKeyForTest(shiftTab());
         v.feedKeyForTest(shiftTab());
+        assertEquals(PermissionMode.PLAN, stub.mode, "期 2 起中间多了一档计划模式");
+        v.feedKeyForTest(shiftTab());
 
-        assertEquals(2, stub.cycles.get());
+        assertEquals(3, stub.cycles.get());
         assertEquals(PermissionMode.DEFAULT, stub.mode);
         assertTrue(state.notice().contains("默认"), "第二次切换的反馈不该被「按任意键清 notice」吃掉，"
                 + "实际 notice：" + state.notice());

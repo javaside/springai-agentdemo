@@ -146,13 +146,14 @@ public final class PermissionConfigLoader {
         return project;
     }
 
-    /** {@code a} 是否不比 {@code b} 宽松。严格程度：DEFAULT ≥ ACCEPT_EDITS ≥ BYPASS（BYPASS 两层皆已被拒）。 */
+    /** {@code a} 是否不比 {@code b} 宽松。严格程度：PLAN ≥ DEFAULT ≥ ACCEPT_EDITS ≥ BYPASS（BYPASS 两层皆已被拒）。 */
     private static boolean stricter(PermissionMode a, PermissionMode b) {
         return strictness(a) >= strictness(b);
     }
 
     private static int strictness(PermissionMode m) {
         return switch (m) {
+            case PLAN -> 3;   // 只读之外一律 DENY，是最严的一档
             case DEFAULT -> 2;
             case ACCEPT_EDITS -> 1;
             case BYPASS -> 0;

@@ -617,6 +617,7 @@ class PermissionEngineTest {
         @DisplayName("未获授权时进不了 BYPASS：cycleMode 与 setMode 都不行，配置声明也不行")
         void bypassRequiresFlag(@TempDir Path root) {
             PermissionEngine e = noBypass(root, PermissionMode.ACCEPT_EDITS);
+            assertEquals(PermissionMode.PLAN, e.cycleMode());
             assertEquals(PermissionMode.DEFAULT, e.cycleMode(), "循环应跳过 BYPASS");
             assertEquals(PermissionMode.DEFAULT, e.setMode(PermissionMode.BYPASS));
             assertEquals(PermissionMode.DEFAULT, e.mode());

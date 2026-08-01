@@ -49,6 +49,7 @@ final class Theme {
     // 这一段要在你没盯着它的时候仍能被余光扫到——它说明的是「接下来的工具调用会不会问你」。
     static final Style MODE_ACCEPT = Style.create().fg(Color.indexed(215)).bold();   // 自动接受编辑=暖橙加粗（同主题强调色）
     static final Style MODE_BYPASS = Style.create().fg(Color.RED).bold();            // 跳过权限检查=红色加粗（最高警示）
+    static final Style MODE_PLAN   = Style.create().fg(Color.indexed(115)).bold();   // 计划模式=冷薄荷加粗（与暖橙的「自动接受编辑」拉开色相）
     static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 

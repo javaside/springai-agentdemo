@@ -1550,6 +1550,7 @@ public final class CodeTuiView extends InlineApp {
         return switch (mode) {
             case DEFAULT -> null;
             case ACCEPT_EDITS -> Span.styled("⏵⏵ " + mode.label() + " · ", MODE_ACCEPT);
+            case PLAN -> Span.styled("⏸ " + mode.label() + " · ", MODE_PLAN);
             case BYPASS -> Span.styled("⚠ " + mode.label() + " · ", MODE_BYPASS);
         };
     }
