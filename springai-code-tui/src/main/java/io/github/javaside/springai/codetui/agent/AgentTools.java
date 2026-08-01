@@ -449,7 +449,7 @@ public final class AgentTools {
      * 读了就会让测试结果随开发者本机的个人规则漂移（在 CI 上绿、在某人机器上红，或反过来）。
      * 生产的引擎由 {@code CodeTuiApplication} 用 {@code PermissionConfigLoader.load(root)} 建。
      */
-    public static PermissionEngine testEngine(Path root) {
+    static PermissionEngine testEngine(Path root) {
         return new PermissionEngine(root, PermissionConfig.empty(), PermissionMode.DEFAULT, false);
     }
 
