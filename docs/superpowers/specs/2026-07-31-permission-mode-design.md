@@ -313,16 +313,16 @@ MCP 工具兜底是 ASK 而非放行——保守默认。批一次后可选「�
 
 ## 分期交付
 
-| 期 | 内容 | 说明 |
-|---|---|---|
-| **期 0** | pty 验证 `Shift+Tab` 是否可区分 | 唯一技术未知，结论决定期 1 的交互设计，必须先做 |
-| **期 1** | `PermissionEngine` + 登记表 + `PermissionCallback` + `permissions.json` 两层加载与回写 + `DEFAULT`/`ACCEPT_EDITS`/`BYPASS` 三模式 + 模式切换键 + 只读版 `/permissions` + 模态队列重构 + 审批面板 | 大头。子 agent 与 MCP 因共用装饰链自动纳管；并发队列与取消唤醒必须这期做对，否则子 agent 一跑就 park |
-| **期 2** | `PLAN` 模式 + `ExitPlanMode` + 计划审批面板 + `{PERMISSION_MODE}` 提示段 + 启动参数 | |
-| **期 3** | `/permissions` 升级为可增删规则的交互面板、建议规则措辞打磨、危险清单扩充、README/CHANGELOG | |
+| 期 | 内容 | 状态 | 说明 |
+|---|---|---|---|
+| **期 0** | pty 验证 `Shift+Tab` 是否可区分 | ✅ 2026-08-01 | 唯一技术未知，结论决定期 1 的交互设计，必须先做 |
+| **期 1** | `PermissionEngine` + 登记表 + `PermissionCallback` + `permissions.json` 两层加载与回写 + `DEFAULT`/`ACCEPT_EDITS`/`BYPASS` 三模式 + 模式切换键 + 只读版 `/permissions` + 模态队列重构 + 审批面板 | ✅ 2026-08-01 | 大头。子 agent 与 MCP 因共用装饰链自动纳管；并发队列与取消唤醒必须这期做对，否则子 agent 一跑就 park |
+| **期 2** | `PLAN` 模式 + `ExitPlanMode` + 计划审批面板 + `{PERMISSION_MODE}` 提示段 + 启动参数 | ✅ 2026-08-01 | 三档循环、`--permission-mode`、计划审批面板与 pty 实机冒烟均已落地。实施中改了一处设计：`PLAN` 下内置危险检查给 **DENY 而非 ASK**（否则只有最危险的那批操作能被当场批准，结论倒置），只读的「读密钥」仍是 ASK |
+| **期 3** | `/permissions` 升级为可增删规则的交互面板、建议规则措辞打磨、危险清单扩充、README/CHANGELOG | 未开始 | |
 
-分期带来的两处**临时状态**（期 2 补齐，别当成缺陷）：
-期 1 的 `Shift+Tab` 循环只有 `DEFAULT → ACCEPT_EDITS`（`PLAN` 尚未实现）；
-期 1 的启动参数只有 `--dangerously-skip-permissions`，完整的 `--permission-mode` 随期 2 落地。
+期 2 遗留一条**未解**的问题（不是临时状态，是新发现）：`PLAN` 下子 agent 与主 agent 共用引擎，
+写操作照样被 DENY，但它既拿不到 `{PERMISSION_MODE}` 提示段、也没有 `ExitPlanMode`（主 agent 独有），
+于是会不知情地反复撞墙。已如实写进 README「已知限制」，解法单独评估。
 
 **文档拆分**：本 spec 覆盖全部四期设计，但实施计划只详细展开期 0 + 期 1。
 期 1 的模态队列重构结果会影响期 2 的面板设计，现在写期 2 的详细步骤是空中楼阁；期 2、期 3 到时各自出计划。

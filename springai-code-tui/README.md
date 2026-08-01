@@ -9,7 +9,7 @@
 - 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、输入框、底部状态栏。
 - **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `ZhipuProvider` / `QwenProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。智谱与千问走 OpenAI 兼容通路（复用 `spring-ai-openai`，`ZHIPU_BASE_URL` 默认 `.../api/paas/v4`、`DASHSCOPE_BASE_URL` 默认 `.../compatible-mode/v1`）。五家统一 read 超时（`CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300s）。
 - 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取网页正文）、`BochaWebSearch`（联网搜索·中文内容优先，博查 API，需配 `BOCHA_API_KEY`）、`BraveWebSearch`（联网搜索·英文内容优先，Brave API，需配 `BRAVE_API_KEY`；两家可共存，模型按内容语言自选，都不配则均不注册）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task` 委派单个子 agent + `ParallelTasks` 并发派多个独立子 agent）、`AutoMemoryTools`（`Memory*` 六件套：跨会话长期记忆的读写/增删/改名，仅主 agent）。
-- **权限管理（审批面板 + 规则）**：有副作用的工具调用**在执行之前**被拦下弹审批面板（↑↓ 选择、1-5 快选、Enter 确认、Esc 中断），你可以「允许一次 / 本会话不再问 / 永久允许（写入 `.codetui/permissions.json`）/ 拒绝（回合继续，模型换做法）/ 拒绝并中断回合」。只读操作直接放行；**网络工具每次都问**（请求内容会离开本机），允许后可按域名永久放行。`Shift+Tab` 在「默认 / 自动接受编辑」间循环，当前档位**常驻状态栏**；`/permissions` 查看生效模式与规则。另有一层**任何 allow 规则与 BYPASS 都盖不住**的内置底线（写 `.ssh`/`.aws`/`.kube`/`.gnupg`/`.git`/`.codetui` 配置、写 shell 启动文件、读私钥与凭据、`rm -rf /` 或 `~` 或变量目标…）。详见下方「权限管理」。
+- **权限管理（审批面板 + 规则）**：有副作用的工具调用**在执行之前**被拦下弹审批面板（↑↓ 选择、1-5 快选、Enter 确认、Esc 中断），你可以「允许一次 / 本会话不再问 / 永久允许（写入 `.codetui/permissions.json`）/ 拒绝（回合继续，模型换做法）/ 拒绝并中断回合」。只读操作直接放行；**网络工具每次都问**（请求内容会离开本机），允许后可按域名永久放行。`Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式」三档间循环，当前档位**常驻状态栏**；**计划模式**只放行只读调查、写与命令一律**拒绝**，模型改用 `ExitPlanMode` 交一份计划，经你批准（自动接受编辑 / 逐个确认 / 打回继续完善）后才动手；`/permissions` 查看生效模式与规则。另有一层**任何 allow 规则与 BYPASS 都盖不住**的内置底线（写 `.ssh`/`.aws`/`.kube`/`.gnupg`/`.git`/`.codetui` 配置、写 shell 启动文件、读私钥与凭据、`rm -rf /` 或 `~` 或变量目标…）。详见下方「权限管理」。
 - **子 agent（Task / ParallelTasks）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`）。`Task` 委派单个子 agent 前台阻塞执行；`ParallelTasks` 一次并发派多个独立子 agent（有界线程池，`CODETUI_SUBAGENT_CONCURRENCY` 默认 4、范围 [1,32]；失败隔离、按序汇总）。内部工具活动带 taskId 内联嵌套显示。
 - **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
 - **MCP（接入外部工具）**：启动时读 `.codetui/mcp.json`（两层：用户 `~/.codetui/mcp.json` + 项目 `<项目根>/.codetui/mcp.json`，项目级同名覆盖用户级）连接外部 [MCP](https://modelcontextprotocol.io/) server（**stdio** 本地子进程，如 `npx`/`uvx` 起的 `chrome-devtools-mcp`、官方 filesystem server；以及 **Streamable HTTP** 远程 server，如 Context7），把其工具注入**主 agent 与子 agent**。工具名带 `mcp__<server>__<工具>` 前缀避免撞名。**`/mcp` 运行期管理**：面板列出全部 server（含禁用/连接失败项），逐个启用/禁用即时生效（下一回合模型即见/不见其工具）并回写 `mcp.json` 的 `enabled` 字段。连不上的 server **静默降级**（记 WARN、不崩启动）；退出时**有界清理**子进程（≤2s，绝不拖慢 `/exit`）。配置见下方「MCP 配置」。
@@ -152,7 +152,7 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 | 3 | *(工具自审插槽)* | 本期无实现方，预留 |
 | 4 | **ask 规则** | 每次都问 |
 | 5 | **allow 规则** | 放行 |
-| 6 | **模式默认** | 见下表 |
+| 6 | **模式默认** | 见下表。**计划模式在这一步是 DENY 不是 ASK**（写/命令直接拒绝，只读与内部工具放行，网络仍每次询问） |
 | 7 | **兜底** | 未登记工具（**含全部 MCP 工具**）一律问 |
 
 判定内部出任何异常都**失败关闭**成人工确认，不会静默放行。
@@ -182,9 +182,11 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 |---|---|---|
 | **默认** | *（不显示）* | 上表的默认列 |
 | **自动接受编辑** | `⏵⏵ 自动接受编辑`（暖橙） | 额外放行工作区内的文件写与文件系统命令 |
+| **计划模式** | `⏸ 计划模式`（冷薄荷） | 只读放行（含只读命令），写与命令一律**拒绝**（不是询问）；产出计划经批准后切档 |
 | **跳过权限检查**（BYPASS） | `⚠ 跳过权限检查`（红） | 全放行——但 **deny 规则与内置底线仍然生效** |
 
-- `Shift+Tab` 只在**前两档**之间循环。**BYPASS 只能由 `--dangerously-skip-permissions` 启动进入**，键盘和配置文件都进不去（否则一个按键或一次 `git clone` 就把这道启动开关架空了）。
+- `Shift+Tab` 在**前三档**之间循环（默认 → 自动接受编辑 → 计划模式 → 默认）。**BYPASS 只能由 `--dangerously-skip-permissions` 启动进入**，键盘和配置文件都进不去（否则一个按键或一次 `git clone` 就把这道启动开关架空了）。
+- **计划模式为什么是「拒绝」而不是「询问」**：能当场批准，这一档就名存实亡了。被拒的工具结果里会写明当前档位与正确的下一步（改调 `ExitPlanMode`），否则模型会对同一个写操作反复重试、把回合耗光。网络工具在这一档仍是**每次询问**（不是拒绝）——调研常要读文档。
 - 当前档位**常驻状态栏行首**（默认档不占位）。`/permissions` 可随时查看生效模式、全部规则与内置底线摘要。
 
 ### `permissions.json`
@@ -238,13 +240,20 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 - `rm -rf /`、`rm -rf ~`、目标是**变量**的删除（`rm -rf $DIR`——展开成什么无从得知）
 - 上述检查**穿透** `sudo`/`env`/`xargs`/`bash -c` 一类包装，也覆盖 `cp`/`mv`/`curl -o`/`tar` 等**写目的地**
 
+> **计划模式下这一层给的是 DENY 而不是 ASK**（仅限「计划模式本来就会拒的」那些操作，即写与非只读命令）。否则会出现结论倒置：普通的 `mvn test` 被拒，而 `rm -rf ~` 反倒因为命中内置检查而变成**唯一能当场批准**的口子。判据是「计划模式本来就会拒的，危险检查不得把它降级成可批准」。
+>
+> **读密钥与凭据在计划模式下仍然是 ASK**——这一档承诺的是「不动手」，不是「不读」，只读调查正是它要允许的事。
+
 ### 启动参数
 
 ```bash
 java -jar springai-code-tui.jar --dangerously-skip-permissions
+java -jar springai-code-tui.jar --permission-mode plan
 ```
 
-启动时打一条 ⚠ 提示，进入 BYPASS。**deny 规则与上面那层内置底线依然会拦你**——这是刻意的。
+`--dangerously-skip-permissions` 启动时打一条 ⚠ 提示，进入 BYPASS。**deny 规则与上面那层内置底线依然会拦你**——这是刻意的。
+
+`--permission-mode <default|acceptEdits|plan>` 指定起始档位（也支持 `--permission-mode=plan` 写法）。**它不接受 `bypass`**：全放行只能由 `--dangerously-skip-permissions` 进，否则那道启动开关就等于有了第二个入口。两个参数同时出现时 `--dangerously-skip-permissions` 优先，并打一行「已忽略 --permission-mode …」。取值非法或缺值只记一条 warn 并忽略，不影响启动。优先级：`--dangerously-skip-permissions` > `--permission-mode` > 配置文件 `defaultMode`。
 
 ## MCP 配置（接入外部工具）
 
@@ -427,11 +436,13 @@ cd /path/to/some/disposable/project
 | Ctrl+→ / Alt+→ / Alt+F | 光标向右按词跳（中文按单字跳） |
 | Ctrl+W / Alt+Backspace | 删除光标前一个词（空白为界；中文按单字删） |
 | Ctrl+U / Ctrl+K | 删到行首 / 删到行尾（以当前逻辑行为界，不跨行） |
-| Shift+Tab | 循环权限模式（默认 ↔ 自动接受编辑；当前档位常驻状态栏） |
+| Shift+Tab | 循环权限模式（默认 → 自动接受编辑 → 计划模式 → 默认；当前档位常驻状态栏） |
 | Esc | 取消当前正在进行的回合（工具调用/模型生成）；审批面板打开时 = 拒绝并中断本回合 |
 | Ctrl+C | 退出程序 |
 
 审批面板打开时：↑↓ 选择、`1`-`5` 快选（只移动高亮，仍需 Enter 确认）、Enter 确认、Esc 中断。
+
+计划审批面板（计划模式下模型调 `ExitPlanMode` 时弹出，计划正文打进上方滚动区、面板只放选项）：↑↓ 选择、`1`-`3` 快选（同样只移动高亮）、Enter 确认、Esc 中断本回合。选第 3 项「继续完善计划」会进入一行反馈输入：打字后 Enter 提交（可留空），Esc 退回选项。
 
 ## 斜杠命令
 
@@ -459,11 +470,11 @@ cd /path/to/some/disposable/project
 - **部分 Ctrl 组合键不可绑定**：终端把 `Ctrl+A..Z` 发成控制字节 1~26，其中 `Ctrl+H/I/J/M` 与 Backspace/Tab/Enter 字节相同、无法区分，故编辑快捷键避开了这几个字母；`Shift/Alt+Enter` 换行能否生效取决于终端能否区分修饰键（Apple Terminal 等区分不了），可靠换行请用 `\` + Enter。
 - **无工具沙箱**：见上方安全声明——权限层是**执行前的人工确认**，不是边界强制；批准之后所有工具（含文件系统工具）仍不受 root 约束。自写的真沙箱（`SandboxedShellTool` 等校验所有工具路径参数）列为后续增强项，本版本未实现。
 - **权限层本期未做的**：
-  - **无 plan 模式**（只读探索 + 出方案不落盘）——已在设计里，列为下一期。`Shift+Tab` 因此只在两档间循环。
   - **无规则编辑界面**：`/permissions` 只读。删规则要手动编辑 `permissions.json`，程序内只能加（审批面板的「永久允许」）不能删。
   - **无工具自审接缝的实现方**：判定顺序第 3 步（工具自己声明本次调用的危险度）是预留插槽，本期没有工具实现它。
   - **规则不区分子 agent**：主 agent 与子 agent 共用同一套规则与模式，不能只给某类子 agent 更严的权限。
   - **审批面板逐个排队**：多个子 agent 并发触发审批时面板一个一个弹（队列上限 8 条），不能批量处理。
+  - **计划模式对子 agent 不友好**：子 agent 与主 agent 共用同一个引擎，故计划模式下它的写操作照样被 DENY；但它既拿不到那段「你正处于计划模式」的系统提示，也**没有 `ExitPlanMode`**（那是主 agent 独有的出口）——于是它会不知情地反复撞墙，直到把回合耗在无效调用上。计划模式下请不要派子 agent 去做会落盘的事。（正在单独评估解法。）
 - **无程序内会话选择器**：会话已持久化并按项目隔离（见上「会话持久化与恢复」），但程序内不能浏览/切换历史会话；`-c` 只恢复**最近一次**会话（按 mtime），要挑更早的需手动操作会话文件。
 - **子 agent 无后台模式**：`Task` 单个前台阻塞、`ParallelTasks` 一批并发前台执行（有界并发，全部 join 后返回）；暂不支持后台任务（`run_in_background` + 轮询回收）与 `/tasks` 详情面板（列为后续增强）。
 - **长期记忆无「自动整理」**：跨会话长期记忆已具备（见上「长期记忆」），但暂未接入定期 consolidation（自动汇总/去重冗余记忆）触发器；记忆的增删改全由模型按需驱动。
