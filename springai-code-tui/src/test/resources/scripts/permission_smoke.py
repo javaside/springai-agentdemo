@@ -72,6 +72,8 @@ OPT_ALWAYS = "3. 允许，永久"
 OPT_DENY = "4. 拒绝，让模型换个做法"
 OPT_CANCEL = "5. 拒绝并中断本回合"
 SUGGESTED_LINE = "允许后将记下规则"
+# 三选项形态下取代 SUGGESTED_LINE 的说明行（见 CodeTuiView#permissionChildren）
+MISSING_OPTS_NOTE = "这类调用不提供"
 
 # The 3-option form: built-in danger checks produce PermissionDecision.askOnly
 # (suggested() == null), so the two "remember this" options must be hidden —
@@ -481,6 +483,9 @@ def check_askonly_panel(session):
                 session.screen.display)
     if "1-3 快选" not in text:
         die("状态栏快选提示没有跟着选项数变成 1-3", session.screen.display)
+    # 少了两项就必须说明为什么——否则面板看着像漏了选项（这是实地反馈来的困惑）。
+    if MISSING_OPTS_NOTE not in text:
+        die("askOnly 面板没有解释为什么少了「本会话 / 永久」两项", session.screen.display)
 
     rows = [find_row(session, n) for n in (OPT_ONCE, OPT3_DENY, OPT3_CANCEL)]
     if rows != [rows[0] + i for i in range(3)]:
@@ -489,7 +494,7 @@ def check_askonly_panel(session):
     if row_backgrounds(session, sel) != {"default"} or \
             row_backgrounds(session, sel + 1) != {"default"}:
         die("askOnly 面板高亮用了背景色（会串到下一行）", session.screen.display)
-    print("askOnly 面板 OK: 只有三项、无「永久/本会话」、无建议规则行、高亮纯前景.")
+    print("askOnly 面板 OK: 只有三项、无「永久/本会话」、有缺项说明、高亮纯前景.")
 
 
 def check_cancel_turn(session):

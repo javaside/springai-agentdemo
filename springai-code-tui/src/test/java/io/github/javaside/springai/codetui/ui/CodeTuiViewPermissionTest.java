@@ -213,6 +213,28 @@ class CodeTuiViewPermissionTest {
     }
 
     @Test
+    @DisplayName("少了「本会话/永久」两项时，面板必须说明原因——否则看着像漏了选项")
+    void noSuggestionExplainsWhyOptionsAreMissing(@TempDir Path root) {
+        ConversationState state = new ConversationState();
+        CodeTuiView v = inModal(state, permNoRule(1L, new CopyOnWriteArrayList<>()), root);
+
+        // 断言落在<b>渲染结果</b>上：这一行是否出现在屏幕上取决于 permissionChildren 的分支，
+        // 只测 permOptions 看不见它（用户的困惑正来自「面板上什么都没说」）。
+        String screen = ViewScreen.of(v);
+        assertTrue(screen.contains("这类调用不提供「本会话 / 永久」"),
+                "三选项形态必须解释为什么少了两项，实际屏幕：\n" + screen);
+        assertFalse(screen.contains("允许后将记下规则"),
+                "无建议规则时不得出现「允许后将记下规则」，那会凭空造出一条不存在的规则");
+
+        // 反向对照：有建议规则时不该出现这句说明（否则它就成了一句人人可见的废话）
+        ConversationState s2 = new ConversationState();
+        CodeTuiView v2 = inModal(s2, perm(1L, new CopyOnWriteArrayList<>()), root);
+        String screen2 = ViewScreen.of(v2);
+        assertTrue(screen2.contains("允许后将记下规则"), "五选项形态应显示建议规则，实际屏幕：\n" + screen2);
+        assertFalse(screen2.contains("这类调用不提供"), "有建议规则时不该说「不提供」");
+    }
+
+    @Test
     @DisplayName("无建议规则时 2 = 拒绝、3 = 中断，且任何按键都到不了 ALLOW_SESSION/ALLOW_ALWAYS")
     void noSuggestionRemapsDigits(@TempDir Path root) {
         ConversationState state = new ConversationState();

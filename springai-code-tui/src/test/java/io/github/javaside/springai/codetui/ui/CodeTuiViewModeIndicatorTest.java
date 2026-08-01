@@ -2,12 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
-import dev.tamboui.buffer.Buffer;
-import dev.tamboui.buffer.Cell;
-import dev.tamboui.layout.Rect;
-import dev.tamboui.terminal.Frame;
 import dev.tamboui.text.Span;
-import dev.tamboui.toolkit.element.RenderContext;
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
 import dev.tamboui.tui.event.KeyModifiers;
@@ -15,7 +10,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.lang.reflect.Method;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -53,51 +47,9 @@ class CodeTuiViewModeIndicatorTest {
         return KeyEvent.ofKey(KeyCode.TAB, KeyModifiers.SHIFT);
     }
 
-    /**
-     * 把整棵 UI 渲染进一块离屏 Buffer，回读成文本。
-     *
-     * <p>宽度取 120：状态行接近终端宽度，窄了会被截断，断言就会因为「没渲染」还是「被截掉」分不清而失真。
-     * 宽字符占两格且第二格是 {@code CONTINUATION}（symbol 为空），必须跳过，否则回读文本里会多出空格、
-     * 子串匹配全部落空。
-     */
+    /** 渲染并回读屏幕文本（离屏 Buffer，见 {@link ViewScreen}）。 */
     private static String screen(CodeTuiView v) {
-        Buffer buf = Buffer.empty(new Rect(0, 0, 120, 12));
-        Frame f = Frame.forTesting(buf);
-        // 元素注册要求「必须在渲染线程」（RenderThread.checkRenderThread）。库只暴露包私有的
-        // markAsRenderThread，测试里反射打标——本项目对 TUI 内部已有同类先例（/clear 反射进私有 Backend）。
-        // 不打标就只能退回「只测纯函数」，而那恰恰测不到本用例要测的东西（标识有没有真的进屏幕）。
-        onRenderThread(() -> v.renderForTest().render(f, f.area(), RenderContext.empty()));
-        StringBuilder sb = new StringBuilder();
-        for (int y = 0; y < buf.height(); y++) {
-            for (int x = 0; x < buf.width(); x++) {
-                Cell c = buf.get(x, y);
-                if (c.isContinuation()) continue;
-                sb.append(c.symbol().isEmpty() ? " " : c.symbol());
-            }
-            sb.append('\n');
-        }
-        return sb.toString();
-    }
-
-    /** 在「已标记为渲染线程」的状态下跑一段，跑完复位（不复位会污染同 JVM 内的后续用例）。 */
-    private static void onRenderThread(Runnable body) {
-        try {
-            Method mark = Class.forName("dev.tamboui.tui.RenderThread")
-                    .getDeclaredMethod("markAsRenderThread");
-            Method clear = Class.forName("dev.tamboui.tui.RenderThread")
-                    .getDeclaredMethod("clearRenderThread");
-            mark.setAccessible(true);
-            clear.setAccessible(true);
-            mark.invoke(null);
-            try {
-                body.run();
-            } finally {
-                clear.invoke(null);
-            }
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException(
-                    "RenderThread 的包私有打标方法不在了——库升级后本测试的渲染路径需要重新对齐", e);
-        }
+        return ViewScreen.of(v);
     }
 
     @Test

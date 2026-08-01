@@ -1308,6 +1308,13 @@ public final class CodeTuiView extends InlineApp {
         if (!reason.isEmpty()) els.add(text("     ↑ " + reason).style(DIM));
         if (r.suggested() != null) {
             els.add(text("     ↳ 允许后将记下规则：" + summarizeOneLine(r.suggested().toDsl())).style(DIM));
+        } else {
+            // 少了「本会话 / 永久」两项时说清楚，否则用户只会以为面板漏了选项（实地反馈来的）。
+            // 措辞刻意<b>不点名</b>具体原因：suggested == null 有两类来源——① 内置底线 / ask 规则命中
+            // （排在 allow 之前，加任何规则都消不掉这次询问）；② 引擎给不出一条「下次还能命中」的安全规则
+            // （命令拆不动、目标解析不出、URL 取不到域名）。而 askOnly 与 ask(reason, null) 在
+            // PermissionDecision 里是<b>同一个值</b>，面板无从分辨，点名就会在另一类上说错话。
+            els.add(text("     ⓘ 这类调用不提供「本会话 / 永久」，每次都会问（原因见上一行）").style(DIM));
         }
         for (int i = 0; i < opts.size(); i++) {
             boolean isSel = i == sel;
