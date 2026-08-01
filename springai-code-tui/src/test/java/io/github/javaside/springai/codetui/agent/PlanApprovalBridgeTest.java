@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -61,6 +62,25 @@ class PlanApprovalBridgeTest {
 
         assertTrue(result.get().contains("先补上回滚方案"), "反馈必须原样回给模型：" + result.get());
         assertNull(switched.get(), "继续完善时不得切模式");
+    }
+
+    @Test
+    @DisplayName("空反馈不得给模型一个悬空的冒号——面板允许空输入，措辞要说清「没有具体意见」")
+    void blankFeedbackGetsUsableWording() throws Exception {
+        Capturing listener = new Capturing();
+        PlanApprovalBridge bridge = new PlanApprovalBridge(listener, m -> { });
+
+        AtomicReference<String> result = new AtomicReference<>();
+        Thread tool = new Thread(() -> result.set(bridge.handle("# 计划")));
+        tool.start();
+        assertTrue(listener.arrived.await(2, TimeUnit.SECONDS));
+
+        listener.seen.get().responder().respond(PlanOutcome.KEEP_PLANNING, "   ");
+        tool.join(2000);
+
+        assertFalse(result.get().contains("计划："), "空反馈不该留下悬空冒号：" + result.get());
+        assertTrue(result.get().contains("没有给出具体意见"), "要让模型知道是「没意见」而不是「意见丢了」");
+        assertTrue(result.get().contains("ExitPlanMode"), "仍要指路");
     }
 
     @Test

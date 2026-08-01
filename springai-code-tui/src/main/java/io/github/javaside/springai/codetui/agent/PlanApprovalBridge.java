@@ -66,8 +66,16 @@ public final class PlanApprovalBridge {
                 modeSwitch.accept(PermissionMode.DEFAULT);
                 return "计划已批准，开始执行。后续每个有副作用的操作仍会逐个请求用户确认。";
             case KEEP_PLANNING:
-                return "用户希望继续完善计划：" + feedback
-                        + "\n请据此修改方案，然后再次调用 ExitPlanMode 提交。仍处于计划模式，不要动手改。";
+                // 空反馈是合法意图（用户就是不想细说），但「用户希望继续完善计划：」后面接空
+                // 会给模型一个悬空的冒号，读起来像是内容被截断了。改成一句明确的话，
+                // 让它知道「没有具体意见」而不是「意见丢了」——面板侧刻意不拦空输入，
+                // 那会多一个用户得自己想办法退出的状态。
+                return feedback.isBlank()
+                        ? "用户希望继续完善计划，但没有给出具体意见。请自行复查方案（是否遗漏步骤、"
+                                + "验证方式是否充分、风险是否交代清楚），改完再次调用 ExitPlanMode 提交。"
+                                + "仍处于计划模式，不要动手改。"
+                        : "用户希望继续完善计划：" + feedback
+                                + "\n请据此修改方案，然后再次调用 ExitPlanMode 提交。仍处于计划模式，不要动手改。";
             case CANCEL:
             default:
                 throw new PermissionCancelledException();
