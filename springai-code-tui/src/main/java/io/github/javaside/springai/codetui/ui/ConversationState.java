@@ -436,10 +436,20 @@ public final class ConversationState implements AgentListener {
      * <p><b>不阻塞</b>（契约要求）：本方法与 {@link #drainPending()} / {@link #cancelCurrent()}
      * 共用同一把监视器锁，这里一旦阻塞冻住的是<b>整个 TUI</b>而不只是一个工具线程。
      * 实现只做 O(1) 的入队判断；应答走的是消费方一次性、非阻塞的 handoff，故必然立即返回。
+     *
+     * <p><b>队满溢出必须留下用户看得见的一行</b>：线程一定会醒（活性没问题），但「有个工具被悄悄拒了」
+     * 只在日志里就等于没发生——用户会以为模型自己改了主意。迟到请求<b>不</b>提示：那个回合已经取消/切换，
+     * 再打一行只是噪音。
      */
     @Override
     public synchronized void onPermissionRequested(long turnId, PermissionRequest request) {
-        if (turnId != acceptingTurnId || !offerModal(request)) {
+        if (turnId != acceptingTurnId) {
+            request.responder().respond(PermissionOutcome.DENY);
+            return;
+        }
+        if (!offerModal(request)) {
+            pending.add(new OutputLine("⚠ 待审批请求过多（已达上限 " + MODAL_QUEUE_CAP + "），已自动拒绝 "
+                    + request.toolName() + "：请先处理面板里的请求", OutputLine.Kind.ERROR));
             request.responder().respond(PermissionOutcome.DENY);
         }
     }

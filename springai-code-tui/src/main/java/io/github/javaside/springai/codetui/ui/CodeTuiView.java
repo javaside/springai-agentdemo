@@ -6,6 +6,8 @@ import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModalRequest;
 import io.github.javaside.springai.codetui.agent.ModelOption;
 import io.github.javaside.springai.codetui.agent.OptionSpec;
+import io.github.javaside.springai.codetui.agent.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.PermissionRequest;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.SkillInfo;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
@@ -103,6 +105,8 @@ public final class CodeTuiView extends InlineApp {
     private final Set<Integer> askChecked = new LinkedHashSet<>();     // 当前多选问题已勾选的选项下标（保序）
     private boolean askFreeText;                                      // 自由文本子模式（单选选了「其他」）
     private final TextAreaState askInput = new TextAreaState();       // 「其他」的自定义输入缓冲（单行直存直取）
+    private PermissionRequest activePermission;                        // 当前正在审批的请求（null=非审批态）
+    private int permOpt;                                              // 审批面板高亮项下标（选项数随 suggested() 变，见 permOptions）
     private int pickIndex;                                           // 选择器当前高亮项
     private int slashIndex;                                          // 斜杠命令补全菜单高亮项
     private boolean slashDismissed;                                  // Esc 关闭补全菜单（文本再变化前保持关闭）
@@ -163,6 +167,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
                 scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
                 scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
+                scope(activePermission != null, permissionChildren()),   // 权限审批面板
                 scope(slashMenuActive(), slashMenuChildren()),      // 斜杠命令补全菜单
                 scope(pendingSkill != null, skillTag()),            // 已挂载技能标签：固定在输入框正上方，发送时随消息带走
                 inputElement(),
@@ -212,20 +217,32 @@ public final class CodeTuiView extends InlineApp {
         for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
             printer.streamingLine(row);
         }
-        // 侦测到新问询（身份不同）→ 进入作答态并复位到第一问。
-        // 队首若是 PermissionRequest 则本 Task 暂不处理（审批面板见 Task 14）。
         ModalRequest head = state.peekModal();
-        if (head instanceof AskRequest pa && pa != activeAsk) {
-            if (isAnswerable(pa)) {
-                activeAsk = pa;
-                askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
-                askFreeText = false; askInput.clear();   // 与其它复位点一致，防上一问询的自由文本残留
-            } else {
-                // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
-                // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消整回合。
-                // 必须与 Esc 走同一 cancelTurnFor：只 responder.cancel、不 dispose 回滚，会残留悬空 tool_calls → 下条 400。
-                state.removeModal(pa);
-                cancelTurnFor(pa, "问询格式无效，已取消当前回合");
+        // 正在审批的请求已不在队首 → 它被别的线程摘走了（cancelCurrent/clearModals 已给它的线程投过 CANCEL，
+        // 线程醒了、回合也结束了）。面板不能继续挂着一个没人在等的请求，就地退出模态；本 tick 可直接接上新队首。
+        // ⚠ 认引用不认相等：两个请求都是 record，分量相同的另一个请求 equals 为真，认相等会把面板留在错误的请求上。
+        if (activePermission != null && head != activePermission) {
+            activePermission = null;
+            permOpt = 0;
+        }
+        // 侦测到新模态（身份不同）→ 进入对应模态并复位状态。
+        // sealed 的穷尽性在 release=17 由人保证：按类型 switch 要 21，故用 instanceof 链（见 ModalRequest 类注释）。
+        if (head != null && head != activeAsk && head != activePermission) {
+            if (head instanceof AskRequest pa) {
+                if (isAnswerable(pa)) {
+                    activeAsk = pa;
+                    askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
+                    askFreeText = false; askInput.clear();   // 与其它复位点一致，防上一问询的自由文本残留
+                } else {
+                    // 畸形问询（无问题 / 某问无选项）：不进模态。上游 Java 校验只 null-check 问题、不校验选项数，
+                    // 空选项会让 onAskKey 的 `% n` 除零、崩掉事件线程；这里优雅降级为取消整回合。
+                    // 必须与 Esc 走同一 cancelTurnFor：只 responder.cancel、不 dispose 回滚，会残留悬空 tool_calls → 下条 400。
+                    state.removeModal(pa);
+                    cancelTurnFor(pa, "问询格式无效，已取消当前回合");
+                }
+            } else if (head instanceof PermissionRequest pr) {
+                activePermission = pr;
+                permOpt = 0;
             }
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
@@ -235,8 +252,11 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
-    /** 测试专用：跑一次 drain（侦测 pendingAsk 并进入作答态）。 */
+    /** 测试专用：跑一次 drain（侦测队首模态并进入作答/审批态）。 */
     void tickForTest() { drain(); }
+
+    /** 测试专用：当前正在审批的请求（null=非审批态）。 */
+    PermissionRequest activePermissionForTest() { return activePermission; }
 
     /**
      * 测试专用：把一个按键喂给输入框按键入口（等价真实按键路由）。
@@ -406,6 +426,7 @@ public final class CodeTuiView extends InlineApp {
         // 修复：真实输入走 inputState 编辑器、不再触发旧 typeChar 清 notice，导致取消长回合（如子 agent）
         // 后 notice 永久占据状态栏；这里补回「下次按键即清」的既定行为。
         if (!state.notice().isEmpty()) state.setNotice("");
+        if (activePermission != null) return onPermissionKey(k);   // 审批模态优先于一切文本编辑（背后 park 着工具线程）
         if (activeAsk != null) return onAskKey(k);      // 作答模态：全部按键交给它，屏蔽文本编辑
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
@@ -1096,13 +1117,18 @@ public final class CodeTuiView extends InlineApp {
     }
 
     /**
-     * 取消一个由问询发起的回合：先唤醒阻塞的工具线程（responder.cancel），再 dispose + cancelCurrent
-     * 让 {@code doOnCancel} 回滚会话——否则半截的 {@code assistant(tool_calls)} 会残留、下条消息 400。
-     * Esc 取消与「畸形问询降级取消」共用此路径，保证二者都走同一套已验证的回滚（见记忆
-     * cancel-tool-turn-leaves-dangling-toolcalls）。
+     * 取消一个由模态请求发起的回合：先唤醒阻塞的工具线程（{@link ModalRequest#cancel()}——问询转
+     * {@code responder.cancel()}、审批投 {@code CANCEL}），再 dispose + cancelCurrent 让
+     * {@code doOnCancel} 回滚会话——否则半截的 {@code assistant(tool_calls)} 会残留、下条消息 400。
+     * 问询 Esc、畸形问询降级、审批「拒绝并中断本回合」/Esc 共用此路径，保证都走同一套已验证的回滚
+     * （见记忆 cancel-tool-turn-leaves-dangling-toolcalls）。
+     *
+     * <p>{@code cancelCurrent()} 里的 {@code clearModals()} 会顺带唤醒<b>其余</b> pending 模态：
+     * 回合结束了，它们的工具线程也必须醒（漏一个就是永久 park）。本请求已由调用方先摘出队列，
+     * 不会收到第二个信号——即便收到也无害，应答口是一次性消费的。
      */
-    private void cancelTurnFor(AskRequest req, String notice) {
-        req.responder().cancel();
+    private void cancelTurnFor(ModalRequest req, String notice) {
+        req.cancel();
         if (current != null) { current.dispose(); current = null; }
         state.cancelCurrent();
         state.clearQueued();
@@ -1143,6 +1169,131 @@ public final class CodeTuiView extends InlineApp {
             }
         }
         return els.toArray(new Element[0]);
+    }
+
+    // ── 权限审批面板 ─────────────────────────────────────────────────────
+    /** 审批面板的一个选项：文案 + 选中它喂回工具线程的结果。 */
+    record PermOption(String label, PermissionOutcome outcome) {}
+
+    /**
+     * 一次审批请求的可选项（顺序即高亮下标，也即数字快选键 1..n）。
+     *
+     * <p><b>{@code suggested() == null} 时隐去「本会话不再问」「永久允许」两项</b>：内置危险检查与
+     * ask 规则命中走的是 {@code PermissionDecision.askOnly}，没有建议规则——加任何 allow 规则都消不掉
+     * 下次的询问，{@code PermissionCallback.remember} 会把这两个结果降级成「仅放行本次、什么都不记」。
+     * 显示出来就是骗人：用户按下「不再询问」，下次照样被问。
+     */
+    static List<PermOption> permOptions(PermissionRequest r) {
+        List<PermOption> out = new ArrayList<>();
+        out.add(new PermOption("允许一次", PermissionOutcome.ALLOW_ONCE));
+        if (r != null && r.suggested() != null) {
+            out.add(new PermOption("允许，本会话不再问", PermissionOutcome.ALLOW_SESSION));
+            out.add(new PermOption("允许，永久（写入项目 permissions.json）", PermissionOutcome.ALLOW_ALWAYS));
+        }
+        out.add(new PermOption("拒绝，让模型换个做法", PermissionOutcome.DENY));
+        out.add(new PermOption("拒绝并中断本回合", PermissionOutcome.CANCEL));
+        return out;
+    }
+
+    /**
+     * 审批按键：↑↓/kj 移动、1–n 移动高亮（不隐式确认）、Enter 确认、Esc = 中断本回合。始终 HANDLED。
+     *
+     * <p><b>拒绝 ≠ 取消回合</b>：选「拒绝，让模型换个做法」只喂回 DENY、回合继续；「拒绝并中断本回合」/ Esc
+     * 才走既有 {@link #cancelTurnFor}（dispose + doOnCancel 回滚会话，否则残留悬空 tool_calls、下轮 400）。
+     *
+     * <p><b>不得存在「既不应答也不取消」的出口</b>：本方法只有「移动高亮（面板留着，用户仍能应答）」与
+     * 「应答并退出」两类结果——请求背后 park 着一个持有回合的工具线程，面板卡住就是 agent 静默挂死。
+     */
+    private EventResult onPermissionKey(KeyEvent k) {
+        List<PermOption> opts = permOptions(activePermission);
+        int n = opts.size();
+        permOpt = clampIndex(permOpt, n);
+        if (k.isCancel()) { finishPermission(PermissionOutcome.CANCEL); return EventResult.HANDLED; }
+        if (k.code() == KeyCode.UP || k.isChar('k'))   { permOpt = (permOpt - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) { permOpt = (permOpt + 1) % n;     return EventResult.HANDLED; }
+        for (int i = 0; i < n && i < 9; i++) {           // 数字 1..n 快选（越界数字被下面兜底吞掉，不移动高亮）
+            if (k.isChar((char) ('1' + i))) { permOpt = i; return EventResult.HANDLED; }
+        }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            finishPermission(opts.get(permOpt).outcome());
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;   // 其余键一律吞掉，不落进输入框
+    }
+
+    /**
+     * 应答并退出审批模态；CANCEL 额外走既有回合取消路径。
+     *
+     * <p>先摘队列再应答：{@code removeModal} 按<b>身份</b>摘（两个请求都是 record，按 equals 会摘错人、
+     * 让被误摘者的线程永久 park）。CANCEL 分支不自己 respond——交给 {@link #cancelTurnFor} 走
+     * {@code ModalRequest.cancel()}，与问询共用同一套已验证的回滚。
+     */
+    private void finishPermission(PermissionOutcome outcome) {
+        PermissionRequest req = activePermission;
+        activePermission = null;
+        permOpt = 0;
+        state.removeModal(req);
+        if (outcome == PermissionOutcome.CANCEL) {
+            cancelTurnFor(req, "已取消当前回合");
+            return;
+        }
+        req.responder().respond(outcome);
+        // 记规则的两个结果给一行确认（只在有建议规则时可选中，故 suggested 必非 null）。
+        // 措辞留了退路：写盘失败时 engine 会降级成会话规则，而 PermissionOutcome 没有回传通道，
+        // 这里无从得知（别臆造一个），所以不把「已永久生效」说成既成事实。
+        if (req.suggested() != null) {
+            if (outcome == PermissionOutcome.ALLOW_SESSION) {
+                state.pushInfo("✓ 本会话不再询问：" + req.suggested().toDsl());
+            } else if (outcome == PermissionOutcome.ALLOW_ALWAYS) {
+                state.pushInfo("✓ 已记下允许规则：" + req.suggested().toDsl()
+                        + "（写入项目 permissions.json；写盘失败则仅本会话生效）");
+            }
+        }
+    }
+
+    /**
+     * 审批面板：标题（工具名 + 来源）+ 目标 + 原因 + 建议规则 + 动态选项。
+     * 高亮走纯前景 {@link Theme#PICK_SEL}（底色条会串到下一项，见 Theme.PICK_SEL 注释）。
+     */
+    private Element[] permissionChildren() {
+        // scope 每帧 eager 求值：首行必须判空，否则非审批态每帧崩渲染线程
+        if (activePermission == null) return new Element[0];
+        PermissionRequest r = activePermission;
+        List<PermOption> opts = permOptions(r);
+        int sel = clampIndex(permOpt, opts.size());
+        List<Element> els = new ArrayList<>();
+        String from = r.taskId() == null ? "" : "（来自子 agent）";
+        els.add(text("  ⚠ 需要授权：" + r.toolName() + from).style(PICK_TITLE));
+        String target = summarizeOneLine(r.target());
+        if (!target.isEmpty()) els.add(text("     " + target).style(PICK_ITEM));
+        String reason = summarizeOneLine(r.reason());
+        if (!reason.isEmpty()) els.add(text("     ↑ " + reason).style(DIM));
+        if (r.suggested() != null) {
+            els.add(text("     ↳ 允许后将记下规则：" + summarizeOneLine(r.suggested().toDsl())).style(DIM));
+        }
+        for (int i = 0; i < opts.size(); i++) {
+            boolean isSel = i == sel;
+            els.add(text("  " + (isSel ? "❯ " : "  ") + (i + 1) + ". " + opts.get(i).label())
+                    .style(isSel ? PICK_SEL : PICK_DESC));
+        }
+        return els.toArray(new Element[0]);
+    }
+
+    /** 审批态状态行文本（包私以便单测断言）：选项数随 suggested 变，快选提示也随之变。 */
+    String permStatusText() {
+        if (activePermission == null) return "";
+        int n = permOptions(activePermission).size();
+        return "⏸ 等待授权 (" + activePermission.toolName() + ") · ↑↓ 选择 · 1-" + n
+                + " 快选 · Enter 确认 · Esc 中断";
+    }
+
+    /** 折叠空白到一行 + 按显示宽度截断（守住「一行内容一物理行」，长命令不撑爆面板）。 */
+    private String summarizeOneLine(String s) {
+        if (s == null) return "";
+        String one = s.replaceAll("\\s+", " ").trim();
+        int max = Math.max(20, terminalWidth() - 8);
+        return displayWidth(one) <= max ? one
+                : dev.tamboui.text.CharWidth.substringByWidth(one, max - 1) + "…";
     }
 
     /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
@@ -1281,6 +1432,7 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element statusLine() {
+        if (activePermission != null) return text(permStatusText()).style(THINK);   // 审批优先：此时别的提示都不该抢
         if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
