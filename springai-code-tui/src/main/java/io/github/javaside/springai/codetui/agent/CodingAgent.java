@@ -24,6 +24,9 @@ import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.SessionFileExternalizer;
+import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -72,6 +75,8 @@ public final class CodingAgent implements SubmitHandler {
     private final SubagentRunner subagentRunner;   // 可空（测试桩）：取消回合时 shutdownNow 在飞并行子 agent + 供 busy 闸门查在飞数
     private final SessionFileExternalizer fileExternalizer;   // 可空（测试桩）：路径②，submit 开头把过往大文本 tool 结果外置为引用
     private final McpRegistry mcpRegistry;   // 可空：MCP 运行期中枢；submit 每回合 .tools(activeTools) 快照注入 + /mcp 门面委托
+    /** 可空（测试桩）：权限引擎，与三处装配点里的 PermissionCallback 共用同一实例；门面（模式/规则）直通它。 */
+    private final PermissionEngine permissionEngine;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -116,6 +121,7 @@ public final class CodingAgent implements SubmitHandler {
         this.subagentRunner = null;    // 单-client 桩路径：无子 agent 执行器
         this.fileExternalizer = null;  // 单-client 桩路径：无路径②外置器
         this.mcpRegistry = null;       // 单-client 桩路径：无 MCP 支持
+        this.permissionEngine = null;  // 单-client 桩路径：无权限引擎（门面退回默认值，见 permissionMode）
     }
 
     /**
@@ -159,7 +165,7 @@ public final class CodingAgent implements SubmitHandler {
                 fileExternalizer, null);
     }
 
-    /** 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；其余同上。 */
+    /** 向后兼容重载（无权限引擎：测试桩用）。等价 permissionEngine=null（权限门面退回默认值）。 */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
@@ -167,6 +173,24 @@ public final class CodingAgent implements SubmitHandler {
                        ToolCallback skillTool, SessionRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, mcpRegistry, null);
+    }
+
+    /**
+     * 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；
+     * {@code permissionEngine} 权限引擎，须是 {@code AgentRuntime.permissionEngine()} 那一个——
+     * 门面（Shift+Tab 切模式 / {@code /permissions} 列规则）改的必须正是工具那一侧读的那个对象（可空，桩路径用）。
+     */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
+                       PermissionEngine permissionEngine) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -183,6 +207,7 @@ public final class CodingAgent implements SubmitHandler {
         this.subagentRunner = subagentRunner;
         this.fileExternalizer = fileExternalizer;
         this.mcpRegistry = mcpRegistry;
+        this.permissionEngine = permissionEngine;
     }
 
     @Override
@@ -454,10 +479,41 @@ public final class CodingAgent implements SubmitHandler {
      * {@code /clear}：切到一个全新空会话。仅换 {@link #sessionId}（volatile 写），下一个回合的
      * {@code SessionMemoryAdvisor} 会按新 id 自动创建空会话；旧会话事件/文件<b>原样保留</b>，可 {@code -c} 恢复。
      * 调用方（{@code CodeTuiView}）已保证仅在空闲（非回合中/非压缩中）时调用，故此处无需再守卫并发。
+     *
+     * <p><b>顺带清掉会话级权限规则</b>：「允许，本会话不再问」的作用域就是这一次会话，
+     * 跨到新会话继续生效等于用户以为清干净了、其实上一轮的授权还在。落盘规则（永久允许）不动。
      */
     @Override
     public void clearContext() {
         this.sessionId = SessionIds.newId();
+        if (permissionEngine != null) {
+            permissionEngine.clearSessionRules();
+        }
+    }
+
+    // ── 权限门面（Shift+Tab 与 /permissions；引擎是唯一事实来源，这里只转发） ──
+
+    /**
+     * 当前权限模式。
+     *
+     * <p><b>无引擎的桩路径退回 DEFAULT 而不是抛</b>：门面是给状态栏读的，
+     * 一个测试桩缺了引擎不该让 UI 渲染崩掉；而 DEFAULT 是最严的那档，退回它不会放宽任何东西。
+     */
+    @Override
+    public PermissionMode permissionMode() {
+        return permissionEngine == null ? PermissionMode.DEFAULT : permissionEngine.mode();
+    }
+
+    /** 循环到下一个模式（Shift+Tab），返回实际生效的模式（引擎可能拒绝进 BYPASS）。 */
+    @Override
+    public PermissionMode cyclePermissionMode() {
+        return permissionEngine == null ? PermissionMode.DEFAULT : permissionEngine.cycleMode();
+    }
+
+    /** 当前生效的全部规则（{@code /permissions} 只读展示）。 */
+    @Override
+    public List<PermissionRule> permissionRules() {
+        return permissionEngine == null ? List.of() : permissionEngine.effectiveRules();
     }
 
     /** 当前会话 id（包级可见，供测试断言换会话是否生效）。 */

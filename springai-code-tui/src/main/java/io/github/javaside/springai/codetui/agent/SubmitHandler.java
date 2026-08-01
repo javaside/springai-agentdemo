@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import reactor.core.Disposable;
 
 import java.util.List;
@@ -55,4 +57,14 @@ public interface SubmitHandler {
 
     /** 禁用（即时完成）。null 表示无 MCP 支持。 */
     default McpRegistry.ToggleResult disableMcp(String name) { return null; }
+
+    // ── 权限管理（/permissions 与 Shift+Tab 用；默认空实现，便于回显桩/测试桩省略） ──
+    /** 当前权限模式（状态栏与面板显示）。默认非空，状态栏不必判 null。 */
+    default PermissionMode permissionMode() { return PermissionMode.DEFAULT; }
+
+    /** 循环到下一个模式（Shift+Tab），返回<b>实际</b>生效的新模式（未获授权时可能原地不动）。 */
+    default PermissionMode cyclePermissionMode() { return permissionMode(); }
+
+    /** 当前生效的全部规则（{@code /permissions} 只读展示）。 */
+    default List<PermissionRule> permissionRules() { return List.of(); }
 }
