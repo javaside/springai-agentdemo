@@ -42,8 +42,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *       用户手写的宽规则（{@code Bash(*)} / {@code Write(**)}）——那是 allow 规则的既定语义，
  *       且它盖不住第 1、2 步。</li>
  *   <li><b>第 6 步模式默认</b>：BYPASS 直接放行（跳过全部类别默认，这就是 BYPASS 的定义，
- *       且 deny 与内置检查已跑完）；命令逐段扫时<b>在第一段不认识处就返回</b>，
- *       跳过的只是后续段——它们只会产生更多 ASK 理由，不会更宽。</li>
+ *       且 deny 与内置检查已跑完）；PLAN 只放行只读与内部工具、其余一律 DENY
+ *       （见 {@link #decideByPlanMode}，它跳过的都是更宽的分支）；命令逐段扫时
+ *       <b>在第一段不认识处就返回</b>，跳过的只是后续段——它们只会产生更多 ASK 理由，不会更宽。</li>
  * </ul>
  *
  * <h2>allow 与命令分段的不对称（Task 7R，故意的）</h2>
@@ -482,6 +483,12 @@ public final class PermissionEngine {
         if (mode == PermissionMode.BYPASS) {
             return PermissionDecision.allow("BYPASS 模式已跳过权限检查（deny 规则与内置危险检查仍然生效）");
         }
+        if (mode == PermissionMode.PLAN) {
+            PermissionDecision plan = decideByPlanMode(entry, target, split);
+            if (plan != null) {
+                return plan;
+            }
+        }
         switch (entry.category()) {
             case INTERNAL:
                 return PermissionDecision.allow("内部工具，无外部副作用");
@@ -499,6 +506,48 @@ public final class PermissionEngine {
             default:
                 return null;      // UNKNOWN 交兜底（保守 ASK，并带建议规则）
         }
+    }
+
+    /**
+     * 计划模式的默认：只读与内部工具放行，其余一律 <b>DENY</b>；
+     * 网络工具返回 null 交回原分支（仍然是每次 ASK）。
+     *
+     * <p><b>为什么是 DENY 不是 ASK</b>：ASK 意味着用户能当场批准，那计划模式就名存实亡了。
+     * 拒绝是这一档的全部意义——「这段时间里根本不可能动手」。
+     *
+     * <p><b>拒绝串必须指路</b>：它会原样进模型的 tool 结果。只说「被拒绝」模型会反复重试同一个写操作，
+     * 把回合耗在无效调用上；写明「改调 ExitPlanMode」才能把它推回计划轨道。
+     *
+     * <p>本步排在第 1、2、4、5 步之后，跳过的只有第 6 步里同类别的那几个分支——
+     * 它们全都不比 DENY 更严（ACCEPT_EDITS 的放行、以及各处的 ASK）→ 安全。
+     */
+    private PermissionDecision decideByPlanMode(ToolRegistry.Entry entry, String target,
+                                                BashCommandSplitter.Split split) {
+        switch (entry.category()) {
+            case INTERNAL:
+                return PermissionDecision.allow("内部工具，无外部副作用");
+            case READ_ONLY:
+                return PermissionDecision.allow("只读操作（计划模式允许调查）");
+            case NETWORK_READ:
+                return null;      // 交回原分支：仍然每次询问
+            case COMMAND:
+                // 拆不动（split 不 parseable）时同样落到 DENY——「拆不动就不放行」的底线在 PLAN 下更该守
+                if (split != null && split.parseable() && !split.segments().isEmpty()
+                        && split.segments().stream().allMatch(BashCommandSplitter::isReadOnly)) {
+                    return PermissionDecision.allow("命令的每一段都在只读白名单内");
+                }
+                return planDeny("执行命令 " + display(target));
+            default:
+                // FILE_WRITE / UNKNOWN（含全部 MCP 工具）
+                return planDeny("这个操作可能修改文件或产生副作用：" + display(target));
+        }
+    }
+
+    /** 计划模式的拒绝串：说清楚现在处于哪一档、以及正确的下一步。 */
+    private static PermissionDecision planDeny(String what) {
+        return PermissionDecision.deny("当前处于计划模式（只读），不能" + what
+                + "。请继续用只读工具把方案调查清楚，然后调用 ExitPlanMode 提交计划等待用户批准；"
+                + "批准后你才能动手。不要重试本次操作。");
     }
 
     private PermissionDecision fileWriteByMode(String toolName, ToolRegistry.Entry entry,
