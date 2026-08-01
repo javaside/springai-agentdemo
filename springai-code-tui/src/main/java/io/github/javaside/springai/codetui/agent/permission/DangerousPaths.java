@@ -369,10 +369,25 @@ public final class DangerousPaths {
         }
         String head = headCommand(words);
 
-        if (DELETE_COMMANDS.contains(head) && hasRecursiveFlag(words)) {
-            String hit = checkDeleteTargets(head, words, root);
-            if (hit != null) {
-                return hit;
+        if (DELETE_COMMANDS.contains(head)) {
+            if (hasRecursiveFlag(words)) {
+                String hit = checkDeleteTargets(head, words, root);
+                if (hit != null) {
+                    return hit;
+                }
+            }
+            // 删除目标也要过 checkWrite：本层保护一个文件不被写，就没有理由不保护它不被删。
+            // 此前删除只走上面那条「结构位置」判定（根 / 顶层 / home），且以 -r 为门，于是
+            // rm -f /etc/sudoers、rm ~/.zshrc、rm -f ~/Library/LaunchAgents/x.plist 全部漏过——
+            // 而同名目标的 checkWrite 是有理由返回的。非递归删除同样致命，故不设 -r 门。
+            for (String w : words.subList(1, words.size())) {
+                if (isOption(w)) {
+                    continue;
+                }
+                String hit = checkWrite(resolveToken(stripTrailingGlob(w), root), root);
+                if (hit != null) {
+                    return head + " 会删除敏感落点——" + hit;
+                }
             }
         }
         // 重定向落点：echo evil >> ~/.zshrc 的首词是 echo，但它落盘
@@ -405,6 +420,17 @@ public final class DangerousPaths {
                     return head + " 会整体搬走 / 打包密钥目录 " + t + "（等同于把密钥带出这台机器）";
                 }
             }
+            // 落点也要过 checkWrite：此前只判「参数是不是密钥目录」，于是
+            // cp evil /usr/local/bin/git、curl -o /etc/sudoers、mv evil ~/.bashrc 全部漏过——
+            // 而 install / tee 同样的动作被拦住，差别只在它们恰好在 WRITER_COMMANDS 表里。
+            // 凡是指名落点的命令，落点都应过 checkWrite，而不是由「命令名在哪张表」决定检查跑不跑。
+            String dest = copyDestination(words);
+            if (dest != null) {
+                String hit = checkWrite(resolveToken(dest, root), root);
+                if (hit != null) {
+                    return head + " 会写入敏感落点——" + hit;
+                }
+            }
         }
         // 命令参数里出现密钥路径：cat ~/.ssh/id_rsa 一类
         for (String w : words) {
@@ -417,6 +443,46 @@ public final class DangerousPaths {
             }
         }
         return null;
+    }
+
+    /**
+     * 取「拷贝类」命令的<b>落点</b>参数（不是全部参数）。
+     *
+     * <p>只判落点是刻意的：全判会把 {@code cp ~/.zshrc /tmp/backup} 的<b>源</b>误报成「写入敏感落点」，
+     * 而它其实是读——读的风险由下面那条通用读循环负责，理由措辞也才对得上。
+     *
+     * <ul>
+     *   <li>{@code -o} / {@code --output} / {@code -O} 后面那个词（{@code curl -o F}、{@code wget -O F}）；
+     *       等号形态 {@code --output=F} 一并认。</li>
+     *   <li>{@code -C} 后面那个词（{@code tar -xf p.tar -C /} 的解包落点）。</li>
+     *   <li>否则取<b>最后一个</b>非选项参数（{@code cp}/{@code mv}/{@code scp}/{@code rsync} 的语义）。</li>
+     * </ul>
+     *
+     * <p>取不到就返回 {@code null}（只有一个参数时没有落点可言，如 {@code tar cf - ~/.ssh}）。
+     */
+    private static String copyDestination(List<String> words) {
+        for (int i = 1; i < words.size(); i++) {
+            String w = words.get(i);
+            if (w.startsWith("--output=")) {
+                return w.substring("--output=".length());
+            }
+            boolean flagWithValue = "-o".equals(w) || "-O".equals(w)
+                    || "--output".equals(w) || "-C".equals(w);
+            if (flagWithValue && i + 1 < words.size()) {
+                return words.get(i + 1);
+            }
+        }
+        String last = null;
+        int count = 0;
+        for (int i = 1; i < words.size(); i++) {
+            String w = words.get(i);
+            if (isOption(w)) {
+                continue;
+            }
+            last = w;
+            count++;
+        }
+        return count >= 2 ? last : null;    // 只有一个非选项参数时它是源，不是落点
     }
 
     /** 路径是不是就是某个敏感目录本身（{@code ~/.ssh}），而不是它里面的某个文件。 */

