@@ -351,11 +351,22 @@ public final class AgentTools {
         // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
         ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine);
 
-        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ Task 工具 + ParallelTasks 工具
+        // ExitPlanMode：计划模式的唯一出口。同样<b>仅主 agent</b>——不进 decoratedList（照记忆工具的既有做法）：
+        // 子 agent 没有自己的模式（继承主会话），提交计划只属于主 agent；给了它反而会让子 agent 替用户切模式。
+        // 与其它工具一样被两层装饰——ToolEventCallback 是 currentTurnId() 的来源，不装饰的话桥里拿到的
+        // turnId 是错的，请求会被 UI 当「迟到」直接丢弃，工具线程随之永久 park。
+        // 不包 MediaExternalizingCallback：返回值是纯文本，没有媒体可外置（与 Task/ParallelTasks 同）。
+        PlanApprovalBridge planBridge = new PlanApprovalBridge(listener, permissionEngine::setMode);
+        ToolCallback decoratedExitPlanTool = new PermissionCallback(
+                new ToolEventCallback(PlanApprovalBridge.exitPlanModeTool(planBridge), listener),
+                permissionEngine, listener);
+
+        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ ExitPlanMode（仅主 agent）+ Task 工具 + ParallelTasks 工具
         // 注意：ParallelTasks 仅给主 agent，不进 decoratedList，故子 agent 不能再派并行子 agent（禁递归 fan-out）。
-        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 2];
+        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 3];
         System.arraycopy(decorated, 0, toolsWithTask, 0, decorated.length);
         System.arraycopy(memoryDecorated, 0, toolsWithTask, decorated.length, memoryDecorated.length);
+        toolsWithTask[toolsWithTask.length - 3] = decoratedExitPlanTool;
         toolsWithTask[toolsWithTask.length - 2] = decoratedTaskTool;
         toolsWithTask[toolsWithTask.length - 1] = decoratedParallelTool;
 

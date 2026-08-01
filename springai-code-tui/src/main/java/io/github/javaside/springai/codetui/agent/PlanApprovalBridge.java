@@ -1,6 +1,9 @@
 package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.function.FunctionToolCallback;
 
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.function.Consumer;
@@ -69,5 +72,38 @@ public final class PlanApprovalBridge {
             default:
                 throw new PermissionCancelledException();
         }
+    }
+
+    /** {@code ExitPlanMode} 的入参：一份 markdown 计划。 */
+    public record PlanInput(String plan) {
+    }
+
+    /**
+     * 把桥包成名为 {@code ExitPlanMode} 的 {@link ToolCallback}。
+     *
+     * <p><b>注册名是这里给的字符串，不是方法名</b>——权限规则、登记表、子 agent 的 allow/deny 过滤
+     * 全按注册名匹配（项目踩过：{@code askUserQuestion} 方法名不匹配 {@code AskUserQuestionTool}
+     * 注册名，导致 deny 静默失效）。它还必须在 {@code ToolRegistry} 里登记为 {@code INTERNAL}：
+     * 未登记即 {@code UNKNOWN}，而 PLAN 模式下 UNKNOWN 是 DENY——本工具会把自己拦住，
+     * 计划模式就成了没有出口的死胡同。
+     */
+    public static ToolCallback exitPlanModeTool(PlanApprovalBridge bridge) {
+        return FunctionToolCallback
+                .builder("ExitPlanMode",
+                        (PlanInput in, ToolContext ctx) -> bridge.handle(in == null ? "" : in.plan()))
+                .description("""
+                        提交一份实施计划，请用户批准后再开始动手。
+
+                        什么时候调用：你处于「计划模式」（系统提示里会告知），已经把现状调查清楚、
+                        想好了要怎么做。把方案写成 markdown 传给 plan 参数。
+
+                        用户可以选择「批准并自动接受编辑」「批准并逐个确认」或「继续完善计划」。
+                        批准后模式会自动切换，你才能修改文件；若用户要求继续完善，本工具会把他的
+                        反馈返回给你，据此改完再提交一次。
+
+                        不在计划模式时不要调用它。
+                        """)
+                .inputType(PlanInput.class)
+                .build();
     }
 }

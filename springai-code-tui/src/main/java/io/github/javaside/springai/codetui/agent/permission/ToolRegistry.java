@@ -57,6 +57,7 @@ public final class ToolRegistry {
         put("AskUserQuestionTool", ToolCategory.INTERNAL, null, false);
         put("Task",                ToolCategory.INTERNAL, null, false);   // 委派本身无害，拦的是子 agent 内部那份工具
         put("ParallelTasks",       ToolCategory.INTERNAL, null, false);
+        put("ExitPlanMode",        ToolCategory.INTERNAL, null, false);   // 提交计划本身无副作用，PLAN 下必须放行
         // ── 记忆工具：路径已被库侧钳在 memories root 内（见类注释） ──
         put("MemoryView",       ToolCategory.INTERNAL, "path", false);
         put("MemoryCreate",     ToolCategory.INTERNAL, "path", false);
