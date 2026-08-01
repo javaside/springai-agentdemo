@@ -4705,6 +4705,14 @@ git commit -m "feat(permission): 最外层拦截装饰器与阻塞审批握手"
 
 ### Task 12: 三处装配点接入
 
+> **来自 Task 11 的必查项**（`8368c30`）：`PermissionCallback` 在 `ToolContext` 为 null 时
+> 取到的 `turnId` 是 `-1`，而 `ConversationState.onPermissionRequested` 会拒掉
+> `turnId != acceptingTurnId` 的一切请求——**于是任何不传 `ToolContext` 的装配点，
+> 它的每一次 ASK 都会被静默 DENY**，用户永远看不到面板，只看到工具莫名被拒。
+> 三处装配点都必须显式验证 `turnId` 传得到，且要有测试钉住。
+
+
+
 **Files:**
 - Modify: `.../agent/AgentTools.java`（装饰循环 + `buildMemoryTools` + `AgentRuntime` 暴露 engine）
 - Modify: `.../agent/McpRegistry.java`（`decorate()` 最外层加 `PermissionCallback`）
@@ -5074,6 +5082,15 @@ git commit -m "feat(permission): SubmitHandler 权限门面与 --dangerously-ski
 > 2. **`peekModal()` 返回的引用不保证还在队列里**——别的线程可能已经 `clearModals()` 了。
 >    现实里 `drain()` 只在 UI 线程跑、且用 `pa != activeAsk` 幂等，撞不上；
 >    但这是**调用方**要守的约定，队列本身不保证。写面板时按此假设。
+> 0. **`suggested() == null` 时不得显示「本会话允许」「永久允许」两个按钮**（Task 11 移交）。
+>    内置危险检查与 ask 规则走的是 `askOnly`，没有建议规则；此时那两个选项**做不到它们承诺的事**——
+>    `PermissionCallback` 会降级成「仅这一次放行，什么都不记」。用户按下「不再询问」，
+>    下次照样被问。按钮该按 `suggested()` 是否为 null 动态显隐。
+>
+> 0b. **`addPersistentRule` 返回 false 有两种含义**（Task 11 移交）：被 deny 规则遮蔽（什么都没记）
+>    与写盘失败（已降级为会话规则）。目前只有日志能区分，`PermissionOutcome` 没有回传通道。
+>    面板若要显示「仅本次会话生效」，需要先加这个通道——别自己臆造一个。
+>
 > 3. **摘除按引用而非 equals**。`removeModal` 用的是 `removeIf(m -> m == r)`：
 >    两个请求类型都是 record（逐分量 equals），分量全同时用 `remove(r)` 会摘掉**另一个**请求，
 >    被误摘的线程永久 park。面板持有请求引用时同理——**认引用，别认相等**。
