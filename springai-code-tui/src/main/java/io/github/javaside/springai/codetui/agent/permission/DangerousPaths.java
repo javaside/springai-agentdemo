@@ -359,6 +359,62 @@ public final class DangerousPaths {
                 return hit;
             }
         }
+        if (!BashCommandSplitter.split(command).parseable()) {
+            return checkHeadIndependently(command, root);
+        }
+        return null;
+    }
+
+    /**
+     * 拆不动时的兜底：<b>完全不依赖 head 位置</b>逐词扫一遍。
+     *
+     * <p><b>为什么需要它</b>：宽松拆段不认引号，会从命令和它的目标<b>之间</b>切开，
+     * 于是每一个依赖 head 的检查（删除 / 写入 / 拷贝）都失效——实测
+     * {@code echo "a;b" ; rm -rf "p;q" /} 拆成 {@code [echo "a}、{@code b" }、
+     * {@code  rm -rf "p}、{@code q" /}]：带 {@code rm} 的那段没有 {@code /}，
+     * 带 {@code /} 的那段 head 是 {@code q"}。整串扫描也救不回来，整串的 head 是 {@code echo}。
+     *
+     * <p>结果是加一对引号就能把「拦住」变成「漏过」——回退比不回退还危险。
+     * 故这里改判据：<b>只要整串里出现了危险命令名，就把每一个词都当作可能的落点检查</b>。
+     * 过宽（{@code echo "rm" $(x)} 也会问），但本层只产出 ASK，方向正确；
+     * 而且只在拆不动时才走这条路，日常命令不受影响。
+     */
+    private static String checkHeadIndependently(String command, Path root) {
+        List<String> words = words(command);
+        boolean destructive = false;
+        String deleteHead = null;
+        for (String w : words) {
+            String base = w.substring(w.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
+            if (DELETE_COMMANDS.contains(base)) {
+                destructive = true;
+                deleteHead = base;
+                break;
+            }
+            if (WRITER_COMMANDS.contains(base) || BULK_COPY_COMMANDS.contains(base)) {
+                destructive = true;
+                break;
+            }
+        }
+        if (!destructive) {
+            return null;
+        }
+        // 「删掉 home / 根本身」靠的是结构位置判定，那条同样依赖 head，也得在这里重跑一遍：
+        // checkWrite(~) 是 null（家目录本就可写），但 rm -rf ~ 显然要问。
+        if (deleteHead != null && hasRecursiveFlag(words)) {
+            String hit = checkDeleteTargets(deleteHead, words, root);
+            if (hit != null) {
+                return "命令结构无法可靠解析，且其中出现了递归删除——" + hit;
+            }
+        }
+        for (String w : words) {
+            if (isOption(w)) {
+                continue;
+            }
+            String hit = checkWrite(resolveToken(stripTrailingGlob(w), root), root);
+            if (hit != null) {
+                return "命令结构无法可靠解析，且其中出现了会落盘 / 删除的命令——" + hit;
+            }
+        }
         return null;
     }
 

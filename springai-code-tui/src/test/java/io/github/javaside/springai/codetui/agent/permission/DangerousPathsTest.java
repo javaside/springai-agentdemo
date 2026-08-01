@@ -215,6 +215,23 @@ class DangerousPathsTest {
     }
 
     @Test
+    @DisplayName("引号内分隔符不得把「拦住」变成「漏过」——回退不能依赖 head 位置")
+    void quotedSeparatorDoesNotInvertTheFallback() {
+        // 对照：不带引号时本来就拦得住
+        assertNotNull(DangerousPaths.checkCommand("echo ab ; rm -rf pq /", ROOT));
+        // 加一对引号让 split 拆不动，宽松拆段会从 rm 和 / 之间切开
+        assertNotNull(DangerousPaths.checkCommand("echo \"a;b\" ; rm -rf \"p;q\" /", ROOT),
+                "加引号就绕过 = 回退比不回退更危险");
+        assertNotNull(DangerousPaths.checkCommand("echo \"a;b\"; rm -rf 'x;y' " + HOME, ROOT));
+        assertNotNull(DangerousPaths.checkCommand(
+                "git commit -m \"fix; ship\" && rm -rf \"a;b\" /", ROOT));
+        assertNotNull(DangerousPaths.checkCommand(
+                "echo \"a;b\"; tee \"x;y\" " + HOME + "/.zshrc", ROOT));
+        // 对照：拆不动但没有破坏性命令时不该乱问，否则审批疲劳
+        assertNull(DangerousPaths.checkCommand("echo \"a;b\" && ls -la", ROOT));
+    }
+
+    @Test
     @DisplayName("命令名同样不区分大小写——APFS 上 /bin/LS 真能执行")
     void commandCaseVariantsDoNotEvade() {
         // 本机实测：ls -l /bin/LS 存在，bash -c 'LS -d /' 退出码 0。
