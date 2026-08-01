@@ -3444,6 +3444,99 @@ git commit -m "feat(permission): 决策引擎（deny > 内置检查 > ask > allo
 
 ---
 
+### Task 7 实施记录（已完成，`2b7c026`；后续修订见文末）
+
+**实际产出**：`PermissionEngine`（新）、`PermissionEngineTest`（53 个测试）、
+`PermissionRule` 两处增量改动。`PermissionDecision` 沿用 `d7941e4`，未改。
+
+#### 上面 Step 1 / Step 4 的示例代码有三处自相矛盾，实现时按 7R 走
+
+不是实现走样，是**计划自身的缺陷**，照抄会同时违反 7R 和计划自己的测试：
+
+1. **`suggestedRules` 要求 `Bash(git push:*)`**，而 7R 第 2 条把 `git`（`-c` / `!alias`）
+   列进「绝不生成前缀规则」。两者不能同真。7R 更晚且标注不可协商，故按 7R。
+2. **`readOnlyAlwaysAllowed` 断言 `WebFetch` 在所有模式放行**，与 7R
+   「`NETWORK_READ` 默认改 ASK」直接冲突。已拆成两个测试。
+3. **`decideByMode` 每条 ASK 都传 `suggested = null`**，但计划自己的 `suggestedRules`
+   要求 DEFAULT 下 `Write` 给出非 null 建议——而 `Write` 在 DEFAULT 下**只**走这个分支。
+   **计划的代码通不过计划的测试。** 实现按 `PermissionDecision` 的类注释：
+   第 6、7 步的 ASK 给建议（加 allow 规则确实能让下次不再问，因为第 5 步在第 6 步之前），
+   第 2、4 步的 ASK 用 `askOnly`（它们排在 allow 之前，加什么规则都照样问，给建议是骗人）。
+
+另：Step 4 示例里 `ToolTargets.extract` / `DangerousPaths.checkCommand` 的签名是旧的
+（都已加 `root` 参数），`decideCommand` 也没实现 7R 的逐段 allow。以实际组件签名为准。
+
+#### 第 5 步的刻意例外：整串字面量 allow 规则可跨段
+
+7R 定的规则是「allow 必须每段都命中」。实现里留了**一个**例外：
+pattern 与整条命令**逐字相等**的字面量规则跨段生效。
+
+理由是它**不可能放宽**——`matches` 对非路径、非 `:*` 的 pattern 走整串相等，
+这条规则只可能命中那一条命令。不留这个口子，多段命令**永远无法被任何规则授权**，
+用户只会转去写 `Bash(*)`，那比这个例外危险得多。
+两个方向都钉住了：`mvn clean && mvn install` 放行，多接一段 `&& rm -rf /tmp/x` 不放行。
+
+#### `suggest()` 在 7R 三条之外新增的两组限制（都是收紧）
+
+1. **破坏性命令不给前缀**（`rm rmdir shred srm dd mkfs chmod chown chgrp kill truncate` 等）。
+   7R 第 2 条只列了「能执行任意命令的工具」，但**同一个坑还有第二个入口**：
+   `commandPrefix` 在第二个词是 flag 时会塌成程序名，而破坏性命令的第二个词**几乎总是选项**。
+   于是批准一次 `rm -rf target` 会生成 **`Bash(rm:*)`——此后任何 rm 都不再问**。
+   这比 7R 举的 `cp .` 反例**升级得更彻底**：`cp .` 至少还限定在以 `.` 开头的目标上。
+2. **构建工具塌成裸程序名时不给前缀**：`Bash(mvn test:*)` 可以，`Bash(mvn:*)` 不行
+   （`mvn exec:java` / `npm run <任意脚本>` / `go run x.go` 都能跑任意代码）。
+   整个拉黑会把最高频的正当诉求（「以后 `mvn test` 别再问」）也堵死，
+   把用户推向 BYPASS——只拒绝裸程序名那一种，两头都顾上。
+
+判断首词一律按 **basename + 折大小写**（`/bin/BASH` 在 APFS 上真能执行），
+带 `=` 的首词（`FOO=bar cmd`）视同命令启动器一并拒绝。
+
+#### 顺带修掉的一个 deny 绕过（改了 `PermissionRule`）
+
+`hasShellSeparator` 是**命令专用**守卫，但 `matches` 此前无条件套用于所有非路径目标。
+7R 要求 `NETWORK_READ` 生成域名前缀规则，而 `&` 在查询串里是再正常不过的字符：
+
+```
+deny:WebFetch(https://evil.com/:*)  vs  https://evil.com/x?a=1&b=2   → 不命中 → 放行
+```
+
+allow 方向只是白问一次，**deny 方向是实打实的绕过**，加一个查询参数就躲开。
+修法是增量的：加一个五参 `matches(..., separatorSensitive)`，四参重载委托传 `true`，
+既有行为与 19 个 `PermissionRuleTest` 全不受影响。引擎对 COMMAND **与 UNKNOWN/MCP**
+都传 `true`（MCP 工具本身可能就是个 shell），只对已知非命令目标（url / query / bash_id）传 `false`。
+
+#### 由本任务暴露、已由 `04a5f8b` 修掉的只读扫描洞
+
+`grep -R AKIA ~` 与 `cat /etc/shadow` 在 **DEFAULT 模式、无任何规则、非 BYPASS** 下
+原本直接 ALLOW——因为二者**就在只读白名单里**，「非只读命令默认 ASK」那道兜底对它们不适用。
+`DangerousPaths` 原文把这条列为盲区时写的是「一条 `allow:Bash(grep:*)` 就能放它过去」，
+实际连规则都不需要。修法见 `04a5f8b`（按「递归扫描 home / `/` / 他人家目录」的结构判据 +
+系统凭据文件按全路径匹配），不在引擎层。
+
+顺带一提：**`suggest()` 生成不出 `Bash(grep:*)`**——单段 `grep` 在第 6 步就放行了，
+根本走不到 `suggest`；出现在多段命令里时给的是整串字面量。
+
+#### 其他实现决定
+
+- `decide()` **永不抛异常**：意外一律失败关闭成 ASK（不是 ALLOW——bug 不该变成静默放行；
+  也不是 DENY——那会把 bug 变成 agent 卡死）。
+- 构造器 `root` 为 null 立即 NPE，与 `ToolTargets.extract` 同一契约。
+- `setMode(BYPASS)` / 配置声明的 BYPASS 在未获授权时都被拒（降级 DEFAULT + WARN），
+  否则 UI 任意一处调用就把 `--dangerously-skip-permissions` 架空了。
+- `addPersistentRule` 遇 deny 遮蔽时**什么都不加**（连会话规则也不加）——
+  一条死的会话规则和一条死的落盘规则一样骗人。新增 `denyingRule()` 供 Task 14
+  区分两种 `false`：被 deny（提示「已被规则 X 禁止」）vs 写盘失败（已降级，提示「仅本次会话生效」）。
+
+#### Task 7R 追加裁定（team-lead，Task 7 完成后）
+
+**7R 第 2 条的「不给前缀」不等于「什么都不给」**：落在 `NO_PREFIX_COMMANDS` 里的命令
+改为退到**整串字面量**规则（`Bash(git push origin main)`），而非返回 null。
+字面量逐字相等才命中，不可能比被批准的那次更宽，故 7R 的立意（绝不自动生成更宽的规则）
+仍然成立，而 `python -c …` / `git push …` 这类也终于能「以后不再问」。
+**仅拆不动（`parseable == false`）时才完全不给建议**——那时连「有几条命令」都不确定。
+
+---
+
 ### Task 8: 登记表完整性测试（对着运行时工具集比对）
 
 **Files:**
