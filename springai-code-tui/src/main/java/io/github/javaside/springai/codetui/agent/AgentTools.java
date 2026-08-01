@@ -5,6 +5,9 @@ import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallbac
 import io.github.javaside.springai.codetui.agent.media.SessionFileExternalizer;
 import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;
 import io.github.javaside.springai.codetui.agent.media.ToolResultMediaHandler;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
+import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
 import org.springaicommunity.agent.tools.AutoMemoryTools;
 import org.springaicommunity.agent.tools.FileSystemTools;
@@ -69,10 +72,13 @@ import java.util.List;
  * {@link ToolEventCallback#currentTurnId()}（当前正在执行工具的回合），不读实时 activeTurnId，
  * 取消/并发下不会串轮。因此 {@link #build} <b>没有</b> activeTurnId 参数。
  *
- * <p><b>安全边界</b>：<b>没有</b>任何工具做强制目录边界——FileSystemTools/Shell/Grep/Glob 在技术上
+ * <p><b>安全边界</b>：<b>工具本身</b>没有任何强制目录边界——FileSystemTools/Shell/Grep/Glob 在技术上
  * 都<b>不</b>受 root 限制（见 {@code AgentToolsSecurityTest}）。曾给 FS 单设 allowedDirectory，
- * 但其余工具都能越界、这层边界形同虚设、反而制造「有沙箱」的假象，遂去掉；全线靠系统提示要求
- * 模型自律约束在 root 内，而非承诺技术强制。
+ * 但其余工具都能越界、这层边界形同虚设、反而制造「有沙箱」的假象，遂去掉。
+ * 拦截改由<b>装饰链最外层</b>的 {@link PermissionCallback} 统一做（本类是三处装配点之一，
+ * 另两处是 {@link #buildMemoryTools} 与 {@code McpRegistry.decorate}）：它按模式 + 规则 +
+ * 内置危险检查判定放行 / 拒绝 / 人工审批。这是一道<b>护栏</b>而非沙箱——工具层依旧能越界，
+ * 只是越界前会停下来问一次。
  */
 public final class AgentTools {
 
@@ -200,10 +206,15 @@ public final class AgentTools {
      * @param mcpRegistry 运行期 MCP 中枢（可空）。MCP 工具<b>不</b>烧入 defaultTools——改由
      *                 CodingAgent 每回合 {@code .tools(mcpRegistry.activeTools())} 快照注入、
      *                 SubagentRunner 经 {@code effectiveTools} 拼接注入，使 /mcp 的启停即时生效。
-     *                 registry 自行完成 MCP 工具的装饰（ToolEventCallback + 媒体外置），此处不再装饰。
+     *                 registry 自行完成 MCP 工具的装饰（PermissionCallback + ToolEventCallback + 媒体外置），此处不再装饰。
+     * @param permissionEngine 权限引擎。<b>由调用方创建并传入</b>，因为它必须早于 {@code McpRegistry.init}
+     *                 存在（MCP 工具在发现时就要被装饰），而 init 又早于本方法。三处装配点
+     *                 （本装饰循环 / {@link #buildMemoryTools} / {@code McpRegistry.decorate}）
+     *                 共用这一个实例——不共用则 Shift+Tab 切模式只对其中一批工具生效。
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
-                                      McpRegistry mcpRegistry) {
+                                      McpRegistry mcpRegistry, PermissionEngine permissionEngine) {
+        java.util.Objects.requireNonNull(permissionEngine, "permissionEngine 不可为 null：漏传等于全线无权限层");
         // 不设 allowedDirectory：沙箱是库的 opt-in 特性，空列表即放行任何路径
         // （见 FileSystemTools.validateAllowedAccess：allowedDirectories.isEmpty() → 直接返回放行）。
         // 全线工具（Shell/Grep/Glob）本就不受 root 强制限制，单给 FS 设边界并无实际安全意义，
@@ -287,11 +298,14 @@ public final class AgentTools {
         // 媒体外置（路径②）：回合间（CodingAgent.submit 开头）把过往「非文本文件」读取结果换成引用（文本文件不动）。
         SessionFileExternalizer fileExternalizer = new SessionFileExternalizer(root);
 
+        // 权限拦截包在<b>最外层</b>（见 PermissionCallback 类注释：放内层会让被拒的调用先在 TUI 显示成
+        // 「工具开始运行」）。装饰顺序自外向内：PermissionCallback → ToolEventCallback → 媒体外置 → 真实工具。
         ToolCallback[] decorated = new ToolCallback[all.size()];
         ToolCallback decoratedSkillTool = null;   // 手动 /skill 路径复用同一个被装饰实例（事件/返回与自动路径一致）
         for (int i = 0; i < all.size(); i++) {
-            decorated[i] = new ToolEventCallback(
-                    new MediaExternalizingCallback(all.get(i), mediaStore, mediaHandler, root), listener);
+            decorated[i] = new PermissionCallback(new ToolEventCallback(
+                    new MediaExternalizingCallback(all.get(i), mediaStore, mediaHandler, root), listener),
+                    permissionEngine, listener);
             if (all.get(i) == reloadableSkill) {
                 decoratedSkillTool = decorated[i];   // 记住 Skill 代理装饰后的实例（供手动 /skill 复用）
             }
@@ -311,17 +325,21 @@ public final class AgentTools {
                 (spec, prompt, desc, turnIgnored) ->
                         // 真实 parentTurnId 从 ThreadLocal 取（Task 工具被 ToolEventCallback 装饰，call 时已压入）
                         subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()));
-        ToolCallback decoratedTaskTool = new ToolEventCallback(taskTool, listener);
+        // Task / ParallelTasks 也包一层：它们类别是 INTERNAL、恒放行，包一层零行为差异，
+        // 只为「所有工具走同一条链」——否则以后给它们加类别时会漏掉这两个。
+        ToolCallback decoratedTaskTool =
+                new PermissionCallback(new ToolEventCallback(taskTool, listener), permissionEngine, listener);
 
         // 批量 ParallelTasks 工具：并发执行多个独立子 agent。parentTurnId 在工具线程（fan-out 前）从 ThreadLocal 取，
         // 再由 runAll 显式传入每个子任务闭包（子线程不读 ThreadLocal）。
         ToolCallback parallelTool = SubagentTool.createParallel(subagentSpecs,
                 (dispatches, turnIgnored) ->
                         subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()));
-        ToolCallback decoratedParallelTool = new ToolEventCallback(parallelTool, listener);
+        ToolCallback decoratedParallelTool = new PermissionCallback(
+                new ToolEventCallback(parallelTool, listener), permissionEngine, listener);
 
         // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
-        ToolCallback[] memoryDecorated = buildMemoryTools(root, listener);
+        ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine);
 
         // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ Task 工具 + ParallelTasks 工具
         // 注意：ParallelTasks 仅给主 agent，不进 decoratedList，故子 agent 不能再派并行子 agent（禁递归 fan-out）。
@@ -405,12 +423,34 @@ public final class AgentTools {
 
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
-                reloadableSkill, subagentRunner, fileExternalizer);
+                reloadableSkill, subagentRunner, fileExternalizer, permissionEngine);
+    }
+
+    /**
+     * 向后兼容（<b>测试用</b>）：自建一个隔离的默认引擎（见 {@link #testEngine}）。
+     *
+     * <p><b>生产别走这条</b>——它建出来的是<b>第二个</b>引擎，与 {@code McpRegistry} 那个不是同一个，
+     * 模式切换只对其中一批工具生效。生产入口是五参重载，引擎由 {@code CodeTuiApplication} 建好传入。
+     */
+    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
+                                      McpRegistry mcpRegistry) {
+        return build(registry, root, listener, mcpRegistry, testEngine(root));
     }
 
     /** 向后兼容：无 MCP 支持（等价 registry=null）。现有测试与旧调用走这条。 */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener) {
         return build(registry, root, listener, (McpRegistry) null);
+    }
+
+    /**
+     * 测试/兼容用的隔离引擎：空配置 + DEFAULT 模式 + 不许 BYPASS。
+     *
+     * <p><b>刻意不读两层 {@code permissions.json}</b>：用户层在 {@code ~/.codetui/permissions.json}，
+     * 读了就会让测试结果随开发者本机的个人规则漂移（在 CI 上绿、在某人机器上红，或反过来）。
+     * 生产的引擎由 {@code CodeTuiApplication} 用 {@code PermissionConfigLoader.load(root)} 建。
+     */
+    public static PermissionEngine testEngine(Path root) {
+        return new PermissionEngine(root, PermissionConfig.empty(), PermissionMode.DEFAULT, false);
     }
 
     /** 子 agent 并行并发度：环境变量 CODETUI_SUBAGENT_CONCURRENCY，非法/缺失回退 4，钳制到 [1, 32]。 */
@@ -529,6 +569,7 @@ public final class AgentTools {
      * @param reloadableSkill     可重载 Skill 代理（{@code /reload} 触发重扫 + {@code skills()} 实时数据源）
      * @param subagentRunner      子 agent 执行器；当前主要供测试观测「记忆工具不泄漏给子 agent」的边界（生产暂无消费方）
      * @param fileExternalizer    路径②：回合间（{@code CodingAgent.submit} 开头）把过往大文本 tool 结果外置为引用，与路径①共用 store/root
+     * @param permissionEngine    权限引擎（UI 经它读/切模式、列生效规则；三处装配点共用同一实例）
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -540,7 +581,8 @@ public final class AgentTools {
                                ToolCallback skillTool,
                                ReloadableSkillTool reloadableSkill,
                                SubagentRunner subagentRunner,
-                               SessionFileExternalizer fileExternalizer) {
+                               SessionFileExternalizer fileExternalizer,
+                               PermissionEngine permissionEngine) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
@@ -549,18 +591,28 @@ public final class AgentTools {
     /**
      * 长期记忆工具（spring-ai-agent-utils 的 AutoMemoryTools，6 个 @Tool）——仅主 agent 使用。
      * 记忆根 <root>/.codetui/memory（与会话仓库同级、按项目隔离；AutoMemoryTools.build() 自动建目录，
-     * 已被 .codetui/ gitignore）。每个工具用 ToolEventCallback 装饰，使记忆操作在 TUI 显示成一行工具活动。
+     * 已被 .codetui/ gitignore）。每个工具用 PermissionCallback(ToolEventCallback(...)) 装饰，
+     * 使记忆操作在 TUI 显示成一行工具活动、并与其余工具走同一条权限链。
      * 单一事实来源：build() 与测试钩子共用本方法，避免装配与断言漂移。
+     *
+     * <p>记忆工具在登记表里是 {@code INTERNAL}（恒放行，路径已被库侧钳死在 {@code .codetui/memory} 内），
+     * 故这层平时不拦任何东西；包上是为了「所有工具走同一条链」——用户写一条
+     * {@code deny: MemoryDelete(*)} 时它得真管用。
      */
-    static ToolCallback[] buildMemoryTools(Path root, AgentListener listener) {
+    static ToolCallback[] buildMemoryTools(Path root, AgentListener listener, PermissionEngine engine) {
         Path dir = memoryDir(root);
         AutoMemoryTools memoryTools = AutoMemoryTools.builder().memoriesDir(dir).build();
         ToolCallback[] raw = ToolCallbacks.from(memoryTools);
         ToolCallback[] decorated = new ToolCallback[raw.length];
         for (int i = 0; i < raw.length; i++) {
-            decorated[i] = new ToolEventCallback(raw[i], listener);
+            decorated[i] = new PermissionCallback(new ToolEventCallback(raw[i], listener), engine, listener);
         }
         return decorated;
+    }
+
+    /** 向后兼容（<b>测试用</b>）：自建一个隔离的默认引擎（见 {@link #testEngine}）。 */
+    static ToolCallback[] buildMemoryTools(Path root, AgentListener listener) {
+        return buildMemoryTools(root, listener, testEngine(root));
     }
 
     /** 记忆根目录 <root>/.codetui/memory（与会话仓库同级、按项目隔离；已被 .codetui/ gitignore）。单一事实来源：prompt 与工具根共用。 */

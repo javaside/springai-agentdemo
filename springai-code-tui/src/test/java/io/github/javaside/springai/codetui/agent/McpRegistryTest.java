@@ -1,5 +1,11 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
+import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
+import io.github.javaside.springai.codetui.agent.permission.RuleScope;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -132,13 +138,25 @@ class McpRegistryTest {
         @Override public void onCompactionFailed(String message) { }
     }
 
+    /**
+     * 装饰链自外向内：{@code PermissionCallback → ToolEventCallback → 媒体外置 → 真实工具}。
+     *
+     * <p>MCP 工具在登记表里是 UNKNOWN（兜底 ASK），故这里显式给一条 allow 规则——
+     * 否则本用例测的就变成「被拒时不发工具事件」了（那是 PermissionCallback 自己的用例）。
+     */
     @Test
-    void decorateWrapsWithToolEventCallbackAndFiresListenerEvents(@TempDir Path root) {
+    void decorateWrapsWithPermissionCallbackAndFiresListenerEvents(@TempDir Path root) {
         RecordingListener listener = new RecordingListener();
-        McpRegistry reg = McpRegistry.initForTest(root, listener, List.of());
+        PermissionEngine engine = new PermissionEngine(root,
+                new PermissionConfig(PermissionMode.DEFAULT,
+                        List.of(new PermissionRule("mcp__s1__ping", null,
+                                PermissionBehavior.ALLOW, RuleScope.SESSION))),
+                PermissionMode.DEFAULT, false);
+        McpRegistry reg = McpRegistry.initForTest(root, listener, List.of(), engine);
         try {
             ToolCallback decorated = reg.decorate(fakeTool("mcp__s1__ping"));
-            assertInstanceOf(ToolEventCallback.class, decorated, "外层须是 ToolEventCallback（TUI 工具活动行）");
+            assertInstanceOf(PermissionCallback.class, decorated,
+                    "最外层须是 PermissionCallback（被拒的调用不该先在 TUI 显示成「工具开始运行」）");
             assertEquals("ok", decorated.call("{}"), "调用应穿透装饰链回到原工具");
             assertEquals(List.of("start:mcp__s1__ping", "finish:mcp__s1__ping:true"), listener.events,
                     "装饰后调用应发工具开始/结束事件");

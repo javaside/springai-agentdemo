@@ -11,6 +11,10 @@ import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.QwenProvider;
 import io.github.javaside.springai.codetui.agent.SessionIds;
 import io.github.javaside.springai.codetui.agent.ZhipuProvider;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoader;
+import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.ui.CodeTuiView;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 
@@ -54,9 +58,26 @@ public class CodeTuiApplication {
         boolean resumed = wantContinue && latest.isPresent();
         String sessionId = resumed ? latest.get() : SessionIds.newId();
 
+        // 权限引擎：整个进程<b>只有这一个</b>，三处装配点（AgentTools 装饰循环 / buildMemoryTools /
+        // McpRegistry.decorate）共用它。必须建在 McpRegistry.init <b>之前</b>——MCP 工具在 init 里
+        // 就被发现并装饰，那时就得拿到引擎；「MCP 工具延迟装饰」不是替代方案（运行期 /mcp 新启用的
+        // server 会漏掉整层权限）。
+        // 顺序上还有两件事在这之前落定：① --dangerously-skip-permissions 在任何工具可能执行之前就已解析，
+        // ② 配置加载不会抛（PermissionConfigLoader 的降级契约：文件坏了就整份跳过并 WARN），
+        // 故没有「引擎还没读到配置就先放行了几次」的窗口。
+        boolean skipPermissions = hasBypassFlag(args);
+        PermissionConfig permissionConfig = PermissionConfigLoader.load(root);
+        PermissionEngine permissionEngine = new PermissionEngine(root, permissionConfig,
+                skipPermissions ? PermissionMode.BYPASS : permissionConfig.defaultMode(),
+                skipPermissions);
+        if (skipPermissions) {
+            state.pushInfo("⚠ 已启用 --dangerously-skip-permissions：除 deny 规则与内置危险检查外，"
+                    + "全部工具调用不再询问。");
+        }
+
         // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
         // 运行期 /mcp 可启停（详见 McpRegistry）。连接失败进 error 态、静默降级。
-        McpRegistry mcpRegistry = McpRegistry.init(root, state);
+        McpRegistry mcpRegistry = McpRegistry.init(root, state, permissionEngine);
         int mcpToolCount = mcpRegistry.activeTools().size();
         if (mcpToolCount > 0) {
             state.pushInfo("（MCP：已发现 " + mcpToolCount + " 个工具。）");
@@ -66,7 +87,8 @@ public class CodeTuiApplication {
         // init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
         int exitCode = 0;
         try {
-            AgentTools.AgentRuntime runtime = AgentTools.build(registry, root, state, mcpRegistry);
+            AgentTools.AgentRuntime runtime =
+                    AgentTools.build(registry, root, state, mcpRegistry, permissionEngine);
             CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
                     runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
@@ -103,6 +125,22 @@ public class CodeTuiApplication {
     private static boolean hasContinueFlag(String[] args) {
         for (String a : args) {
             if ("-c".equals(a) || "--continue".equals(a)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 是否带「跳过权限检查」启动选项（仿 Claude Code 的 {@code --dangerously-skip-permissions}）。
+     *
+     * <p><b>必须整串精确相等</b>：前缀相近的参数（{@code --dangerously-skip}）不得误判成开了裸奔模式。
+     * 这是唯一能进 BYPASS 的入口——{@code PermissionEngine.setMode}/{@code cycleMode} 都会
+     * 拒绝在没有它的启动里切到 BYPASS。
+     */
+    static boolean hasBypassFlag(String[] args) {
+        for (String a : args) {
+            if ("--dangerously-skip-permissions".equals(a)) {
                 return true;
             }
         }

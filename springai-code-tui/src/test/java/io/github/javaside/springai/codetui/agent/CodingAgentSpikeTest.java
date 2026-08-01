@@ -73,6 +73,20 @@ class CodingAgentSpikeTest {
             errors.add(new Object[]{turnId, error});
         }
         @Override public void onQuestionAsked(long turnId, AskRequest request) { }
+
+        /**
+         * 本 spike 一律批准，恢复权限层接入（Task 12）之前的行为——它测的是流式 / 取消 / turnId 绑定，
+         * 不是权限。
+         *
+         * <p><b>不能用 {@link AgentListener} 的默认 DENY</b>：实测那会让模型在
+         * 「{@code find}/{@code ls -R} 被拒 → 换个办法 → 再被拒」上多绕 3 个 LLM 往返，
+         * 单轮从 19s 涨到 60s 以上，把本类的 {@link #TURN_TIMEOUT_MS} 顶穿——
+         * 于是一个「模型依赖的观察型用例」会因为权限层而红，指向的却不是任何缺陷。
+         */
+        @Override public void onPermissionRequested(long turnId, PermissionRequest request) {
+            request.responder().respond(PermissionOutcome.ALLOW_ONCE);
+        }
+
         @Override public void onCompactionStarted(String reason) { }
         @Override public void onCompactionFinished(int eventsRemoved, int tokensSaved) { }
         @Override public void onCompactionFailed(String message) { }

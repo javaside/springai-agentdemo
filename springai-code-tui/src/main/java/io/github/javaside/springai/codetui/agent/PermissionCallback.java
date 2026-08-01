@@ -86,6 +86,16 @@ public final class PermissionCallback implements ToolCallback {
         return delegate.getToolDefinition();
     }
 
+    /**
+     * 包私供装配点测试断言「三处装配点用的是同一个引擎」。
+     *
+     * <p>这不是可有可无的一句断言：各自新建引擎的话，模式切换（Shift+Tab）只影响其中一批工具，
+     * 而用户在主 agent 里授过的会话规则对子 agent / MCP 工具无效——两种失效都不报错，只是行为诡异。
+     */
+    PermissionEngine engine() {
+        return engine;
+    }
+
     @Override
     public String call(String toolInput) {
         return call(toolInput, null);

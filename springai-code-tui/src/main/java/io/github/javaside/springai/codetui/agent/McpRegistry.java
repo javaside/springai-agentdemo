@@ -4,6 +4,7 @@ import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
 import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;
 import io.github.javaside.springai.codetui.agent.media.ToolResultMediaHandler;
+import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.modelcontextprotocol.client.McpSyncClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,8 +24,9 @@ import java.util.concurrent.Executors;
  * 运行期 MCP 中枢：持有<b>全量</b>条目（含 enabled:false 的），支持 /mcp 的启用/禁用即时生效 + 回写。
  * 取代裸 {@link McpClientManager} 流水线（其连接/发现/关闭静态件在此复用，不重写）。
  *
- * <p><b>装饰职责</b>：enable/初连时即用 ToolEventCallback + MediaExternalizingCallback 装饰，
- * {@link #activeTools()} 返回的始终是已装饰实例——与内置工具行为一致（TUI 工具活动行 + 媒体外置路径①）。
+ * <p><b>装饰职责</b>：enable/初连时即用 PermissionCallback + ToolEventCallback + MediaExternalizingCallback
+ * 装饰，{@link #activeTools()} 返回的始终是已装饰实例——与内置工具行为一致
+ * （权限拦截 + TUI 工具活动行 + 媒体外置路径①）。
  *
  * <p><b>并发</b>：条目表用 synchronized(this) 保护；enable/disable 全程互斥于独立的 {@code toggleLock}
  * （registry 自证串行，不依赖 UI 层闸门），杜绝「enable 锁外连接在飞时 disable 插入、迟到写回把禁用复活」。
@@ -68,21 +70,31 @@ public final class McpRegistry {
     private final AgentListener listener;
     private final MediaArtifactStore mediaStore;
     private final ToolResultMediaHandler mediaHandler;
+    private final PermissionEngine permissionEngine;
 
-    private McpRegistry(Path root, AgentListener listener) {
+    private McpRegistry(Path root, AgentListener listener, PermissionEngine permissionEngine) {
         this.root = root;
         this.listener = listener;
         this.mediaStore = new MediaArtifactStore(root.resolve(".codetui").resolve("artifacts"), root);
         this.mediaHandler = new TextReferenceMediaHandler();
+        this.permissionEngine = Objects.requireNonNull(permissionEngine,
+                "permissionEngine 不可为 null：漏传等于 MCP 工具全线无权限层");
     }
 
-    /** 生产入口：全量加载两层配置 + 并行连接 enabled 项（失败进 error 态，不抛）。 */
-    public static McpRegistry init(Path root, AgentListener listener) {
-        return init(root, listener, McpConfigLoader.loadAll(root));
+    /**
+     * 生产入口：全量加载两层配置 + 并行连接 enabled 项（失败进 error 态，不抛）。
+     *
+     * @param permissionEngine 权限引擎，须与 {@code AgentTools.build} 用的是<b>同一个实例</b>。
+     *                         故它由 {@code CodeTuiApplication} 在调用本方法<b>之前</b>建好——
+     *                         MCP 工具在这里就要被装饰，等不到 build。
+     */
+    public static McpRegistry init(Path root, AgentListener listener, PermissionEngine permissionEngine) {
+        return init(root, listener, McpConfigLoader.loadAll(root), permissionEngine);
     }
 
-    static McpRegistry init(Path root, AgentListener listener, List<McpConfigLoader.LoadedServer> loaded) {
-        McpRegistry reg = new McpRegistry(root, listener);
+    static McpRegistry init(Path root, AgentListener listener, List<McpConfigLoader.LoadedServer> loaded,
+                            PermissionEngine permissionEngine) {
+        McpRegistry reg = new McpRegistry(root, listener, permissionEngine);
         for (McpConfigLoader.LoadedServer l : loaded) {
             reg.entries.put(l.config().name(), new Entry(l));
         }
@@ -92,12 +104,19 @@ public final class McpRegistry {
 
     /** 测试入口：不做启动期连接（条目按 enabled=false 或经 addConnectedForTest 塞假工具驱动）。 */
     static McpRegistry initForTest(Path root, AgentListener listener,
-                                   List<McpConfigLoader.LoadedServer> loaded) {
-        McpRegistry reg = new McpRegistry(root, listener);
+                                   List<McpConfigLoader.LoadedServer> loaded,
+                                   PermissionEngine permissionEngine) {
+        McpRegistry reg = new McpRegistry(root, listener, permissionEngine);
         for (McpConfigLoader.LoadedServer l : loaded) {
             reg.entries.put(l.config().name(), new Entry(l));
         }
         return reg;
+    }
+
+    /** 测试入口（向后兼容）：自建一个隔离的默认引擎，见 {@link AgentTools#testEngine}。 */
+    static McpRegistry initForTest(Path root, AgentListener listener,
+                                   List<McpConfigLoader.LoadedServer> loaded) {
+        return initForTest(root, listener, loaded, AgentTools.testEngine(root));
     }
 
     /** 测试钩子：把条目直接置为「已启用、已连接、给定工具」（client 仍 null，close 时自然跳过）。 */
@@ -155,10 +174,17 @@ public final class McpRegistry {
         e.error = c.error();
     }
 
-    /** 包私供测试断言装饰链（外层 ToolEventCallback）。 */
+    /**
+     * 包私供测试断言装饰链（最外层 {@link PermissionCallback}）。
+     *
+     * <p>运行期 {@code /mcp} 启用的 server 也走这里——故权限层<b>不能</b>改成「装配期一次性包装」，
+     * 那会让启动后新启用的 server 漏掉整层。
+     */
     ToolCallback decorate(ToolCallback raw) {
-        return new ToolEventCallback(
-                new MediaExternalizingCallback(raw, mediaStore, mediaHandler, root), listener);
+        return new PermissionCallback(
+                new ToolEventCallback(
+                        new MediaExternalizingCallback(raw, mediaStore, mediaHandler, root), listener),
+                permissionEngine, listener);
     }
 
     /** /mcp 面板数据源（快照）。 */
