@@ -1896,6 +1896,15 @@ cd springai-code-tui && python3 src/test/resources/scripts/permission_smoke.py
 
 并给常驻标识补一条：切到计划模式、按键清掉 notice 后，屏幕上仍有 `⏸ 计划模式`。
 
+> **Task 1 交办的两条只有 pty 能证伪的疑虑，本步一并验掉**：
+> ① `MODE_PLAN` 用 `Color.indexed(115)`（冷薄荷），此前只在离屏 Buffer 里验了 `Style` 相等——
+> **没验过真实 ANSI 下与相邻文字的对比度**。照 `check_panel_layout` 里既有的 `row_backgrounds`
+> 手法，断言该行无背景色残留，并把整行打进 `print_screen` 供人眼复核配色。
+> ② `⏸`（U+23F8）是**宽度不确定**的符号，部分终端按双宽渲染。状态行本就接近终端宽度，
+> 挤位会导致换行、撑破单行布局。断言：切到计划模式后状态行**仍只占一个物理行**
+> （用 `find_row` 取状态行行号，确认其下一行仍是预期内容而非续行）。
+> 若实测发现 `⏸` 排版有问题，换成窄符号（如 `>>`/`::`）并同步改 `CodeTuiView#modeTag` 与单测。
+
 - [ ] **Step 3: 加计划审批面板断言**
 
 新增 `check_plan_approval(session)`：
