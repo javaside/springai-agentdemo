@@ -30,7 +30,18 @@ final class StatusBar {
      * （思考=THINK、跑工具=RUNNING）。
      */
     Text shimmer(String label, String suffix, Style base, long animTick) {
+        return shimmer(label, suffix, base, animTick, null);
+    }
+
+    /**
+     * 同上，但在最前面插一个静态 {@code leading} 段（{@code null} 则不插）。
+     *
+     * <p>用途只有一个：权限模式常驻标识（见 {@code CodeTuiView#modeTag}）。放<b>行首</b>而非行尾，
+     * 是因为状态行本就接近终端宽度，尾部先被截断——而「现在会不会问你」比「Esc 取消」更不该被截掉。
+     */
+    Text shimmer(String label, String suffix, Style base, long animTick, Span leading) {
         List<Span> spans = shimmerSpans(label, base, animTick);
+        if (leading != null) spans.add(0, leading);
         if (!suffix.isEmpty()) spans.add(Span.styled(suffix, DIM));
         return Text.from(Line.from(spans));
     }

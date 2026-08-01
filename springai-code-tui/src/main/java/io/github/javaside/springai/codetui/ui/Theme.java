@@ -45,6 +45,10 @@ final class Theme {
     static final Style THINK      = Style.create().fg(Color.YELLOW);
     static final Style RUNNING    = Style.create().fg(Color.CYAN);
     static final Style SHIMMER_HI  = Style.create().fg(Color.BRIGHT_WHITE).bold();   // 状态栏波光高亮
+    // 权限模式常驻标识（仅非 DEFAULT 显示，见 CodeTuiView#modeTag）。故意与状态行其余部分<b>拉开色相</b>：
+    // 这一段要在你没盯着它的时候仍能被余光扫到——它说明的是「接下来的工具调用会不会问你」。
+    static final Style MODE_ACCEPT = Style.create().fg(Color.indexed(215)).bold();   // 自动接受编辑=暖橙加粗（同主题强调色）
+    static final Style MODE_BYPASS = Style.create().fg(Color.RED).bold();            // 跳过权限检查=红色加粗（最高警示）
     static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
 

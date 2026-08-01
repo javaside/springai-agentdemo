@@ -58,6 +58,9 @@ BACKSPACE = b"\x7f"
 
 MODE_DEFAULT = "权限模式：默认"
 MODE_ACCEPT = "权限模式：自动接受编辑"
+# The persistent status-bar tag (CodeTuiView#modeTag) — distinct wording from the
+# transient notice above precisely so a test cannot confuse the two.
+MODE_TAG_ACCEPT = "⏵⏵ 自动接受编辑"
 PERM_BOTTOM_LINE = "内置底线"
 MCP_PANEL_TITLE = "MCP 服务器"
 MCP_EXPANDED = "（未连接，无工具信息）"
@@ -283,6 +286,33 @@ def check_mode_cycle(session):
     session.write(SHIFT_TAB)
     session.wait_for(MODE_DEFAULT)
     print("Shift+Tab OK: 循环只在两档之间（BYPASS 未混入）.")
+
+
+def check_mode_indicator_persists(session):
+    """The mode must stay visible after the switch notice is gone.
+
+    Before this indicator existed the mode was only ever shown in three places
+    that all disappear: the Shift+Tab notice (wiped by the very next keypress),
+    the /permissions report and the BYPASS launch banner (both scroll away).
+    So the assertion that matters is not "the notice appeared" — it is "the
+    mode is still on screen once the notice is provably gone".
+    """
+    session.write(SHIFT_TAB)
+    session.wait_for(MODE_ACCEPT)                    # transient notice
+    session.write(b"x")                              # any key wipes the notice
+    session.wait_for(MODE_TAG_ACCEPT)
+    assert_absent(session, MODE_ACCEPT,
+                  "notice 还在，这条断言就没证明「常驻标识」而只是又看了一遍 notice")
+    print("常驻标识 OK: notice 清掉后状态栏仍显示「%s」." % MODE_TAG_ACCEPT)
+
+    session.write(CTRL_U)                            # drop the typed 'x'
+    session.write(SHIFT_TAB)                         # back to DEFAULT
+    session.wait_for(MODE_DEFAULT)
+    session.write(b"x")
+    wait_until(session, lambda: MODE_TAG_ACCEPT not in session.screen_text(),
+               8, "切回默认后标识应消失（常态不占位），实际仍在屏上")
+    session.write(CTRL_U)
+    print("常驻标识 OK: 切回「默认」后标识消失、不粘住.")
 
 
 def check_permissions_report(session):
@@ -527,6 +557,7 @@ def main():
         print("Startup OK.")
 
         check_mode_cycle(session)
+        check_mode_indicator_persists(session)
         check_permissions_report(session)
         check_slash_tab_guard(session)
         check_mcp_tab_guard(session)

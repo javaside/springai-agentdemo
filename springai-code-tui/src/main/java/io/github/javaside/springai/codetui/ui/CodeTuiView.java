@@ -11,6 +11,7 @@ import io.github.javaside.springai.codetui.agent.PermissionRequest;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.SkillInfo;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
@@ -18,6 +19,8 @@ import dev.tamboui.buffer.Cell;
 import dev.tamboui.layout.Rect;
 import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
+import dev.tamboui.text.Line;
+import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
 import dev.tamboui.toolkit.app.InlineApp;
 import dev.tamboui.toolkit.element.Element;
@@ -1499,15 +1502,43 @@ public final class CodeTuiView extends InlineApp {
         if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         // 空闲但仍有已取消子 agent 在收尾：给提示，避免「消息静默入队、无转轮」被误判为卡死（见 busy()/drainingSubagentsHint）。
         String draining = drainingSubagentsHint(state.isIdle(), onSubmit.hasInFlightSubagents());
-        if (draining != null) return richText(statusBar.shimmer(draining, qs + " · Ctrl+C 退出", THINK, animTick));
+        Span mode = modeTag(onSubmit.permissionMode());
+        if (draining != null) return richText(statusBar.shimmer(draining, qs + " · Ctrl+C 退出", THINK, animTick, mode));
         return switch (state.status()) {
-            case IDLE -> text("Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + onSubmit.currentModel() + ctxUsage.suffix()).style(HINT);
-            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK, animTick));
+            case IDLE -> {
+                String hint = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · "
+                        + onSubmit.currentModel() + ctxUsage.suffix();
+                yield mode == null ? text(hint).style(HINT)
+                        : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
+            }
+            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
                 yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
-                        qs + " · Esc 取消", RUNNING, animTick));
+                        qs + " · Esc 取消", RUNNING, animTick, mode));
             }
+        };
+    }
+
+    /**
+     * 当前权限模式的<b>常驻</b>标识；{@code DEFAULT} 返回 {@code null}（常态不占位、不制造噪声）。
+     *
+     * <p><b>为什么需要它</b>：在此之前模式只出现在三个<b>会消失</b>的地方——Shift+Tab 后的 notice
+     * （下一次按键即被 {@link #onInputKey} 顶部清掉）、{@code /permissions} 报告与 BYPASS 启动横幅
+     * （都是 scrollback 里的一条历史，随对话滚走）。于是切到非 DEFAULT 后随便按个键，用户就<b>再也
+     * 看不出自己在哪一档</b>，只能重新敲 {@code /permissions} 查。对「这次工具调用会不会问我」这种
+     * 有安全后果的状态，不可见等同于不存在——BYPASS 尤甚：那是最该持续可见的一档，横幅却只出现一次。
+     *
+     * <p>只挂在常态三行（空闲 / 思考 / 跑工具）上，不挂菜单、模态与 notice 行：那些是<b>临时接管</b>
+     * 状态行的覆盖层，收起后标识自然回来；挂上去反而会和 notice 里的「权限模式：X」重复成两遍。
+     *
+     * <p>纯函数（不读实例态），故可直接单测；真实屏幕上的可见性由 pty 冒烟钉。
+     */
+    static Span modeTag(PermissionMode mode) {
+        return switch (mode) {
+            case DEFAULT -> null;
+            case ACCEPT_EDITS -> Span.styled("⏵⏵ " + mode.label() + " · ", MODE_ACCEPT);
+            case BYPASS -> Span.styled("⚠ " + mode.label() + " · ", MODE_BYPASS);
         };
     }
 

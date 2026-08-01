@@ -5883,7 +5883,8 @@ git commit -m "test(permission): pty 实机冒烟（Shift+Tab 模式循环 + /pe
   > 真正的判据是：**权限层相关测试 0 失败**，`todoTurnIdBinding` 的红/绿单独记录、不计入。
   > 另注：**必须 `clean` 跑**——本分支出现过 `target/classes` 残留篡改产物导致的幽灵失败，
   > 同样机制也能产生幽灵绿。
-- [ ] `permission_smoke.py` 输出 `SMOKE PASS`
+- [x] `permission_smoke.py` 输出 `SMOKE PASS`（2026-08-01 实跑，13 条断言全过；
+      含「背景色探测自检」——先证明验证手段有效再用它断言高亮纯前景）
 - [ ] 手动验收：带真实 key 启动，让模型执行 `git status && git push origin main`
       → 弹出审批面板 → 选「4. 拒绝」→ **回合继续**、模型换做法
       → 再触发一次 → 选「5. 中断」→ 回合结束，**下一条消息不报 400**
@@ -5925,3 +5926,55 @@ reason/suggested/responder）在 Task 9 定义、Task 11 构造、Task 14 消费
 **4. 已知的实施顺序依赖**：Task 12 会把 `PermissionEngine` 的创建时机提到 `McpRegistry.init` 之前，
 这会连带改 `CodeTuiApplication` 的启动顺序——**Task 12 与 Task 13 建议连着做**，中间不要停在半编译状态。
 
+
+---
+
+## 期 1 收尾补丁：模式常驻标识（2026-08-01，计划外，由用户提问引出）
+
+**用户的问题**：「当前的权限模式哪里有显示？」——查下来这是个真缺陷，不是文档问题。
+
+**症状**：模式只出现在三个**会消失**的地方：
+
+| 位置 | 存活时间 |
+|---|---|
+| `Shift+Tab` 后的 sticky notice | **下一次按键即被清**（`onInputKey` 顶部无条件清 notice） |
+| `/permissions` 报告 | scrollback 里一条历史，随对话滚走 |
+| BYPASS 启动横幅 | 同上，且**只打一次** |
+
+空闲状态行里**没有**模式。于是切到「自动接受编辑」后随便按个键，用户就再也看不出自己在哪一档，
+只能重新敲 `/permissions` 查。对「这次工具调用会不会问我」这种**有安全后果**的状态，
+不可见等同于不存在；BYPASS 尤甚——那是最该持续可见的一档。
+
+**修法**（`CodeTuiView#modeTag` + `Theme.MODE_ACCEPT/MODE_BYPASS` + `StatusBar.shimmer` 五参重载）：
+状态行**行首**挂一个常驻标识，`DEFAULT` 返回 `null`（常态不占位、不制造噪声）：
+
+```
+⏵⏵ 自动接受编辑 · Enter 发送 · /model 切换模型 · …      （暖橙加粗）
+⚠ 跳过权限检查 · Enter 发送 · …                        （红色加粗）
+```
+
+三条设计判断，都是**踩过的坑倒推出来的**：
+
+1. **放行首不放行尾**。状态行本就接近终端宽度，尾部先被截断——而「现在会不会问你」
+   比「Esc 取消」更不该被截掉。
+2. **只挂常态三行**（空闲 / 思考 / 跑工具），不挂菜单、模态与 notice 行。那些是**临时接管**
+   状态行的覆盖层，收起后标识自然回来；挂上去反而会和 notice 里的「权限模式：X」重复成两遍。
+3. **不占额外终端行**。`skillTag` 那种「输入框上方独立一行」的做法对本标识过重——
+   ACCEPT_EDITS 是常用档，不该长期吃掉一行。
+
+**测试**（`CodeTuiViewModeIndicatorTest`，3 个 + pty 2 条）：
+
+断言**落在渲染结果上**，不是只测纯函数——缺陷恰恰是 `statusLine()` 的**分支顺序**
+（notice 分支提前 return）把标识挡掉，只测 `modeTag` 会又造出一个「不会失败的测试」。
+故把整棵 UI 渲染进离屏 `Buffer` 回读文本（`Frame.forTesting` + 反射 `markAsRenderThread`，
+本项目对 TUI 内部已有同类先例）。核心用例的顺序是：切换 → **按键清掉 notice** → 断言标识仍在。
+
+**变异实测**（照本分支惯例，绿了不算数）：把 IDLE 分支改回 `text(hint).style(HINT)`，
+`tagSurvivesNoticeBeingCleared` 与 `bypassTagIsPersistentAndRed` **双双变红**，报的正是
+「notice 清掉后模式标识必须仍在状态栏」。
+
+pty 侧新增 `check_mode_indicator_persists`：断言标识出现的**同时**断言 notice 已不在屏上——
+否则这条测试只是又看了一遍 notice，证不了「常驻」。另钉「切回 DEFAULT 后标识消失」防粘住。
+
+**回归**：`mvn test -pl springai-code-tui` 823 跑 / 1 败（`CodingAgentSpikeTest.todoTurnIdBinding`，
+既有 flaky 真实模型测试，与本改动无关）；`permission_smoke.py` → `SMOKE PASS`（13 → 15 条断言）。
