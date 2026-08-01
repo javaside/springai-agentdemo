@@ -54,6 +54,7 @@ SHIFT_TAB = b"\x1b[Z"
 TAB = b"\t"
 ESC = b"\x1b"
 CTRL_U = b"\x15"
+BACKSPACE = b"\x7f"
 
 MODE_DEFAULT = "权限模式：默认"
 MODE_ACCEPT = "权限模式：自动接受编辑"
@@ -67,10 +68,19 @@ OPT_SESSION = "2. 允许，本会话不再问"
 OPT_ALWAYS = "3. 允许，永久"
 OPT_DENY = "4. 拒绝，让模型换个做法"
 OPT_CANCEL = "5. 拒绝并中断本回合"
+SUGGESTED_LINE = "允许后将记下规则"
 
-# The stub model emits a tool call only when the user's message carries this
-# marker, so "chat normally" turns stay panel-free.
-PUSH_MARKER = "PUSHNOW"
+# The 3-option form: built-in danger checks produce PermissionDecision.askOnly
+# (suggested() == null), so the two "remember this" options must be hidden —
+# no allow rule can silence the built-in floor, showing them would be a lie.
+PANEL_TITLE_SSH = "⚠ 需要授权：Write"
+OPT3_DENY = "2. 拒绝，让模型换个做法"
+OPT3_CANCEL = "3. 拒绝并中断本回合"
+
+# The stub model emits a tool call only when the user's message carries one of
+# these markers, so "chat normally" turns stay panel-free.
+PUSH_MARKER = "PUSHNOW"      # -> Bash(git push …)   : 5-option form
+SSH_MARKER = "SSHNOW"        # -> Write(.ssh/config) : 3-option form (built-in floor)
 DENIED_REPLY = "好的，我不推送了。"
 PLAIN_REPLY = "冒烟回复：一切正常。"
 
@@ -124,7 +134,14 @@ class StubModel(BaseHTTPRequestHandler):
         if role == "tool":
             kind, chunks = "text", self._text_chunks(DENIED_REPLY)
         elif PUSH_MARKER in tail:
-            kind, chunks = "tool_call", self._tool_call_chunks()
+            kind, chunks = "bash_call", self._tool_call_chunks(
+                "Bash", {"command": "git push origin main"})
+        elif SSH_MARKER in tail:
+            # Relative path: the app resolves it against cwd (the temp dir), so
+            # the `.ssh` path segment is what trips the built-in check — nothing
+            # outside the sandbox is ever named, let alone written.
+            kind, chunks = "write_call", self._tool_call_chunks(
+                "Write", {"filePath": ".ssh/config", "content": "Host smoke\n"})
         else:
             kind, chunks = "text", self._text_chunks(PLAIN_REPLY)
 
@@ -149,15 +166,12 @@ class StubModel(BaseHTTPRequestHandler):
         return out
 
     @staticmethod
-    def _tool_call_chunks():
+    def _tool_call_chunks(name, args):
         call = {
             "index": 0,
-            "id": "call_smoke_1",
+            "id": "call_smoke_%d" % len(StubModel.requests),
             "type": "function",
-            "function": {
-                "name": "Bash",
-                "arguments": json.dumps({"command": "git push origin main"}),
-            },
+            "function": {"name": name, "arguments": json.dumps(args)},
         }
         return [
             _sse(_chunk({"role": "assistant", "content": "", "tool_calls": [call]})),
@@ -286,29 +300,34 @@ def check_slash_tab_guard(session):
 
     Enters with mode=DEFAULT, leaves with mode=DEFAULT.
     """
+    # "/model" is on screen regardless — it sits in the welcome banner, the
+    # idle status line AND the menu row — so `wait_for("/model")` after Tab is
+    # a false positive.  Typing a sentinel char right after Tab is what makes
+    # the assertion discriminating: completed input reads "/modelx", an
+    # ignored Tab reads "/modx".  (Tab completion was dead in the shipped app
+    # until c8d933c with every unit test green — this must not go quiet again.)
     session.write(b"/mod")
     session.wait_for("❯ /model")
-    # The menu row (and the welcome banner) already render "/model", so
-    # counting occurrences is the only way to tell "menu shows it" from
-    # "input box now holds it".
-    before = session.screen_text().count("/model")
 
     # Shift+Tab must not be eaten by the completion handler.
     session.write(SHIFT_TAB)
-    session.pump(0.8)
-    if session.screen_text().count("/model") != before:
-        die("Shift+Tab 在斜杠菜单里被当成了补全键（/model 出现次数 %d→%d）"
-            % (before, session.screen_text().count("/model")), session.screen.display)
-    print("斜杠菜单：Shift+Tab 没有触发补全（守卫生效）.")
+    session.write(b"x")
+    session.wait_for("/modx")
+    assert_absent(session, "/modelx", "Shift+Tab 在斜杠菜单里被当成了补全键")
+    print("斜杠菜单：Shift+Tab 没有触发补全（输入仍是 /modx）.")
 
-    # …and it must actually have reached the mode cycle.  The status-bar
-    # notice is hidden while the menu owns the status line, so ask the report.
+    session.write(BACKSPACE)
+    session.wait_for("❯ /model")
     session.write(TAB)
-    wait_until(session, lambda: session.screen_text().count("/model") > before,
-               5, "bare Tab 把输入补全成 /model")
-    print("斜杠菜单：裸 Tab 仍然补全（旧行为未回归）.")
+    session.write(b"x")
+    session.wait_for("/modelx")
+    print("斜杠菜单：裸 Tab 仍然补全（输入变成 /modelx，旧行为未回归）.")
     session.write(CTRL_U)
     session.pump(0.3)
+
+    # …and the Shift+Tab above must actually have reached the mode cycle.  The
+    # status-bar notice is hidden while the menu owns the status line, so the
+    # /permissions report is the only user-visible proof.
     assert_mode_via_report(session, "自动接受编辑")
     print("斜杠菜单：Shift+Tab 确实切了模式（/permissions 报告为准）.")
 
@@ -409,16 +428,49 @@ def check_deny_resumes_turn(session):
     print("DENY 握手 OK: 工具线程被唤醒、回合继续、模型收到 tool 结果并续答.")
 
 
+def check_askonly_panel(session):
+    """The 3-option form, reached through the real chain: a Write under `.ssh`
+    trips the built-in floor, which yields askOnly (suggested() == null).
+
+    Both facts matter — that the floor fires at all, and that the two
+    "remember this" options are hidden (no allow rule can silence the floor,
+    so offering them would be a lie).
+    """
+    session.write(("写个配置 " + SSH_MARKER).encode() + b"\r")
+    session.wait_for(PANEL_TITLE_SSH, timeout=40)
+    session.pump(0.6)
+    print_screen("ASK-ONLY PANEL (3 options, built-in floor)", session.screen.display)
+
+    text = session.screen_text()
+    for needle in (OPT_ONCE, OPT3_DENY, OPT3_CANCEL):
+        if needle not in text:
+            die("askOnly 面板缺少 %r" % needle, session.screen.display)
+    for forbidden in (OPT_SESSION, OPT_ALWAYS, SUGGESTED_LINE):
+        if forbidden in text:
+            die("askOnly 面板不该出现 %r（内置底线消不掉，显示出来就是骗人）" % forbidden,
+                session.screen.display)
+    if "1-3 快选" not in text:
+        die("状态栏快选提示没有跟着选项数变成 1-3", session.screen.display)
+
+    rows = [find_row(session, n) for n in (OPT_ONCE, OPT3_DENY, OPT3_CANCEL)]
+    if rows != [rows[0] + i for i in range(3)]:
+        die("三个选项没有各占一个连续物理行（行号=%s）" % rows, session.screen.display)
+    sel = find_row(session, "❯ 1. 允许一次")
+    if row_backgrounds(session, sel) != {"default"} or \
+            row_backgrounds(session, sel + 1) != {"default"}:
+        die("askOnly 面板高亮用了背景色（会串到下一行）", session.screen.display)
+    print("askOnly 面板 OK: 只有三项、无「永久/本会话」、无建议规则行、高亮纯前景.")
+
+
 def check_cancel_turn(session):
     """Esc = 拒绝并中断本回合.  The turn ends and the *next* message must not
-    blow up with a dangling-tool_calls 400."""
-    before = len(StubModel.requests)
-    session.write(("再试一次 " + PUSH_MARKER).encode() + b"\r")
-    session.wait_for(PANEL_TITLE, timeout=30)
-    print("第二次审批弹出.")
+    blow up with a dangling-tool_calls 400.
 
+    Entered with the askOnly panel open (see check_askonly_panel).
+    """
+    before = len(StubModel.requests)
     session.write(ESC)
-    wait_until(session, lambda: PANEL_TITLE not in session.screen_text(),
+    wait_until(session, lambda: PANEL_TITLE_SSH not in session.screen_text(),
                10, "Esc 关闭审批面板并中断回合")
     session.pump(1.0)
 
@@ -489,7 +541,13 @@ def main():
         check_panel_layout(session)
         check_highlight_moves(session)
         check_deny_resumes_turn(session)
+        check_askonly_panel(session)
         check_cancel_turn(session)
+
+        # The Write never ran: the turn was cancelled at the approval panel.
+        if os.path.exists(os.path.join(tmpdir, ".ssh", "config")):
+            die("Esc 中断后 Write 仍然落了盘 —— 工具在应答前就执行了")
+        print("中断后 .ssh/config 未被写入（拦截确实在执行之前）.")
 
         session.write(b"/exit\r")
         deadline = time.time() + 10
