@@ -24,11 +24,33 @@ public final class PermissionModePrompt {
             把你打算怎么做写成一份 markdown 计划提交给用户；用户批准后才会切换到可以动手的模式。
             """;
 
+    /**
+     * 子 agent 版的计划模式提示。
+     *
+     * <p><b>刻意不提 ExitPlanMode，别「统一成一份文案」</b>：那个工具<b>只装配给主 agent</b>
+     * （见 {@code AgentTools.build}——它不进 {@code decoratedList}，故子 agent 的工具集里根本没有）。
+     * 给子 agent 指这条路，等于把「不知道为什么被拒」换成「知道了、照做了、还是失败」，更糟。
+     * 子 agent 该知道的是另一件事：它在只读调查阶段，<b>把发现报告回主 agent 就是它的交付</b>，
+     * 由主 agent 汇总成计划去提交。
+     */
+    private static final String SUBAGENT_PLAN_GUIDANCE = """
+            当前处于「计划模式」：你只能读取和探索，不能修改任何文件、也不能执行有副作用的命令
+            （这不是建议——权限层会直接拒绝这类调用，重试没有意义，换个写法绕也绕不过去）。
+            你这一趟的任务就是只读调查：用 Read / Grep / Glob 与只读命令把现状查清楚。
+            把调查结果和你的判断写进最终回复报告回去，这就是你的交付；
+            该怎么动手由主 agent 汇总成计划、交用户批准后再说，不需要你去改任何东西。
+            """;
+
     private PermissionModePrompt() {
     }
 
-    /** 该模式对应的提示段；非 PLAN（含 null）一律空串。 */
+    /** 主 agent 版提示段；非 PLAN（含 null）一律空串。 */
     public static String of(PermissionMode mode) {
         return mode == PermissionMode.PLAN ? PLAN_GUIDANCE : "";
+    }
+
+    /** 子 agent 版提示段（<b>不含</b> ExitPlanMode，见 {@link #SUBAGENT_PLAN_GUIDANCE}）；非 PLAN（含 null）一律空串。 */
+    public static String forSubagent(PermissionMode mode) {
+        return mode == PermissionMode.PLAN ? SUBAGENT_PLAN_GUIDANCE : "";
     }
 }

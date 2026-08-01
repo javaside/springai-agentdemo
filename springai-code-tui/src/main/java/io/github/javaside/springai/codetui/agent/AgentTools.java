@@ -328,8 +328,10 @@ public final class AgentTools {
         // Task 工具本身也用 ToolEventCallback 装饰，故委派本身在主流显示为一行。
         java.util.List<ToolCallback> decoratedList = java.util.List.of(decorated);
         int subagentConcurrency = resolveSubagentConcurrency();
+        // permissionEngine::mode 是「实时」来源，不是快照：子 agent 的模式提示段每次派发现取现算，
+        // 使 Shift+Tab 切档在下一次委派即生效（见 SubagentRunner.effectiveSystemPrompt）。
         SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener,
-                projectInstructions, subagentConcurrency, mcpRegistry);
+                projectInstructions, subagentConcurrency, mcpRegistry, permissionEngine::mode);
         java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
         ToolCallback taskTool = SubagentTool.create(subagentSpecs,
                 (spec, prompt, desc, turnIgnored) ->

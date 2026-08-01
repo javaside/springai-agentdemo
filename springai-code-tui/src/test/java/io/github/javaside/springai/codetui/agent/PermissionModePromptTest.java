@@ -28,6 +28,32 @@ class PermissionModePromptTest {
     }
 
     @Test
+    @DisplayName("子 agent 版不得提 ExitPlanMode——它没有这个工具，指过去就是死路")
+    void subagentVariantDoesNotMentionExitPlanMode() {
+        String sub = PermissionModePrompt.forSubagent(PermissionMode.PLAN);
+        assertFalse(sub.isBlank(), "PLAN 下子 agent 必须知道自己改不了东西");
+        assertFalse(sub.contains("ExitPlanMode"),
+                "子 agent 没有 ExitPlanMode（不在 decoratedList 里），提它等于指一条走不通的路：" + sub);
+        assertTrue(sub.contains("只读") || sub.contains("不能修改"), "要说清边界：" + sub);
+
+        // 主 agent 版反过来必须提它——那是主 agent 唯一的出口
+        assertTrue(PermissionModePrompt.of(PermissionMode.PLAN).contains("ExitPlanMode"));
+    }
+
+    @Test
+    @DisplayName("子 agent 版同样只有 PLAN 有内容，且不含花括号")
+    void subagentVariantOnlyPlanAndNoBraces() {
+        assertEquals("", PermissionModePrompt.forSubagent(PermissionMode.DEFAULT));
+        assertEquals("", PermissionModePrompt.forSubagent(PermissionMode.ACCEPT_EDITS));
+        assertEquals("", PermissionModePrompt.forSubagent(PermissionMode.BYPASS));
+        assertEquals("", PermissionModePrompt.forSubagent(null));
+        for (PermissionMode m : PermissionMode.values()) {
+            String s = PermissionModePrompt.forSubagent(m);
+            assertFalse(s.contains("{") || s.contains("}"), m + " 的子 agent 提示段含花括号：" + s);
+        }
+    }
+
+    @Test
     @DisplayName("提示段里不得出现花括号——它作为 param 值注入，带花括号会炸模板引擎")
     void noBracesInGuidance() {
         for (PermissionMode m : PermissionMode.values()) {

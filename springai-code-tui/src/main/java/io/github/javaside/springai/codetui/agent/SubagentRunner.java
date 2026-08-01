@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -46,6 +47,15 @@ public final class SubagentRunner {
     private final int maxConcurrency;
     /** 可空：MCP 工具的每次委派实时来源（enable/disable 即时反映到下一次委派的工具集）。 */
     private final McpRegistry mcpRegistry;
+    /**
+     * 当前权限模式的<b>实时</b>来源（同 mcpRegistry 的性质：读的是运行期状态，不是装配期快照）。
+     *
+     * <p><b>必须是 Supplier 而不是一个 PermissionMode 值</b>：模式随 {@code Shift+Tab} 运行期变化，
+     * 而 SubagentRunner 是装配期建一次、之后长期存活的。存值就等于把启动那一刻的模式烘焙进去，
+     * 切档后给子 agent 的提示会是错的——比没有提示更坏（它会理直气壮地按错误前提行动）。
+     * 每次派发都经 {@link #effectiveSystemPrompt} 现取现算。
+     */
+    private final Supplier<PermissionMode> modeSupplier;
 
     /** 当前在飞的子 agent 总数（串行 run + 并行 runAll 都计）；供 UI 的 busy 闸门判断「取消后是否还有旧子 agent 未清」。 */
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -72,6 +82,19 @@ public final class SubagentRunner {
                 () -> "task_" + UUID.randomUUID(), mcpRegistry);
     }
 
+    /**
+     * 生产装配用：额外接一个权限模式的实时来源（传 {@code permissionEngine::mode}）。
+     *
+     * <p>其余重载一律以 {@code () -> null} 兜底 —— 等价「无模式信息」，
+     * {@link PermissionModePrompt#forSubagent} 对 null 返回空串，故老调用方行为零变化。
+     */
+    public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                          String projectInstructions, int maxConcurrency, McpRegistry mcpRegistry,
+                          Supplier<PermissionMode> modeSupplier) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency,
+                () -> "task_" + UUID.randomUUID(), mcpRegistry, modeSupplier);
+    }
+
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                    String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier) {
         this(registry, tools, listener, projectInstructions, maxConcurrency, taskIdSupplier, null);
@@ -80,6 +103,13 @@ public final class SubagentRunner {
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                    String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier,
                    McpRegistry mcpRegistry) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency, taskIdSupplier,
+                mcpRegistry, () -> null);
+    }
+
+    SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                   String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier,
+                   McpRegistry mcpRegistry, Supplier<PermissionMode> modeSupplier) {
         this.registry = registry;
         this.tools = tools;
         this.listener = listener;
@@ -87,6 +117,7 @@ public final class SubagentRunner {
         this.taskIdSupplier = taskIdSupplier;
         this.maxConcurrency = Math.max(1, maxConcurrency);
         this.mcpRegistry = mcpRegistry;
+        this.modeSupplier = modeSupplier == null ? () -> null : modeSupplier;
     }
 
     /** 执行一次委派，返回子 agent 最终文本。parentTurnId=发起 Task 的回合。 */
@@ -216,12 +247,27 @@ public final class SubagentRunner {
         return inFlight.get();
     }
 
-    /** 子 agent 有效系统提示：spec 自身提示 + 项目指令（非空时追加）。纯函数，便于单测。 */
+    /**
+     * 子 agent 有效系统提示：spec 自身提示 + 项目指令（非空时追加）+ 权限模式提示段（仅 PLAN 非空）。
+     *
+     * <p><b>每次派发都调一次</b>（见 {@code run} 里的 {@code .system(effectiveSystemPrompt(spec))}），
+     * 故模式提示读的是<b>当下</b>的模式，{@code Shift+Tab} 切档在下一次委派即生效，没有装配期烘焙。
+     *
+     * <p><b>纯字符串拼接，不走模板参数</b>：这里注入的是最终 system 文本，调用方
+     * {@code .system(String)} 不带任何 param，故 Spring 的模板引擎不会去解析它——
+     * 正文里就算有花括号也炸不了（项目在 AGENTS.md 与长期记忆两处踩过的是<b>带 param</b> 的那条路）。
+     * 即便如此，{@link PermissionModePrompt} 仍有单测钉死「正文无花括号」，双保险。
+     */
     String effectiveSystemPrompt(SubagentSpec spec) {
-        if (projectInstructions.isEmpty()) {
-            return spec.systemPrompt();
+        StringBuilder sb = new StringBuilder(spec.systemPrompt());
+        if (!projectInstructions.isEmpty()) {
+            sb.append("\n\n").append(projectInstructions);
         }
-        return spec.systemPrompt() + "\n\n" + projectInstructions;
+        String modeGuidance = PermissionModePrompt.forSubagent(modeSupplier.get());
+        if (!modeGuidance.isEmpty()) {
+            sb.append("\n\n").append(modeGuidance);
+        }
+        return sb.toString();
     }
 
     /**
