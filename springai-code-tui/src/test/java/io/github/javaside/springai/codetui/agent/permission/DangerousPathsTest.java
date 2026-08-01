@@ -215,6 +215,36 @@ class DangerousPathsTest {
     }
 
     @Test
+    @DisplayName("归错表导致的缺口：读方向漏收、XDG 拼法、主机私钥、落盘即执行")
+    void misfiledEntriesAreCovered() {
+        // 写受保护、读却完全放行——而里面是 _authToken / 内嵌 token
+        assertNotNull(DangerousPaths.checkRead(Path.of(HOME, ".npmrc"), ROOT));
+        assertNotNull(DangerousPaths.checkRead(Path.of(HOME, ".gitconfig"), ROOT));
+        // 同一份 git 配置的 XDG 拼法，同样能靠 core.pager / credential.helper 劫持
+        assertNotNull(DangerousPaths.checkWrite(Path.of(HOME, ".config", "git", "config"), ROOT));
+        // 主机私钥：不带点、不以 .key 结尾，此前三条检查全不命中
+        assertNotNull(DangerousPaths.checkRead(Path.of("/etc/ssh/ssh_host_ed25519_key"), ROOT));
+        // sshd 会读它给会话设环境变量，实践中有人往里放 token
+        assertNotNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "environment"), ROOT));
+        // direnv：cd 进目录就执行；项目内更危险，ACCEPT_EDITS 会自动放行项目内的写
+        assertNotNull(DangerousPaths.checkWrite(ROOT.resolve(".envrc"), ROOT));
+        // 对照：计划明确要求豁免的仍豁免
+        assertNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "known_hosts"), ROOT));
+        assertNull(DangerousPaths.checkRead(Path.of(HOME, ".ssh", "config"), ROOT));
+    }
+
+    @Test
+    @DisplayName("macOS 真实临时目录不得每次弹窗——审批疲劳会把用户逼向永久允许")
+    void realTempDirIsWritable() {
+        assertNull(DangerousPaths.checkWrite(
+                Path.of(System.getProperty("java.io.tmpdir")).resolve("scratch.txt"), ROOT),
+                "java.io.tmpdir 在 macOS 上是 /var/folders/…/T/，是频率最高的写");
+        assertNull(DangerousPaths.checkWrite(Path.of("/tmp/x"), ROOT));
+        // 对照：临时目录可写不等于系统位置可写
+        assertNotNull(DangerousPaths.checkWrite(Path.of("/usr/local/bin/git"), ROOT));
+    }
+
+    @Test
     @DisplayName("shell 的 -c 载荷本身是一条命令，须递归检查")
     void shellDashCPayloadIsCheckedRecursively() {
         assertNotNull(DangerousPaths.checkCommand("bash -c \"rm -rf /\"", ROOT));

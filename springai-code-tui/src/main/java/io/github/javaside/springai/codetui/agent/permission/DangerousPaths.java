@@ -97,17 +97,35 @@ public final class DangerousPaths {
      * 代价是 {@code ~/.ssh/rc} 之类冷门文件会多问一次——本层是 ASK 不是 DENY，方向可接受。
      */
     private static final Set<String> SSH_PUBLIC_FILES = Set.of(
-            "known_hosts", "known_hosts2", "config", "authorized_keys", "environment");
+            "known_hosts", "known_hosts2", "config", "authorized_keys");
+    // environment 曾在此列，已移出：sshd 会读它来给会话设环境变量，实践中有人往里放 token。
 
     /** 写进去就可能被劫持的配置文件名（任意层级——名叫 {@code .zshrc} 的文件不会是普通项目产物）。 */
     private static final Set<String> SHELL_CONFIG_FILES = Set.of(
             ".gitconfig", ".gitmodules", ".zshrc", ".bashrc", ".zshenv",
-            ".zprofile", ".bash_profile", ".profile", ".npmrc");
+            ".zprofile", ".bash_profile", ".profile", ".npmrc",
+            // direnv：cd 进目录就执行它，与 .vscode/tasks.json 同属「落盘即取得执行权」。
+            // 在项目内更危险——ACCEPT_EDITS 会自动放行项目内的写。
+            ".envrc");
 
     /** 「父目录名 / 文件名」形态的敏感配置（构建工具会读它们里的凭据与镜像地址）。 */
     private static final Set<String> SENSITIVE_NESTED = Set.of(
             ".m2/settings.xml", ".gradle/gradle.properties", ".kube/config",
-            "gh/hosts.yml", "gh/config.yml");
+            "gh/hosts.yml", "gh/config.yml",
+            // XDG 形态：git 读 ~/.config/git/config 与 ~/.gitconfig 是同一份配置，
+            // 同样能靠 core.pager / credential.helper / alias 劫持执行。
+            // 只收了 ~/.gitconfig 而漏掉这个，等于给同一个动作留了第二种拼法。
+            "git/config");
+
+    /**
+     * 写受保护、读也必须受保护的文件——它们既是「写进去会被劫持」也是「读出来就是凭据」。
+     *
+     * <p>{@code .npmrc} 此前只在 {@link #SHELL_CONFIG_FILES}（写方向）里，读方向完全放行，
+     * 而它装的是 {@code //registry.npmjs.org/:_authToken=…}。
+     * {@code .gitconfig} 同理，可携带 {@code url.…insteadOf} 里的内嵌 token。
+     */
+    private static final Set<String> READABLE_SECRET_CONFIGS =
+            Set.of(".npmrc", ".gitconfig");
 
     /**
      * 写进去会「在别处被自动执行」的配置（父目录名 / 文件名形态）。
@@ -179,7 +197,11 @@ public final class DangerousPaths {
      * 仍由前面那些条命中（它们在白名单区内，但危险性另有来源）。
      */
     private static final Set<String> WRITABLE_ROOTS = Set.of(
-            "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/dev");
+            "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/dev",
+            // macOS 的真实每用户临时目录是 /var/folders/xx/…/T/，即 java.io.tmpdir。
+            // 漏了它，每一次 mktemp / createTempFile 都要弹窗——而这是频率最高的写，
+            // 恰是本类 javadoc 自述必须避免的那种审批疲劳（会把用户逼向「一律永久允许」）。
+            "/var/folders", "/private/var/folders");
 
     /** 删除类命令。 */
     private static final Set<String> DELETE_COMMANDS = Set.of("rm", "rmdir", "shred", "srm");
@@ -328,6 +350,13 @@ public final class DangerousPaths {
         }
         if (segs.contains(".ssh") && !SSH_PUBLIC_FILES.contains(name)) {
             return "读取 ~/.ssh 里的非公开文件（私钥不只叫 id_*）：" + target;
+        }
+        if (READABLE_SECRET_CONFIGS.contains(name)) {
+            return "读取可能含 token 的工具配置 " + name + "：" + target;
+        }
+        // 主机私钥：文件名是 ssh_host_*_key，不带点、也不以 .key 结尾，故上面两条都不命中
+        if (name.startsWith("ssh_host_") && name.endsWith("_key")) {
+            return "读取 SSH 主机私钥（内容即秘密本身）：" + target;
         }
         String nested = nestedName(segs);
         if (nested != null && SENSITIVE_NESTED.contains(nested)) {
