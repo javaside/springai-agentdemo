@@ -215,6 +215,24 @@ class DangerousPathsTest {
     }
 
     @Test
+    @DisplayName("只读命令也能一次读光凭据：递归扫描家目录 / 根、以及系统凭据文件")
+    void readOnlyCommandsCanStillSweepEverything() {
+        // grep 在只读白名单里，DEFAULT 模式下无需任何规则就自动放行——
+        // 判据不是「grep 危险」，而是「扫描范围等于整个家目录」
+        assertNotNull(DangerousPaths.checkCommand("grep -R AKIA " + HOME, ROOT));
+        assertNotNull(DangerousPaths.checkCommand("grep -r AKIA /", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("grep -R token /Users/someone", ROOT),
+                "别人的家目录同样是全量扫描");
+        // 文件名太普通、进不了 SECRET_FILES 的系统凭据，按整条路径比对
+        assertNotNull(DangerousPaths.checkCommand("cat /etc/shadow", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("cat /etc/sudoers", ROOT));
+        // 对照：项目内的递归扫描是日常操作，不得误报
+        assertNull(DangerousPaths.checkCommand("grep -R TODO " + ROOT, ROOT));
+        assertNull(DangerousPaths.checkCommand("grep -R TODO src", ROOT));
+        assertNull(DangerousPaths.checkCommand("ls " + HOME, ROOT), "非递归地列家目录无妨");
+    }
+
+    @Test
     @DisplayName("引号内分隔符不得把「拦住」变成「漏过」——回退不能依赖 head 位置")
     void quotedSeparatorDoesNotInvertTheFallback() {
         // 对照：不带引号时本来就拦得住

@@ -136,6 +136,13 @@ public final class DangerousPaths {
             "credentials", "secring.gpg", ".netrc", ".pgpass", ".pypirc", ".git-credentials");
 
     /**
+     * 系统级凭据文件的绝对路径——按<b>整条路径</b>比对，因为它们的文件名太普通
+     * （{@code shadow} / {@code sudoers} 单看名字不像密钥，收进 {@link #SECRET_FILES} 会误伤同名普通文件）。
+     */
+    private static final Set<String> SYSTEM_SECRET_PATHS = Set.of(
+            "/etc/shadow", "/etc/gshadow", "/etc/master.passwd", "/etc/sudoers", "/etc/krb5.keytab");
+
+    /**
      * 私钥 / 证书的扩展名。
      *
      * <p>刻意<b>不</b>收 {@code .pub}——公钥就是给人看的，收了只会制造无谓的审批。
@@ -296,6 +303,9 @@ public final class DangerousPaths {
         List<String> segs = segments(target);
         String name = segs.isEmpty() ? "" : segs.get(segs.size() - 1);
 
+        if (SYSTEM_SECRET_PATHS.contains(target.toString().toLowerCase(Locale.ROOT))) {
+            return "读取系统凭据文件（内容即秘密本身）：" + target;
+        }
         String secret = checkSecretFile(segs, name);
         if (secret != null) {
             return secret;
@@ -488,6 +498,22 @@ public final class DangerousPaths {
                 }
             }
         }
+        // 递归扫描一整棵以家目录 / 根为起点的树——与命令名无关的结构性判据。
+        // grep -R AKIA ~ 的目标是家目录本身，不是任何具名密钥路径，所以上面每一条都不命中；
+        // 而 grep 在只读白名单里，于是 DEFAULT 模式下无需任何规则就自动放行——
+        // 一次静默的全家目录凭据扫描。判据不是「grep 危险」，是「扫描范围等于整个家目录」。
+        if (hasRecursiveFlag(words)) {
+            for (String w : words.subList(1, words.size())) {
+                if (isOption(w)) {
+                    continue;
+                }
+                Path t = resolveToken(stripTrailingGlob(w), root);
+                if (t != null && isScanEverything(t)) {
+                    return head + " 会递归扫描 " + t + " 整棵树（家目录 / 根级别的全量扫描，"
+                            + "足以一次性读出所有凭据）";
+                }
+            }
+        }
         // 命令参数里出现密钥路径：cat ~/.ssh/id_rsa 一类
         for (String w : words) {
             if (isOption(w)) {
@@ -539,6 +565,25 @@ public final class DangerousPaths {
             count++;
         }
         return count >= 2 ? last : null;    // 只有一个非选项参数时它是源，不是落点
+    }
+
+    /**
+     * 目标是不是「家目录 / 根」这一级——递归扫描它等于把机器上的凭据一次读个遍。
+     *
+     * <p>刻意<b>不</b>把项目根算进来：{@code grep -R TODO <root>} 是日常操作，
+     * 收进来只会制造审批疲劳，而项目内的秘密另有 {@code .env} 一类具名检查兜。
+     */
+    private static boolean isScanEverything(Path t) {
+        if (t.getNameCount() == 0) {
+            return true;                                    // 根本身
+        }
+        Path home = Path.of(System.getProperty("user.home")).normalize();
+        if (t.equals(home)) {
+            return true;
+        }
+        List<String> segs = segments(t);
+        // /Users/<someone> 与 /home/<someone>：别人的家目录同样是全量扫描
+        return segs.size() == 2 && ("users".equals(segs.get(0)) || "home".equals(segs.get(0)));
     }
 
     /** 路径是不是就是某个敏感目录本身（{@code ~/.ssh}），而不是它里面的某个文件。 */
