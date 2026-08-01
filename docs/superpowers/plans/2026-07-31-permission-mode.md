@@ -5873,7 +5873,16 @@ git commit -m "test(permission): pty 实机冒烟（Shift+Tab 模式循环 + /pe
 
 ## 完成标准（期 1 验收）
 
-- [ ] `mvn test -pl springai-code-tui` 全绿
+- [x] `mvn clean test -pl springai-code-tui` —— **820 tests, 0 failures**（2026-08-01 实跑）
+
+  > ⚠ **这条标准本身不可靠，别拿单次结果下结论**：`CodingAgentSpikeTest.todoTurnIdBinding`
+  > 打真实模型、60 秒超时，是**既有 flaky**（在干净 worktree、HEAD 不带任何改动上跑 3 次：
+  > 1 过 2 败；我这边两次 clean 跑：1 次全过、1 次它单独失败）。它与权限层无关——
+  > 权限包在被接线前于 main 源码里零消费方，且它用自己的 Recorder listener。
+  >
+  > 真正的判据是：**权限层相关测试 0 失败**，`todoTurnIdBinding` 的红/绿单独记录、不计入。
+  > 另注：**必须 `clean` 跑**——本分支出现过 `target/classes` 残留篡改产物导致的幽灵失败，
+  > 同样机制也能产生幽灵绿。
 - [ ] `permission_smoke.py` 输出 `SMOKE PASS`
 - [ ] 手动验收：带真实 key 启动，让模型执行 `git status && git push origin main`
       → 弹出审批面板 → 选「4. 拒绝」→ **回合继续**、模型换做法
