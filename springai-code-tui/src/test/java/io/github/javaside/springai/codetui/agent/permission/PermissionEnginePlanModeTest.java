@@ -70,6 +70,29 @@ class PermissionEnginePlanModeTest {
     }
 
     @Test
+    @DisplayName("PLAN 下危险操作是 DENY 不是 ASK——否则只有最危险的那批还能被当场批准")
+    void dangerousOpsDeniedNotAsked(@TempDir Path root) {
+        PermissionEngine e = plan(root);
+
+        PermissionDecision rm = e.decide("Bash", "{\"command\":\"rm -rf ~\"}");
+        assertEquals(PermissionBehavior.DENY, rm.behavior(),
+                "PLAN 下 rm -rf ~ 若是 ASK，用户就能当场批准它——而普通的 mvn test 反而被拒，结论是倒置的");
+        assertTrue(rm.reason().contains("ExitPlanMode"), "仍要指路");
+
+        assertEquals(PermissionBehavior.DENY,
+                e.decide("Write", "{\"filePath\":\"" + System.getProperty("user.home") + "/.ssh/authorized_keys\"}")
+                        .behavior());
+    }
+
+    @Test
+    @DisplayName("但读密钥在 PLAN 下仍是 ASK——PLAN 承诺的是「不动手」，不是「不读」")
+    void readingSecretsStillAsks(@TempDir Path root) {
+        assertEquals(PermissionBehavior.ASK,
+                plan(root).decide("Read", "{\"filePath\":\"" + System.getProperty("user.home") + "/.ssh/id_rsa\"}")
+                        .behavior());
+    }
+
+    @Test
     @DisplayName("deny 规则仍排第一；allow 规则仍排在模式默认之前（既定语义，别当 bug 修）")
     void ruleOrderUnchanged(@TempDir Path root) {
         PermissionEngine denied = plan(root,

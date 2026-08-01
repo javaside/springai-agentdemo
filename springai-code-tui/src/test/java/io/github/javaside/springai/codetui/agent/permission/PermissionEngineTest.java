@@ -738,9 +738,17 @@ class PermissionEngineTest {
                         start.await();
                         for (int n = 0; n < 500; n++) {
                             PermissionDecision d = e.decide("Write", pathInput(inside));
-                            // 工作区内的写：模式怎么切，结论也只能是 ALLOW 或 ASK，绝不会是 DENY
-                            assertNotEquals(PermissionBehavior.DENY, d.behavior());
+                            // 工作区内的写只有 PLAN 档会拒（期 2 起）。这里<b>不能</b>写成
+                            // 「mode() 快照 == PLAN 则断言 DENY」：mutator 线程一直在 cycleMode，
+                            // 快照与本次 decide() 实际用的档位必然错位，两个方向都会 flake
+                            // （快照非 PLAN 但判定时已切进 PLAN，或快照 PLAN 但判定时已切出）。
+                            // 故断言一条与档位无关、同样有内容的不变量：DENY 蕴含它来自 PLAN 分支。
+                            // 出现任何别的 DENY（DEFAULT/ACCEPT_EDITS/BYPASS 拒了工作区内的写）都是回归。
                             assertNotNull(d.reason());
+                            if (d.behavior() == PermissionBehavior.DENY) {
+                                assertTrue(d.reason().contains("计划模式"),
+                                        "工作区内的写只有 PLAN 档会拒，其余任何 DENY 都是回归：" + d.reason());
+                            }
                             decisions.incrementAndGet();
                         }
                     } catch (Throwable t) {

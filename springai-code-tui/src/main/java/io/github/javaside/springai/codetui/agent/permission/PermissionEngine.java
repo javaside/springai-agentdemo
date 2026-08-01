@@ -33,7 +33,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <ul>
  *   <li><b>第 1 步 DENY</b>：跳过 2/4/5/6。DENY 是最强结论，被跳过的全都更宽 → 安全。</li>
  *   <li><b>第 2 步内置检查 ASK</b>：跳过 4（同为 ASK）、5（更宽）、6（更宽或同）。
- *       deny 已在第 1 步跑完，不存在被跳过的 DENY → 安全。</li>
+ *       deny 已在第 1 步跑完，不存在被跳过的 DENY → 安全。
+ *       <b>PLAN 例外</b>：本步在 PLAN 下对「PLAN 本来就会拒的」操作返回 DENY 而非 ASK
+ *       （见 {@link #doDecide} 第 2 步的注释）。DENY 是最强结论，跳过的 4/5/6 全都更宽 → 安全。</li>
  *   <li><b>第 4 步 ask 规则</b>：跳过 5、6，二者都不可能比 ASK 更严 → 安全。</li>
  *   <li><b>第 5 步 allow 规则</b>：<b>唯一一处跳过了更严检查的地方</b>——第 6 步的模式默认对
  *       COMMAND 会逐段查白名单、对 FILE_WRITE 会看是否在工作区内，都可能是 ASK。
@@ -353,6 +355,19 @@ public final class PermissionEngine {
         // 2. 内置危险检查——不可被 allow 规则覆盖，命中强制 ASK（护栏不是牢笼，人确认了就该能做）
         String danger = builtinDanger(entry, path, target);
         if (danger != null) {
+            // PLAN 下的特例：本步的初衷是「护栏不是牢笼，人确认了就该能做」，那在另外三档都对；
+            // 但 PLAN 的立意恰恰是「这段时间里根本不可能动手」，而普通写操作已在第 6 步被拒——
+            // 若这里仍给 ASK，就等于只给<b>最危险</b>的那批操作留了唯一一道可当场批准的口子
+            // （实测过：PLAN 下 rm -rf ~ 是 ASK，而无害的 mvn test 是 DENY，结论倒置）。
+            // 判据是「PLAN 本来就会拒的，危险检查不得把它降级成可批准」，故复用 decideByPlanMode
+            // 而不另写一套判断；只读操作（读密钥 / 凭据）仍走下面的 askOnly——
+            // PLAN 承诺的是「不动手」，不是「不读」，只读调查正是这一档要允许的事。
+            if (mode == PermissionMode.PLAN) {
+                PermissionDecision planned = decideByPlanMode(entry, target, split);
+                if (planned != null && planned.behavior() == PermissionBehavior.DENY) {
+                    return planned;
+                }
+            }
             // 刻意 askOnly：本步排在 allow 规则之前，加任何 allow 规则都消不掉这次询问，给建议就是骗人
             return PermissionDecision.askOnly(danger);
         }
