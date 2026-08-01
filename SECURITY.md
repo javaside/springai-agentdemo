@@ -27,8 +27,11 @@
 
 `springai-code-tui` 是一个**给大模型开放本机文件系统与 shell 的工具**。以下几点是**设计上如此、已在 README 明确披露**的，报告它们不会被当作漏洞处理：
 
-- **没有沙箱**：`FileSystemTools` / `ShellTools` / `GrepTool` / `GlobTool` 在技术上都不受项目根目录限制，全靠系统提示自律约束。
-- **子 agent 同权**：`Task` / `ParallelTasks` 派出的子 agent 复用同一套未沙箱工具。
+- **没有沙箱**：`FileSystemTools` / `ShellTools` / `GrepTool` / `GlobTool` 在技术上都不受项目根目录限制。本版本起有一层**执行前的人工审批**（见模块 README 的「权限管理」），但它管的是「要不要做这一步」，**不是边界强制**——调用一旦被放行就以你的用户权限执行、不受目录约束。
+- **权限层的已知弱点**（设计取舍，非漏洞）：内置底线是**黑名单**（枚举已知高危目标，没枚举到的漏过）；规则 DSL 不做空白归一、路径匹配区分大小写（macOS APFS 上 `/etc` 与 `/ETC` 同一文件，deny 方向会漏）、不解析符号链接；只读操作（`Read`/`Grep`/`Glob`）默认不询问；**审批疲劳**下用户一路按「允许」与没有权限层无异。
+  真正属于漏洞的是**绕过**：让某次调用**既没被放行也没弹审批就执行了**，或让内置底线在**未加 `--dangerously-skip-permissions`** 的情况下失效——这类请按上面的流程报告。
+- **`--dangerously-skip-permissions` 下的放行**不是漏洞（deny 规则与内置底线在该模式下**仍然生效**；若它们在该模式下失效，那才是漏洞）。
+- **子 agent 同权**：`Task` / `ParallelTasks` 派出的子 agent 复用同一套未沙箱工具，走同一个权限引擎与同一套规则。
 - **联网出口无过滤**：`SmartWebFetchTool` 可抓取任意网址；`BochaWebSearch` / `BraveWebSearch` 会把搜索词发给第三方；配置了 `type: "http"` 的远程 MCP server 会收到工具调用的入参。这些通道在被提示注入时可能外泄本地读到的内容。
 - **提示注入**：模型会读取网页、文件与 MCP server 返回的内容，这些内容可能包含针对模型的指令。本项目不提供针对提示注入的技术防护。
 
@@ -40,5 +43,6 @@
 
 - 所有 API key 只从**环境变量**读取，不写入任何配置文件或会话存储。
 - 会话与长期记忆落在 `<项目根>/.codetui/` 下，该目录已被 `.gitignore` 忽略。
+- 权限规则文件 `permissions.json` 是**智能体自己写得到**的（它有 `Write` 工具，项目层文件又随仓库走），故：`defaultMode` **不接受 `BYPASS`**（全放行只能由启动参数进入）、**项目层的 allow 不得是通配放行**、**项目层的 `defaultMode` 只能比用户层严**——clone 一个仓库不得让智能体变得更宽松。
 - `mcp.json` 的 `headers` 建议用 `${ENV_VAR}` 引用而非写死 token。
 - 发布包的 SHA-256 校验和随每版发版说明公布，请在使用前校验。

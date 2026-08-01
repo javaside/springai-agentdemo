@@ -31,7 +31,7 @@ bin/code-tui                      # Windows 用 bin\code-tui.cmd
 
 包内含启动脚本 + 主 jar + 全部依赖 + `LICENSE`/`NOTICE`/`README`，只需 **JDK 17+**。每版的 SHA-256 校验和见对应[发版说明](CHANGELOG.md)。
 
-> ⚠️ **先读安全声明**：它给智能体开放了本机文件系统与 shell 的实质访问，**不是安全沙箱**。请只在可随意丢弃、且已被版本控制干净纳管的目录中运行。详见 [模块 README 的安全声明](springai-code-tui/README.md) 与 [SECURITY.md](SECURITY.md)。
+> ⚠️ **先读安全声明**：它给智能体开放了本机文件系统与 shell 的实质访问。有副作用的调用会在**执行前**弹审批面板请你确认，但**这不是安全沙箱**——权限层管的是「要不要做这一步」，不是「能做到多远」；你一旦批准，那次调用就以你的用户权限执行、不受目录约束。请只在可随意丢弃、且已被版本控制干净纳管的目录中运行。详见 [模块 README 的安全声明](springai-code-tui/README.md) 与 [SECURITY.md](SECURITY.md)。
 
 ### 能做什么
 
@@ -39,6 +39,7 @@ bin/code-tui                      # Windows 用 bin\code-tui.cmd
 |---|---|
 | **多 provider** | DeepSeek / 智谱 GLM / 通义千问 / Anthropic / OpenAI，`/model` 运行时切换，模型清单可经 `*_MODELS` 自定义 |
 | **工具** | 文件读写、Shell、Grep/Glob、联网抓取（webFetch）、**联网搜索**（博查中文 + Brave 英文，模型按内容语言自选）、向用户反问 |
+| **权限管理** | 有副作用的调用**执行前**弹审批面板（允许一次 / 本会话 / 永久 / 拒绝 / 中断），规则写 `permissions.json`；`Shift+Tab` 切模式且常驻状态栏；另有一层 **allow 规则与 BYPASS 都盖不住**的内置底线 |
 | **子 agent** | `Task` 单个委派 / `ParallelTasks` 并发派发，内置 explore / plan / bash / general-purpose 四类 |
 | **MCP** | 接入外部工具：本地 stdio 子进程 + **远程 Streamable HTTP**（headers 支持 `${ENV_VAR}` 插值），`/mcp` 面板运行期启停 |
 | **上下文** | 事件溯源会话记忆 + 回合感知压缩、跨会话长期记忆、项目指令（`AGENTS.md`）、`-c` 恢复上次会话 |
@@ -96,7 +97,7 @@ springai-agentdemo                  父工程（聚合 + 版本管理，packagin
 └── springai-code-tui              【综合应用】命令行编码智能体（TUI）
     └── 多 provider（DeepSeek/智谱/千问/Anthropic/OpenAI）+ 子 agent（Task + ParallelTasks 并行）+ 技能
         + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ MCP（接入外部工具）+ 计划/任务面板 + 会话压缩
-        + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
+        + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）+ 权限管理（审批面板 + 规则 + 内置底线）
 
 ```
 
