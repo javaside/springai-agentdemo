@@ -516,7 +516,10 @@ public final class DangerousPaths {
             if (c.isEmpty() || isOption(c) || c.indexOf('=') >= 0) {
                 continue;                       // 选项与 VAR=value 都不是命令名
             }
-            String base = c.substring(c.lastIndexOf('/') + 1);   // /bin/rm → rm
+            // 小写化：APFS 大小写不敏感，/bin/LS 真能执行（实测 `bash -c 'LS -d /'` 成功），
+            // 故 RM -rf / 与 rm -rf / 是同一条命令。四张命令表都是小写，这里不折叠就整层可绕。
+            String base = c.substring(c.lastIndexOf('/') + 1)
+                    .toLowerCase(Locale.ROOT);                   // /bin/RM → rm
             if (COMMAND_WRAPPERS.contains(base)) {
                 continue;
             }

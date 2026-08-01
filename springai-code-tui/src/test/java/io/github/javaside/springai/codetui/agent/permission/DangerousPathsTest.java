@@ -180,6 +180,23 @@ class DangerousPathsTest {
     }
 
     @Test
+    @DisplayName("命令名同样不区分大小写——APFS 上 /bin/LS 真能执行")
+    void commandCaseVariantsDoNotEvade() {
+        // 本机实测：ls -l /bin/LS 存在，bash -c 'LS -d /' 退出码 0。
+        // 命令表全是小写，headCommand 不折叠大小写就整层可绕。
+        assertNotNull(DangerousPaths.checkCommand("RM -rf /", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("Rm -Rf " + HOME, ROOT));
+        assertNotNull(DangerousPaths.checkCommand("/bin/RM -rf /", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("SUDO rm -rf /", ROOT),
+                "包装词表也是小写，SUDO 不折叠就跳不过包装、head 取成 SUDO");
+        assertNotNull(DangerousPaths.checkCommand("ENV rm -rf /", ROOT));
+        assertNotNull(DangerousPaths.checkCommand("Tee " + HOME + "/.zshrc", ROOT));
+        // 对照：正常小写仍然拦得住，且无害命令未被误伤
+        assertNotNull(DangerousPaths.checkCommand("rm -rf /", ROOT));
+        assertNull(DangerousPaths.checkCommand("ls -la", ROOT));
+    }
+
+    @Test
     @DisplayName("路径检查不依赖「在家目录之下」这一前提")
     void sensitiveDirsAreMatchedByStructureNotHomePrefix() {
         // macOS 的同一份 ~/.ssh 还有 firmlink 拼法，toRealPath() 实测不会收敛到 /Users/…
