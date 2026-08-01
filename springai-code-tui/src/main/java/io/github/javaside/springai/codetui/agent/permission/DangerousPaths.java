@@ -240,7 +240,7 @@ public final class DangerousPaths {
     // ── 路径检查 ────────────────────────────────────────────────────────
 
     /**
-     * 写检查；命中返回原因，否则 null。
+     * 写检查；命中返回原因，否则 null。<b>逐个别名查一遍，任一命中即命中</b>。
      *
      * @param target 已由 {@code ToolTargets} 解析并规范化的目标路径，可为 null
      * @param root   项目根。<b>路径检查本身不需要它</b>（判据全是路径结构，见类注释），
@@ -248,6 +248,38 @@ public final class DangerousPaths {
      *               且 {@code checkCommand} 解析相对目标时确实要用
      */
     public static String checkWrite(Path target, Path root) {
+        return firstHit(target, root, DangerousPaths::checkWriteOne);
+    }
+
+    /** 读检查；命中返回原因，否则 null。<b>逐个别名查一遍</b>。参数含义同 {@link #checkWrite}。 */
+    public static String checkRead(Path target, Path root) {
+        return firstHit(target, root, DangerousPaths::checkReadOne);
+    }
+
+    /**
+     * 逐个写法查一遍，任一命中即命中。
+     *
+     * <p>底线没有 allow 方向（命中只会导致询问 / 拒绝），故这里放宽是<b>纯安全方向</b>
+     * ——不需要引擎那套 deny/allow 不对称。别名由 {@link PathAliases} 给出
+     * （原写法 + 符号链接解析后）；{@code target == null} 时别名列表为空，
+     * 与两个 {@code *One} 自己的 null 守卫一样返回 null，行为不变。
+     *
+     * <p>代价是每次判定多 1–2 次文件系统调用（{@link PathAliases} 要爬到最长的已存在祖先）。
+     * 命令检查里 {@code checkWrite} / {@code checkRead} 是<b>逐词</b>调的，故一条长命令会放大这个代价；
+     * 本层是安全护栏、调用频率由用户操作决定，暂不优化。
+     */
+    private static String firstHit(Path target, Path root,
+                                   java.util.function.BiFunction<Path, Path, String> check) {
+        for (Path alias : PathAliases.of(target)) {
+            String hit = check.apply(alias, root);
+            if (hit != null) {
+                return hit;
+            }
+        }
+        return null;
+    }
+
+    private static String checkWriteOne(Path target, Path root) {
         if (target == null) {
             return null;
         }
@@ -328,8 +360,7 @@ public final class DangerousPaths {
         return true;
     }
 
-    /** 读检查；命中返回原因，否则 null。参数含义同 {@link #checkWrite}。 */
-    public static String checkRead(Path target, Path root) {
+    private static String checkReadOne(Path target, Path root) {
         if (target == null) {
             return null;
         }
