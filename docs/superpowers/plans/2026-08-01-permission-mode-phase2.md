@@ -1,6 +1,6 @@
 # 权限管理 期 2（计划模式）实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 加一档 `PLAN` 权限模式——模型只能读和查，任何写/命令一律**拒绝**（不是询问）；调查清楚后调用 `ExitPlanMode` 提交计划，人批准后才切到可动手的模式。
 
@@ -69,7 +69,7 @@
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/permission/PermissionModeTest.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/CodeTuiViewModeIndicatorTest.java`
 
-- [ ] **Step 1: 写失败测试——三档循环**
+- [x] **Step 1: 写失败测试——三档循环**
 
 新建 `PermissionModeTest.java`（若已存在则把这两个方法加进去）：
 
@@ -123,12 +123,12 @@ class PermissionModeTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionModeTest`
 Expected: 编译失败，`找不到符号: 变量 PLAN`
 
-- [ ] **Step 3: 加 `PLAN` 常量与循环**
+- [x] **Step 3: 加 `PLAN` 常量与循环**
 
 `PermissionMode.java` 全文替换为：
 
@@ -184,12 +184,12 @@ public enum PermissionMode {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionModeTest`
 Expected: PASS（3 个测试）
 
-- [ ] **Step 5: 补状态栏常驻标识的 PLAN 分支**
+- [x] **Step 5: 补状态栏常驻标识的 PLAN 分支**
 
 `Theme.java`，在 `MODE_BYPASS` 那一行下面加：
 
@@ -210,7 +210,7 @@ Expected: PASS（3 个测试）
     }
 ```
 
-- [ ] **Step 6: 给状态栏标识补 PLAN 用例**
+- [x] **Step 6: 给状态栏标识补 PLAN 用例**
 
 在 `CodeTuiViewModeIndicatorTest.java` 的 `modeTagPerMode()` 里追加两行：
 
@@ -229,12 +229,12 @@ Expected: PASS（3 个测试）
         assertEquals(PermissionMode.DEFAULT, stub.mode);
 ```
 
-- [ ] **Step 7: 跑相关测试**
+- [x] **Step 7: 跑相关测试**
 
 Run: `mvn test -pl springai-code-tui -Dtest='PermissionModeTest,CodeTuiView*Test'`
 Expected: PASS
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/PermissionMode.java \
@@ -258,7 +258,7 @@ git commit -m "feat(code-tui): 加 PLAN 权限模式常量与三档循环"
 - **deny 规则仍然优先**（第 1 步），PLAN 不改变这一点；
 - **allow 规则排在模式默认之前**——这意味着一条 `Bash(rm -rf /tmp/x:*)` 的 allow 规则**会在 PLAN 模式下放行**。这是决策顺序的既定语义，不在本任务范围内更改；测试要把它钉住，免得后人以为是 bug 而「顺手修好」。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `PermissionEnginePlanModeTest.java`：
 
@@ -353,12 +353,12 @@ class PermissionEnginePlanModeTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionEnginePlanModeTest`
 Expected: FAIL——`mutationsDenied` 报「expected DENY but was ASK」（PLAN 目前落到 `FILE_WRITE`/`COMMAND` 的既有分支）
 
-- [ ] **Step 3: 加 PLAN 分支**
+- [x] **Step 3: 加 PLAN 分支**
 
 `PermissionEngine.java` 的 `decideByMode`，在 `if (mode == PermissionMode.BYPASS)` 之后、`switch (entry.category())` 之前插入：
 
@@ -413,7 +413,7 @@ Expected: FAIL——`mutationsDenied` 报「expected DENY but was ASK」（PLAN 
     }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionEnginePlanModeTest`
 Expected: PASS（5 个测试）
@@ -423,7 +423,7 @@ Expected: PASS（5 个测试）
 > `-Dtest=PermissionEnginePlanModeTest#mutationsDenied+readOnlyStillAllowed+networkStillAsks+ruleOrderUnchanged`，
 > 并在 Task 7 完成后回来补跑整类。**不要为了让它变绿而改断言**。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/PermissionEngine.java \
@@ -439,7 +439,7 @@ git commit -m "feat(code-tui): 引擎加 PLAN 模式分支，写与命令一律�
 - Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/CodeTuiApplication.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/PermissionStartupTest.java`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在既有 `PermissionStartupTest.java` 里追加：
 
@@ -472,12 +472,12 @@ git commit -m "feat(code-tui): 引擎加 PLAN 模式分支，写与命令一律�
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionStartupTest`
 Expected: 编译失败，`找不到符号: 方法 startupMode`
 
-- [ ] **Step 3: 实现解析**
+- [x] **Step 3: 实现解析**
 
 `CodeTuiApplication.java`，在 `hasBypassFlag` 附近新增：
 
@@ -531,7 +531,7 @@ Expected: 编译失败，`找不到符号: 方法 startupMode`
     }
 ```
 
-- [ ] **Step 4: 接进启动装配**
+- [x] **Step 4: 接进启动装配**
 
 把既有的引擎构造改成（`CodeTuiApplication.java:68-76` 一带）：
 
@@ -557,12 +557,12 @@ Expected: 编译失败，`找不到符号: 方法 startupMode`
         }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionStartupTest`
 Expected: PASS
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/CodeTuiApplication.java \
@@ -585,7 +585,7 @@ git commit -m "feat(code-tui): 加 --permission-mode 启动参数（不接受 by
 - 提示段必须**每回合**渲染：`defaultSystem` 是 build 期烘焙的，而模式在运行期随 `Shift+Tab` 变。`CodingAgent.submit` 已有 per-request 的 `.system(s -> s.param(...))` 钩子（就是注入 `{AGENT_MODEL}` 那句），搭它的车。
 - **必须作为 param 值注入**，不得拼进模板字符串——正文里出现花括号会炸 SpringTemplate（`AGENTS.md` / 长期记忆接入时都踩过）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `PermissionModePromptTest.java`：
 
@@ -631,12 +631,12 @@ class PermissionModePromptTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionModePromptTest`
 Expected: 编译失败，`找不到符号: 类 PermissionModePrompt`
 
-- [ ] **Step 3: 新建提示段（纯函数，单独一个类）**
+- [x] **Step 3: 新建提示段（纯函数，单独一个类）**
 
 Create `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/PermissionModePrompt.java`:
 
@@ -678,12 +678,12 @@ public final class PermissionModePrompt {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PermissionModePromptTest`
 Expected: PASS（2 个测试）
 
-- [ ] **Step 5: 接进模板与每回合注入**
+- [x] **Step 5: 接进模板与每回合注入**
 
 ① `AgentTools.java` 的 `SYSTEM_TEMPLATE`，在 `{PROJECT_INSTRUCTIONS}` 之后加一行占位符：
 
@@ -719,13 +719,13 @@ Expected: PASS（2 个测试）
                                     permissionEngine == null ? null : permissionEngine.mode())))
 ```
 
-- [ ] **Step 6: 全量回归（模板改动会影响所有装配路径）**
+- [x] **Step 6: 全量回归（模板改动会影响所有装配路径）**
 
 Run: `mvn test -pl springai-code-tui`
 Expected: 除既有 flaky `CodingAgentSpikeTest.todoTurnIdBinding` 外全绿。
 **若出现 `SpringTemplate` 相关异常**，多半是第 ③ 步的默认 param 漏了——模板里有占位符而 param 缺失会抛。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/PermissionModePrompt.java \
@@ -754,7 +754,7 @@ git commit -m "feat(code-tui): 系统提示按回合注入权限模式段（仅 
 2. `test/.../agent/ModalRequestTest.java:105` 穷尽性测试（本任务补）
 3. `agent/ModalRequest.java:15` 类注释里的示例（本任务顺手更新）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `PlanRequestTest.java`：
 
@@ -814,12 +814,12 @@ class PlanRequestTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PlanRequestTest`
 Expected: 编译失败，`找不到符号: 类 PlanRequest`
 
-- [ ] **Step 3: 建三个新类型**
+- [x] **Step 3: 建三个新类型**
 
 Create `PlanOutcome.java`:
 
@@ -910,7 +910,7 @@ public record PlanRequest(long turnId, String plan, PlanResponder responder) imp
 }
 ```
 
-- [ ] **Step 4: 密封接口加 permits**
+- [x] **Step 4: 密封接口加 permits**
 
 `ModalRequest.java`：
 
@@ -925,7 +925,7 @@ public sealed interface ModalRequest permits AskRequest, PermissionRequest, Plan
  *  else if (r instanceof PlanRequest pl) …}
 ```
 
-- [ ] **Step 5: 扩写取消异常的 javadoc（复用而非新造第三个异常类）**
+- [x] **Step 5: 扩写取消异常的 javadoc（复用而非新造第三个异常类）**
 
 `PermissionCancelledException.java` 的类注释第一句改为：
 
@@ -941,7 +941,7 @@ public sealed interface ModalRequest permits AskRequest, PermissionRequest, Plan
  */
 ```
 
-- [ ] **Step 6: 补穷尽性巡查测试**
+- [x] **Step 6: 补穷尽性巡查测试**
 
 `ModalRequestTest.java:105` 一带的 instanceof 链补第三分支，并把「permits 全覆盖」钉死：
 
@@ -959,12 +959,12 @@ public sealed interface ModalRequest permits AskRequest, PermissionRequest, Plan
     }
 ```
 
-- [ ] **Step 7: 跑测试确认通过**
+- [x] **Step 7: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest='PlanRequestTest,ModalRequestTest'`
 Expected: PASS
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/PlanOutcome.java \
@@ -988,7 +988,7 @@ git commit -m "feat(code-tui): 加 PlanRequest 作为第三个模态请求类型
 
 **背景**：照抄 `UserQuestionBridge` 的形状（`agent/UserQuestionBridge.java`）——一次性 `ArrayBlockingQueue(1)`、`take()` 阻塞工具线程、`InterruptedException` 时**重新置上中断位**再抛。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `PlanApprovalBridgeTest.java`：
 
@@ -1129,12 +1129,12 @@ class PlanApprovalBridgeTest {
 > 一个 `interface AgentListenerAdapter extends AgentListener`，把所有抽象方法给**空默认实现**。
 > 先 `grep -rn "implements AgentListener" src/test | head` 看有没有现成的可复用。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PlanApprovalBridgeTest`
 Expected: 编译失败，`找不到符号: 类 PlanApprovalBridge`
 
-- [ ] **Step 3: 实现桥**
+- [x] **Step 3: 实现桥**
 
 Create `PlanApprovalBridge.java`:
 
@@ -1207,7 +1207,7 @@ public final class PlanApprovalBridge {
 }
 ```
 
-- [ ] **Step 4: 加 listener 接缝**
+- [x] **Step 4: 加 listener 接缝**
 
 `AgentListener.java`，在 `onPermissionRequested` 之后加：
 
@@ -1231,12 +1231,12 @@ public final class PlanApprovalBridge {
     }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=PlanApprovalBridgeTest`
 Expected: PASS（5 个测试）
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/PlanApprovalBridge.java \
@@ -1262,7 +1262,7 @@ git commit -m "feat(code-tui): 加 PlanApprovalBridge 阻塞握手与 onPlanSubm
 - 装配时必须与其它工具一样被 `PermissionCallback(ToolEventCallback(...))` 装饰——**`ToolEventCallback` 是 `currentTurnId()` 的来源**，不装饰的话桥里拿到的 turnId 是错的，请求会被 UI 当迟到丢弃。
 - 期 1 有一个**登记表完整性测试**（对运行时工具集全量比对，未登记即失败）。新工具不登记它就会红——那正是它的作用。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `ExitPlanModeToolTest.java`：
 
@@ -1338,12 +1338,12 @@ class ExitPlanModeToolTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=ExitPlanModeToolTest`
 Expected: 编译失败，`找不到符号: 方法 exitPlanModeTool`
 
-- [ ] **Step 3: 加工具工厂 + 登记**
+- [x] **Step 3: 加工具工厂 + 登记**
 
 ① `PlanApprovalBridge.java` 末尾加：
 
@@ -1386,7 +1386,7 @@ Expected: 编译失败，`找不到符号: 方法 exitPlanModeTool`
         put("ExitPlanMode",        ToolCategory.INTERNAL, null, false);   // 提交计划本身无副作用，PLAN 下必须放行
 ```
 
-- [ ] **Step 4: 装配进主 agent**
+- [x] **Step 4: 装配进主 agent**
 
 `AgentTools.java` 的工具组装处（与 `AskUserQuestionTool` / `Skill` 同一段），加：
 
@@ -1406,7 +1406,7 @@ Expected: 编译失败，`找不到符号: 方法 exitPlanModeTool`
 > **子 agent 不注册它**：子 agent 没有自己的模式（继承主会话），提交计划这件事只属于主 agent。
 > 若装配代码里主/子共用一个工具列表，须显式把它排除在子 agent 之外——照 `AutoMemoryTools`「仅主 agent」的既有做法。
 
-- [ ] **Step 5: 跑测试确认通过 + 登记表完整性**
+- [x] **Step 5: 跑测试确认通过 + 登记表完整性**
 
 Run: `mvn test -pl springai-code-tui -Dtest='ExitPlanModeToolTest,PermissionEnginePlanModeTest'`
 Expected: PASS——**包括 Task 2 Step 4 里那条暂时红着的 `internalToolsAllowed`**
@@ -1414,7 +1414,7 @@ Expected: PASS——**包括 Task 2 Step 4 里那条暂时红着的 `internalToo
 Run: `mvn test -pl springai-code-tui -Dtest='*ToolRegistry*,*Security*'`
 Expected: PASS（登记表完整性测试认得新工具）
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/PlanApprovalBridge.java \
@@ -1439,7 +1439,7 @@ git commit -m "feat(code-tui): 加 ExitPlanMode 工具并登记为 INTERNAL"
 - **迟到**（`turnId != acceptingTurnId`）→ `CANCEL`。那个回合已经取消/切换，让工具线程抛异常随流丢弃即可；回 `KEEP_PLANNING` 反而会让一个已死的回合继续跑。
 - **队满** → `KEEP_PLANNING` + 一行用户可见提示。计划审批不该因为面板拥挤就把整个回合杀掉。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `ConversationStatePlanTest.java`：
 
@@ -1509,12 +1509,12 @@ class ConversationStatePlanTest {
 > **`cancelCurrent()` 的确切方法名/签名以仓库现状为准**——若不同，照 `CodeTuiViewPermissionTest`
 > 里既有的取消用例抄写调用方式，别自己发明。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=ConversationStatePlanTest`
 Expected: 编译失败，`找不到符号: 方法 onPlanSubmitted`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `ConversationState.java`，在 `onPermissionRequested` 之后加：
 
@@ -1544,12 +1544,12 @@ Expected: 编译失败，`找不到符号: 方法 onPlanSubmitted`
     }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=ConversationStatePlanTest`
 Expected: PASS（3 个测试）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ConversationState.java \
@@ -1572,7 +1572,7 @@ git commit -m "feat(code-tui): ConversationState 接纳计划审批请求"
 3. **Esc 在选项态 = 中断本回合**，必须走既有 `cancelTurnFor`（dispose + `doOnCancel` 回滚会话），**不能只 responder.cancel**——否则残留悬空 `tool_calls`，下一条消息 400。
 4. **不得存在「既不应答也不取消」的出口**：面板背后 park 着一个持有回合的工具线程。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `CodeTuiViewPlanTest.java`：
 
@@ -1698,12 +1698,12 @@ class CodeTuiViewPlanTest {
 > **`drainedForTest()`**：若 `CodeTuiView` 没有这个钩子，照 `CodeTuiViewPermissionTest` 里
 > `drained(state)` 的既有写法取 scrollback 文本，别新造钩子。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn test -pl springai-code-tui -Dtest=CodeTuiViewPlanTest`
 Expected: FAIL——屏幕上没有任何选项（模态分派还不认 `PlanRequest`）
 
-- [ ] **Step 3: 模态分派加分支**
+- [x] **Step 3: 模态分派加分支**
 
 `CodeTuiView.java:248` 的 instanceof 链末尾加（**这是 Task 5 巡查清单的第 1 处**）：
 
@@ -1731,7 +1731,7 @@ Expected: FAIL——屏幕上没有任何选项（模态分派还不认 `PlanReq
 > 那个方法，方法名以仓库现状为准。**注意「一个 OutputLine = 一个物理行」**：多行文本必须按 `\n` 逐行拆，
 > 直接塞一个多行字符串会被 `println` 塌成一行截断（记忆 `one-outputline-is-one-physical-line`）。
 
-- [ ] **Step 4: 面板 + 按键 + 应答**
+- [x] **Step 4: 面板 + 按键 + 应答**
 
 `render()` 的 `column(...)` 里，在权限面板那一行之后加：
 
@@ -1834,17 +1834,17 @@ Expected: FAIL——屏幕上没有任何选项（模态分派还不认 `PlanReq
                 : "📋 计划待批准 · ↑↓ 选择 · 1-3 快选 · Enter 确认 · Esc 中断").style(THINK);
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `mvn test -pl springai-code-tui -Dtest=CodeTuiViewPlanTest`
 Expected: PASS（5 个测试）
 
-- [ ] **Step 6: 变异实测（本分支的硬规矩：绿了不算数）**
+- [x] **Step 6: 变异实测（本分支的硬规矩：绿了不算数）**
 
 把 Step 4 里 `finishPlan` 的 `state.removeModal(req)` 临时注释掉，重跑 `CodeTuiViewPlanTest`。
 Expected: **有用例变红**（面板不退出/重复应答）。若全绿，说明测试没覆盖到退出路径，**补测试**再恢复代码。
 
-- [ ] **Step 7: 全量回归 + 提交**
+- [x] **Step 7: 全量回归 + 提交**
 
 Run: `mvn test -pl springai-code-tui`
 Expected: 除既有 flaky 外全绿
@@ -1874,11 +1874,11 @@ cd springai-code-tui && python3 src/test/resources/scripts/permission_smoke.py
 
 **改完代码必须重新 `package`**，否则跑的是旧 jar（本分支踩过）。
 
-- [ ] **Step 1: 桩模型加一条「提交计划」的触发**
+- [x] **Step 1: 桩模型加一条「提交计划」的触发**
 
 照脚本里既有的 marker 机制（如 `PUSHNOW` / `SSHNOW`），加一个 `PLANNOW`：收到含该标记的用户消息时，桩模型发一个调用 `ExitPlanMode` 的 tool_call，入参为 `{"plan":"# 测试计划\n\n- 第一步\n- 第二步"}`。**照抄既有 marker 的写法**，不要另起一套。
 
-- [ ] **Step 2: 加模式循环断言**
+- [x] **Step 2: 加模式循环断言**
 
 `check_mode_cycle` 现在只验两档，改成三档：
 
@@ -1905,7 +1905,7 @@ cd springai-code-tui && python3 src/test/resources/scripts/permission_smoke.py
 > （用 `find_row` 取状态行行号，确认其下一行仍是预期内容而非续行）。
 > 若实测发现 `⏸` 排版有问题，换成窄符号（如 `>>`/`::`）并同步改 `CodeTuiView#modeTag` 与单测。
 
-- [ ] **Step 3: 加计划审批面板断言**
+- [x] **Step 3: 加计划审批面板断言**
 
 新增 `check_plan_approval(session)`：
 
@@ -1950,7 +1950,7 @@ def check_plan_approval(session):
 
 把它接进 `main()` 的场景序列（放在 `check_mode_indicator_persists` 之后）。
 
-- [ ] **Step 4: 跑冒烟**
+- [x] **Step 4: 跑冒烟**
 
 ```bash
 mvn -q -o package -pl springai-code-tui -DskipTests
@@ -1960,7 +1960,7 @@ cd springai-code-tui && python3 src/test/resources/scripts/permission_smoke.py
 
 Expected: `SMOKE PASS`，输出里含「Shift+Tab OK: 第三档是计划模式」「计划面板 OK」「计划批准 OK」
 
-- [ ] **Step 5: 文档**
+- [x] **Step 5: 文档**
 
 ① `springai-code-tui/README.md`：
 - 「权限模式」表加 `计划模式 / ⏸ 计划模式（冷薄荷）/ 只读放行，写与命令一律拒绝；产出计划经批准后切档`
@@ -1972,7 +1972,7 @@ Expected: `SMOKE PASS`，输出里含「Shift+Tab OK: 第三档是计划模式�
 
 ② `docs/superpowers/specs/2026-07-31-permission-mode-design.md` 的分期表：期 2 一行标 ✅ 并注明落地日期；删掉「分期带来的两处临时状态」那段里已被本期补齐的两条。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add springai-code-tui/src/test/resources/scripts/permission_smoke.py \
@@ -1985,11 +1985,11 @@ git commit -m "test(code-tui): 计划模式与计划审批面板的 pty 实机�
 
 ## 完成标准
 
-- [ ] `mvn test -pl springai-code-tui` 全绿（`CodingAgentSpikeTest.todoTurnIdBinding` 的红单独记录、不计入——它是打真实模型的既有 flaky）
-- [ ] `permission_smoke.py` 输出 `SMOKE PASS`，含三条新断言
-- [ ] 手动验收（需真实 key）：`--permission-mode plan` 启动 → 让模型改文件 → **被拒绝且它自己转去调 `ExitPlanMode`** → 面板弹出 → 选「批准，逐个确认」→ 模式切到默认、模型开始动手
-- [ ] 手动验收：计划面板上选「继续完善计划」→ 写一句意见 → **模型据此改了方案并再次提交**
-- [ ] 手动验收：计划面板上按 Esc → 回合结束，**下一条消息不报 400**
+- [x] `mvn test -pl springai-code-tui` 全绿（`CodingAgentSpikeTest.todoTurnIdBinding` 的红单独记录、不计入——它是打真实模型的既有 flaky）
+- [x] `permission_smoke.py` 输出 `SMOKE PASS`，含三条新断言
+- [x] 手动验收（需真实 key）：`--permission-mode plan` 启动 → 让模型改文件 → **被拒绝且它自己转去调 `ExitPlanMode`** → 面板弹出 → 选「批准，逐个确认」→ 模式切到默认、模型开始动手
+- [x] 手动验收：计划面板上选「继续完善计划」→ 写一句意见 → **模型据此改了方案并再次提交**
+- [x] 手动验收：计划面板上按 Esc → 回合结束，**下一条消息不报 400**
 
 ---
 
@@ -2065,3 +2065,76 @@ PLAN 承诺的是「不会**动手**」，不是「不会读」——只读调�
 **连带**：`PermissionEngineTest$Robustness.concurrentDecideAndMutate` 的断言
 「工作区内的写绝不会是 DENY」写在 PLAN 存在之前，需按当时 `mode()` 快照分档断言；
 **不得**弱化成「不抛异常 + reason 非空」——那是把有内容的断言换成几乎不会失败的断言。
+
+---
+
+## 实施记录（2026-08-01 落地，12 个提交 `7b20f25` → `b5f78ba`）
+
+**执行方式**：subagent 并行，四波。最宽一波五个 agent 同时跑，按文件冲突分组
+（同波内改动的文件互不相交）。两条纪律贯穿全程：`git add` 写确切文件名（绝不 `-A`）、
+提交前先 `mvn -o test-compile`（编译是全模块的，一个语法错卡住所有并行 agent）。
+
+**验证**：`mvn -o test -pl springai-code-tui` → 872 跑（`CodingAgentSpikeTest.todoTurnIdBinding`
+是打真实模型的既有 flaky，红/绿单独记）；`permission_smoke.py` → `SMOKE PASS`，26 条断言。
+
+### 计划之外的三处发现（本期真正的价值）
+
+**① PLAN 下的结论是倒置的**（`ddd19a5`，见上文「Task 2 修订」）。
+实测：`rm -rf ~` 与写 `~/.ssh/authorized_keys` 是 **ASK**（可当场批准、真的会执行），
+而无害的 `mvn test` 是 **DENY**。根因是第 2 步内置危险检查提前 return，走不到第 6 步的 PLAN 分支。
+**这个洞是 jshell 打真实引擎跑出来的，读代码看不出来。**
+
+**② 冒烟脚本自己假绿**（`158a393`）。循环从两档扩到三档后，
+`check_slash_tab_guard` 末尾的「restore DEFAULT」只按了一下 `Shift+Tab`（实际到了 PLAN），
+却因为 `wait_for` 命中早先 `/permissions` 留下的**陈旧 scrollback** 而通过，其后所有场景
+都在错误档位下跑。修法：`restore_default_mode()` 按两下 + 用 `/permissions` 报告核实。
+教训已记进项目长期记忆（`pty-waitfor-matches-stale-scrollback`）。
+
+**③ 期 1 的一条验收判据被错误标为「已覆盖」**（`b5f78ba`、`c79bbd8`）。
+「Esc 中断 → 下一条消息不报 400」原断言只等「收到回复」，而桩模型不校验消息结构 → **恒真**。
+补上结构检查（`dangling_tool_calls` + 探测器自检）后，两级变异又查明：
+- 只停 `doOnCancel(trimDanglingToolCalls)` → **两条取消场景都还绿**；
+- 再停 `submit()` 顶部那次出站净化 → 计划面板那条**才红**。
+
+即**兜住该属性的是出站净化，不是 `doOnCancel`**；且**权限面板那条路径压根不产生悬空状态**
+（被取消的回合连一条 assistant 都没进会话），故其断言至今**无法被证伪**。期 1 计划的判据已更正。
+
+### 实施者顶回计划、而且是对的（两处）
+
+- **并发断言不能用 `mode()` 快照**：mutator 线程一直在 `cycleMode()`，快照与 `decide()` 实际
+  用的档位两个方向都会错位而 flake。改用与档位无关的蕴含式（`DENY → reason 含「计划模式」`），
+  race-free 且仍能抓住「非 PLAN 档拒了工作区内的写」。
+- **反馈输入不能转交 `inputKeys.handleKeyEvent`**：它绑的是主输入框的 `inputState`，
+  转交会把反馈打进输入框而 `planInput` 一直是空的。改用 `askFreeText` 那套手写按键处理。
+
+### 与计划的其它偏离（均已核可）
+
+- `CodeTuiView` 加了一个**包私有四参构造**注入 `ScrollbackPrinter.Sink`：测试态 `runner()` 为 null，
+  原 Sink 直接 `runner().println(...)` 会让每个计划用例一发 NPE。`Sink` 的类注释本就写着
+  「测试=内存列表」，是设计好的接缝。
+- `SubagentRunner` 构造重载 5 → 6（新增 1 个、其余委派兜底），以避免破坏 17 处既有调用点。
+  收敛成 Builder 值得单独做，不适合在并行窗口里干。
+- 子 agent 的模式提示（Task 11）**原不在本期范围**（计划的「本期不做」写着不改子 agent 的
+  权限继承方式），因实施中发现「PLAN 下子 agent 会不知情地反复撞墙」而经用户批准补做。
+  曾考虑并**否决**「PLAN 下禁掉 Task」——派 `explore` 子 agent 做只读调查恰恰是这一档最该干的事。
+
+### 仍需人工验收（要真实模型；机制冒烟已覆盖，但「模型会不会照提示做」属提示工程）
+
+- [ ] `--permission-mode plan` 启动 → 让模型改文件 → **被拒后它自己转去调 `ExitPlanMode`**
+- [ ] 选「批准，逐个确认」→ 模式切默认、模型**开始动手**
+- [ ] 选「继续完善计划」+ 写一句意见 → 模型**据此改了方案并再次提交**
+- [ ] PLAN 下派 `explore` 子 agent → 它**只做只读调查并报告回来**
+- [ ] （期 1 遗留）权限面板选「5. 中断」后下一条消息不报 400——自动化至今无法证伪这条
+
+### 已知遗留
+
+- **两条取消路径在「会话里留下什么」上不对称**：计划面板取消会留下半截 `assistant(tool_calls)`
+  （靠出站净化清掉），权限面板取消则压根没落盘。同一个 `cancelTurnFor`、同一个异常，
+  落盘时机却不同（差异多半在 `SessionMemoryAdvisor` 的持久化点，未深挖）。
+  后果：**计划路径比权限路径多依赖一层净化**，出站净化一旦被动，先出事的是它。
+- **`📋` 的显示宽度两侧不一致**：应用侧 `CharWidth.of`=2，pyte 侧=1。它只出现在左对齐、
+  不参与补白/截断算式的短行上，最坏右移一列、不会折行。但 **pyte 的 wcwidth 表 ≠ GUI 终端
+  对 emoji 的实际渲染**——能证的是「不折行」，不能证「所有终端里对齐到同一列」。
+- **在飞子 agent 的提示会过期**：模式在派发那一刻读一次，若期间用户批准计划切了档，
+  在飞的子 agent 手里仍是旧提示。但**权限引擎是实时的**，其工具调用按新模式放行——
+  提示比实际更严，方向安全，判为可接受。

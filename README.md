@@ -39,7 +39,8 @@ bin/code-tui                      # Windows 用 bin\code-tui.cmd
 |---|---|
 | **多 provider** | DeepSeek / 智谱 GLM / 通义千问 / Anthropic / OpenAI，`/model` 运行时切换，模型清单可经 `*_MODELS` 自定义 |
 | **工具** | 文件读写、Shell、Grep/Glob、联网抓取（webFetch）、**联网搜索**（博查中文 + Brave 英文，模型按内容语言自选）、向用户反问 |
-| **权限管理** | 有副作用的调用**执行前**弹审批面板（允许一次 / 本会话 / 永久 / 拒绝 / 中断），规则写 `permissions.json`；`Shift+Tab` 切模式且常驻状态栏；另有一层 **allow 规则与 BYPASS 都盖不住**的内置底线 |
+| **权限管理** | 有副作用的调用**执行前**弹审批面板（允许一次 / 本会话 / 永久 / 拒绝 / 中断），规则写 `permissions.json`；另有一层 **allow 规则与 BYPASS 都盖不住**的内置底线 |
+| **计划模式** | `Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式」三档间循环，当前档位常驻状态栏。计划模式下只放行只读调查，写与命令一律**拒绝**（不是询问），模型改用 `ExitPlanMode` 交一份计划，经你批准后才动手；也可用 `--permission-mode plan` 启动 |
 | **子 agent** | `Task` 单个委派 / `ParallelTasks` 并发派发，内置 explore / plan / bash / general-purpose 四类 |
 | **MCP** | 接入外部工具：本地 stdio 子进程 + **远程 Streamable HTTP**（headers 支持 `${ENV_VAR}` 插值），`/mcp` 面板运行期启停 |
 | **上下文** | 事件溯源会话记忆 + 回合感知压缩、跨会话长期记忆、项目指令（`AGENTS.md`）、`-c` 恢复上次会话 |
@@ -97,7 +98,8 @@ springai-agentdemo                  父工程（聚合 + 版本管理，packagin
 └── springai-code-tui              【综合应用】命令行编码智能体（TUI）
     └── 多 provider（DeepSeek/智谱/千问/Anthropic/OpenAI）+ 子 agent（Task + ParallelTasks 并行）+ 技能
         + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ MCP（接入外部工具）+ 计划/任务面板 + 会话压缩
-        + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）+ 权限管理（审批面板 + 规则 + 内置底线）
+        + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
+        + 权限管理（审批面板 + 规则 + 内置底线 + 计划模式）
 
 ```
 
