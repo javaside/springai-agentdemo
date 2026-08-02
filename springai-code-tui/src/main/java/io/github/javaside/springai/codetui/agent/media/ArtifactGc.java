@@ -40,7 +40,10 @@ public final class ArtifactGc {
             if (!Files.isDirectory(artifactsDir)) return;
             List<Path> files = new ArrayList<>();
             try (Stream<Path> s = Files.list(artifactsDir)) {
-                s.filter(Files::isRegularFile).forEach(files::add);
+                // 必须先排掉软链再判 isRegularFile——后者<b>默认跟随</b>符号链接，会把
+                // MediaArtifactStore 建的 latest.<ext> 当成一个普通文件：它的大小被重复计入总量
+                // （指向的目标已经算过一次），而且链本身可能被删掉、或删掉目标留下悬空链。
+                s.filter(p -> !Files.isSymbolicLink(p)).filter(Files::isRegularFile).forEach(files::add);
             }
             long total = 0;
             for (Path p : files) total += sizeOf(p);

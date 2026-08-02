@@ -3,12 +3,15 @@ package io.github.javaside.springai.codetui.agent.media;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class ArtifactGcTest {
 
@@ -45,5 +48,30 @@ class ArtifactGcTest {
     @Test
     void missingDirectoryIsSilent() {
         ArtifactGc.sweep(dir.resolve("nope"), 1000);
+    }
+
+    /**
+     * latest.png 这类软链既不该被计入总量，也不该被删掉。
+     *
+     * <p>构造刻意让两种实现产生可观测差别：两个真文件共 1200 字节，上限 1500——不跟随软链时
+     * 总量 1200 未超限，直接 no-op；一旦跟随（{@code Files.isRegularFile} 的默认行为），软链的
+     * 600 字节被<b>重复</b>计入变成 1800 超限，于是 GC 开删最旧的 a.png。
+     */
+    @Test
+    void symlinkIsNeitherCountedNorDeleted() throws Exception {
+        Path a = file("a.png", 600, 1_000L);
+        Path b = file("b.png", 600, 2_000L);
+        Path link = dir.resolve("latest.png");
+        try {
+            Files.createSymbolicLink(link, a.getFileName());
+        } catch (IOException | UnsupportedOperationException | SecurityException e) {
+            assumeTrue(false, "本文件系统建不了符号链接，跳过：" + e);
+        }
+
+        ArtifactGc.sweep(dir, 1_500);
+
+        assertTrue(Files.exists(a), "软链的大小不该被重复计入，a.png 不该被删");
+        assertTrue(Files.exists(b), "b.png 不该被删");
+        assertTrue(Files.exists(link, LinkOption.NOFOLLOW_LINKS), "软链本身不该被删");
     }
 }
