@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
+import io.github.javaside.springai.codetui.agent.media.MediaReferencePreservingCompactionStrategy;
 import io.github.javaside.springai.codetui.agent.media.SessionFileExternalizer;
 import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;
 import io.github.javaside.springai.codetui.agent.media.ToolResultMediaHandler;
@@ -60,8 +61,10 @@ import java.util.List;
  * <p><b>返回 {@link AgentRuntime}</b>：{@link #build} 除了 {@link ChatClient}，还暴露 {@link SessionService}
  * 与一份更激进的手动压缩策略（保留 20 事件），供上层 {@code /compact} 命令直接触发压缩。
  * <b>自动</b>（阈值触发）路径的策略用 {@link NotifyingCompactionStrategy} 包一层，使原本静默的压缩对 UI 可见；
- * <b>手动</b>路径的策略<b>不</b>包装——它由 {@code CodingAgent.runCompaction} 直接调用并自行上报事件，
- * 若再包装会重复上报同一次压缩。
+ * <b>手动</b>路径的策略<b>不</b>包 Notifying——它由 {@code CodingAgent.runCompaction} 直接调用并自行上报事件，
+ * 若再包装会重复上报同一次压缩。两条路径都再包一层
+ * {@link MediaReferencePreservingCompactionStrategy}，把被摘要掉的图片引用逐字捞回来（否则 sha 路径
+ * 一被 LLM 改写，图就再也寻址不到）。装配见 {@link #autoCompaction} / {@link #manualCompaction}。
  *
  * <p><b>为何不挂 conversation_search 工具</b>：0.5.0 的压缩是<b>销毁式</b>的——
  * {@code DefaultSessionService.compactWith} 只把压缩后的集合经 {@code replaceEvents} 覆盖写回，
@@ -107,6 +110,35 @@ public final class AgentTools {
 
     /** 手动策略的重叠窗口：须 >=0 且 < MANUAL_MAX_EVENTS_TO_KEEP，给摘要与保留段留一点上下文衔接。 */
     private static final int MANUAL_OVERLAP_SIZE = 3;
+
+    /**
+     * <b>自动</b>压缩路径的装配：{@code Notifying( Preserving( base ) )}。
+     *
+     * <p>Notifying 必须在<b>最外层</b>：它上报的 {@code eventsRemoved} / {@code tokensEstimatedSaved}
+     * 应当是「加了附件清单之后」的净效果。今天两个数字恰好都被 Preserving 原样透传，包反了也看不出差别；
+     * 但一旦 Preserving 将来要把清单的开销记进账，包反的那份就会让 UI 报出偏乐观的数字。
+     *
+     * <p>{@code base}（真正做摘要的策略）由调用方传入，不在这里构造——这样装配级测试可以塞一个
+     * 假 base 端到端验证「清单确实被插进去了」，不必起一个真 LLM。
+     */
+    static CompactionStrategy autoCompaction(CompactionStrategy base, AgentListener listener) {
+        return new NotifyingCompactionStrategy(
+                new MediaReferencePreservingCompactionStrategy(base), listener, "auto");
+    }
+
+    /**
+     * <b>手动</b>（{@code /compact}）压缩路径的装配：{@code Preserving( base )}，<b>不</b>包 Notifying。
+     *
+     * <p>不包 Notifying 是刻意的——手动路径由 {@code CodingAgent.runCompaction} 直接调用
+     * {@code sessionService.compact} 并拿到返回值自行上报生命周期事件，再包一层会把同一次压缩
+     * （尤其是失败）重复上报。
+     *
+     * <p>但 Preserving <b>必须单独套上</b>：它和自动路径是两条独立的策略对象，只接自动那条的话，
+     * 用户一按 {@code /compact} 图就全丢——这正是最容易漏、也最难在测试里发现的那种错。
+     */
+    static CompactionStrategy manualCompaction(CompactionStrategy base) {
+        return new MediaReferencePreservingCompactionStrategy(base);
+    }
 
     /** 会话记忆的默认用户 id（单会话 TUI，仅作归属占位）。 */
     private static final String DEFAULT_USER_ID = "code-tui-user";
@@ -394,20 +426,19 @@ public final class AgentTools {
         // token 估算器（JTokkit，spring-ai-commons 提供）：trigger 与摘要策略都需显式提供，无默认值。
         TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
 
-        // 自动压缩策略（保留 120）→ 包一层通知装饰器（reason="auto"），让阈值触发的压缩对 UI 可见。
-        // 自动路径由 advisor 内部调用、拿不到返回值，必须靠装饰器上报 started/finished/failed。
-        CompactionStrategy autoStrategy = new NotifyingCompactionStrategy(
+        // 自动压缩策略（保留 120）：装配见 #autoCompaction。
+        CompactionStrategy autoStrategy = autoCompaction(
                 RecursiveSummarizationCompactionStrategy.builder(auxClient)
                         .maxEventsToKeep(MAX_EVENTS_TO_KEEP)
                         .tokenCountEstimator(tokenCountEstimator).build(),
-                listener, "auto");
+                listener);
 
-        // 手动压缩策略（保留 20，更激进）：<b>不</b>包装装饰器——手动路径由 {@code CodingAgent.runCompaction}
-        // 直接调用 sessionService.compact 并拿到返回值自行上报生命周期事件；若再包装会导致失败被重复上报。
-        CompactionStrategy manualStrategy = RecursiveSummarizationCompactionStrategy.builder(auxClient)
-                .maxEventsToKeep(MANUAL_MAX_EVENTS_TO_KEEP)
-                .overlapSize(MANUAL_OVERLAP_SIZE)
-                .tokenCountEstimator(tokenCountEstimator).build();
+        // 手动压缩策略（保留 20，更激进）：装配见 #manualCompaction。
+        CompactionStrategy manualStrategy = manualCompaction(
+                RecursiveSummarizationCompactionStrategy.builder(auxClient)
+                        .maxEventsToKeep(MANUAL_MAX_EVENTS_TO_KEEP)
+                        .overlapSize(MANUAL_OVERLAP_SIZE)
+                        .tokenCountEstimator(tokenCountEstimator).build());
 
         SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
                 .defaultUserId(DEFAULT_USER_ID)
