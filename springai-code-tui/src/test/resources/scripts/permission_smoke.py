@@ -70,6 +70,7 @@ MODE_PLAN = "权限模式：计划模式"
 MODE_TAG_ACCEPT = "⏵⏵ 自动接受编辑"
 MODE_TAG_PLAN = "⏸ 计划模式"
 PERM_BOTTOM_LINE = "内置底线"
+PERM_PANEL_TITLE = "🔑 权限规则"
 MCP_PANEL_TITLE = "MCP 服务器"
 MCP_EXPANDED = "（未连接，无工具信息）"
 PANEL_TITLE = "⚠ 需要授权：Bash"
@@ -221,11 +222,34 @@ def start_stub():
 
 # ── screen helpers ───────────────────────────────────────────────────────
 def find_row(session, needle):
-    """Index of the first screen row containing `needle`, or -1."""
+    """含 `needle` 的<b>最后</b>一个屏幕行号，找不到返回 -1。
+
+    <b>取最后一个而不是第一个</b>：本脚本用它定位「当前面板」，而活面板永远钉在屏幕
+    底部、scrollback 在它上面。同一个场景跑第二遍时，第一次留下的面板文本还在 scrollback
+    里——取首个匹配就会拿到那条历史，于是「三项各占一连续行」的断言看到 [27, 6, 29, 30]
+    这种行号（实测过）。这与 wait_for 命中陈旧 scrollback 是同一族陷阱。
+    """
+    hit = -1
     for i, line in enumerate(session.screen.display):
         if needle in line:
-            return i
-    return -1
+            hit = i
+    return hit
+
+
+def assert_rows_below(session, anchor, needles, what):
+    """从 `anchor` 行的下一行起，逐行核对 `needles`——顺序与「各占一物理行」一起钉住。
+
+    <b>为什么不逐个 find_row</b>：那样既会撞上陈旧 scrollback（同一场景跑第二遍时，
+    上一次的面板文本还在屏上），也会撞上同屏重复（目标串 `git push origin main` 同时
+    出现在标题下的目标行与下面的原因行里）。两种都实测过。锚定一次、往下数，两个问题
+    一起消失，还顺带证明了顺序没乱。
+    """
+    for offset, needle in enumerate(needles, start=1):
+        row = anchor + offset
+        if row >= len(session.screen.display) or needle not in session.screen.display[row]:
+            actual = session.screen.display[row] if row < len(session.screen.display) else "<越界>"
+            die("%s：第 %d 行应含 %r，实际 %r（疑似折行/塌行/顺序变了）"
+                % (what, row, needle, actual), session.screen.display)
 
 
 def row_backgrounds(session, y):
@@ -356,6 +380,11 @@ def assert_mode_via_report(session, label):
     session.write(b"/permissions\r")
     wait_until(session, lambda: (last_mode_line(session) or "").startswith("权限模式：" + label),
                8, "/permissions 报告显示「%s」（实际：%s）" % (label, last_mode_line(session)))
+    # 期 3 起 /permissions 会**留下一个面板**，而面板吞掉所有按键——不关掉的话，
+    # 后面场景敲的每一个字符（斜杠命令、Shift+Tab 之外的一切）都进不了输入框。
+    # 模式那行仍下沉 scrollback，故读完即可关。
+    session.write(ESC)
+    session.pump(0.3)
 
 
 # ── scenarios ────────────────────────────────────────────────────────────
@@ -646,13 +675,97 @@ def check_plan_cancel_turn(session):
 
 
 def check_permissions_report(session):
+    """期 3 起 /permissions 是交互面板：**模式**与**内置底线**仍下沉 scrollback
+    （它们是信息不是列表），**规则列表进面板**。此刻还没有任何规则，故面板显示配置指引。
+    """
     session.write(b"/permissions\r")
     session.wait_for(PERM_BOTTOM_LINE)
+    session.pump(0.4)
     text = session.screen_text()
-    for needle in ("权限模式：默认（Shift+Tab 循环切换）", "当前没有自定义规则"):
+    for needle in ("权限模式：默认（Shift+Tab 循环切换）", PERM_BOTTOM_LINE):
         if needle not in text:
-            die("/permissions 报告缺少 %r" % needle, session.screen.display)
-    print("/permissions OK: 模式 + 规则 + 内置底线三段都在.")
+            die("/permissions 的 scrollback 段缺少 %r" % needle, session.screen.display)
+    if PERM_PANEL_TITLE not in text:
+        die("/permissions 应打开交互面板（缺 %r）" % PERM_PANEL_TITLE, session.screen.display)
+    if "当前没有自定义规则" not in text:
+        die("零规则时面板应给配置指引", session.screen.display)
+    session.write(ESC)                      # 关掉面板，别影响后面的场景
+    session.pump(0.3)
+    if PERM_PANEL_TITLE in session.screen_text():
+        die("Esc 没有关掉 /permissions 面板", session.screen.display)
+    print("/permissions OK: 模式与底线进 scrollback、规则列表进面板、Esc 可关.")
+
+
+def check_permissions_panel_delete(session, tmpdir):
+    """整条闭环：审批面板选「永久」写下规则 → /permissions 面板里看得见 →
+    d 要确认 → 确认后从**列表和文件里同时**消失。
+
+    这一条是期 3 唯一能证伪「面板说删了、实际还在」的手段——单测里 SubmitHandler
+    是桩，只有实机才同时检验 UI、引擎、写盘三者是否一致。
+    """
+    rules_file = os.path.join(tmpdir, ".codetui", "permissions.json")
+
+    # ① 经审批面板写一条永久规则
+    session.write(("帮我推送 " + PUSH_MARKER).encode() + b"\r")
+    session.wait_for(PANEL_TITLE, timeout=40)
+    session.write(b"3")                     # 3. 允许，永久
+    session.pump(0.3)
+    session.write(b"\r")
+    session.wait_for("已记下允许规则", timeout=20)
+    session.pump(0.8)
+    if not os.path.exists(rules_file):
+        die("「永久允许」没有写出 %s" % rules_file, session.screen.display)
+    with open(rules_file) as f:
+        written = f.read()
+    if "Bash(" not in written:
+        die("规则文件里没有 Bash 规则：%r" % written, session.screen.display)
+    print("永久规则 OK: 已写入 %s." % rules_file)
+
+    # ② 面板里看得见它
+    session.write(b"/permissions\r")
+    session.wait_for(PERM_PANEL_TITLE, timeout=20)
+    session.pump(0.5)
+    print_screen("PERMISSIONS PANEL (as rendered)", session.screen.display)
+    text = session.screen_text()
+    if "Bash(" not in text:
+        die("面板里看不到刚写下的规则", session.screen.display)
+    if "项目级" not in text:
+        die("面板应标出规则来自哪一层", session.screen.display)
+
+    # 每项各占一个连续物理行 + 高亮纯前景（底色条会串到下一行，本项目实机复现过）
+    sel = find_row(session, "❯")
+    if sel is None:
+        die("面板没有高亮行", session.screen.display)
+    if row_backgrounds(session, sel) != {"default"} \
+            or row_backgrounds(session, sel + 1) != {"default"}:
+        die("权限面板高亮用了背景色（会串到下一行）", session.screen.display)
+
+    # ③ d 只是请求删除，必须先确认
+    session.write(b"d")
+    session.pump(0.4)
+    if "确认删除" not in session.screen_text():
+        die("按 d 应先出现确认行，而不是直接删", session.screen.display)
+    with open(rules_file) as f:
+        if "Bash(" not in f.read():
+            die("确认之前就把规则删了", session.screen.display)
+    print("删除确认 OK: d 不直接删、先要确认.")
+
+    # ④ 确认后从列表与文件里同时消失
+    session.write(b"\r")
+    session.pump(0.8)
+    # ⚠ 不能用 `"Bash(" not in screen_text()` 判断「列表里没了」——screen_text() 含 scrollback，
+    # 而几步之前刚打进去一行「✓ 已记下允许规则：Bash(...)」，那条历史永远在屏上。
+    # 这正是本脚本栽过的陷阱（见 restore_default_mode 的注释）。改用正向断言：
+    # 删光之后面板必然显示零规则指引。
+    if "当前没有自定义规则" not in session.screen_text():
+        die("确认后面板应变成零规则指引（说明列表真的更新了）", session.screen.display)
+    with open(rules_file) as f:
+        after = f.read()
+    if "Bash(" in after:
+        die("面板说删了，但文件里还在：%r" % after, session.screen.display)
+    session.write(ESC)
+    session.pump(0.3)
+    print("删除生效 OK: 列表与 permissions.json 同时不再有它.")
 
 
 def check_slash_tab_guard(session):
@@ -732,10 +845,9 @@ def check_panel_layout(session):
 
     # Header block: title / target / reason / suggested rule, one physical row
     # each and contiguous (a wrapped or collapsed row shifts these apart).
-    head = [find_row(session, n) for n in
-            (PANEL_TITLE, "git push origin main", "只读白名单", "允许后将记下规则")]
-    if head != [head[0] + i for i in range(4)]:
-        die("面板抬头四行不连续（行号=%s），疑似折行/塌行" % head, session.screen.display)
+    assert_rows_below(session, find_row(session, PANEL_TITLE),
+                      ("git push origin main", "只读白名单", "允许后将记下规则"),
+                      "审批面板抬头")
 
     rows = [find_row(session, n) for n in
             (OPT_ONCE, OPT_SESSION, OPT_ALWAYS, OPT_DENY, OPT_CANCEL)]
@@ -917,6 +1029,7 @@ def main():
         check_plan_approval(session)
         check_plan_cancel_turn(session)
         check_permissions_report(session)
+        check_permissions_panel_delete(session, tmpdir)
         check_slash_tab_guard(session)
         check_mcp_tab_guard(session)
 
