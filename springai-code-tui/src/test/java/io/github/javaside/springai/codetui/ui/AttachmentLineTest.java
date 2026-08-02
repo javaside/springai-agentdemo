@@ -80,6 +80,20 @@ class AttachmentLineTest {
         assertFalse(line.contains("Ctrl+X"), "已取消还提示 Ctrl+X 是噪音：" + line);
     }
 
+    /**
+     * 取消行必须说清「接下来会怎样」，不能只说「取消了什么」。
+     *
+     * <p>取消附件不会删掉输入框里那段路径（误附场景里用户就是要说那个路径），于是路径还在屏幕上、
+     * 行里却写着「已取消」——用户会以为没生效。实测反馈原话：「附件是取消了，输入框里的文件还在，
+     * 歧义特别大」。这条钉住那句结果说明，防止有人为了短又把它删掉。
+     */
+    @Test
+    void cancelledLineStatesWhatHappensToThePathText() {
+        String line = CodeTuiView.attachmentLineCancelled();
+        assertTrue(line.contains("普通文本"),
+                "只说了取消、没说路径会怎样，用户看着路径还在会以为没生效：" + line);
+    }
+
     /** 附件行必须是单行——本项目铁律：一个 OutputLine = 一个物理行，多行会被 println 塌成一行截断。 */
     @Test
     void attachmentLineIsAlwaysASingleLine() {

@@ -503,9 +503,18 @@ public final class CodeTuiView extends InlineApp {
         return b.toString();
     }
 
-    /** 取消后的附件行。刻意不再提示 Ctrl+X——已经取消了，再提示是噪音。 */
+    /**
+     * 取消后的附件行。
+     *
+     * <p><b>必须说清「接下来会怎样」，不能只说「取消了什么」</b>：取消附件<b>不会</b>删掉输入框里
+     * 那段路径——最典型的误附场景（{@code 把 docs/bug.png 复制到 tmp/}）里，用户<b>就是要</b>跟模型
+     * 说这个路径，删掉等于毁掉他的话。但路径明明还在屏幕上、行里却写着「已取消」，用户会以为
+     * 没生效（实测反馈：「附件是取消了，输入框里的文件还在，歧义特别大」）。补一句结果即可消歧。
+     *
+     * <p>刻意不再提示 {@code Ctrl+X}——已经取消了，再提示是噪音。
+     */
     static String attachmentLineCancelled() {
-        return "  ⏎ 已取消附件";
+        return "  ⏎ 已取消附件 · 路径仅作普通文本发送";
     }
 
     /** 当前输入文本里识别到的图片（按文本记忆，见 {@link #attachCacheText}）。 */
