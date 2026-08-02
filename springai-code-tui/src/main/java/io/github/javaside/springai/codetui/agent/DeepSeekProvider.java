@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
+import io.github.javaside.springai.codetui.agent.media.VisionModels;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
@@ -94,4 +96,14 @@ public final class DeepSeekProvider implements LlmProvider {
     @Override public List<ModelOption> models() { return models; }
 
     @Override public String defaultModel() { return models.get(0).id(); }
+
+    /**
+     * DeepSeek 目前没有视觉模型，这里仍显式覆写：让「这家没有视觉模型」成为一个写下来的事实，
+     * 而不是「忘了覆写」留下的默认行为。判定同样按模型走 {@link VisionModels}，将来这家出了
+     * 视觉模型只需改名单。
+     */
+    @Override
+    public ModelCapabilities capabilities(String modelId) {
+        return new ModelCapabilities(VisionModels.supportsImage(modelId), false);
+    }
 }

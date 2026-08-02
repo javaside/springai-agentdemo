@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
+import io.github.javaside.springai.codetui.agent.media.VisionModels;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -83,4 +85,13 @@ public final class OpenAiProvider implements LlmProvider {
     @Override public List<ModelOption> models() { return models; }
 
     @Override public String defaultModel() { return models.get(0).id(); }
+
+    /**
+     * 视觉能力按<b>模型</b>判定，不按 provider——同一家既有视觉模型也有纯文本模型。
+     * 名单与「未知即不支持」的理由见 {@link VisionModels}。
+     */
+    @Override
+    public ModelCapabilities capabilities(String modelId) {
+        return new ModelCapabilities(VisionModels.supportsImage(modelId), false);
+    }
 }
