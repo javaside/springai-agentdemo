@@ -1,10 +1,12 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
 import io.github.javaside.springai.codetui.agent.media.SessionFileExternalizer;
 import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;
 import io.github.javaside.springai.codetui.agent.media.ToolResultMediaHandler;
+import io.github.javaside.springai.codetui.agent.media.VisionMaterializingChatModel;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
@@ -31,6 +33,7 @@ import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ToolContext;
 
 import java.nio.file.Path;
@@ -245,7 +248,10 @@ public final class AgentTools {
         // ① SmartWebFetch 的网页内容 AI 抽取；② 会话历史的滚动摘要。都不能带工具/记忆，否则会递归触发工具或记忆循环。
         // 底层用 DynamicAuxChatModel：每次调用实时解析激活 provider/模型，使这两处跟随 /model 切换
         // （否则绑死在启动那家，切换后仍打到旧家——见 DynamicAuxChatModel 类注释）。
-        ChatClient auxClient = ChatClient.builder(new DynamicAuxChatModel(registry)).build();
+        // <b>不要在这一行往里塞装饰器</b>——尤其不要塞视觉兑现（原因见 auxChatModel 的 javadoc：
+        // 摘要含引用块，包上等于每次自动压缩静默变成视觉请求）。要动就去改 auxChatModel，
+        // 那里有一条守卫测试等着（AuxClientNotVisionWrappedTest）。
+        ChatClient auxClient = ChatClient.builder(auxChatModel(registry)).build();
 
         // 网页获取工具：抓取→转 Markdown→按 prompt AI 抽取。关掉 domainSafetyCheck（见类注释）。
         SmartWebFetchTool webFetch = SmartWebFetchTool.builder(auxClient)
@@ -304,6 +310,11 @@ public final class AgentTools {
         // 媒体外置（路径①）：装饰循环前构造一次 store + handler，供每个工具的装饰器共享。
         MediaArtifactStore mediaStore =
                 new MediaArtifactStore(root.resolve(".codetui").resolve("artifacts"), root);
+        // 启动清理：截图循环会让 artifacts 迅速膨胀，而该目录按项目共享、跨会话累积、
+        // /clear 也不清。不做引用扫描（要遍历所有会话文件，出错面大得多）——误删旧图
+        // 只会让模型 Read 拿到「文件不存在」，可恢复。
+        // 只在这里扫一次：McpRegistry 指向同一个目录，两处都加等于重复扫。
+        ArtifactGc.sweep(root.resolve(".codetui").resolve("artifacts"), ArtifactGc.DEFAULT_MAX_BYTES);
         ToolResultMediaHandler mediaHandler = new TextReferenceMediaHandler();
         // 媒体外置（路径②）：回合间（CodingAgent.submit 开头）把过往「非文本文件」读取结果换成引用（文本文件不动）。
         SessionFileExternalizer fileExternalizer = new SessionFileExternalizer(root);
@@ -421,11 +432,19 @@ public final class AgentTools {
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
         java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
+        // 每个 provider 的视觉装饰器实例单独留一份引用：/context 要按<b>激活</b> provider 读
+        // lastSnapshot()，而快照是每个装饰器自己的状态（预算也按实例计），拿错一个就报错数字。
+        java.util.Map<String, VisionMaterializingChatModel> visionModels = new java.util.LinkedHashMap<>();
         for (LlmProvider provider : registry.allProviders()) {
             if (!provider.available()) {
                 continue;
             }
-            ChatClient c = ChatClient.builder(provider.chatModel())
+            // 视觉兑现的唯一接线点：包在 provider 的 ChatModel 外，位于整条 advisor 链<b>下游</b>，
+            // 故兑现结果绝不会回流进会话存储（见 VisionMaterializingChatModel 类注释）。
+            VisionMaterializingChatModel visionModel =
+                    VisionMaterializingChatModel.wrap(provider.chatModel(), root);
+            visionModels.put(provider.id(), visionModel);
+            ChatClient c = ChatClient.builder(visionModel)
                     .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                             .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, environmentInfo)
                             .param(AgentEnvironment.GIT_STATUS_KEY, gitStatus)
@@ -449,7 +468,7 @@ public final class AgentTools {
 
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
-                reloadableSkill, subagentRunner, fileExternalizer, permissionEngine);
+                reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels);
     }
 
     /**
@@ -600,6 +619,7 @@ public final class AgentTools {
      * @param subagentRunner      子 agent 执行器；当前主要供测试观测「记忆工具不泄漏给子 agent」的边界（生产暂无消费方）
      * @param fileExternalizer    路径②：回合间（{@code CodingAgent.submit} 开头）把过往大文本 tool 结果外置为引用，与路径①共用 store/root
      * @param permissionEngine    权限引擎（UI 经它读/切模式、列生效规则；三处装配点共用同一实例）
+     * @param visionModels        每个 provider 的视觉兑现装饰器，键同 {@code clients}；供 {@code /context} 按激活 provider 读 {@code lastSnapshot()}
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -612,10 +632,26 @@ public final class AgentTools {
                                ReloadableSkillTool reloadableSkill,
                                SubagentRunner subagentRunner,
                                SessionFileExternalizer fileExternalizer,
-                               PermissionEngine permissionEngine) {
+                               PermissionEngine permissionEngine,
+                               java.util.Map<String, VisionMaterializingChatModel> visionModels) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
+    }
+
+    /**
+     * 辅助 client（SmartWebFetch 抽取 + 会话滚动摘要）底层的 ChatModel。
+     *
+     * <p><b>这个 ChatModel 绝不能被 {@link VisionMaterializingChatModel} 包上。</b>摘要请求里的消息
+     * <b>含引用块</b>——一旦包上，每次压缩都会把历史图兑现成真字节发给摘要模型，<b>一次纯文本摘要
+     * 静默变成视觉请求</b>。而压缩是<b>自动触发</b>的、全程无提示，你不会注意到，直到看账单。
+     *
+     * <p>之所以把它抽成一个独立方法而不是埋在 {@link #build} 一长串构造里：让「auxClient 用哪个
+     * ChatModel」变成<b>一处显式决策</b>，可以被守卫测试直接盯住
+     * （见 {@code AuxClientNotVisionWrappedTest}）——否则「顺手包上」这件事没有任何东西挡得住。
+     */
+    static ChatModel auxChatModel(ProviderRegistry registry) {
+        return new DynamicAuxChatModel(registry);
     }
 
     /**
