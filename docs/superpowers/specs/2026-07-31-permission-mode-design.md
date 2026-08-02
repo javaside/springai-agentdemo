@@ -154,7 +154,7 @@ MCP 工具兜底是 ASK 而非放行——保守默认。批一次后可选「�
 
 切换：`Shift+Tab` 循环 `DEFAULT → ACCEPT_EDITS → PLAN`；`BYPASS` 只在启动开启时才进循环。
 另提供 `/permissions` 命令：**期 1 是只读版**（把当前模式与生效规则打进 scrollback，
-照 `/skills` 的写法），期 3 升级为可就地增删规则的交互面板。
+照 `/skills` 的写法），期 3 升级为可就地**删**规则的交互面板（新增仍走审批面板的「允许，永久」）。
 
 > **技术未知**：`Shift+Tab` 能否被终端区分需 pty 实机验证（同 `Shift+Enter` 的老问题）。
 > 若不能区分，回退为 `/permissions` 命令 + `Ctrl+P` 循环。**这是期 0 的唯一任务。**
@@ -318,7 +318,7 @@ MCP 工具兜底是 ASK 而非放行——保守默认。批一次后可选「�
 | **期 0** | pty 验证 `Shift+Tab` 是否可区分 | ✅ 2026-08-01 | 唯一技术未知，结论决定期 1 的交互设计，必须先做 |
 | **期 1** | `PermissionEngine` + 登记表 + `PermissionCallback` + `permissions.json` 两层加载与回写 + `DEFAULT`/`ACCEPT_EDITS`/`BYPASS` 三模式 + 模式切换键 + 只读版 `/permissions` + 模态队列重构 + 审批面板 | ✅ 2026-08-01 | 大头。子 agent 与 MCP 因共用装饰链自动纳管；并发队列与取消唤醒必须这期做对，否则子 agent 一跑就 park |
 | **期 2** | `PLAN` 模式 + `ExitPlanMode` + 计划审批面板 + `{PERMISSION_MODE}` 提示段 + 启动参数 | ✅ 2026-08-01 | 三档循环、`--permission-mode`、计划审批面板与 pty 实机冒烟均已落地。实施中改了一处设计：`PLAN` 下内置危险检查给 **DENY 而非 ASK**（否则只有最危险的那批操作能被当场批准，结论倒置），只读的「读密钥」仍是 ASK |
-| **期 3** | `/permissions` 升级为可增删规则的交互面板、建议规则措辞打磨、危险清单扩充、README/CHANGELOG | 未开始 | |
+| **期 3** | 补四个判定漏洞（大小写 / 符号链接 / `ACCEPT_EDITS` 命令段不判工作区 / 过宽 root）+ `/permissions` 改可**删**规则的交互面板 | ✅ 2026-08-02 | **重心与本表原定的不同**：原写「可增删规则 + 措辞打磨 + 危险清单扩充」，实际取舍见 `2026-08-02-permission-matching-holes-design.md`——危险清单扩充判为 YAGNI（黑名单没有尽头，逐条加只制造「越来越安全」的错觉）；面板内**新增/编辑**规则不做（需 DSL 校验与错误提示，工作量接近再加半期），新增仍走审批面板 |
 
 期 2 实施中发现并当期补掉的一条（原设计漏考虑）：`PLAN` 下子 agent 与主 agent 共用引擎，
 写操作照样被 DENY，但它此前既拿不到 `{PERMISSION_MODE}` 提示段、也没有 `ExitPlanMode`
