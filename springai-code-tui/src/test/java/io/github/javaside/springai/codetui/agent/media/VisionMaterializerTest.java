@@ -33,6 +33,14 @@ class VisionMaterializerTest {
         ImageIO.write(new BufferedImage(100, 80, BufferedImage.TYPE_INT_RGB), "png", p.toFile());
     }
 
+    /** 长边正好卡在 MAX_EDGE 上：不触发缩放，token 就按这个尺寸算，方便精确算预算。 */
+    private void bigPng(String rel) throws Exception {
+        Path p = root.resolve(rel);
+        if (p.getParent() != null) Files.createDirectories(p.getParent());
+        ImageIO.write(new BufferedImage(ImagePreparer.MAX_EDGE, 1500, BufferedImage.TYPE_INT_RGB),
+                "png", p.toFile());
+    }
+
     /** 造一个能通过 FileReferenceParser 严格校验的引用块。 */
     private String ref(String name, String rel) {
         return "[file reference]\n"
@@ -240,6 +248,77 @@ class VisionMaterializerTest {
         int total = out.stream().filter(m -> m instanceof MediaContent)
                 .mapToInt(m -> ((MediaContent) m).getMedia().size()).sum();
         assertEquals(1, total, "同一张图发了两份");
+    }
+
+    // ── 被预算跳过的引用要写对 delivery ─────────────────────────
+
+    /**
+     * 用户当轮贴了超过配额的图：超出的那些 delivery 必须写成 budget_exceeded。
+     *
+     * <p>留成 not_in_view 是在说谎——那句话的意思是「Read 一次就能看」，而这张图
+     * Read 回来会再次撞上同一个预算、再次被跳过，模型白白空转一轮还花钱。
+     * 五态设计的初衷就是消灭这种空转。
+     */
+    @Test
+    void userImagesBeyondQuotaAreMarkedBudgetExceeded() throws Exception {
+        png("a.png"); png("b.png"); png("c.png"); png("d.png");
+        String text = "四张图\n" + ref("a.png", "a.png") + "\n" + ref("b.png", "b.png")
+                + "\n" + ref("c.png", "c.png") + "\n" + ref("d.png", "d.png");
+        Prompt p = new Prompt(List.of(new UserMessage(text)));
+
+        String out = materializer().materialize(p, true).getInstructions().get(0).getText();
+
+        assertEquals(VisionBudget.MAX_USER_IMAGES,
+                countOccurrences(out, "delivery: " + FileReference.DELIVERY_DELIVERED),
+                "应恰好兑现配额上限张数");
+        assertTrue(out.contains("delivery: " + FileReference.DELIVERY_BUDGET_EXCEEDED),
+                "被配额挤掉的那张仍是 not_in_view，等于骗模型再 Read 一次：\n" + out);
+        assertFalse(out.contains("delivery: " + FileReference.DELIVERY_NOT_IN_VIEW),
+                "不该再有 not_in_view 残留：\n" + out);
+    }
+
+    /**
+     * ★ 张数配额（上面那条）和 token 预算是两条<b>独立</b>的跳过路径：
+     * 上面那条 4 张小图从没碰过 {@code session.admit}，只在张数上溢出；
+     * 这条两张大图没超张数配额，是第二张的 token 越了每请求上限。
+     * 少了这条，{@code admit} 返回 false 那个分支的标注就是无人验证的。
+     */
+    @Test
+    void tokenBudgetOverflowIsMarkedBudgetExceeded() throws Exception {
+        // 长边不超过 MAX_EDGE 故不缩放，token 按原尺寸算：1568×1500/750 ≈ 3136，两张即超 6000。
+        bigPng("big1.png"); bigPng("big2.png");
+        String text = "两张大图\n" + ref("big1.png", "big1.png") + "\n" + ref("big2.png", "big2.png");
+        Prompt p = new Prompt(List.of(new UserMessage(text)));
+
+        String out = materializer().materialize(p, true).getInstructions().get(0).getText();
+
+        assertEquals(1, countOccurrences(out, "delivery: " + FileReference.DELIVERY_DELIVERED),
+                "token 预算只容得下一张：\n" + out);
+        assertEquals(1, countOccurrences(out, "delivery: " + FileReference.DELIVERY_BUDGET_EXCEEDED),
+                "被 token 预算挤掉的那张必须标注：\n" + out);
+    }
+
+    /** 回合累计额度用尽后，当轮引用要写 turn_budget_exhausted——语义与「被本请求配额挤掉」不同：
+     *  前者本回合怎么 Read 都没用，后者换一轮少贴几张就行。 */
+    @Test
+    void turnBudgetExhaustionIsMarkedDistinctly() throws Exception {
+        png("x.png");
+        VisionMaterializer m = materializer();
+        Prompt p = new Prompt(List.of(new UserMessage("固定提问\n" + ref("x.png", "x.png"))));
+
+        for (int i = 0; i < VisionBudget.MAX_TURN_DELIVERIES; i++) {
+            m.materialize(p, true);
+        }
+        String out = m.materialize(p, true).getInstructions().get(0).getText();
+
+        assertTrue(out.contains("delivery: " + FileReference.DELIVERY_TURN_EXHAUSTED),
+                "额度用尽后应写 turn_budget_exhausted，而不是让模型以为 Read 一次就能看：\n" + out);
+    }
+
+    private static int countOccurrences(String haystack, String needle) {
+        int n = 0, i = 0;
+        while ((i = haystack.indexOf(needle, i)) >= 0) { n++; i += needle.length(); }
+        return n;
     }
 
     // ── 统计 ────────────────────────────────────────────────

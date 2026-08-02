@@ -108,24 +108,51 @@ public final class VisionMaterializer {
 
         // 用户图<b>先</b>过预算：预算是先到先得，顺序即优先级。反过来会让「照这张稿子改」的
         // 稿子被随后 Read 的图挤掉——功能在最典型的用法上直接失效。
-        Map<ParsedReference, Media> userMedia = admitAll(userRefs, session);
-        Map<ParsedReference, Media> toolMedia = admitAll(toolRefs, session);
+        Map<ParsedReference, Outcome> userOutcomes =
+                admitAll(userRefs, VisionBudget.MAX_USER_IMAGES, session);
+        Map<ParsedReference, Outcome> toolOutcomes =
+                admitAll(toolRefs, VisionBudget.MAX_TOOL_IMAGES, session);
 
-        if (userMedia.isEmpty() && toolMedia.isEmpty()) {
+        Map<ParsedReference, Media> toolMedia = deliveredMedia(toolOutcomes);
+
+        // 短路条件是「什么都没改」而<b>不是</b>「什么都没兑现」：一张都没兑现但有引用被判超预算时，
+        // 那些 delivery 行仍必须改写，否则模型拿到的是「Read 一次就能看」这句假话。
+        if (userOutcomes.isEmpty() && toolMedia.isEmpty()) {
             lastSnapshot = VisionSnapshot.EMPTY;
-            return prompt;              // 什么都没兑现 → 原样返回同一对象，调用方可用 == 判断
+            return prompt;              // 原样返回同一对象，调用方可用 == 判断
         }
 
         List<Message> out = new ArrayList<>(msgs);
-        if (!userMedia.isEmpty()) {
-            out.set(anchor, attachToAnchor((UserMessage) msgs.get(anchor), userMedia));
+        if (!userOutcomes.isEmpty()) {
+            out.set(anchor, rewriteAnchor((UserMessage) msgs.get(anchor), userOutcomes));
         }
         if (!toolMedia.isEmpty()) {
             out.add(synthesise(toolMedia));
         }
 
-        lastSnapshot = new VisionSnapshot(userMedia.size() + toolMedia.size(), session.tokensUsed());
+        int delivered = deliveredMedia(userOutcomes).size() + toolMedia.size();
+        lastSnapshot = delivered == 0
+                ? VisionSnapshot.EMPTY
+                : new VisionSnapshot(delivered, session.tokensUsed());
         return prompt.mutate().messages(out).build();
+    }
+
+    /**
+     * 一条引用过闸后的结局：兑现到的 {@link Media}（被跳过时为 {@code null}）+ 该写进
+     * {@code delivery} 行的状态。
+     *
+     * <p>只记成功的不够：被预算挤掉的那些若不留结局，delivery 行就会留在 {@code not_in_view}，
+     * 那句话的意思是「Read 一次就能看」——对一张会再次撞上同一个预算的图，这是假话。
+     */
+    private record Outcome(Media media, String delivery) {}
+
+    /** 从结局表里挑出真兑现了的，保持 {@link LinkedHashMap} 的顺序。 */
+    private Map<ParsedReference, Media> deliveredMedia(Map<ParsedReference, Outcome> outcomes) {
+        Map<ParsedReference, Media> out = new LinkedHashMap<>();
+        for (Map.Entry<ParsedReference, Outcome> e : outcomes.entrySet()) {
+            if (e.getValue().media() != null) out.put(e.getKey(), e.getValue().media());
+        }
+        return out;
     }
 
     /**
@@ -150,14 +177,19 @@ public final class VisionMaterializer {
         return meta != null && Boolean.TRUE.equals(meta.get(SYNTHETIC_KEY));
     }
 
-    /** 锚点那条 user 消息里的引用，按出现顺序取前 {@link VisionBudget#MAX_USER_IMAGES} 张。 */
+    /**
+     * 锚点那条 user 消息里的<b>全部</b>引用，按出现顺序。
+     *
+     * <p>不在这里砍到 {@link VisionBudget#MAX_USER_IMAGES}：超配额的那几条也得留下来，
+     * 才能把它们的 delivery 改写成 {@code budget_exceeded}。真正的张数闸门在
+     * {@link #admitAll} 里。解析本来就是对整段文本做的，多留几条不多花钱。
+     */
     private List<ParsedReference> collectUserRefs(List<Message> msgs, int anchor, Set<String> seen) {
         List<ParsedReference> out = new ArrayList<>();
         if (anchor < 0) {
             return out;                                  // 没有锚点就只处理其后的工具结果
         }
         for (ParsedReference r : FileReferenceParser.parse(msgs.get(anchor).getText(), root)) {
-            if (out.size() >= VisionBudget.MAX_USER_IMAGES) break;
             if (seen.add(r.sha())) out.add(r);
         }
         return out;
@@ -169,6 +201,10 @@ public final class VisionMaterializer {
      * <p>只认 {@link ToolResponseMessage}——{@code AssistantMessage} 必须跳过。模型看得见引用
      * 格式，可能在自己的回复里照抄；无差别扫描会把它复述的假引用当真兑现（而那段文本完全由
      * 模型的输出决定，等于把兑现的控制权交出去）。
+     *
+     * <p><b>为什么这里仍在收集阶段砍配额</b>（用户侧已改成收全、由 {@link #admitAll} 砍）：
+     * 工具侧被跳过的引用<b>无处改写</b>——它在 {@code ToolResponseMessage} 里，那条一个字都不能动。
+     * 多收几条只会在每次工具循环迭代里白白多做解析与存在性校验，换不来任何能写出去的信号。
      */
     private List<ParsedReference> collectToolRefs(List<Message> msgs, int anchor, Set<String> seen) {
         List<ParsedReference> out = new ArrayList<>();
@@ -189,21 +225,43 @@ public final class VisionMaterializer {
     }
 
     /**
-     * 逐张过闸：准备字节 → 请求 token 预算 → 回合累计额度。任一不过就跳过这张，不影响别的。
+     * 逐张过闸：张数配额 → 准备字节 → 请求 token 预算 → 回合累计额度。任一不过就跳过这张，
+     * 不影响别的；<b>但结局都要记下来</b>，跳过的那些还得据此改写 delivery。
      *
      * <p>返回 {@link LinkedHashMap} 是有意的：合成消息的正文按这个顺序列名字，顺序稳定
      * 模型才对得上「第几张是哪个文件」。
+     *
+     * @param maxDeliveries 本来源的张数配额，按<b>真兑现</b>的张数计——发不出去的格式不该白占一个名额
      */
-    private Map<ParsedReference, Media> admitAll(List<ParsedReference> refs,
-                                                 VisionBudget.Session session) {
-        Map<ParsedReference, Media> out = new LinkedHashMap<>();
+    private Map<ParsedReference, Outcome> admitAll(List<ParsedReference> refs, int maxDeliveries,
+                                                   VisionBudget.Session session) {
+        Map<ParsedReference, Outcome> out = new LinkedHashMap<>();
+        int delivered = 0;
         for (ParsedReference r : refs) {
+            // 张数已满：直接标注，<b>不</b>再 prepare。这是出站热路径，为几张注定发不出去的图
+            // 解码缩放是白花钱。代价是超配额的那张若本身还是 HEIC，标注会略失准——两害取其轻。
+            if (delivered >= maxDeliveries) {
+                out.put(r, new Outcome(null, FileReference.DELIVERY_BUDGET_EXCEEDED));
+                continue;
+            }
             Optional<PreparedImage> prepared = preparer.prepare(r.file(), r.mimeType());
-            if (prepared.isEmpty()) continue;                       // 发不出去的格式/过大/读失败
+            if (prepared.isEmpty()) {
+                // 发不出去的格式/过大/读失败：五态里没有精确对应的状态。硬套一个只会让语义更糊
+                // ——budget_exceeded 会让模型以为「少贴几张就能看」，而这张<b>怎么试都发不出去</b>。
+                // 故有意保持原样不改写。
+                continue;
+            }
             PreparedImage img = prepared.get();
-            if (!session.admit(img.estimatedTokens())) continue;    // 本请求 token 预算满了
-            if (!session.tryConsumeTurnSlot()) continue;            // 本回合累计额度用尽
-            out.put(r, toMedia(r, img));
+            if (!session.admit(img.estimatedTokens())) {            // 本请求 token 预算满了
+                out.put(r, new Outcome(null, FileReference.DELIVERY_BUDGET_EXCEEDED));
+                continue;
+            }
+            if (!session.tryConsumeTurnSlot()) {                    // 本回合累计额度用尽
+                out.put(r, new Outcome(null, FileReference.DELIVERY_TURN_EXHAUSTED));
+                continue;
+            }
+            out.put(r, new Outcome(toMedia(r, img), FileReference.DELIVERY_DELIVERED));
+            delivered++;
         }
         return out;
     }
@@ -221,30 +279,42 @@ public final class VisionMaterializer {
     }
 
     /**
-     * 用户贴的图：原地补到锚点那条消息上，并把它自己的 {@code delivery} 行改成 delivered。
+     * 用户贴的图：兑现的原地补到锚点那条消息上，并把<b>每一条有结局的</b>引用的 {@code delivery}
+     * 行改写成它真实的下场。
      *
-     * <p>不改 delivery 的话，模型会同时收到「这张图你看不见」和那张图——自相矛盾的信号。
-     * 改写只作用于<b>出站副本</b>，会话存储里那份保持原状。
+     * <p>兑现的不改，模型会同时收到「这张图你看不见」和那张图——自相矛盾的信号；被预算挤掉的
+     * 不改，模型会以为「Read 一次就能看」，白空转一轮还花钱。改写只作用于<b>出站副本</b>，
+     * 会话存储里那份保持原状。
      */
-    private UserMessage attachToAnchor(UserMessage anchorMsg, Map<ParsedReference, Media> media) {
+    private UserMessage rewriteAnchor(UserMessage anchorMsg, Map<ParsedReference, Outcome> outcomes) {
         String text = anchorMsg.getText();
         // 必须<b>从后往前</b>替换：下标是在原文本上算的，先动前面的会让后面的 start/end 全部错位。
-        List<ParsedReference> byPositionDesc = new ArrayList<>(media.keySet());
+        List<ParsedReference> byPositionDesc = new ArrayList<>(outcomes.keySet());
         byPositionDesc.sort((a, b) -> Integer.compare(b.start(), a.start()));
         for (ParsedReference r : byPositionDesc) {
             if (r.start() < 0 || r.end() > text.length() || r.start() >= r.end()) continue;
             String block = text.substring(r.start(), r.end());
             text = text.substring(0, r.start())
-                    + FileReference.withDelivery(block, FileReference.DELIVERY_DELIVERED)
+                    + FileReference.withDelivery(block, outcomes.get(r).delivery())
                     + text.substring(r.end());
         }
-        return anchorMsg.mutate()
-                .text(text)
-                .media(new ArrayList<>(media.values()))
-                .build();
+        UserMessage.Builder b = anchorMsg.mutate().text(text);
+        // 一张都没兑现时不碰 media：mutate() 会带上原有的 media，覆写成空等于把别处挂的图擦掉。
+        List<Media> media = new ArrayList<>(deliveredMedia(outcomes).values());
+        if (!media.isEmpty()) {
+            b.media(media);
+        }
+        return b.build();
     }
 
-    /** 工具产的图：只能靠合成一条 user 消息投递（{@code ToolResponseMessage} 没有 media 字段）。 */
+    /**
+     * 工具产的图：只能靠合成一条 user 消息投递（{@code ToolResponseMessage} 没有 media 字段）。
+     *
+     * <p><b>这里只列真兑现的那几张</b>，被预算跳过的一个字都不提：正文的行序就是模型区分
+     * 「第几张是哪个文件」的唯一依据，混进没带图的名字会直接把这个绑定弄错。而且合成消息在
+     * 一张都没兑现时根本不存在，「没提到就是没被跳过」这个反推本来就不成立——与其给一半场景
+     * 发个不可靠的信号，不如不发。
+     */
     private UserMessage synthesise(Map<ParsedReference, Media> media) {
         StringBuilder b = new StringBuilder(SYNTHETIC_HEADER);
         for (ParsedReference r : media.keySet()) {
