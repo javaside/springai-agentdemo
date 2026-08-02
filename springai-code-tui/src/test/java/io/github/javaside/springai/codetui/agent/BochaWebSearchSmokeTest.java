@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>这也是 {@code ProxySelector.getDefault()} 那行唯一的实际验证途径——起代理 stub 做单测的成本
  * 明显高于收益，靠真机跑一次体感确认更划算。
  */
+@EnabledIfEnvironmentVariable(named = "CODETUI_LIVE_TESTS", matches = "1")   // 默认不跑：联网、花钱、且墙钟断言天生不稳
 @EnabledIfEnvironmentVariable(named = "BOCHA_API_KEY", matches = ".+")
 class BochaWebSearchSmokeTest {
 

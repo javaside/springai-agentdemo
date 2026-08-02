@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  * 200 与完整 serverInfo），所以 headers 全部丢失它照样绿。鉴权头是否真的发出去，由
  * {@code McpTransportFactoryTest.headerCustomizerPutsConfiguredHeadersOnRequest} 负责。
  */
+@EnabledIfEnvironmentVariable(named = "CODETUI_LIVE_TESTS", matches = "1")   // 默认不跑：联网、花钱、且墙钟断言天生不稳
 @EnabledIfEnvironmentVariable(named = "CODETUI_MCP_SMOKE_URL", matches = ".+")
 class McpStreamableHttpSmokeTest {
 

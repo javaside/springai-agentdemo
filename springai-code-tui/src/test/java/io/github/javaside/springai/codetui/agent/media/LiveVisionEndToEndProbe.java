@@ -43,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>默认跳过（无 key 即不跑），不进 CI。这不是回归测试，是一次性的链路可行性验证。
  */
+@EnabledIfEnvironmentVariable(named = "CODETUI_LIVE_TESTS", matches = "1")   // 默认不跑：联网、花钱、且墙钟断言天生不稳
 class LiveVisionEndToEndProbe {
 
     /** 造一张纯色 PNG 落到 root 下，返回它的相对路径。尺寸够大以确保走缩图分支。 */

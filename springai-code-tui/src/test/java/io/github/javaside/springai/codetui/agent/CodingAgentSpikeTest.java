@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p>真实调用 DeepSeek，需要网络与有效 key，故由人工在里程碑2硬门处跑一次。
  * 无 key 的 headless CI 里它永远是 skipped。
  */
+@EnabledIfEnvironmentVariable(named = "CODETUI_LIVE_TESTS", matches = "1")   // 默认不跑：联网、花钱、且墙钟断言天生不稳
 @EnabledIfEnvironmentVariable(named = "DEEPSEEK_API_KEY", matches = ".+")
 class CodingAgentSpikeTest {
 

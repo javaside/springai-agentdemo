@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 对照实验（同序列但不挂 Media）实测回「只看到图片文件引用，无法看到实际图像内容」，
  * 说明这个断言确实有判别力。
  */
+@EnabledIfEnvironmentVariable(named = "CODETUI_LIVE_TESTS", matches = "1")   // 默认不跑：联网、花钱、且墙钟断言天生不稳
 class LiveVisionSequenceProbe {
 
     /** 纯绿 16×16 PNG。够小（<100B）不产生真实费用，又有明确可判别的内容。 */

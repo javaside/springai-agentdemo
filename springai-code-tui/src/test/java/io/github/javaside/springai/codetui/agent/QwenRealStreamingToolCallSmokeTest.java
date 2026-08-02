@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>默认跳过；配了 DASHSCOPE_API_KEY 才跑（会产生真实计费调用）：
  * {@code DASHSCOPE_API_KEY=... mvn -pl springai-code-tui test -Dtest=QwenRealStreamingToolCallSmokeTest}
  */
+@EnabledIfEnvironmentVariable(named = "CODETUI_LIVE_TESTS", matches = "1")   // 默认不跑：联网、花钱、且墙钟断言天生不稳
 @EnabledIfEnvironmentVariable(named = "DASHSCOPE_API_KEY", matches = ".+")
 class QwenRealStreamingToolCallSmokeTest {
 
