@@ -790,6 +790,13 @@ mvn test -pl springai-code-tui -Dtest=AttachmentInjectionTest
     }
 ```
 
+> ⚠️ **尺寸为 0 要当成「未知」，不能原样写进引用块。**
+> Task 1 的 `sniff` **只读前 64 KiB**（它跑在每次击键上，读全文件遇到几百 MB 的路径会卡死渲染线程）。
+> 代价是：SOF 段在 64 KiB 之外的巨幅 JPEG，`width`/`height` 会退化成 **0**。
+> 把 0 原样传给 `MediaArtifact` 会让引用块渲出 `dimensions: 0x0` —— 那是**假信息**，比不写更糟。
+> 构造 `MediaArtifact` 时：`width <= 0 || height <= 0` → 两个都传 `null`（`FileReference.render` 只在两者非空时才写 `dimensions:` 行）。
+> **配一条测试**：`DetectedImage(..., 0, 0, true)` 产出的引用块里不含 `dimensions:`。
+
 `existingFileArtifact` / `copyIntoArtifacts` 的实现你来写。要点：
 
 - **`existingFileArtifact`**：`source=EXISTING_FILE`、`ownedByStore=false`、`relativePath` 用 root 相对路径、`originalName` 用文件名。sha 用**文件绝对路径的 SHA-256**（期 1 对 `EXISTING_FILE` 就是这么做的，见 `MediaExternalizingCallback.referenceExistingFile`——**先去读那段照抄**，别自创）。
