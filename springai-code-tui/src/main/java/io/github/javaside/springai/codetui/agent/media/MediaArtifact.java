@@ -36,8 +36,12 @@ public record MediaArtifact(
      *
      * <p>解析侧已有「重复字段整块丢弃」兜底，但只靠那一层的代价是：名字古怪的<b>合法</b>文件
      * 从此永远无法兑现，而用户什么都没做错。在源头清洗，这种块根本不会被产生。
+     *
+     * <p>包私有而非私有：{@code FileReferenceParser} 的 name fallback 同样直接取磁盘文件名
+     * （引用块里没写 name 时），那条路绕过了本记录，必须共用同一套清洗——否则含换行的名字会
+     * 流进 {@code VisionMaterializer} 合成消息的正文，往那里注入伪造的行。
      */
-    private static String sanitizeName(String name) {
+    static String sanitizeName(String name) {
         if (name == null) return null;
         StringBuilder b = new StringBuilder(name.length());
         for (int i = 0; i < name.length(); i++) {

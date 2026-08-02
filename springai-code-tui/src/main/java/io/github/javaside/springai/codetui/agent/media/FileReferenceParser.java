@@ -74,7 +74,12 @@ public final class FileReferenceParser {
         if (file == null) return null;
 
         String sha = id.startsWith("sha256:") ? id.substring("sha256:".length()) : id;
-        String name = f.getOrDefault("name", file.getFileName().toString());
+        // 引用块里的 name 在 render 时已被清洗过，只有 fallback 这一路是<b>未清洗的磁盘文件名</b>。
+        // Unix 文件名只禁 / 和 NUL——换行是合法的，而这个名字会被写进合成消息的正文（见
+        // VisionMaterializer#synthesise），不洗就等于让文件名往那里注入伪造的行。
+        String name = f.containsKey("name")
+                ? f.get("name")
+                : MediaArtifact.sanitizeName(file.getFileName().toString());
         return new ParsedReference(sha, name, mime, file, start, end);
     }
 

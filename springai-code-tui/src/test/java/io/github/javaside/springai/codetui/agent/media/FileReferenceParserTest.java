@@ -3,12 +3,15 @@ package io.github.javaside.springai.codetui.agent.media;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class FileReferenceParserTest {
 
@@ -167,5 +170,36 @@ class FileReferenceParserTest {
         String dupReason = block("a.png", "a.png", "image")
                 .replace("reason: x", "reason: x\nreason: y");
         assertTrue(FileReferenceParser.parse(dupReason, root).isEmpty(), "重复 reason 被接受了");
+    }
+
+    /**
+     * name 字段缺失时 fallback 到磁盘文件名，而 Unix 文件名可含换行（只禁 {@code /} 和 NUL）
+     * ——必须清洗，否则它会流进 {@code VisionMaterializer} 合成消息的正文，往那里注入伪造的行。
+     *
+     * <p><b>为什么必须绕道符号链接</b>：直觉写法是把含换行的文件名直接写进 {@code path:}，
+     * 但那个换行会<b>劈开引用块自己的那一行</b>——{@code path} 的值变成 {@code "a"}，指向一个
+     * 不存在的文件，整块在存在性校验就被丢掉，断言<b>永远跑不到</b>（已实测：把宽松的
+     * {@code if (!refs.isEmpty())} 换成 assertFalse 后确实红了）。这跟文件系统无关，是构造本身
+     * 不可能成立。符号链接把两件事拆开：块里写的是干净的单行名字，而
+     * {@code resolveInRoot} 解链后拿到的<b>真实</b>文件名才带换行，恰好就是 fallback 读的那个。
+     */
+    @Test
+    void fallbackNameFromDiskIsSanitized() throws Exception {
+        Path weird = root.resolve("a\nb.png");
+        Files.writeString(weird, "x");
+        Path link = root.resolve("link.png");
+        try {
+            Files.createSymbolicLink(link, weird);
+        } catch (IOException | UnsupportedOperationException e) {
+            assumeTrue(false, "本文件系统建不出符号链接：" + e);
+        }
+
+        String noName = "[file reference]\nid: sha256:abcd\nkind: image\n"
+                + "mime_type: image/png\nsize_bytes: 1\npath: link.png\n"
+                + "delivery: not_in_view\nreason: x\n[/file reference]";
+        List<ParsedReference> refs = FileReferenceParser.parse(noName, root);
+
+        assertEquals(1, refs.size(), "构造失效了，断言根本跑不到");
+        assertFalse(refs.get(0).name().contains("\n"), "fallback 名字未清洗");
     }
 }
