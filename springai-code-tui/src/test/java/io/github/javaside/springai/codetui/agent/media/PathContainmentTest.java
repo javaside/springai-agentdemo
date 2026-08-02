@@ -88,4 +88,32 @@ class PathContainmentTest {
         assertEquals("shot.png", rel, "解链后应得干净相对名，而非 ../../ 跨越式路径");
         assertFalse(rel.contains(".."), "不得含 ..");
     }
+
+    /**
+     * 回归：文件在符号链接 root 的<b>子目录</b>里。
+     *
+     * <p>这是唯一能区分「真的解链后 relativize」与「判越界后回退裸文件名」的形状：文件直接躺在
+     * root 顶层时两条路都得到 {@code shot.png}，上面那条用例的断言看不出差别——把 relativeToRoot
+     * 的解链去掉它照样绿。有了子目录，正确实现得 {@code sub/shot.png}，丢了解链则越界回退成
+     * {@code shot.png}，差异才暴露出来。
+     */
+    @Test
+    void relativeToRoot_symlinkedRoot_nestedFile_keepsSubdir(@TempDir Path real) throws Exception {
+        Path realTarget = real.resolve("realdir");
+        Path sub = realTarget.resolve("sub");
+        Files.createDirectories(sub);
+        Path f = sub.resolve("shot.png");
+        Files.writeString(f, "x");
+        Path linkRoot = real.resolve("linkdir");
+        try {
+            Files.createSymbolicLink(linkRoot, realTarget);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            return;
+        }
+        // root 带链、file 给解链后的真实路径——不解 root 的链就会误判越界
+        String rel = PathContainment.relativeToRoot(f.toRealPath(), linkRoot);
+        assertEquals("sub/shot.png".replace('/', java.io.File.separatorChar), rel,
+                "两边解链后 relativize 应保留子目录；丢了解链会误判越界、回退成裸文件名 shot.png");
+        assertFalse(rel.contains(".."), "不得含 ..");
+    }
 }

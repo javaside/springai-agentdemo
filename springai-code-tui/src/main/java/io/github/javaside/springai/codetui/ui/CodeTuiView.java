@@ -23,6 +23,7 @@ import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.agent.media.MagicSniffer;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifact;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
+import io.github.javaside.springai.codetui.agent.media.PathContainment;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
@@ -579,7 +580,9 @@ public final class CodeTuiView extends InlineApp {
             boolean dimKnown = img.width() > 0 && img.height() > 0;
             return new MediaArtifact(
                     sha256Hex(file.toAbsolutePath().normalize().toString()),
-                    file, relativeToRoot(file, root),
+                    // 相对路径直接委托 PathContainment：口径必须与解析器的包含校验逐字一致，
+                    // 各算一份的话解链逻辑一改就分家，图会在引用块里静默消失。
+                    file, PathContainment.relativeToRoot(file, root),
                     s.mimeType(), null, s.kind(), Files.size(file),
                     dimKnown ? img.width() : null, dimKnown ? img.height() : null, null,
                     ArtifactSource.EXISTING_FILE, false,
@@ -608,26 +611,6 @@ public final class CodeTuiView extends InlineApp {
                     a.source(), a.ownedByStore(), a.originalName());
         } catch (RuntimeException | IOException e) {
             return null;
-        }
-    }
-
-    /**
-     * 相对 root 的短路径。<b>两边都先解符号链接</b>再 relativize：macOS 的 /tmp → /private/tmp
-     * 这类链会让「root 带链、file 已解链」算出 {@code ../../private/tmp/...} 这种跨越式路径，
-     * 写进引用块就过不了解析器的包含校验。逻辑同 {@code PathContainment#relativeToRoot}
-     * ——那个类是包私有的，本包够不着，只能照抄。
-     */
-    private static String relativeToRoot(Path file, Path root) {
-        Path rf = realPath(file), rr = realPath(root);
-        // 仍越界（insideRoot 是按 normalize 判的，解链后可能不成立）→ 回退文件名，不泄漏绝对结构。
-        return rf.startsWith(rr) ? rr.relativize(rf).toString() : rf.getFileName().toString();
-    }
-
-    private static Path realPath(Path p) {
-        try {
-            return p.toRealPath();
-        } catch (IOException e) {
-            return p.toAbsolutePath().normalize();
         }
     }
 
