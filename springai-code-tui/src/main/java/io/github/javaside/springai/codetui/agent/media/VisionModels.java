@@ -27,7 +27,19 @@ public final class VisionModels {
             "glm-4v", "glm-4.1v", "glm-4.5v"
     );
 
-    /** 该模型是否接受图片输入。null / 空 / 不在名单 → false。 */
+    /**
+     * <b>本次运行能否给该模型投递图片。</b>注意这不是纯粹的「模型静态能力」——
+     * 它<b>包含了全局开关</b>（{@code CODETUI_VISION=off} 时对所有模型返回 false）。
+     *
+     * <p>之所以把两个维度揉在一起：每个调用点想要的恰好都是「现在能不能投」。
+     * 尤其 {@link TextReferenceMediaHandler} 据此决定引用里写 {@code reference_only}
+     * 还是 {@code not_in_view}——开关关着时写 reference_only 是对的，因为此时模型
+     * Read 回来确实看不见，写 not_in_view 会骗它白 Read 一次。
+     *
+     * <p>调用方<b>不要</b>把它和 {@link #enabled()} 当成两个独立维度再判一次，那是重复判断。
+     *
+     * <p>null / 空 / 不在名单 → false。
+     */
     public static boolean supportsImage(String modelId) {
         if (!enabled() || modelId == null || modelId.isBlank()) {
             return false;
@@ -43,7 +55,12 @@ public final class VisionModels {
 
     /** 全局开关：{@code CODETUI_VISION=off} 时整个视觉链路停用（引用照常，零行为变化）。 */
     public static boolean enabled() {
-        String v = System.getenv("CODETUI_VISION");
-        return v == null || !v.trim().equalsIgnoreCase("off");
+        return enabledFor(System.getenv("CODETUI_VISION"));
+    }
+
+    /** 开关值的解析（纯函数，供单测——{@code System.getenv} 在进程内无法注入，
+     *  不抽出来这个 kill switch 就永远没有测试覆盖）。 */
+    static boolean enabledFor(String envValue) {
+        return envValue == null || !envValue.trim().equalsIgnoreCase("off");
     }
 }

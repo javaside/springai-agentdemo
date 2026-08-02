@@ -33,4 +33,15 @@ class VisionModelsTest {
     void matchingIsCaseInsensitive() {
         assertTrue(VisionModels.supportsImage("GPT-5.6-Sol"), "大小写混写的已知 id");
     }
+
+    /** kill switch 的语义：只有明确的 off（忽略大小写与空白）关闭，其余一律开启。 */
+    @Test
+    void killSwitchRecognisesOnlyExplicitOff() {
+        assertFalse(VisionModels.enabledFor("off"), "off 应关闭");
+        assertFalse(VisionModels.enabledFor("  OFF  "), "大小写与空白应忽略");
+        assertTrue(VisionModels.enabledFor(null), "未配置 = 开启");
+        assertTrue(VisionModels.enabledFor(""), "空串 = 开启");
+        assertTrue(VisionModels.enabledFor("on"));
+        assertTrue(VisionModels.enabledFor("false"), "刻意不认 false/0/no——只认 off，少一种猜法");
+    }
 }
