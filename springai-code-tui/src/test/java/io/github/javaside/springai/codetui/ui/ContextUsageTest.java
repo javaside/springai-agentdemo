@@ -28,7 +28,7 @@ class ContextUsageTest {
     /** 造一份满快照：events=100（用户40/助手50/工具8/其他2）、est=30000、window=100000、
      *  threshold=60000、autoKeep=20、manualKeep=10。 */
     private static ContextStats full() {
-        return new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 100_000L, 20, 10);
+        return new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 100_000L, 20, 10, 0, 0L);
     }
 
     @Test
@@ -68,11 +68,38 @@ class ContextUsageTest {
         assertTrue(sink.lines.get(4).contains("保留最近 10 条"), "手动行");
     }
 
+    /**
+     * 视觉占用单列一行，且必须紧跟文本估算行——图片从不进会话存储，上面那笔估算看不见它们。
+     * 顺带钉住「不许把视觉 token 加进 estimatedTokens」：那行仍应是 30,000。
+     */
+    @Test
+    void report_visionUsage_printsOwnLineRightAfterTextEstimate() {
+        RecordingSink sink = new RecordingSink();
+        ContextStats s = new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 100_000L, 20, 10, 3, 4_800L);
+        new ContextUsage(() -> s, sink).report();
+
+        assertEquals(6, sink.lines.size(), "满快照 + 视觉行 → 6 行报告");
+        assertTrue(sink.lines.get(2).contains("30,000"), "文本估算行不许把视觉 token 加进去");
+        String vision = sink.lines.get(3);
+        assertTrue(vision.contains("3 张"), "图片张数：" + vision);
+        assertTrue(vision.contains("4,800"), "视觉 token 原值，不做 k 舍入（小图会显示成 0k）：" + vision);
+        assertTrue(vision.contains("不计入上方文本估算"), "必须说明这是另一笔账：" + vision);
+    }
+
+    /** 没兑现过图就不占一行——常态是纯文本会话，多一行恒 0 的噪音会稀释真正要看的数字。 */
+    @Test
+    void report_noVisionUsage_omitsVisionLine() {
+        RecordingSink sink = new RecordingSink();
+        new ContextUsage(ContextUsageTest::full, sink).report();
+
+        assertTrue(sink.lines.stream().noneMatch(l -> l.contains("视觉图片")), "零视觉时不该有视觉行");
+    }
+
     @Test
     void report_noWindow_omitsWindowPercentLine() {
         RecordingSink sink = new RecordingSink();
         // window=0, threshold=0, manualKeep=0 → 只标题 + 事件桶 + 无占窗口的 token 行
-        ContextStats s = new ContextStats(5, 3, 2, 0, 0, 1_234L, 0L, 0L, 0, 0);
+        ContextStats s = new ContextStats(5, 3, 2, 0, 0, 1_234L, 0L, 0L, 0, 0, 0, 0L);
         new ContextUsage(() -> s, sink).report();
 
         assertEquals(3, sink.lines.size(), "无窗口/阈值/手动 → 3 行");
@@ -96,7 +123,7 @@ class ContextUsageTest {
 
     @Test
     void suffix_windowZero_isEmpty() {
-        ContextStats noWindow = new ContextStats(5, 3, 2, 0, 0, 1_234L, 0L, 0L, 0, 0);
+        ContextStats noWindow = new ContextStats(5, 3, 2, 0, 0, 1_234L, 0L, 0L, 0, 0, 0, 0L);
         ContextUsage cu = new ContextUsage(() -> noWindow, new RecordingSink());
         cu.refresh();
         assertEquals("", cu.suffix(), "窗口=0 → 空后缀");
@@ -117,7 +144,7 @@ class ContextUsageTest {
     @Test
     void pct_roundsHalfUp_notTruncated() {
         // 49500/100000 = 49.5% → Math.round → 50%（截断/整除会得 49%）
-        ContextStats halfUp = new ContextStats(10, 5, 5, 0, 0, 49_500L, 0L, 100_000L, 0, 0);
+        ContextStats halfUp = new ContextStats(10, 5, 5, 0, 0, 49_500L, 0L, 100_000L, 0, 0, 0, 0L);
         ContextUsage cu = new ContextUsage(() -> halfUp, new RecordingSink());
         cu.refresh();
         assertEquals(" · 上下文 50%", cu.suffix(), "49.5% 四舍五入到 50%（非截断的 49%）");
@@ -126,7 +153,7 @@ class ContextUsageTest {
     @Test
     void pct_roundsDownBelowHalf_notCeil() {
         // 49400/100000 = 49.4% → Math.round → 49%（排除向上取整 ceil 的 50%）
-        ContextStats belowHalf = new ContextStats(10, 5, 5, 0, 0, 49_400L, 0L, 100_000L, 0, 0);
+        ContextStats belowHalf = new ContextStats(10, 5, 5, 0, 0, 49_400L, 0L, 100_000L, 0, 0, 0, 0L);
         ContextUsage cu = new ContextUsage(() -> belowHalf, new RecordingSink());
         cu.refresh();
         assertEquals(" · 上下文 49%", cu.suffix(), "49.4% 取整到 49%（排除 ceil）");

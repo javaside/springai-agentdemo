@@ -24,6 +24,8 @@ import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.SessionFileExternalizer;
+import io.github.javaside.springai.codetui.agent.media.VisionMaterializingChatModel;
+import io.github.javaside.springai.codetui.agent.media.VisionSnapshot;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
@@ -77,6 +79,8 @@ public final class CodingAgent implements SubmitHandler {
     private final McpRegistry mcpRegistry;   // 可空：MCP 运行期中枢；submit 每回合 .tools(activeTools) 快照注入 + /mcp 门面委托
     /** 可空（测试桩）：权限引擎，与三处装配点里的 PermissionCallback 共用同一实例；门面（模式/规则）直通它。 */
     private final PermissionEngine permissionEngine;
+    /** 可空（测试桩）：按 provider id 索引的视觉兑现装饰器，与 clientsByProvider 一一对应；仅供 /context 读快照。 */
+    private final java.util.Map<String, VisionMaterializingChatModel> visionModels;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -122,6 +126,7 @@ public final class CodingAgent implements SubmitHandler {
         this.fileExternalizer = null;  // 单-client 桩路径：无路径②外置器
         this.mcpRegistry = null;       // 单-client 桩路径：无 MCP 支持
         this.permissionEngine = null;  // 单-client 桩路径：无权限引擎（门面退回默认值，见 permissionMode）
+        this.visionModels = null;      // 单-client 桩路径：无视觉装饰器（/context 的视觉列恒为 0）
     }
 
     /**
@@ -178,11 +183,7 @@ public final class CodingAgent implements SubmitHandler {
                 fileExternalizer, mcpRegistry, null);
     }
 
-    /**
-     * 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；
-     * {@code permissionEngine} 权限引擎，须是 {@code AgentRuntime.permissionEngine()} 那一个——
-     * 门面（Shift+Tab 切模式 / {@code /permissions} 列规则）改的必须正是工具那一侧读的那个对象（可空，桩路径用）。
-     */
+    /** 向后兼容重载（无视觉装饰器：测试桩用）。等价 visionModels=null（{@code /context} 的视觉列恒为 0）。 */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
@@ -191,6 +192,28 @@ public final class CodingAgent implements SubmitHandler {
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, mcpRegistry, permissionEngine, null);
+    }
+
+    /**
+     * 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；
+     * {@code permissionEngine} 权限引擎，须是 {@code AgentRuntime.permissionEngine()} 那一个——
+     * 门面（Shift+Tab 切模式 / {@code /permissions} 列规则）改的必须正是工具那一侧读的那个对象（可空，桩路径用）。
+     *
+     * <p>{@code visionModels} 须是 {@code AgentRuntime.visionModels()} 那一份——{@code /context} 要报的是
+     * <b>真正发出去的那条请求</b>兑现了多少图，读别的实例只会得到恒 0 的假账。
+     */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
+                       PermissionEngine permissionEngine,
+                       java.util.Map<String, VisionMaterializingChatModel> visionModels) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -208,6 +231,7 @@ public final class CodingAgent implements SubmitHandler {
         this.fileExternalizer = fileExternalizer;
         this.mcpRegistry = mcpRegistry;
         this.permissionEngine = permissionEngine;
+        this.visionModels = visionModels;
     }
 
     @Override
@@ -598,9 +622,29 @@ public final class CodingAgent implements SubmitHandler {
             }
         }
         long tokens = sb.length() == 0 ? 0L : tokenCountEstimator.estimate(sb.toString());
+        VisionSnapshot vision = snapshotOf(visionModels, registry);
         return new ContextStats(events.size(), user, assistant, tool, other, tokens,
                 AgentTools.COMPACTION_TOKEN_THRESHOLD, AgentTools.CONTEXT_WINDOW_TOKENS,
-                AgentTools.MAX_EVENTS_TO_KEEP, AgentTools.MANUAL_MAX_EVENTS_TO_KEEP);
+                AgentTools.MAX_EVENTS_TO_KEEP, AgentTools.MANUAL_MAX_EVENTS_TO_KEEP,
+                vision.images(), vision.tokens());
+    }
+
+    /**
+     * 当前<b>激活</b> provider 的上次兑现快照。无 registry / 无装饰器 / 该家没装饰器 → 空快照。
+     *
+     * <p>必须按激活 provider 取，不能随便取一个：每家 provider 一个装饰器、各记各的账，
+     * 而 {@code /model} 可以跨家切换。取错家会报上一家的陈旧数字，且<b>看起来完全合理</b>
+     * ——没有任何迹象提示这笔账根本不属于当前请求。
+     *
+     * <p>抽成包级静态纯函数是为了能单测「按激活取对了那一个」——造整个 CodingAgent 太贵。
+     */
+    static VisionSnapshot snapshotOf(java.util.Map<String, VisionMaterializingChatModel> models,
+                                     ProviderRegistry registry) {
+        if (models == null || registry == null) {
+            return VisionSnapshot.EMPTY;
+        }
+        VisionMaterializingChatModel m = models.get(registry.active().id());
+        return m == null ? VisionSnapshot.EMPTY : m.lastSnapshot();
     }
 
     /** 从一个流式块里抽取文本增量并发给 listener。全链路 null-guard：工具调用块常常没有输出/文本。 */
