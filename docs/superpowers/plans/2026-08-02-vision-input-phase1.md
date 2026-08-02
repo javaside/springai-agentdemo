@@ -6,7 +6,7 @@
 
 **Architecture:** 会话存储里永远只有文本引用块；一个 `ChatModel` 装饰器在**出站请求组装的最后一刻**把「当轮」的引用兑现成真 `Media`。因 `ToolResponseMessage` 挂不了 `Media`，工具产图靠**合成一条 user 消息追加在消息列表末尾**投递；该合成消息带 `codetui.synthetic` 元数据自证身份，使回合边界判定不依赖框架内部行为。
 
-**Tech Stack:** Java 17（`maven.compiler.release=17`，**无类型模式 switch、无 record pattern**）、Spring AI 2.0、spring-ai-session-management 0.5.0、Apache Tika（已有）、JDK ImageIO（零新依赖）、JUnit 5 + AssertJ。
+**Tech Stack:** Java 17（`maven.compiler.release=17`，**无类型模式 switch、无 record pattern**）、Spring AI 2.0、spring-ai-session-management 0.5.0、Apache Tika（已有）、JDK ImageIO（零新依赖）、JUnit 5。
 
 **设计依据：** [2026-08-02 视觉输入设计](../specs/2026-08-02-vision-input-design.md)
 
@@ -17,6 +17,27 @@
 - **验证命令必须模块作用域**：`mvn test -pl springai-code-tui -Dtest=XxxTest`。
   **绝不**加 `-DfailIfNoSpecifiedTests=false`——整仓跑会被 3 个空模块打挂，加这个参数只是把问题盖住。
 - **Java 17**：不要写 `case String s ->` 这类类型模式 switch，也不要写 record pattern，编译不过。
+
+- ⚠️ **断言一律用 JUnit `org.junit.jupiter.api.Assertions`，不要用 AssertJ。**
+  本模块**没有 assertj 依赖**（pom 里只有 `junit-jupiter`，父 pom 也没有），138 个既有测试统一用 JUnit 断言。
+  **本计划书各任务的测试代码块里写的 `assertThat(...)` 全是笔误**（写计划时照习惯写的、未核对依赖），
+  实现时按下表换算，**不要为此往 pom 加依赖**——为迁就笔误引入新依赖是本末倒置，
+  且本期对外的卖点之一正是「零新增第三方依赖」。
+
+  | 计划书里的写法 | 实际要写的 |
+  |---|---|
+  | `assertThat(x).isTrue()` / `.isFalse()` | `assertTrue(x)` / `assertFalse(x)` |
+  | `assertThat(x).isEqualTo(y)` | `assertEquals(y, x)` ← **期望值在前** |
+  | `assertThat(bytes).isEqualTo(other)` | `assertArrayEquals(other, bytes)` ← byte[] 必须用它，`assertEquals` 比的是引用、恒假 |
+  | `assertThat(a).isSameAs(b)` | `assertSame(b, a)` ← 要的就是引用相同（如证明命中缓存），**别退化成值比较** |
+  | `assertThat(opt).isEmpty()` | `assertTrue(opt.isEmpty())` |
+  | `assertThat(list).hasSize(n)` | `assertEquals(n, list.size())` |
+  | `assertThat(s).contains(x)` | `assertTrue(s.contains(x), "缺少：" + x)` |
+  | `assertThat(s).doesNotContain(x)` | `assertFalse(s.contains(x), "不该含：" + x)` |
+  | `assertThat(x).isInstanceOf(T.class)` | `assertInstanceOf(T.class, x)` |
+  | `assertThat(map).containsEntry(k, v)` | `assertEquals(v, map.get(k))` |
+  | `assertThat(x).as("第 %d 次", i)...` | 把描述作为最后一个参数：`assertTrue(x, "第 " + i + " 次")` ← **别把消息丢掉**，循环类断言没有序号极难定位 |
+
 - 提交信息用中文正文，首行 `feat(vision): …` / `test(vision): …` / `refactor(vision): …`。
 - 每个任务结束前跑一次该任务涉及的测试类，**绿了才提交**。
 
