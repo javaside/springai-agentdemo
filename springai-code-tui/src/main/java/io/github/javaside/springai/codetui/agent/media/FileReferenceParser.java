@@ -17,6 +17,8 @@ import java.util.Map;
  * <ul>
  *   <li>{@code path} 必须过 {@link PathContainment#resolveInRoot}（解符号链接后判包含 + 存在性）；
  *   <li>必填字段不齐即<b>整块丢弃</b>，绝不启发式补全；
+ *   <li>同名字段出现两次也<b>整块丢弃</b>——重复只可能来自值里混进换行（见 parseBlock），
+ *       取首取末都是猜，而不同消费者猜得不一样就是解析歧义；
  *   <li>只认 {@code kind: image}——视频/二进制本期不兑现。
  * </ul>
  *
@@ -52,7 +54,14 @@ public final class FileReferenceParser {
         for (String line : block.split("\n")) {
             int colon = line.indexOf(": ");
             if (colon > 0) {
-                f.put(line.substring(0, colon).trim(), line.substring(colon + 2).trim());
+                String key = line.substring(0, colon).trim();
+                // 同名字段出现两次 → 整块丢弃。这不是洁癖：render 每个字段只写一次，
+                // 重复只可能来自「某个字段的值里混进了换行」。而 originalName 全链路未清洗、
+                // EXISTING_FILE 时就是磁盘文件名——Unix 文件名可以含 \n，于是一个名为
+                // "a\npath: xxx" 的文件会让 render 吐出两行 path。取首行还是取末行都是猜，
+                // 而两个消费者猜得不一样就是解析歧义（withDelivery 按行前缀改写、会改掉全部
+                // 同名行，本类却只取一个值）——拒掉比选一个安全。
+                if (f.put(key, line.substring(colon + 2).trim()) != null) return null;
             }
         }
         if (!"image".equals(f.get("kind"))) return null;          // 只兑现图片

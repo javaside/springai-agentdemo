@@ -122,4 +122,50 @@ class FileReferenceParserTest {
         assertTrue(FileReferenceParser.parse(null, root).isEmpty());
         assertTrue(FileReferenceParser.parse("whatever", null).isEmpty());
     }
+
+    /**
+     * 文件名注入：Unix 文件名可含换行，而 originalName 原样取自磁盘、render 又把 name
+     * 写在 kind 之后——于是一个精心命名的文件能注入一行 kind: image，
+     * 靠 HashMap 后写覆盖把非图片伪装成图片。重复字段整块丢弃即堵死这条路。
+     */
+    @Test
+    void rejectsBlockWithDuplicateFieldFromNewlineInName() throws Exception {
+        makeFile("evil.bin");
+        String injected = "[file reference]\n"
+                + "id: sha256:abcd1234abcd1234\n"
+                + "kind: binary\n"
+                + "mime_type: application/octet-stream\n"
+                + "size_bytes: 1234\n"
+                + "name: evil\n"
+                + "kind: image\n"          // ← 文件名里的换行造出来的注入行
+                + "x.bin\n"
+                + "path: evil.bin\n"
+                + "delivery: not_in_view\n"
+                + "reason: x\n"
+                + "[/file reference]";
+        assertTrue(FileReferenceParser.parse(injected, root).isEmpty(),
+                "带重复 kind 的块被接受了——非图片可伪装成图片");
+    }
+
+    /**
+     * 重复字段一律拒，不限于 kind——取首取末都是猜，两个消费者猜得不一样就是歧义。
+     *
+     * <p><b>为什么两个重复值都刻意选「合法」的</b>：若把第二条写成 {@code path: /etc/passwd}，
+     * 块会被<b>包含校验</b>拦下而不是被重复规则拦下——测试为了错误的理由变绿，把 parseBlock 的
+     * 判重整个去掉它照样是绿的（已在变异副本上实测过）。这里两条 path 都指向 root 内真实存在的
+     * 文件，而 reason 根本不参与任何校验，于是唯一能拦下它们的只剩重复字段规则。
+     */
+    @Test
+    void rejectsBlockWithAnyDuplicateField() throws Exception {
+        makeFile("a.png");
+        makeFile("b.png");
+        String dupPath = block("a.png", "a.png", "image")
+                .replace("delivery: not_in_view", "path: b.png\ndelivery: not_in_view");
+        assertTrue(FileReferenceParser.parse(dupPath, root).isEmpty(), "重复 path 被接受了");
+
+        // reason 不参与任何校验，重复它仍须整块丢弃——这才撑得起「任何字段」这句话
+        String dupReason = block("a.png", "a.png", "image")
+                .replace("reason: x", "reason: x\nreason: y");
+        assertTrue(FileReferenceParser.parse(dupReason, root).isEmpty(), "重复 reason 被接受了");
+    }
 }
