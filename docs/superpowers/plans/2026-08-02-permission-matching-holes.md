@@ -1,6 +1,6 @@
 # 权限管理 期 3（补判定漏洞 + 规则可删）实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 补掉四条「用户以为拦住了、实际没拦」的判定漏洞（大小写、符号链接、`ACCEPT_EDITS` 命令段不判工作区、过宽 root），并让 `/permissions` 能就地删规则。
 
@@ -55,7 +55,7 @@
 
 **背景**：期 1 刻意没用 `toRealPath()`——它对**尚不存在的文件**直接抛，而「写一个还不存在的文件」是常态。解法是解析**最长的已存在祖先**再拼回剩余段。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `PathAliasesTest.java`:
 
@@ -136,12 +136,12 @@ class PathAliasesTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest=PathAliasesTest`
 Expected: 编译失败，`找不到符号: 类 PathAliases`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 Create `PathAliases.java`:
 
@@ -230,18 +230,18 @@ public final class PathAliases {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest=PathAliasesTest`
 Expected: PASS（5 个测试；不支持符号链接的环境上有 1 个被 skip）
 
-- [ ] **Step 5: 变异实测**
+- [x] **Step 5: 变异实测**
 
 把 `resolveThroughSymlinks` 的 `while` 循环体删掉（只试 `absolute` 本身、不爬祖先），重跑。
 Expected: `resolvesThroughSymlinkedParentForMissingFile` **变红**（它正是靠爬祖先才成立的）。
 恢复后复跑全绿。结果写进报告。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/PathAliases.java \
@@ -263,7 +263,7 @@ git commit -m "feat(code-tui): 加 PathAliases——解析最长已存在祖先�
 - 规则存在两个 `CopyOnWriteArrayList`：`fileRules`（启动加载 + 「永久允许」追加）与 `sessionRules`（「本会话不再问」）。折叠孪生要跟着它们走。
 - **`PermissionRule.java` 一行不改**。若你觉得非改不可，报 BLOCKED。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `PermissionEngineAliasTest.java`:
 
@@ -396,7 +396,7 @@ class PermissionEngineAliasTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest=PermissionEngineAliasTest`
 Expected: `denyFoldsCase` / `denyFollowsSymlink` 等变红（当前不折叠、不解析）；
@@ -405,7 +405,7 @@ Expected: `denyFoldsCase` / `denyFollowsSymlink` 等变红（当前不折叠、�
 > ⚠ 这一点很重要：安全支点的两条**一开始就是绿的**，所以**必须靠 Step 5 的变异实测**
 > 证明它们真的有鉴别力。否则你无法区分「它在守护」与「它恰好总是绿」。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `PermissionEngine.java`：
 
@@ -510,12 +510,12 @@ Expected: `denyFoldsCase` / `denyFollowsSymlink` 等变红（当前不折叠、�
 > （分别是 allow 分支与「对单个 target 做一次匹配」的原有逻辑，含 `separatorSensitive`、
 > COMMAND 分段那套）。**抽取时行为一字不改**——先抽取、跑既有测试全绿，再加新逻辑。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='PermissionEngine*Test,PermissionRuleTest,DangerousPaths*Test'`
 Expected: 全绿（既有用例 + 新的 8 条）
 
-- [ ] **Step 5: 变异实测（本任务的关键一步）**
+- [x] **Step 5: 变异实测（本任务的关键一步）**
 
 做**两个**变异，各跑一次 `PermissionEngineAliasTest`：
 
@@ -527,7 +527,7 @@ Expected: 全绿（既有用例 + 新的 8 条）
 **若变异 1 之后 `allowDoesNotFoldCase` 仍然绿，说明它没打到 allow 路径——先修用例再继续。**
 两个变异都要恢复，恢复后复跑全绿。结果写进报告。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/PermissionEngine.java \
@@ -549,7 +549,7 @@ git commit -m "feat(code-tui): deny/ask 认符号链接与大小写的多种写�
 
 底线**没有 allow 方向**（命中只会导致询问/拒绝），故这里放宽是纯安全方向，不需要 Task 2 那套不对称。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `DangerousPathsAliasTest.java`:
 
@@ -608,14 +608,14 @@ class DangerousPathsAliasTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest=DangerousPathsAliasTest`
 Expected: `writeThroughSymlinkIntoSsh` 变红。
 **另两条折叠用例可能一开始就绿**（既有代码已折了那几处）——若是绿的，报告里**明确写出哪几条本来就绿**，
 不要当成自己的功劳，也不要因此删掉它们（它们是回归保险）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ① `checkRead` / `checkWrite` 的**主体重命名**为私有的 `checkReadOne` / `checkWriteOne`，公开入口改成薄壳：
 
@@ -654,16 +654,16 @@ Expected: `writeThroughSymlinkIntoSsh` 变红。
 > ⚠ 只折叠**用于比较的那份副本**，别把用于展示/日志的路径也小写化——
 > 面板上打出 `/users/zxh/.ssh/config` 会让人以为是另一个文件。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='DangerousPaths*Test,PermissionEngine*Test'`
 Expected: 全绿。**`DangerousPathsTableCoverageTest` 尤其要绿**——它逐条验九张常量表仍然有效。
 
-- [ ] **Step 5: 变异实测**
+- [x] **Step 5: 变异实测**
 
 把 `firstHit` 改成只查第一个别名，重跑 → `writeThroughSymlinkIntoSsh` 变红。恢复后复跑全绿。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/DangerousPaths.java \
@@ -685,7 +685,7 @@ git commit -m "feat(code-tui): 内置底线接入路径别名，补齐按名字�
 **所有绝对路径**成立，于是「写入项目与家目录之外的系统位置」这条检查全面失效。
 按名字命中的检查不受影响——**被架空的是这一条，不是整层底线**。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `OverBroadRootTest.java`:
 
@@ -749,12 +749,12 @@ class OverBroadRootTest {
     }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='OverBroadRootTest,PermissionStartupTest'`
 Expected: 编译失败，找不到 `isOverBroadRoot` / `overBroadRootNotice`
 
-- [ ] **Step 3: 实现判据与豁免**
+- [x] **Step 3: 实现判据与豁免**
 
 `DangerousPaths.java` 新增：
 
@@ -795,7 +795,7 @@ Expected: 编译失败，找不到 `isOverBroadRoot` / `overBroadRootNotice`
         }
 ```
 
-- [ ] **Step 4: 实现启动提示**
+- [x] **Step 4: 实现启动提示**
 
 `CodeTuiApplication.java` 新增：
 
@@ -824,17 +824,17 @@ Expected: 编译失败，找不到 `isOverBroadRoot` / `overBroadRootNotice`
         }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='OverBroadRootTest,PermissionStartupTest,DangerousPaths*Test'`
 Expected: 全绿
 
-- [ ] **Step 6: 变异实测**
+- [x] **Step 6: 变异实测**
 
 去掉 `isOutsideWritableRoots` 里新加的 `!isOverBroadRoot(root) &&`，重跑
 → `systemLocationCheckSurvivesRootSlash` 变红。恢复后复跑全绿。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/DangerousPaths.java \
@@ -861,7 +861,7 @@ git commit -m "fix(code-tui): 过宽 root 不再静默架空「系统位置」�
 **职责边界**：`BashCommandSplitter` 只做**词法**（哪些 token 长得像路径），
 `PermissionEngine` 做**策略**（这些路径在不在工作区内）。root 是引擎才有的知识，不下沉。
 
-- [ ] **Step 1: 写词法层的失败测试**
+- [x] **Step 1: 写词法层的失败测试**
 
 Create `CommandPathArgumentsTest.java`:
 
@@ -910,12 +910,12 @@ class CommandPathArgumentsTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest=CommandPathArgumentsTest`
 Expected: 找不到符号 `pathArguments`
 
-- [ ] **Step 3: 实现词法层**
+- [x] **Step 3: 实现词法层**
 
 `BashCommandSplitter.java`（`words` 是现有私有方法，直接复用）：
 
@@ -947,7 +947,7 @@ Expected: 找不到符号 `pathArguments`
     }
 ```
 
-- [ ] **Step 4: 写策略层的失败测试**
+- [x] **Step 4: 写策略层的失败测试**
 
 Create `AcceptEditsCommandScopeTest.java`:
 
@@ -1024,7 +1024,7 @@ class AcceptEditsCommandScopeTest {
 }
 ```
 
-- [ ] **Step 5: 实现策略层**
+- [x] **Step 5: 实现策略层**
 
 `PermissionEngine.commandByMode` 里那句
 
@@ -1089,22 +1089,22 @@ class AcceptEditsCommandScopeTest {
 > **实施提示**：`insideRoot` 是该类已有的私有方法（`fileWriteByMode` 在用），直接复用。
 > `literalPrefix("*.txt")` 返回空串 → `root.resolve("")` = root → 区内，符合预期。
 
-- [ ] **Step 6: 核对放行文案**
+- [x] **Step 6: 核对放行文案**
 
 `commandByMode` 末尾的放行理由（原文类似 `自动接受编辑：命令各段都是只读或工作区内的文件操作`）
 **现在才是真的**。确认它与新行为一致；若措辞与实现对不上，**以实现为准**改文案。
 
-- [ ] **Step 7: 跑测试确认通过**
+- [x] **Step 7: 跑测试确认通过**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='CommandPathArgumentsTest,AcceptEditsCommandScopeTest,PermissionEngine*Test,BashCommandSplitter*Test'`
 Expected: 全绿
 
-- [ ] **Step 8: 变异实测**
+- [x] **Step 8: 变异实测**
 
 去掉 `&& allPathArgsInsideRoot(seg)`，重跑
 → `absoluteOutsideAsks` / `tildeAsks` / `relativeEscapeAsks` 变红。恢复后复跑全绿。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/BashCommandSplitter.java \
@@ -1128,7 +1128,7 @@ git commit -m "fix(code-tui): 自动接受编辑对命令段也判工作区，�
 读-改-写保留未知字段、JSON 非法就整个不动、重复键检测、保留原 POSIX 权限位、进程内静态锁。
 `remove` **照抄这套**，不要另起一路。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `PermissionConfigWriterRemoveTest.java`:
 
@@ -1293,12 +1293,12 @@ class PermissionEngineRemoveRuleTest {
 > ⚠ `e.rules()` 是面板要用的规则视图。若现有方法名不同（如 `permissionRules()` 门面对应的那个），
 > **以仓库现状为准**改测试里的调用，别新造一个同义方法。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='PermissionConfigWriterRemoveTest,PermissionEngineRemoveRuleTest'`
 Expected: 找不到 `remove` / `removeRule`
 
-- [ ] **Step 3: 实现 writer 的 remove**
+- [x] **Step 3: 实现 writer 的 remove**
 
 `PermissionConfigWriter.java`（**照抄 `append` 的结构**：同一把 `LOCK`、同一个 `MAPPER`、
 同一套 `readRoot` / 原子写 / `copyPosixPermissions`）：
@@ -1340,7 +1340,7 @@ Expected: 找不到 `remove` / `removeRule`
 5. 删掉全部匹配项（同一条可能被手工写重复），写临时文件 → `copyPosixPermissions` → `ATOMIC_MOVE`
 6. `catch (Exception e)` → `log.warn` + `cleanup(tmp)` + `return false`
 
-- [ ] **Step 4: 实现引擎的 removeRule**
+- [x] **Step 4: 实现引擎的 removeRule**
 
 `PermissionEngine.java`：
 
@@ -1378,17 +1378,17 @@ Expected: 找不到 `remove` / `removeRule`
 > **注意那条写盘失败的处理**：写盘失败时**不从内存摘**。反过来（内存摘了、文件没删）
 > 会造成「这次运行不生效、重启后又回来」，比直接告诉用户「没删成」更难排查。
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='PermissionConfigWriter*Test,PermissionEngine*Test'`
 Expected: 全绿
 
-- [ ] **Step 6: 变异实测**
+- [x] **Step 6: 变异实测**
 
 把 `removeRule` 里的 `foldedTwins.remove(rule);` 注释掉，重跑
 → `removedDenyRuleDropsItsFoldedTwin` 变红。恢复后复跑全绿。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/PermissionConfigWriter.java \
@@ -1413,7 +1413,7 @@ git commit -m "feat(code-tui): 规则可删——writer 加 remove，引擎同�
 **已有可复用的东西**：`ViewScreen.of(view)`（离屏渲染回读屏幕文本，测试用）、
 `Theme.PICK_SEL/PICK_ITEM/PICK_DESC`（纯前景高亮，**不要用背景色条**）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `CodeTuiViewPermissionsPanelTest.java`:
 
@@ -1555,12 +1555,12 @@ class CodeTuiViewPermissionsPanelTest {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest=CodeTuiViewPermissionsPanelTest`
 Expected: 编译失败（`removePermissionRule` 不存在）/ 屏幕上没有规则列表
 
-- [ ] **Step 3: 门面加删除入口**
+- [x] **Step 3: 门面加删除入口**
 
 `SubmitHandler.java`，在既有的 `permissionRules()` 旁边加：
 
@@ -1576,7 +1576,7 @@ Expected: 编译失败（`removePermissionRule` 不存在）/ 屏幕上没有规
 生产落地端（`CodingAgent` 里 `permissionRules()` 那几个门面方法附近）转调 `permissionEngine.removeRule(rule)`，
 引擎为 null 时返回 false。
 
-- [ ] **Step 4: 实现面板**
+- [x] **Step 4: 实现面板**
 
 `CodeTuiView.java`：
 
@@ -1615,12 +1615,12 @@ allow/ask 的确认行改为 `…？以后会重新询问 · Enter 确认 · Esc
 
 > **高亮必须用 `PICK_SEL`（纯前景）**——行内 TUI 下背景色条会串到下一行，本项目 pty 实机复现过。
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `mvn -o test -pl springai-code-tui -Dtest='CodeTuiView*Test'`
 Expected: 全绿
 
-- [ ] **Step 6: 变异实测**
+- [x] **Step 6: 变异实测**
 
 两个变异，各跑一次：
 
@@ -1629,7 +1629,7 @@ Expected: 全绿
 
 都恢复，恢复后复跑全绿。结果写进报告。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java \
@@ -1657,7 +1657,7 @@ mvn -q -o dependency:build-classpath -pl springai-code-tui -Dmdep.outputFile=tar
 cd springai-code-tui && python3 src/test/resources/scripts/permission_smoke.py
 ```
 
-- [ ] **Step 1: 冒烟脚本改造既有的 `/permissions` 断言**
+- [x] **Step 1: 冒烟脚本改造既有的 `/permissions` 断言**
 
 `check_permissions_report` 现在断言的是 scrollback 里的三段文本。`/permissions` 改成面板后，
 **规则那段不再进 scrollback**——请把它改成：模式与内置底线仍在 scrollback（断言不变），
@@ -1666,7 +1666,7 @@ cd springai-code-tui && python3 src/test/resources/scripts/permission_smoke.py
 ⚠ 用 `restore_default_mode()` 那套纪律：**不要用 `wait_for` 断言「当前状态」**，
 它会命中早先留在 scrollback 的陈旧文本（本脚本为此栽过一次，见脚本内注释）。
 
-- [ ] **Step 2: 新增 `check_permissions_panel(session)`**
+- [x] **Step 2: 新增 `check_permissions_panel(session)`**
 
 覆盖：
 
@@ -1682,14 +1682,14 @@ cd springai-code-tui && python3 src/test/resources/scripts/permission_smoke.py
 
 接进 `main()` 的场景序列。
 
-- [ ] **Step 3: 跑冒烟**
+- [x] **Step 3: 跑冒烟**
 
 Expected: `SMOKE PASS`，且包含你新加的 `OK:` 行。
 
 ⚠ 若某条断言红了，**先判断是脚本写错还是产品真有问题**。是产品问题就修产品，并在报告里说清楚——
 **这正是这一步存在的意义**，不要为了让脚本变绿而放宽断言。
 
-- [ ] **Step 4: 文档**
+- [x] **Step 4: 文档**
 
 `springai-code-tui/README.md`：
 
@@ -1708,7 +1708,7 @@ Expected: `SMOKE PASS`，且包含你新加的 `OK:` 行。
 - **补一句新的诚实声明**：直接在 `$HOME` 下运行时，「家目录豁免」仍使「系统位置」检查对整个家目录失效——
   这一条本期没动（见 spec §4）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add springai-code-tui/src/test/resources/scripts/permission_smoke.py \
@@ -1720,12 +1720,12 @@ git commit -m "test(code-tui): /permissions 面板的 pty 实机冒烟；文档�
 
 ## 完成标准
 
-- [ ] `mvn test -pl springai-code-tui` 全绿（`CodingAgentSpikeTest.todoTurnIdBinding` 的红单独记）
-- [ ] `permission_smoke.py` → `SMOKE PASS`，含 `/permissions` 面板的新断言
-- [ ] **六处变异实测全部生效**：Task 1（爬祖先）、Task 2（allow 不折叠 / 别名）、Task 3（只查首个别名）、
+- [x] `mvn test -pl springai-code-tui` 全绿（`CodingAgentSpikeTest.todoTurnIdBinding` 的红单独记）
+- [x] `permission_smoke.py` → `SMOKE PASS`，含 `/permissions` 面板的新断言
+- [x] **六处变异实测全部生效**：Task 1（爬祖先）、Task 2（allow 不折叠 / 别名）、Task 3（只查首个别名）、
       Task 4（过宽 root 豁免）、Task 5（命令段判工作区）、Task 6（清折叠孪生）、Task 7（确认态 / deny 措辞）
-- [ ] 人工：误点一次「永久允许」后能在 `/permissions` 面板里删掉，**重启后确实不在**
-- [ ] 人工：删一条 deny 规则时，确认提示明确说「这会放宽权限」
+- [x] 人工：误点一次「永久允许」后能在 `/permissions` 面板里删掉，**重启后确实不在**
+- [x] 人工：删一条 deny 规则时，确认提示明确说「这会放宽权限」
 
 ---
 
@@ -1772,3 +1772,87 @@ Task 4 与 Task 5 彼此独立，也不与 Task 2/3 抢文件之外的语义—�
 | 4 | Task 6（`writer`+`PermissionEngine`） | 等 Task 2/5 放开 `PermissionEngine` |
 | 5 | Task 7（`CodeTuiView`+`SubmitHandler`） | 依赖 Task 6 |
 | 6 | Task 8（脚本 + 文档） | 依赖全部 |
+
+---
+
+## 实施记录（2026-08-02 落地，11 个提交 `8ec53cc` → `0b7f9e4`）
+
+**执行方式**：subagent 并行，按文件冲突分波。中途两个 agent 因配额（402）与连接中断掉线，
+未完成的部分由协调者接手——**因此本期没有「谁的活」这种边界，最终判据一律是协调者在全部
+提交后自己跑的那次全量回归与 pty 冒烟。**
+
+**验证**：`mvn -o test -pl springai-code-tui` → **952 跑 / 1 败**
+（`CodingAgentSpikeTest.todoTurnIdBinding`，打真实模型的既有 flaky，单独记）；
+`permission_smoke.py` → **SMOKE PASS**，18 条断言。
+
+### 四个漏洞的最终形态
+
+| # | 修法 | 关键取舍 |
+|---|---|---|
+| 1 大小写 | deny/ask 规则预生成**折叠孪生**（pattern 小写），匹配时小写候选配孪生 | `PermissionRule` 一行未改；`pattern == null` 与 ALLOW 不造孪生 |
+| 2 符号链接 | `PathAliases`：解析**最长已存在祖先**再拼回剩余段；**悬空链接**走 `readSymbolicLink`，有界 8 跳 | 每跳完把「爬祖先 + toRealPath」整个重来，一个循环兜住三种形态 |
+| 3 `ACCEPT_EDITS` 命令段 | 路径参数**全部**在工作区内才放行 | `~` 一律判区外；通配符取字面前缀；`--opt=value` 取 `=` 之后那半 |
+| 4 过宽 root | `root` 是 `/` 或家目录**严格祖先**时不做豁免 + 启动提示 | `root == 家目录`**刻意不救**（另有独立的家目录豁免，见 spec §4） |
+
+### 计划外的发现与修正
+
+**① 「不清折叠孪生，删掉的 deny 会借孪生继续生效」——我编的因果，代码里不成立。**
+计划与任务书都这么写，实施者据此加了 `foldedTwins.remove(rule)` 并配了注释。
+**变异实测停掉那行，用例照样绿**——孪生是按规则做键的缓存，只在匹配「仍在规则表里」的
+规则时经 `computeIfAbsent` 查到，规则一摘就再也查不到。那行是**缓存卫生，不是正确性护栏**。
+两处注释与用例定位已更正。
+
+> 教训：一个听起来有道理的机制可以通过代码审查（实施者照做、还写了注释），
+> **只有变异实测能揭穿**。变异不只是「验证测试会红」，更是**验证你以为的因果链真的存在**。
+
+**② 两条我写的「不会失败的测试」，都被实施者抓出。**
+- `allowDoesNotFoldCase`（标着 ★ 的安全支点）：`Write /ETC/passwd` 在**第 2 步**内置检查就被
+  拦成 ASK，**第 5 步 allow 根本轮不到**，折不折叠断言恒为 ASK。改用**工作区内**路径才有鉴别力。
+- `allow Read(src/**)` 的反向断言：`Read` 是 `READ_ONLY`、模式默认本就 ALLOW，
+  命中与否结论相同。改用 `Write`。实施者还补了对照组，证明那个 ASK 来自「大小写没折」
+  而非「相对 pattern 的 allow 整个不工作」——少了它，反向断言会因**错误的原因**变绿。
+
+**③ 一个 agent 死在变异实测中途**，`BashCommandSplitter` 里留下 `// MUTANT: = 形态那段已移除`。
+**这是并行开发最危险的残留形态**：一个被故意改坏的产品代码留在工作树里，不跑测试就提交
+等于把变异当成品交付。收尾时靠跑测试发现并还原。
+
+**④ pty 断言连踩三次「把 scrollback 当当前状态」**（期 2 已为此栽过一次）：
+- `"Bash(" not in screen_text()` 判断「列表里没了」——而几步前刚打进去 `✓ 已记下允许规则：Bash(...)`；
+- `assert_mode_via_report` 读完报告**不关面板**，而面板吞掉所有按键，后续场景字符进不了输入框；
+- `find_row` 取首个匹配 → 命中上一轮 scrollback；改取最后一个 → 撞同屏重复
+  （`git push origin main` 同时在目标行与原因行）。
+
+**两种纯策略都不成立**，故新增 `assert_rows_below`：锚定面板标题、往下逐行核对——
+两个问题一起消失，还顺带把顺序钉住。
+
+### 实施者顶回计划、而且是对的
+
+- **`@TempDir` 的处理**：我给的退路是「放宽成 `contains`」，实施者改为**先 `toRealPath()` 再往下建**，
+  让「有没有链」由用例自己控制。断言反而**比原稿更强**。
+  → 通则：**先让环境变确定，再考虑放宽断言**。
+- **`roundTrips` 不用于 `remove`**：那道校验防的是「落盘的授权宽于用户批准的那一次」，
+  只对写入方向成立；删除是收窄方向，要求往返一致只会让**一条恰好不能往返的规则永远删不掉**。
+- **抽 `writeAtomically` 而非照抄**：我写「照抄 append 的纪律」，实施者改为两边共用一份实现——
+  授权文件里两份平行实现，日后只改一边就是静默漂移。
+- **并发断言不能用 `mode()` 快照**（沿用期 2 的结论）。
+
+### 已知遗留（如实留在代码与文档里）
+
+- **硬链接没有任何一层兜得住**：`ln ~/.ssh/id_rsa /tmp/x` 之后 `/tmp/x` 路径上没有任何可疑之处，
+  逐段判定与别名解析都无从下手。文件系统不提供同 inode 反查。
+- **macOS firmlink** `toRealPath` 不收敛，靠内置底线的结构匹配兜（路径里仍有 `.ssh` 这样的段）。
+- **链环或超 8 跳的链接**：跳数用尽退回原写法。
+- **`$HOME` 下直接运行**：家目录豁免仍使「系统位置」检查对整个家目录失效，
+  过宽 root 那条修法**救不了这一种**（见 spec §4）。
+- **`shadows()` 不走折叠孪生**：`deny Read(/ETC/**)` 遮蔽不了针对 `/etc/x` 的候选建议，
+  面板上仍会出现「永久允许」。**不是绕过**（deny 在第 1 步照样赢），但会让用户写下一条
+  永不生效的 allow。已在 `shadows()` javadoc 留痕。
+- **`{a,b}` 花括号不算通配符**：`cp {../x,y} d` 整串当字面路径 → 判区外 → ASK。方向安全。
+- **性能**：`checkSegment`/`checkHeadIndependently` 逐词调 `checkWrite`/`checkRead`，
+  一条 N 词命令产生 O(N) 次别名解析。单条命令量级仍小，已写进 `firstHit` javadoc。
+
+### 仍需人工验收（要真实模型 / 真实终端）
+
+- [ ] 误点一次「允许，永久」后，在 `/permissions` 面板里 `d` 删掉它，**重启后确实不在**
+- [ ] 删一条 deny 规则时，确认提示明确说「这会放宽权限」
+- [ ] macOS 上造一条经符号链接指向 `~/.ssh` 的写入，确认**真的弹审批**（冒烟用的是临时目录里的假家目录）
