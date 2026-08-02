@@ -131,6 +131,15 @@ public final class CodeTuiView extends InlineApp {
     private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
     private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
     private long animTick;                                           // 动画帧计数（drain 每 ~33ms 自增），驱动状态栏波光
+    private final ImageAttachmentDetector imageDetector = new ImageAttachmentDetector();
+    /** 本次输入是否已按 Ctrl+G 取消附件。清空输入框时复位（见 {@link #clearInput}）——否则取消一次就永久失效。 */
+    private boolean attachmentsCancelled;
+    // 识别结果的「按文本」记忆：render 每帧都跑（TamboUI 逐帧重绘），而 detectWithOverflow 要切词 +
+    // 遍历每个词做路径解析。detector 自己按「路径+mtime」缓存了读盘嗅探，但切词/解析仍是每帧开销，
+    // 故这里再记一层：文本没变就直接复用。代价是「文本已打好、之后才把文件拷进那个路径」要等下一次
+    // 击键才认出来——比每帧扫一遍文本划算得多。
+    private String attachCacheText;
+    private ImageAttachmentDetector.Result attachCache = ImageAttachmentDetector.Result.EMPTY;
 
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
@@ -385,15 +394,26 @@ public final class CodeTuiView extends InlineApp {
         @Override
         public Size preferredSize(int maxW, int maxH, RenderContext ctx) {
             int w = maxW > 0 ? maxW : 80;
-            return Size.of(w, visualRowCount(w - 2) + 2); // 自动增高：软折行后的可视行数 + 上下边框
+            // 附件行占的那一行必须在这里算进去：多留不画会留白，画了没留会被裁掉（两边必须同一个判据）。
+            int attach = attachmentLineText().isEmpty() ? 0 : 1;
+            return Size.of(w, visualRowCount(w - 2) + 2 + attach); // 自动增高：软折行后的可视行数 + 上下边框
         }
 
         @Override
         public void render(Frame frame, Rect rect, RenderContext ctx) {
             Buffer buf = frame.buffer();
+            Rect boxRect = rect;
+            String attach = attachmentLineText();
+            if (!attach.isEmpty() && rect.height() > 1) {
+                // 画在输入框<b>下方</b>而非框内：框内那块是编辑区，塞进提示会与光标/软折行抢位置。
+                // 超出终端宽度要先截断——buf.setString 越界写是静默丢弃，截断至少还能读出前半句。
+                boxRect = new Rect(rect.x(), rect.y(), rect.width(), rect.height() - 1);
+                buf.setString(rect.x(), rect.y() + rect.height() - 1,
+                        dev.tamboui.text.CharWidth.substringByWidth(attach, Math.max(1, rect.width())), HINT);
+            }
             Block block = Block.builder().borders(Borders.ALL).borderType(BorderType.ROUNDED).build();
-            block.render(rect, buf);
-            Rect inner = block.inner(rect);
+            block.render(boxRect, buf);
+            Rect inner = block.inner(boxRect);
             int ix = inner.x(), iy = inner.y(), iw = Math.max(1, inner.width()), ih = inner.height();
 
             if (inputState.text().isEmpty()) {              // 空态：只画反显块光标，不画框内占位符
@@ -452,6 +472,53 @@ public final class CodeTuiView extends InlineApp {
         return segs;
     }
 
+    // ── 附件行（输入框下方那一行）────────────────────────────────────────
+    /**
+     * 附件行文本。<b>纯函数</b>，便于单测——渲染分支顺序类的缺陷本项目栽过，
+     * 内容函数与渲染必须分开测。
+     *
+     * @param count     已识别（未取消）的图片张数
+     * @param overflow  因超上限被丢弃的张数，<b>必须如实显示</b>：静默截断会让用户以为都附上了
+     * @param firstName 第一张的文件名，只在 count==1 时用（多张时列名会撑爆一行）
+     */
+    static String attachmentLine(int count, int overflow, String firstName) {
+        if (count <= 0) return "";
+        StringBuilder b = new StringBuilder("  ⏎ 已附带 ").append(count).append(" 张图片");
+        if (count == 1 && firstName != null) b.append("（").append(firstName).append("）");
+        if (overflow > 0) b.append("，另有 ").append(overflow).append(" 张超出上限未附");
+        b.append("  · Ctrl+G 取消");
+        return b.toString();
+    }
+
+    /** 取消后的附件行。刻意不再提示 Ctrl+G——已经取消了，再提示是噪音。 */
+    static String attachmentLineCancelled() {
+        return "  ⏎ 已取消附件";
+    }
+
+    /** 当前输入文本里识别到的图片（按文本记忆，见 {@link #attachCacheText}）。 */
+    private ImageAttachmentDetector.Result attachments() {
+        String text = inputState.text();
+        if (!text.equals(attachCacheText)) {
+            attachCache = imageDetector.detectWithOverflow(text, root);
+            attachCacheText = text;
+        }
+        return attachCache;
+    }
+
+    /** 该画在输入框下方的那一行；空串=不画（也不占高度）。 */
+    private String attachmentLineText() {
+        ImageAttachmentDetector.Result r = attachments();
+        if (r.images().isEmpty()) {
+            // 没图可取消时顺手复位取消态：用户把路径删掉再重新写一条，理应重新附上。
+            // 不复位的话，一次 Ctrl+G 会连累同一段草稿里之后写的所有路径，而用户看不出原因。
+            attachmentsCancelled = false;
+            return "";
+        }
+        return attachmentsCancelled
+                ? attachmentLineCancelled()
+                : attachmentLine(r.images().size(), r.overflow(), r.images().get(0).name());
+    }
+
     /** 当前文本在给定内宽下软折行后的总可视行数（≥1）。 */
     private int visualRowCount(int innerWidth) {
         int rows = 0, n = inputState.lineCount();
@@ -496,6 +563,14 @@ public final class CodeTuiView extends InlineApp {
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
         if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
         if (pickingPerms) return onPermsPanelKey(k);    // 权限规则面板同理
+        // Ctrl+G 取消本次输入的图片附件（readline 里 Ctrl+G 正是 abort；刻意不用 Ctrl+D——本项目实现了
+        // readline 键位，那里 Ctrl+D 是删除字符/空行 EOF，绑给取消会跟肌肉记忆打架）。
+        // 必须在转交 textArea 之前拦下，否则被当普通字符插进输入框：用户按了取消，附件没取消，
+        // 反而多了个看不见的控制字符。判键写法同 onEditShortcut 的 Ctrl+字母。
+        if (k.hasCtrl() && k.isChar('g')) {
+            attachmentsCancelled = true;
+            return EventResult.HANDLED;    // 无图时也吞掉：控制键漏进编辑器比无反馈更糟
+        }
         // 正在浏览历史（histIndex<size）时 ↑↓ 始终翻历史——即使翻到的是一条 /命令、补全菜单也弹出来了，
         // 也不让菜单抢走 ↑↓（否则一遇到 /model 就卡住翻不动）。菜单的 Tab/Enter/Esc 仍照常处理。
         if (histIndex < history.size()) {
@@ -750,6 +825,19 @@ public final class CodeTuiView extends InlineApp {
         return cc > 0 && cc <= line.length() && line.charAt(cc - 1) == '\\';
     }
 
+    /**
+     * 清空输入框，<b>并</b>复位附件取消态——{@link #submitInput} 里十几条分支都要清空输入框
+     * （/model、/clear、/compact… 各自 clear 后 return），逐处补复位必漏；漏掉的后果是
+     * 「取消一次之后这个会话里再也附不上图」，而且用户完全不知道为什么。故收敛成一处。
+     *
+     * <p>⚠ 后续「把附件兑现成引用块」的逻辑必须写在调用本方法<b>之前</b>——本方法一跑，
+     * {@code attachmentsCancelled} 就没了。
+     */
+    private void clearInput() {
+        inputState.clear();
+        attachmentsCancelled = false;
+    }
+
     /** 提交：忙时把消息入队（回合结束由 {@link #drain} 自动出队提交），空闲时立即提交。均清空输入框。 */
     private void submitInput() {
         String text = inputState.text();
@@ -757,12 +845,12 @@ public final class CodeTuiView extends InlineApp {
         addHistory(text);                            // 记入历史（含斜杠命令），供 ↑↓ 回溯
         String cmd = text.strip();
         if (cmd.equals("/model")) {                  // 斜杠命令：打开模型选择器（仿 Claude Code）
-            inputState.clear();
+            clearInput();
             openModelPicker();
             return;
         }
         if (cmd.equals("/compact")) {
-            inputState.clear();
+            clearInput();
             if (state.isCompacting()) {
                 return;   // 已在压缩：动画条已表明状态，不再叠加 notice（否则会在压缩结束后残留一帧）
             }
@@ -774,7 +862,7 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         if (cmd.equals("/clear")) {                  // 换新空会话：旧会话留盘可 -c 恢复
-            inputState.clear();
+            clearInput();
             if (state.isBusy()) {                    // 回合中 / 压缩中 / 有待处理模态：拒绝（见 isBusy）
                 state.setNotice("忙碌中，无法清空");
                 return;
@@ -800,39 +888,39 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         if (cmd.equals("/context")) {          // 只读快照：任何时刻都可查（含回合进行中），不打断
-            inputState.clear();
+            clearInput();
             ctxUsage.report();
             return;
         }
         if (cmd.equals("/skills")) {           // 只读清单：任何时刻都可查，不打断
-            inputState.clear();
+            clearInput();
             printSkills();
             return;
         }
         if (cmd.equals("/skill")) {                  // 打开技能选择器（选中后显示为输入框上方标签，发送时加载）
-            inputState.clear();
+            clearInput();
             openSkillPicker();
             return;
         }
         if (cmd.equals("/reload")) {                 // 重扫技能目录：运行中新增/删除的 SKILL.md 就此对模型与 /skills 生效
-            inputState.clear();
+            clearInput();
             reloadSkills();
             return;
         }
         if (cmd.equals("/mcp")) {                    // MCP 管理面板：仅空闲可开（回合中摘工具/关连接会撞在飞调用）
-            inputState.clear();
+            clearInput();
             if (busy()) { state.setNotice("忙碌中，无法管理 MCP"); return; }
             openMcpPicker();
             return;
         }
         if (cmd.equals("/permissions")) {       // 模式与底线进 scrollback，规则清单进面板（可删）
-            inputState.clear();
+            clearInput();
             printPermissions();
             openPermsPanel();
             return;
         }
         if (cmd.equals("/continue")) {               // 续跑：上一批计划被 Esc/报错中断后，据会话里保留的 todo 从首个未完成项接着做
-            inputState.clear();
+            clearInput();
             // 工具中立：别硬点 Task/串行——上一批若是 ParallelTasks 并行跑的，"逐个用 Task" 会把独立任务逼回串行、丢掉并行。
             // 让模型按任务独立性自选，并与先前采用的方式保持一致。
             String prompt = "继续执行上一批未完成的计划。请先回顾你的 todo 列表，从第一个尚未完成的任务开始委派子 agent 继续："
@@ -843,16 +931,16 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         if (cmd.equals("/help")) {
-            inputState.clear();
+            clearInput();
             printHelp();
             return;
         }
         if (cmd.equals("/exit") || cmd.equals("/quit")) {
-            inputState.clear();
+            clearInput();
             quit();
             return;
         }
-        inputState.clear();
+        clearInput();
         String skill = pendingSkill;                 // 一次性：本条消息取走挂载
         pendingSkill = null;
         if (busy()) {                                // 忙/压缩中/有在飞子 agent：排队，挂载随消息入队
