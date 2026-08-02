@@ -248,10 +248,33 @@ public final class SubagentRunner {
     }
 
     /**
-     * 子 agent 有效系统提示：spec 自身提示 + 项目指令（非空时追加）+ 权限模式提示段（仅 PLAN 非空）。
+     * 产出图片时把 artifact 路径写进报告。
+     *
+     * <p><b>为什么只是一句提示、不做机制</b>：子 agent 截的图与主 agent 的图落在同一个
+     * artifacts 目录，但回到主 agent 的<b>只有它的最终文本报告</b>。报告里不写路径，
+     * 主 agent 就无从得知这些图存在——而要让它知道，就得给子 agent 契约加一条「结构化产物清单」，
+     * 那是比这个问题本身大得多的改动。一句提示能覆盖绝大多数情况，成本一行。
+     *
+     * <p><b>无条件追加，不按视觉能力开关</b>：即便当前模型不支持看图、或
+     * {@code CODETUI_VISION=off}，「主 agent 不知道这些文件存在」这个问题依然成立
+     * （它至少该知道有图、路径在哪）。按能力开关只会让同一次派发的提示随环境漂移，
+     * 换来的收益是省一句话。
+     */
+    private static final String ARTIFACT_GUIDANCE = """
+            若你在调查中产生了图片（截图、图表等），请把它们的 artifact 路径写进最终报告，
+            否则主 agent 无从得知这些图存在。
+            """;
+
+    /**
+     * 子 agent 有效系统提示：spec 自身提示 + 项目指令（非空时追加）+ 权限模式提示段（仅 PLAN 非空）
+     * + 产物路径提示（{@link #ARTIFACT_GUIDANCE}，恒追加）。
      *
      * <p><b>每次派发都调一次</b>（见 {@code run} 里的 {@code .system(effectiveSystemPrompt(spec))}），
      * 故模式提示读的是<b>当下</b>的模式，{@code Shift+Tab} 切档在下一次委派即生效，没有装配期烘焙。
+     *
+     * <p><b>产物提示加在这里而不是四份内置 agent 的 md 里</b>：这里是所有子 agent 的必经之路，
+     * 用户自定义的 {@code .codetui/agents/*.md} 也走这条——写进内置 md 要抄四份，
+     * 且自定义 agent 永远拿不到。
      *
      * <p><b>纯字符串拼接，不走模板参数</b>：这里注入的是最终 system 文本，调用方
      * {@code .system(String)} 不带任何 param，故 Spring 的模板引擎不会去解析它——
@@ -267,6 +290,7 @@ public final class SubagentRunner {
         if (!modeGuidance.isEmpty()) {
             sb.append("\n\n").append(modeGuidance);
         }
+        sb.append("\n\n").append(ARTIFACT_GUIDANCE);
         return sb.toString();
     }
 
