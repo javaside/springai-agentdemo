@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
+import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;
 import dev.tamboui.text.CharWidth;
@@ -35,8 +36,11 @@ final class HistoryReplay {
                     out.add(new OutputLine("", Kind.ASSISTANT));                 // 回合间留白，与 onUserMessage 一致
                     // 会话持久化的是「注入后」的有效文本；实时 UI 只显示用户原文（onUserMessage 传 text 而非
                     // effectiveText），回放须一致，故剥掉 CodingAgent.injectSkill 注入的 <skill_instruction> 前缀。
+                    // 贴图注入的引用块同理：存的是八行机器格式，回放须渲成一行 📎。
+                    // 先剥技能前缀再剥引用块——两者互不重叠，固定顺序便于推理。
                     // 单行 OutputLine 即可——userBlock 自身按 \n 拆行、软折（与实时同路径）。
-                    out.add(new OutputLine("› " + stripSkillInstruction(safe(m.getText())), Kind.USER));
+                    out.add(new OutputLine("› " + stripFileReferences(
+                            stripSkillInstruction(safe(m.getText()))), Kind.USER));
                 }
                 case ASSISTANT -> {
                     String text = m.getText();
@@ -101,6 +105,58 @@ final class HistoryReplay {
             after++;                                            // 跳过 injectSkill 附加的 "\n\n" 分隔（容忍 \r\n）
         }
         return userText.substring(after);
+    }
+
+    /**
+     * 把引用块换成一行 {@code 📎 name (w×h)}。
+     *
+     * <p>与 {@link #stripSkillInstruction} 同一个理由：会话持久化的是「注入后」的有效文本，
+     * 而实时 UI 只显示用户原文（{@code onUserMessage} 收到的是注入前的），回放须一致。
+     * 不处理的话 {@code -c} 之后每张图都甩八行机器格式给用户看。
+     *
+     * <p>残缺块（有开标记无闭标记）<b>保底原样</b>，不误删后面的正文——与
+     * {@link #stripSkillInstruction} 同纪律。
+     */
+    static String stripFileReferences(String text) {
+        if (text == null || !text.contains(FileReference.OPEN)) {
+            return text;
+        }
+        StringBuilder out = new StringBuilder();
+        int from = 0;
+        while (true) {
+            int open = text.indexOf(FileReference.OPEN, from);
+            if (open < 0) {
+                break;
+            }
+            int close = text.indexOf(FileReference.CLOSE, open);
+            if (close < 0) {
+                break;                                          // 残缺：剩余部分原样收尾
+            }
+            int end = close + FileReference.CLOSE.length();
+            out.append(text, from, open).append(summarise(text.substring(open, end)));
+            from = end;
+        }
+        out.append(text.substring(from));
+        return out.toString();
+    }
+
+    /** 一个块 → 一行。缺字段就少显示，不报错（历史块的字段集会随版本变）。 */
+    private static String summarise(String block) {
+        String name = field(block, "name");
+        String dim = field(block, "dimensions");
+        if (name == null) {
+            name = "图片";
+        }
+        return "📎 " + name + (dim == null ? "" : " (" + dim.replace("x", "×") + ")");
+    }
+
+    private static String field(String block, String key) {
+        for (String line : block.split("\n")) {
+            if (line.startsWith(key + ": ")) {
+                return line.substring(key.length() + 2).trim();
+            }
+        }
+        return null;
     }
 
     private static String stripCr(String s) {

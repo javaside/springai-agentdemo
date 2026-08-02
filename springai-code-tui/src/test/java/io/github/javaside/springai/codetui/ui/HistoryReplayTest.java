@@ -12,6 +12,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** -c 恢复回放：历史消息 → scrollback 行。校验类型/顺序/跳过 SYSTEM/工具紧凑标记。 */
@@ -111,6 +112,77 @@ class HistoryReplayTest {
         List<OutputLine> out = HistoryReplay.toReplayLines(List.of(am));
         assertEquals(1, out.size(), "空白正文不产生行，只剩工具标记");
         assertEquals(Kind.TOOL_START, out.get(0).kind());
+    }
+
+    /** 引用块要渲成一行可读的，否则 -c 之后满屏机器格式。 */
+    @Test
+    void referenceBlockBecomesSingleReadableLine() {
+        String stored = "看下这个报错\n"
+                + "[file reference]\nid: sha256:abcd\nkind: image\nmime_type: image/png\n"
+                + "size_bytes: 1234\ndimensions: 1440x900\nname: bug.png\n"
+                + "path: docs/bug.png\ndelivery: not_in_view\nreason: x\n[/file reference]";
+        String shown = HistoryReplay.stripFileReferences(stored);
+        assertTrue(shown.contains("📎 bug.png"), shown);
+        assertTrue(shown.contains("1440×900"), shown);
+        assertFalse(shown.contains("[file reference]"), "机器格式漏出来了：" + shown);
+        assertTrue(shown.startsWith("看下这个报错"), "正文被动了：" + shown);
+    }
+
+    /** 多个引用块各渲一行。 */
+    @Test
+    void multipleReferenceBlocksEachBecomeOneLine() {
+        String one = "[file reference]\nkind: image\nname: a.png\ndimensions: 10x10\n"
+                + "path: a.png\n[/file reference]";
+        String two = one.replace("a.png", "b.png");
+        String shown = HistoryReplay.stripFileReferences("对比\n" + one + "\n" + two);
+        assertTrue(shown.contains("📎 a.png"), shown);
+        assertTrue(shown.contains("📎 b.png"), shown);
+        assertFalse(shown.contains("[/file reference]"), shown);
+    }
+
+    /** 没有引用块时原样返回——不该给普通消息加工。 */
+    @Test
+    void plainTextIsUntouched() {
+        assertEquals("普通消息", HistoryReplay.stripFileReferences("普通消息"));
+    }
+
+    /** 残缺块（只有开标记）保底原样，不误删后面的正文——与 stripSkillInstruction 同纪律。 */
+    @Test
+    void unterminatedBlockIsLeftAloneRatherThanEatingTheRest() {
+        String broken = "看这个\n[file reference]\nkind: image";
+        assertEquals(broken, HistoryReplay.stripFileReferences(broken));
+    }
+
+    /**
+     * 接线断言：走公开入口 toReplayLines 验证 USER 分支<b>确实调用</b>了剥离。
+     *
+     * <p>上面四条测的是纯函数，即便忘了在 USER 分支接上也照样全绿——本项目在期 1
+     * 抓到过这类「不会失败的测试」，故这条单独把接线钉死。
+     */
+    @Test
+    void userBranchActuallyStripsReferenceBlocks() {
+        String stored = "看下这个报错\n"
+                + "[file reference]\nid: sha256:abcd\nkind: image\nmime_type: image/png\n"
+                + "size_bytes: 1234\ndimensions: 1440x900\nname: bug.png\n"
+                + "path: docs/bug.png\ndelivery: not_in_view\nreason: x\n[/file reference]";
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals(2, out.size());
+        assertEquals(Kind.USER, out.get(1).kind());
+        String shown = out.get(1).text();
+        assertFalse(shown.contains("[file reference]"), "USER 分支没接上剥离：" + shown);
+        assertFalse(shown.contains("delivery:"), "USER 分支没接上剥离：" + shown);
+        assertTrue(shown.contains("📎 bug.png (1440×900)"), shown);
+        assertTrue(shown.startsWith("› 看下这个报错"), shown);
+    }
+
+    /** 技能注入 + 引用块共存：两者都要剥掉，剩纯原文 + 📎 行。 */
+    @Test
+    void skillInstructionAndReferenceBlockAreBothStripped() {
+        String stored = "<skill_instruction>\nbody\n</skill_instruction>\n\n看图\n"
+                + "[file reference]\nkind: image\nname: a.png\ndimensions: 10x10\n"
+                + "path: a.png\n[/file reference]";
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals("› 看图\n📎 a.png (10×10)", out.get(1).text());
     }
 
     @Test
