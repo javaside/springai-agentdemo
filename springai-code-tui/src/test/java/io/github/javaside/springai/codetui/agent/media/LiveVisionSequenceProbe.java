@@ -18,6 +18,7 @@ import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -43,8 +44,10 @@ class LiveVisionSequenceProbe {
         ChatResponse r = provider.chatModel().call(sequence(provider.defaultModel()));
         String text = r.getResult().getOutput().getText();
         System.out.println("[probe] model=" + provider.defaultModel() + " reply=" + text);
-        assertFalse(text == null || text.isBlank(), "回复为空");
-        // 真的看到了那张绿图才答得出「绿」——没看到只会说「无法看到实际图像内容」。
+        assertNotNull(text, "模型没有返回任何文本");
+        assertFalse(text.isBlank(), "模型返回空白文本");
+        // 上面两条只证明 HTTP 没挂。真的看到了那张绿图才答得出「绿」——
+        // 没看到只会说「无法看到实际图像内容」（已做对照实验，见类注释）。
         assertTrue(text.toLowerCase().matches("(?s).*(绿|green).*"), "模型没认出绿色，回复：" + text);
     }
 
