@@ -15,7 +15,9 @@ import org.springframework.ai.chat.messages.Message;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 线程安全共享状态，兼任 {@link AgentListener} 落地端。<b>Claude Code 式行内滚动模型</b>：
@@ -108,6 +110,14 @@ public final class ConversationState implements AgentListener {
 
     /** 队列上限：防失控回合塞爆队列；超出的请求直接被拒（DENY，回合继续）。 */
     static final int MODAL_QUEUE_CAP = 8;
+
+    // ── BYPASS 留痕（--dangerously-skip-permissions 放行掉的内置底线） ──
+    // LinkedHashSet 而不是 List：天然去重（同一个操作在一个回合里可能命中很多次，
+    // 汇总里列十遍 rm -rf 只会淹没别的项）且保序（按第一次发生的先后列出）。
+    private final Set<String> bypassed = new LinkedHashSet<>();
+    // 累积归属的回合。换回合即清空：上一回合的账不能算到这一回合头上，
+    // 也保证没能 flush 的回合（被 Esc 取消等）不会把记录永远留在集合里。
+    private long bypassTurnId = -1L;
 
     // ── 输入缓冲 ────────────────────────────────────────────────────────
     public synchronized void typeChar(char c) { notice = ""; input.append(c); }
@@ -402,8 +412,53 @@ public final class ConversationState implements AgentListener {
         return null;
     }
 
+    /**
+     * BYPASS 放行了一个通常需要确认的操作：<b>即时</b>打一行进 scrollback，并按回合累积，
+     * 供 {@link #onTurnComplete} 汇总一次。
+     *
+     * <p><b>刻意不做迟到过滤</b>（别处那句 {@code turnId != acceptingTurnId} 这里没有）：
+     * 迟到过滤的用意是「已取消回合的输出不要再显示」，而这件事<b>已经真的发生在磁盘上了</b>——
+     * 回合作不作数，与「.git/hooks 被写过」这个事实无关，留痕不该被回合状态吞掉。
+     *
+     * <p>不阻塞、不弹窗：BYPASS 的定义就是不问，在这里问就是把它要解决的死锁请回来。
+     */
+    @Override
+    public synchronized void onGuardrailBypassed(long turnId, String what) {
+        String reason = what == null ? "（未给出理由）" : what;
+        if (turnId != bypassTurnId) {
+            bypassed.clear();                 // 换回合：上一回合没 flush 掉的残留不带进来
+            bypassTurnId = turnId;
+        }
+        bypassed.add(reason);
+        pending.add(new OutputLine("⚠ BYPASS 放行：" + reason + "（通常需要确认）", OutputLine.Kind.INFO));
+    }
+
+    /**
+     * 回合末汇总本回合被 BYPASS 放行的操作，然后清空。
+     *
+     * <p><b>为什么要汇总</b>：即时行保证「正在发生时屏幕上有」，但半无人值守场景下人回来时
+     * scrollback 已经几百行，汇总是他唯一读得完的那份账。
+     *
+     * <p><b>为什么排在 {@link #onTurnComplete} 的迟到过滤之前</b>：回合被 Esc 取消后
+     * acceptingTurnId 已复位成 -1，跟着一起被过滤的话这批记录既不显示、也不清空，
+     * 会一直挂到下一次有放行时才被顶掉——静默丢账，正是本功能要防的。
+     */
+    private void flushGuardrailBypasses(long turnId) {
+        if (turnId != bypassTurnId || bypassed.isEmpty()) return;
+        pending.add(new OutputLine("⚠ 本回合 BYPASS 放行了 " + bypassed.size() + " 个通常需要确认的操作：",
+                OutputLine.Kind.INFO));
+        for (String w : bypassed) {
+            // ⚠ 一个 OutputLine = 一个物理行：多行分多次 push，绝不在一个字符串里塞 \n
+            // （scrollback 用 println 下沉，\n 会被塌成一行并截断，人看到的是半句话）
+            pending.add(new OutputLine("   · " + w, OutputLine.Kind.INFO));
+        }
+        bypassed.clear();
+        bypassTurnId = -1L;
+    }
+
     @Override
     public synchronized void onTurnComplete(long turnId) {
+        flushGuardrailBypasses(turnId);        // 必须在迟到过滤之前，见方法注释
         if (turnId != acceptingTurnId) return;
         flushStreaming();
         activeTool = "";

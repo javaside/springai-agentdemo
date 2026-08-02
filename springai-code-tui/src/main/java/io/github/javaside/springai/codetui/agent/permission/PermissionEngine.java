@@ -491,12 +491,12 @@ public final class PermissionEngine {
         //
         // ⚠️ 核心不变量：本档下不得产生任何 ASK。改这里之前先看 bypassNeverAsks 那条测试。
         if (mode == PermissionMode.BYPASS) {
-            String bypassed = builtinDanger(entry, path, target);
-            if (bypassed != null) {
-                // 放弃拦截，但不放弃告知——留痕接线见下一个任务。
-                notifyGuardrailBypassed(bypassed);
-            }
-            return PermissionDecision.allow("BYPASS 模式已跳过权限检查（deny 规则仍然生效）");
+            // 放弃拦截，但不放弃告知：底线理由串（没踩到就是 null）随判定结果捎出去，
+            // 由 PermissionCallback 转成 onGuardrailBypassed 留痕。引擎不认识 UI，也拿不到 turnId——
+            // 给它注入 listener 会让这个纯判定器既难测又难在别的宿主里复用。
+            return PermissionDecision.allowBypassingGuardrail(
+                    "BYPASS 模式已跳过权限检查（deny 规则仍然生效）",
+                    builtinDanger(entry, path, target));
         }
 
         // 2. 内置危险检查——不可被 allow 规则覆盖，命中强制 ASK（护栏不是牢笼，人确认了就该能做）
@@ -798,11 +798,6 @@ public final class PermissionEngine {
             default:
                 return null;
         }
-    }
-
-    /** BYPASS 下放行了一个通常需要确认的操作。留痕接线见下一个任务。 */
-    private void notifyGuardrailBypassed(String what) {
-        // 下一个任务接上 AgentListener 回调
     }
 
     /** 模式默认；返回 null 表示「模式不表态」，交给兜底 ASK。 */

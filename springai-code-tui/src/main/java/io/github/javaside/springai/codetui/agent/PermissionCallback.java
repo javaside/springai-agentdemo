@@ -80,10 +80,26 @@ public final class PermissionCallback implements ToolCallback {
         void recorded(long turnId, boolean ok, String message);
     }
 
+    /**
+     * BYPASS 放行了一个命中内置底线的操作时的留痕出口
+     * （生产实现是 {@code listener::onGuardrailBypassed}）。
+     *
+     * <p><b>为什么是这一层报而不是引擎报</b>：引擎是纯判定器，不认识 UI 也拿不到 turnId；
+     * 它只把「这次放行踩了哪条底线」写进 {@link PermissionDecision#bypassedGuardrail()}，
+     * 由本类翻译成事件。
+     *
+     * <p>与 {@link RuleRecorder} 一样，<b>漏传只是少一行提示、不会挂死</b>，故默认可为 no-op。
+     */
+    @FunctionalInterface
+    public interface BypassNotifier {
+        void bypassed(long turnId, String what);
+    }
+
     private final ToolCallback delegate;
     private final PermissionEngine engine;
     private final Asker asker;
     private final RuleRecorder recorder;
+    private final BypassNotifier bypassNotifier;
 
     public PermissionCallback(ToolCallback delegate, PermissionEngine engine, Asker asker) {
         this(delegate, engine, asker, (t, ok, m) -> { });
@@ -91,17 +107,24 @@ public final class PermissionCallback implements ToolCallback {
 
     public PermissionCallback(ToolCallback delegate, PermissionEngine engine,
                               Asker asker, RuleRecorder recorder) {
+        this(delegate, engine, asker, recorder, (t, w) -> { });
+    }
+
+    public PermissionCallback(ToolCallback delegate, PermissionEngine engine, Asker asker,
+                              RuleRecorder recorder, BypassNotifier bypassNotifier) {
         this.delegate = Objects.requireNonNull(delegate, "delegate 不可为 null");
         this.engine = Objects.requireNonNull(engine, "engine 不可为 null");
         this.asker = Objects.requireNonNull(asker, "asker 不可为 null：漏传会让每次 ASK 都 park");
         this.recorder = recorder == null ? (t, ok, m) -> { } : recorder;
+        this.bypassNotifier = bypassNotifier == null ? (t, w) -> { } : bypassNotifier;
     }
 
-    /** 生产构造：两个接缝都挂到 listener 上。 */
+    /** 生产构造：三个接缝都挂到 listener 上。 */
     public PermissionCallback(ToolCallback delegate, PermissionEngine engine, AgentListener listener) {
         this(delegate, engine,
                 Objects.requireNonNull(listener, "listener 不可为 null")::onPermissionRequested,
-                listener::onRuleRecorded);
+                listener::onRuleRecorded,
+                listener::onGuardrailBypassed);
     }
 
     @Override
@@ -130,12 +153,31 @@ public final class PermissionCallback implements ToolCallback {
         PermissionDecision decision = engine.decide(name, toolInput);   // 契约：永不抛，出错失败关闭成 ASK
 
         if (decision.behavior() == PermissionBehavior.ALLOW) {
+            if (decision.bypassedGuardrail() != null) {
+                notifyBypass(ToolEventCallback.extractTurnId(toolContext), decision.bypassedGuardrail(), name);
+            }
             return invoke(toolInput, toolContext);
         }
         if (decision.behavior() == PermissionBehavior.DENY) {
             return denyMessage(decision.reason());
         }
         return askThenAct(name, toolInput, toolContext, decision);
+    }
+
+    /**
+     * 把「BYPASS 放行了一个通常需要确认的操作」告诉 UI。
+     *
+     * <p><b>出口抛异常也照样执行工具</b>：留痕失败是少一行提示，把它变成工具调用失败就是
+     * 让一条提示决定一次操作的成败——与 {@code asker} 的失败关闭成 DENY 不同，
+     * 那里等不到应答会永久 park，这里没有任何活性依赖。日志仍留一条，别静默。
+     */
+    private void notifyBypass(long turnId, String what, String toolName) {
+        log.warn("BYPASS 放行了一个通常需要确认的操作：tool={} 理由={}", toolName, what);
+        try {
+            bypassNotifier.bypassed(turnId, what);
+        } catch (RuntimeException e) {
+            log.error("BYPASS 留痕未能送达界面：tool={}", toolName, e);
+        }
     }
 
     private String askThenAct(String name, String toolInput, ToolContext toolContext,

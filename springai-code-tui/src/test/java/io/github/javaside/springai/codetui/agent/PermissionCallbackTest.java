@@ -504,6 +504,59 @@ class PermissionCallbackTest {
         assertEquals("工具炸了", ex.getMessage());
     }
 
+    // ── BYPASS 留痕接线 ────────────────────────────────────────────────
+    // 这几条测的是「判定 → UI」这条通路真的通：ConversationState 那端的用例全都直接调
+    // onGuardrailBypassed，就算引擎压根不回报也照样全绿（实测过：把引擎那句改回
+    // PermissionDecision.allow(...)，整模块 1109 条一条不红）。
+
+    @Test
+    @DisplayName("BYPASS 放行内置底线：留痕出口收到理由与 turnId，工具照常执行")
+    void bypassOfBuiltinGuardrailIsReported(@TempDir Path root) {
+        FakeTool tool = new FakeTool("Write");
+        List<String> got = new CopyOnWriteArrayList<>();
+        AtomicReference<Long> turn = new AtomicReference<>();
+        PermissionCallback cb = new PermissionCallback(tool, engine(root, PermissionMode.BYPASS),
+                (t, r) -> { throw new AssertionError("BYPASS 下不得有任何审批"); },
+                (t, ok, m) -> { },
+                (t, what) -> { turn.set(t); got.add(what); });
+
+        String hook = root.resolve(".git").resolve("hooks").resolve("pre-commit").toString();
+        assertEquals("OK", cb.call("{\"filePath\":\"" + hook.replace("\\", "\\\\") + "\"}", ctx(7L)));
+        assertTrue(tool.called.get(), "留痕不该妨碍放行——BYPASS 的定义就是照做");
+        assertEquals(1, got.size(), "引擎没把「踩了内置底线」这个事实报出来：" + got);
+        assertTrue(got.get(0).contains(".git"), "理由串里应能看出踩了哪条底线：" + got.get(0));
+        assertEquals(7L, turn.get(), "turnId 得对，否则汇总会算到别的回合头上");
+    }
+
+    @Test
+    @DisplayName("BYPASS 放行普通操作：不留痕（没踩底线就别刷噪音）")
+    void bypassOfHarmlessOperationIsNotReported(@TempDir Path root) {
+        FakeTool tool = new FakeTool("Write");
+        List<String> got = new CopyOnWriteArrayList<>();
+        PermissionCallback cb = new PermissionCallback(tool, engine(root, PermissionMode.BYPASS),
+                (t, r) -> { throw new AssertionError("BYPASS 下不得有任何审批"); },
+                (t, ok, m) -> { },
+                (t, what) -> got.add(what));
+
+        String plain = root.resolve("a.txt").toString();
+        assertEquals("OK", cb.call("{\"filePath\":\"" + plain.replace("\\", "\\\\") + "\"}", ctx(1L)));
+        assertTrue(got.isEmpty(), "普通写入不该留痕，否则汇总里全是噪音：" + got);
+    }
+
+    @Test
+    @DisplayName("留痕出口抛异常：工具照常执行（一行提示不该决定一次操作的成败）")
+    void bypassNotifierFailureDoesNotBlockTheTool(@TempDir Path root) {
+        FakeTool tool = new FakeTool("Write");
+        PermissionCallback cb = new PermissionCallback(tool, engine(root, PermissionMode.BYPASS),
+                (t, r) -> { throw new AssertionError("BYPASS 下不得有任何审批"); },
+                (t, ok, m) -> { },
+                (t, what) -> { throw new IllegalStateException("UI 挂了"); });
+
+        String hook = root.resolve(".git").resolve("hooks").resolve("pre-commit").toString();
+        assertEquals("OK", cb.call("{\"filePath\":\"" + hook.replace("\\", "\\\\") + "\"}", ctx(1L)));
+        assertTrue(tool.called.get());
+    }
+
     @Test
     @DisplayName("透传：getToolDefinition 与无 ToolContext 的 call 重载都不改变语义")
     void passesThroughDefinitionAndSingleArgCall(@TempDir Path root) {

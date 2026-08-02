@@ -111,6 +111,27 @@ public interface AgentListener {
      */
     default void onRuleRecorded(long turnId, boolean ok, String message) { }
 
+    /**
+     * BYPASS 下放行了一个<b>通常需要确认</b>的操作（{@code --dangerously-skip-permissions} 打开时，
+     * 命中内置底线却没被拦住的那些）。
+     *
+     * <p>默认空实现，便于回显桩 / 测试桩省略。落地端应：即时打一行进 scrollback，
+     * 并按 {@code turnId} 累积、在 {@link #onTurnComplete} 时汇总一次。
+     *
+     * <p><b>为什么即时行与汇总都要</b>：即时行保证「正在发生时屏幕上有」，
+     * 汇总保证「人回来时不必翻几百行 scrollback」。半无人值守场景（丢个大任务给 agent
+     * 然后人离开、之后回来看）两者都必要——内置底线的价值有两半，BYPASS 放弃了「拦住你」，
+     * 就不该连「让你知道发生了什么」一起丢。
+     *
+     * <p><b>本回调绝不能阻塞</b>——与 {@link #onPermissionRequested} 同纪律：
+     * {@code ConversationState} 的 listener 方法是 {@code synchronized}，
+     * 与 {@code drainPending()} 共用同一把锁，在这里阻塞会冻住<b>整个 TUI</b>。
+     * 更不得在这里发起询问：BYPASS 的定义就是不问，问了就是把死锁又请回来。
+     *
+     * @param what 危险理由串（引擎的内置底线原话，形如「写入 .git/ 内部（…）：/p/.git/hooks/pre-commit」）
+     */
+    default void onGuardrailBypassed(long turnId, String what) { }
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);
