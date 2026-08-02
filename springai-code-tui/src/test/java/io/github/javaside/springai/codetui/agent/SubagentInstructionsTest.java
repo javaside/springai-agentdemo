@@ -43,13 +43,18 @@ class SubagentInstructionsTest {
     }
 
     /**
-     * 产物路径提示<b>对每个子 agent 都得有</b>——包括用户自定义的 {@code .codetui/agents/*.md}。
-     * 它加在 {@code effectiveSystemPrompt}（所有派发的必经之路）而不是四份内置 md 里，正是为此；
+     * 产物路径提示<b>与 spec 的提示正文无关</b>：任何 spec 都拿得到。
+     *
+     * <p>这钉的是<b>注入点</b>——提示加在 {@code effectiveSystemPrompt}（所有派发的必经之路）
+     * 而不是四份内置 md 里，所以一个提示正文完全不同的 spec 照样带得上它；
      * 若哪天有人把它挪回 md，本用例会红。
+     *
+     * <p><b>它证明不了「用户自定义 agent 也有」</b>——那个功能今天根本不存在
+     * （{@code SubagentLoader.loadBuiltins} 只读 4 个 classpath 内置 md）。这里的 spec 是测试手搓的。
      */
     @Test
     void artifactHint_presentForArbitrarySpec() {
-        SubagentSpec custom = new SubagentSpec("用户自定义的", "d", "完全不同的提示正文",
+        SubagentSpec custom = new SubagentSpec("提示正文完全不同的", "d", "完全不同的提示正文",
                 List.of(), List.of(), null, List.of());
         String eff = runnerWith("").effectiveSystemPrompt(custom);
         assertTrue(eff.contains(ARTIFACT_HINT),

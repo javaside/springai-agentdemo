@@ -272,9 +272,10 @@ public final class SubagentRunner {
      * <p><b>每次派发都调一次</b>（见 {@code run} 里的 {@code .system(effectiveSystemPrompt(spec))}），
      * 故模式提示读的是<b>当下</b>的模式，{@code Shift+Tab} 切档在下一次委派即生效，没有装配期烘焙。
      *
-     * <p><b>产物提示加在这里而不是四份内置 agent 的 md 里</b>：这里是所有子 agent 的必经之路，
-     * 用户自定义的 {@code .codetui/agents/*.md} 也走这条——写进内置 md 要抄四份，
-     * 且自定义 agent 永远拿不到。
+     * <p><b>产物提示加在这里而不是四份内置 agent 的 md 里</b>：写进 md 要抄四份，四份还会各自漂移；
+     * 这里是所有派发的必经之路，一处即可。将来若支持用户自定义 agent
+     * （今天没有：{@code SubagentLoader.loadBuiltins} 只读 4 个 classpath 内置 md，
+     * 全仓没有任何代码扫描 {@code .codetui/agents/}），它们也会自动带上这段，无需再改。
      *
      * <p><b>纯字符串拼接，不走模板参数</b>：这里注入的是最终 system 文本，调用方
      * {@code .system(String)} 不带任何 param，故 Spring 的模板引擎不会去解析它——
