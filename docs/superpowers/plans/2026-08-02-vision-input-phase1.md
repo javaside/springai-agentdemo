@@ -1453,6 +1453,63 @@ git commit -m "feat(vision): 分来源配额 + 每回合累计预算
 
 ---
 
+### Task 7 前置修正：`VisionModels` 的两个维度被我揉成了一个
+
+**Task 2 实施时发现（记录以免下游踩坑）**：`VisionModels.supportsImage(modelId)` 内部**先查了 `enabled()`**，于是它返回的不是「这个模型有没有视觉能力」这个静态事实，而是「**本次运行能不能给这个模型投图**」——`CODETUI_VISION=off` 时它对所有模型返回 false。
+
+**行为是对的**（每个调用点想要的恰好都是后者：`capabilities()` 关掉开关后写 `reference_only` 是正确的，因为此时 Read 回来确实看不见），**但方法名在说谎**，且 `capabilities()` 的结果会被冻结进 `ToolContext` 当作「模型能力快照」——将来若有人拿它显示「本模型支持视觉」，开关关着时就会显示错。
+
+Task 7 实施时一并修掉，**两步都要做**：
+
+1. **改 javadoc 说实话**（不改行为、不改方法名——名字改动要动 5 个 provider，churn 不值）：
+
+```java
+    /**
+     * <b>本次运行能否给该模型投递图片。</b>注意这不是纯粹的「模型静态能力」——
+     * 它<b>包含了全局开关</b>（{@code CODETUI_VISION=off} 时对所有模型返回 false）。
+     *
+     * <p>之所以把两个维度揉在一起：每个调用点想要的恰好都是「现在能不能投」。
+     * 尤其 {@code TextReferenceMediaHandler} 据此决定引用里写 {@code reference_only}
+     * 还是 {@code not_in_view}——开关关着时写 reference_only 是对的，因为此时
+     * 模型 Read 回来确实看不见，写 not_in_view 会骗它白 Read 一次。
+     *
+     * <p>调用方<b>不要</b>把它和 {@link #enabled()} 当成两个独立维度再判一次，那是重复判断。
+     */
+    public static boolean supportsImage(String modelId) {
+```
+
+2. **把开关解析抽成可测的纯函数**——现在 `enabled()` 直接读 `System.getenv`，**在进程内根本测不了**，等于这个 kill switch 从未被任何测试覆盖，谁改坏了都没人知道：
+
+```java
+    /** 全局开关：{@code CODETUI_VISION=off} 时整个视觉链路停用（引用照常，零行为变化）。 */
+    public static boolean enabled() {
+        return enabledFor(System.getenv("CODETUI_VISION"));
+    }
+
+    /** 开关值的解析（纯函数，供单测——{@code System.getenv} 在进程内无法注入，
+     *  不抽出来这个 kill switch 就永远没有测试覆盖）。 */
+    static boolean enabledFor(String envValue) {
+        return envValue == null || !envValue.trim().equalsIgnoreCase("off");
+    }
+```
+
+配套测试加进 `VisionModelsTest`：
+
+```java
+    /** kill switch 的语义：只有明确的 off（忽略大小写与空白）关闭，其余一律开启。 */
+    @Test
+    void killSwitchRecognisesOnlyExplicitOff() {
+        assertFalse(VisionModels.enabledFor("off"));
+        assertFalse(VisionModels.enabledFor("  OFF  "));
+        assertTrue(VisionModels.enabledFor(null));      // 未配置 = 开启
+        assertTrue(VisionModels.enabledFor(""));
+        assertTrue(VisionModels.enabledFor("on"));
+        assertTrue(VisionModels.enabledFor("false"));   // 刻意不认 false/0/no——只认 off，少一种猜法
+    }
+```
+
+---
+
 ### Task 7：`VisionMaterializer` —— 本期全部判断的所在地
 
 **核心算法**（纯函数，可完全离线单测）：
