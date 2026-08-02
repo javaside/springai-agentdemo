@@ -114,10 +114,76 @@ class PermissionEngineTest {
         }
 
         @Test
-        @DisplayName("② 内置危险检查在 BYPASS 下也触发")
-        void builtinDangerTriggersInBypass(@TempDir Path root) {
+        @DisplayName("② BYPASS 下内置危险检查不再触发——开关不该说谎")
+        void builtinDangerIsSkippedUnderBypass(@TempDir Path root) {
             PermissionEngine e = engine(root, PermissionMode.BYPASS);
-            assertEquals(PermissionBehavior.ASK, e.decide("Bash", bash("rm -rf /")).behavior());
+            PermissionDecision d = e.decide("Write", pathInput(root.resolve(".git/hooks/pre-commit")));
+            assertEquals(PermissionBehavior.ALLOW, d.behavior(),
+                    "BYPASS 下命中内置底线仍在询问，开关等于假的：" + d.reason());
+        }
+
+        @Test
+        @DisplayName("② BYPASS 下 ask 规则也不再触发（「每次问我」与「别问」直接矛盾，按 BYPASS 走）")
+        void askRuleIsSkippedUnderBypass(@TempDir Path root) {
+            PermissionEngine e = engine(root, PermissionMode.BYPASS, "ask:Bash(mvn test:*)");
+            PermissionDecision d = e.decide("Bash", bash("mvn test"));
+            assertEquals(PermissionBehavior.ALLOW, d.behavior(), d.reason());
+        }
+
+        /**
+         * ★ 核心不变量：BYPASS 下<b>不存在任何 ASK 结果</b>。
+         *
+         * <p>用户要的不是「某几条不弹了」，而是「跑起来之后不会停下来等我」。
+         * 逐条断言容易漏掉将来新增的分支，这条直接从结果侧钉死。
+         */
+        @Test
+        @DisplayName("② BYPASS 下永远不会出现 ASK（核心不变量）")
+        void bypassNeverAsks(@TempDir Path root) {
+            PermissionEngine e = engine(root, PermissionMode.BYPASS, "ask:Bash(mvn test:*)");
+            Path home = Path.of(System.getProperty("user.home"));
+            String[][] cases = {
+                    {"Write", pathInput(root.resolve(".git/hooks/pre-commit"))},
+                    {"Write", pathInput(home.resolve(".zshrc"))},
+                    {"Read", pathInput(home.resolve(".ssh/id_rsa"))},
+                    {"Bash", bash("rm -rf $BUILD_DIR")},
+                    {"Bash", bash("mvn test")},
+                    {"Bash", bash("echo hi")},
+            };
+            for (String[] c : cases) {
+                PermissionDecision d = e.decide(c[0], c[1]);
+                assertNotEquals(PermissionBehavior.ASK, d.behavior(),
+                        "BYPASS 下仍会停下来等人：" + c[0] + " " + c[1] + " → " + d.reason());
+            }
+        }
+
+        /**
+         * ★ deny 规则保留：它是用户自己写的明令，且 clone 别人仓库时它保护你。
+         * 注意 deny <b>不阻塞</b>——直接拒绝并告知模型，回合继续。
+         */
+        @Test
+        @DisplayName("② BYPASS 下 deny 规则仍硬拒（且不阻塞）")
+        void denyRuleStillAppliesUnderBypass(@TempDir Path root) {
+            PermissionEngine e = engine(root, PermissionMode.BYPASS, "deny:Bash(git push:*)");
+            PermissionDecision d = e.decide("Bash", bash("git push origin main"));
+            assertEquals(PermissionBehavior.DENY, d.behavior(), d.reason());
+        }
+
+        /** ★ 只改 BYPASS 一档。这条守着最容易犯的错：把「跳过」写成无条件的。 */
+        @Test
+        @DisplayName("② 另外三档的内置底线一个字不变")
+        void otherModesStillEnforceBuiltinDanger(@TempDir Path root) {
+            String hook = pathInput(root.resolve(".git/hooks/pre-commit"));
+            for (PermissionMode m : new PermissionMode[]{
+                    PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS}) {
+                PermissionEngine e = engine(root, m);
+                assertEquals(PermissionBehavior.ASK, e.decide("Write", hook).behavior(),
+                        m + " 档的内置底线被误伤了");
+            }
+            // PLAN 档的危险写操作本就该是 DENY 而非 ASK
+            //（否则只有最危险的那批能当场批准，结论倒置）
+            PermissionEngine plan = engine(root, PermissionMode.PLAN);
+            assertEquals(PermissionBehavior.DENY, plan.decide("Write", hook).behavior(),
+                    "PLAN 档的特例被误伤了");
         }
 
         @Test

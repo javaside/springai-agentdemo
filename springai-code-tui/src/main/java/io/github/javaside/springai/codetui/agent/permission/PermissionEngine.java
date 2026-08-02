@@ -21,6 +21,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <h2>判定顺序（顺序本身就是安全属性，别重排）</h2>
  * <ol>
  *   <li>deny 规则——最高，任何模式下生效（含 BYPASS）</li>
+ *   <li><b>BYPASS 直接放行</b>——排在这里而不是第 6 步，见 {@link #doDecide}。
+ *       本档下 2/4/5/6 全部跳过，故<b>不可能产生任何 ASK</b>（这是本档的核心不变量）</li>
  *   <li>内置危险检查（{@link DangerousPaths}）——<b>不可被 allow 规则覆盖</b>，命中强制 ASK 而非 DENY</li>
  *   <li><i>（预留插槽：工具自审 PermissionAware。本期无实现方，期 3 有需要时插在这里）</i></li>
  *   <li>ask 规则</li>
@@ -45,8 +47,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *       且拆不动时一律不放行，使第 5 步的判定粒度不粗于第 6 步。剩下的残余风险是
  *       用户手写的宽规则（{@code Bash(*)} / {@code Write(**)}）——那是 allow 规则的既定语义，
  *       且它盖不住第 1、2 步。</li>
- *   <li><b>第 6 步模式默认</b>：BYPASS 直接放行（跳过全部类别默认，这就是 BYPASS 的定义，
- *       且 deny 与内置检查已跑完）；PLAN 只放行只读与内部工具、其余一律 DENY
+ *   <li><b>BYPASS 放行</b>：跳过 2/4/5/6 —— 全都可能是 ASK，这正是本档的定义
+ *       （「跳过审批」）；唯一比它严的 DENY 只可能来自第 1 步，而第 1 步已跑完 → 安全。
+ *       内置底线与 ask 规则被有意舍弃，理由见 {@link #doDecide}。</li>
+ *   <li><b>第 6 步模式默认</b>：PLAN 只放行只读与内部工具、其余一律 DENY
  *       （见 {@link #decideByPlanMode}，它跳过的都是更宽的分支）；命令逐段扫时
  *       <b>在第一段不认识处就返回</b>，跳过的只是后续段——它们只会产生更多 ASK 理由，不会更宽。</li>
  * </ul>
@@ -471,6 +475,30 @@ public final class PermissionEngine {
             return PermissionDecision.deny("已被 deny 规则 " + deny.toDsl() + " 禁止：" + display(target));
         }
 
+        // ★ BYPASS：到此为止。deny 规则（第 1 步，用户自己写的明令）已经过了，其余一律放行。
+        //
+        // 为什么排在这里而不是原来的第 6 步：一个名字带 dangerously 的开关，打开之后还在弹窗，
+        // 那它就是在骗人。原设计「护栏不是牢笼，人确认了就该能做」本身没错，但它默认了
+        // 总有人在场——半无人值守（丢个大任务给 agent 然后人离开）时护栏变成死锁：
+        // PermissionCallback 阻塞在无超时的一次性队列上，只有 UI 应答或回合 dispose 能解开。
+        //
+        // 保留 deny 而不保留内置底线，是因为二者来源不同：内置底线是本项目的意见，
+        // deny 是用户写在 permissions.json 里的明令，且 <项目根>/.codetui/permissions.json
+        // 是仓库带来的——clone 别人的仓库时那些 deny 规则本来就是保护你的。
+        //
+        // ask 规则一并跳过：它的语义是「每次都问我」，与 BYPASS 的「不问」直接矛盾，
+        // 此时按 BYPASS 走是唯一自洽的解释。
+        //
+        // ⚠️ 核心不变量：本档下不得产生任何 ASK。改这里之前先看 bypassNeverAsks 那条测试。
+        if (mode == PermissionMode.BYPASS) {
+            String bypassed = builtinDanger(entry, path, target);
+            if (bypassed != null) {
+                // 放弃拦截，但不放弃告知——留痕接线见下一个任务。
+                notifyGuardrailBypassed(bypassed);
+            }
+            return PermissionDecision.allow("BYPASS 模式已跳过权限检查（deny 规则仍然生效）");
+        }
+
         // 2. 内置危险检查——不可被 allow 规则覆盖，命中强制 ASK（护栏不是牢笼，人确认了就该能做）
         String danger = builtinDanger(entry, path, target);
         if (danger != null) {
@@ -772,13 +800,17 @@ public final class PermissionEngine {
         }
     }
 
+    /** BYPASS 下放行了一个通常需要确认的操作。留痕接线见下一个任务。 */
+    private void notifyGuardrailBypassed(String what) {
+        // 下一个任务接上 AgentListener 回调
+    }
+
     /** 模式默认；返回 null 表示「模式不表态」，交给兜底 ASK。 */
     private PermissionDecision decideByMode(String toolName, ToolRegistry.Entry entry,
                                             String target, Path path,
                                             BashCommandSplitter.Split split) {
-        if (mode == PermissionMode.BYPASS) {
-            return PermissionDecision.allow("BYPASS 模式已跳过权限检查（deny 规则与内置危险检查仍然生效）");
-        }
+        // 这里没有 BYPASS 分支不是漏了：它已在决策链更前面（第 1 步 deny 之后）直接放行，
+        // 永远到不了这一步。见 doDecide 里那段注释。
         if (mode == PermissionMode.PLAN) {
             PermissionDecision plan = decideByPlanMode(entry, target, split);
             if (plan != null) {

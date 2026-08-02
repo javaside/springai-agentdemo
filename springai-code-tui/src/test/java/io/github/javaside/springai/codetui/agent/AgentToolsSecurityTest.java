@@ -192,8 +192,8 @@ class AgentToolsSecurityTest {
     }
 
     @Test
-    @DisplayName("护栏：BYPASS 模式下 deny 规则与内置危险检查仍然生效（不是全开）")
-    void engine_bypass_stillHonoursDenyAndBuiltins(@TempDir Path root) {
+    @DisplayName("护栏：BYPASS 模式下 deny 规则仍然生效，但内置危险检查被跳过（行为变更）")
+    void engine_bypass_stillHonoursDenyButSkipsBuiltins(@TempDir Path root) {
         PermissionEngine engine = new PermissionEngine(root,
                 new PermissionConfig(PermissionMode.BYPASS, List.of(
                         PermissionRule.parse("Bash(git push:*)",
@@ -203,9 +203,12 @@ class AgentToolsSecurityTest {
         assertEquals(PermissionBehavior.DENY,
                 engine.decide("Bash", "{\"command\":\"git push origin main\"}").behavior(),
                 "BYPASS 也盖不住 deny 规则");
-        assertEquals(PermissionBehavior.ASK,
+        // 行为变更：内置危险检查在 BYPASS 下不再拦。一个名字带 dangerously 的开关，
+        // 打开之后还在弹窗就是在骗人——而弹窗在半无人值守时就是死锁（应答队列无超时）。
+        // deny 规则保留是因为它来源不同：用户写在 permissions.json 里的明令，不是本项目的意见。
+        assertEquals(PermissionBehavior.ALLOW,
                 engine.decide("Bash", "{\"command\":\"rm -rf /\"}").behavior(),
-                "BYPASS 也盖不住内置危险检查");
+                "BYPASS 就该跳过内置危险检查（deny 规则另算）");
     }
 
     // ---------------------------------------------------------------------
