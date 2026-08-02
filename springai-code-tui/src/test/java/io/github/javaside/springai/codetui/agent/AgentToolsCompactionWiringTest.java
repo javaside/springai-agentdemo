@@ -15,6 +15,7 @@ import org.springframework.ai.session.compaction.CompactionStrategy;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -106,9 +107,13 @@ class AgentToolsCompactionWiringTest {
     @Test
     void manualPath_doesNotNotify() {
         // 手动路径由 CodingAgent.runCompaction 自行上报；这里若冒出 started，就是同一次压缩被报了两遍。
-        RecordingListener listener = new RecordingListener();
-        AgentTools.manualCompaction(fakeSummariser(summary())).compact(request());
-        assertEquals(null, listener.startedReason, "手动策略不该挂 Notifying");
+        //
+        // 断言的是<b>类型</b>而不是「某个 listener 没被回调」：manualCompaction 压根不收 listener 参数，
+        // 造一个本地 listener 去断言它没被调用，无论实现怎么改都恒真——那种测试拆掉整条防线也不会红。
+        // 手动路径一旦被包上 Notifying，最外层类型必然变成 NotifyingCompactionStrategy，这里立刻红。
+        CompactionStrategy manual = AgentTools.manualCompaction(fakeSummariser(summary()));
+        assertFalse(manual instanceof NotifyingCompactionStrategy,
+                "手动策略不该挂 Notifying（会和 CodingAgent.runCompaction 的自报重复），实际：" + manual.getClass());
     }
 
     /** 只记压缩三事件的最小 listener，其余接缝方法留空。 */
