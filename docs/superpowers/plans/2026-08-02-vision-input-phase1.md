@@ -6,16 +6,17 @@
 
 > ## ✅ 期 1 已全部完成（2026-08-02）
 >
-> 13 个任务全部落地。`mvn clean test -pl springai-code-tui` 实测 **Tests run: 1044，Failures: 0**
-> （本期新增 91 个 `@Test`）。
+> 13 个任务全部落地，`mvn clean test -pl springai-code-tui` 实测 **Tests run: 1046**（本期新增
+> 91 个 `@Test`）。全模块唯一的红是既有 flaky **`CodingAgentSpikeTest.todoTurnIdBinding`**——
+> 打真实 DeepSeek、单轮硬上限 60 秒，实测耗时横跨那条线，与本期改动无关。
 >
-> ⚠️ **这个 1044 不含打真实网络的那类测试**：`CodingAgentSpikeTest` 整类挂
-> `@EnabledIfEnvironmentVariable(named = "DEEPSEEK_API_KEY")`，本次运行的 shell 里没有该 key，
-> **整类被跳过**——包括那条既有 flaky `todoTurnIdBinding`（打真实 DeepSeek、单轮硬上限 60 秒，
-> 历史实测耗时横跨那条线）。它与本期改动无关，但本次统计**没有覆盖它**，别把 0 failures
-> 读成「那条也修好了」。
+> ⚠️ **这条 flaky 的两次实测就是它 flaky 的证据**：同一份代码连跑两次，第一次 `Failures: 0`
+> （它绿了），第二次 `Failures: 1`，报 `回合 1 在 60000ms 内未完成（超时）`。**别把某一次的
+> 0 failures 当成「那条也稳了」。**
 >
-> 同理，Task 0 的真机探针（`57e2117`）默认跳过、不进 CI，那 1044 里也没有它。
+> 另注意 `CodingAgentSpikeTest` 整类挂 `@EnabledIfEnvironmentVariable(named = "DEEPSEEK_API_KEY")`：
+> **没有该 key 的环境里整类跳过**，届时统计里根本没有它，0 failures 更不代表它绿。
+> 同理，Task 0 的真机探针（`57e2117`）默认跳过、不进 CI，这 1046 里没有它。
 >
 > **期间抓到 5 条「不会失败的测试」，全部已修并做过逐个隔离的变异验证**，其中 3 条源自本计划书
 > 自己的示例代码：
