@@ -145,7 +145,7 @@ public final class CodeTuiView extends InlineApp {
     private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
     private long animTick;                                           // 动画帧计数（drain 每 ~33ms 自增），驱动状态栏波光
     private final ImageAttachmentDetector imageDetector = new ImageAttachmentDetector();
-    /** 本次输入是否已按 Ctrl+G 取消附件。清空输入框时复位（见 {@link #clearInput}）——否则取消一次就永久失效。 */
+    /** 本次输入是否已按 Ctrl+X 取消附件。清空输入框时复位（见 {@link #clearInput}）——否则取消一次就永久失效。 */
     private boolean attachmentsCancelled;
     // 识别结果的「按文本」记忆：render 每帧都跑（TamboUI 逐帧重绘），而 detectWithOverflow 要切词 +
     // 遍历每个词做路径解析。detector 自己按「路径+mtime」缓存了读盘嗅探，但切词/解析仍是每帧开销，
@@ -499,11 +499,11 @@ public final class CodeTuiView extends InlineApp {
         StringBuilder b = new StringBuilder("  ⏎ 已附带 ").append(count).append(" 张图片");
         if (count == 1 && firstName != null) b.append("（").append(firstName).append("）");
         if (overflow > 0) b.append("，另有 ").append(overflow).append(" 张超出上限未附");
-        b.append("  · Ctrl+G 取消");
+        b.append("  · Ctrl+X 取消");
         return b.toString();
     }
 
-    /** 取消后的附件行。刻意不再提示 Ctrl+G——已经取消了，再提示是噪音。 */
+    /** 取消后的附件行。刻意不再提示 Ctrl+X——已经取消了，再提示是噪音。 */
     static String attachmentLineCancelled() {
         return "  ⏎ 已取消附件";
     }
@@ -523,7 +523,7 @@ public final class CodeTuiView extends InlineApp {
         ImageAttachmentDetector.Result r = attachments();
         if (r.images().isEmpty()) {
             // 没图可取消时顺手复位取消态：用户把路径删掉再重新写一条，理应重新附上。
-            // 不复位的话，一次 Ctrl+G 会连累同一段草稿里之后写的所有路径，而用户看不出原因。
+            // 不复位的话，一次 Ctrl+X 会连累同一段草稿里之后写的所有路径，而用户看不出原因。
             attachmentsCancelled = false;
             return "";
         }
@@ -674,11 +674,13 @@ public final class CodeTuiView extends InlineApp {
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
         if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
         if (pickingPerms) return onPermsPanelKey(k);    // 权限规则面板同理
-        // Ctrl+G 取消本次输入的图片附件（readline 里 Ctrl+G 正是 abort；刻意不用 Ctrl+D——本项目实现了
-        // readline 键位，那里 Ctrl+D 是删除字符/空行 EOF，绑给取消会跟肌肉记忆打架）。
+        // 取消图片附件。⚠️ 不要改回 Ctrl+G：Chrome 的 Gemini 扩展把它注册成 OS 级全局热键，
+        // 键在任何终端应用看到它之前就被抢走（用户实机撞车，按下去弹的是 Chrome 对话框）。
+        // 这类冲突在代码里修不了。Ctrl+X 在 readline 里是前缀键、单按无动作，不撞肌肉记忆，
+        // 且已在出问题的那台机器上（Chrome 开着）实测确认能到达。
         // 必须在转交 textArea 之前拦下，否则被当普通字符插进输入框：用户按了取消，附件没取消，
         // 反而多了个看不见的控制字符。判键写法同 onEditShortcut 的 Ctrl+字母。
-        if (k.hasCtrl() && k.isChar('g')) {
+        if (k.hasCtrl() && k.isChar('x')) {
             attachmentsCancelled = true;
             return EventResult.HANDLED;    // 无图时也吞掉：控制键漏进编辑器比无反馈更糟
         }
@@ -1051,7 +1053,7 @@ public final class CodeTuiView extends InlineApp {
             quit();
             return;
         }
-        // ── 附件兑现（必须在 clearInput() 之前：那一跑 attachmentsCancelled 就被复位，Ctrl+G 会失效） ──
+        // ── 附件兑现（必须在 clearInput() 之前：那一跑 attachmentsCancelled 就被复位，Ctrl+X 会失效） ──
         // 位置也必须在全部斜杠命令分支<b>之后</b>：否则 "/help docs/bug.png" 这类文本也会被识别、
         // 甚至把图注进一条根本不会发给模型的命令里。
         List<DetectedImage> attached = attachmentsCancelled ? List.of() : attachments().images();

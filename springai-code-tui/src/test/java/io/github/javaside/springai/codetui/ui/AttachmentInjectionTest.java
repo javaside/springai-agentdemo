@@ -176,19 +176,19 @@ class AttachmentInjectionTest {
         assertEquals("", v.inputTextForTest(), "有视觉能力却被闸门拦下了：" + state.notice());
     }
 
-    /** Ctrl+G 取消后没有附件，闸门无从触发——文本模型照样能发一条含图片路径的普通消息。 */
+    /** Ctrl+X 取消后没有附件，闸门无从触发——文本模型照样能发一条含图片路径的普通消息。 */
     @Test
-    @DisplayName("Ctrl+G 取消附件后，文本模型不再被闸门拦")
+    @DisplayName("Ctrl+X 取消附件后，文本模型不再被闸门拦")
     void cancelledAttachmentsBypassTheGate() throws Exception {
         png(root, "docs/bug.png");
         ConversationState state = new ConversationState();
         CodeTuiView v = view(state, root, "deepseek-chat");
         v.setInputForTest("看下 docs/bug.png");
-        v.feedKeyForTest(KeyEvent.ofChar('g', dev.tamboui.tui.event.KeyModifiers.CTRL));
+        v.feedKeyForTest(KeyEvent.ofChar('x', dev.tamboui.tui.event.KeyModifiers.CTRL));
 
         submit(v);
 
         assertEquals("", v.inputTextForTest(),
-                "已经 Ctrl+G 取消了附件，闸门还在拦：" + state.notice());
+                "已经 Ctrl+X 取消了附件，闸门还在拦：" + state.notice());
     }
 }

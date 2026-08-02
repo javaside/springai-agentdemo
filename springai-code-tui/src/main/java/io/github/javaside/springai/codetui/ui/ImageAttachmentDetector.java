@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p><b>为什么不引入 {@code @} 标记</b>：用户明确选了裸路径自动识别（拖拽白送支持——终端
  * 不传文件、只把路径当粘贴插进来）。代价是无法用语法表达「这个路径不要当图片」，
- * {@code 把 docs/bug.png 复制到 tmp/} 必然误附。该代价由<b>附件行可见 + Ctrl+G 撤销</b>承担，
+ * {@code 把 docs/bug.png 复制到 tmp/} 必然误附。该代价由<b>附件行可见 + Ctrl+X 撤销</b>承担，
  * <b>不靠规则消灭</b>——任何试图从句意猜意图的规则都比误附本身更不可预测。
  *
  * <p><b>刻意不做 root 包含校验</b>：那道校验（{@code PathContainment}）是防外部注入的，

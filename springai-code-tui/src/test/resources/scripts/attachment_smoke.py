@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""PTY smoke test for 用户贴图的附件行 + Ctrl+G 取消。
+"""PTY smoke test for 用户贴图的附件行 + Ctrl+X 取消。
 
-<b>这个脚本存在的唯一理由</b>：证明 `Ctrl+G` 这个按键<b>真的能到达应用</b>。
+<b>这个脚本存在的唯一理由</b>：证明 `Ctrl+X` 这个按键<b>真的能到达应用</b>。
+
+⚠️ 本脚本证明的是「字节到了应用能处理」，<b>证明不了</b>「用户按下那个组合键时
+终端真的发出那个字节」——中间还隔着终端模拟器、输入法、OS 全局热键。
+Ctrl+G 就是栽在这一段上的（Chrome/Gemini 抢了全局热键）。换键后必须由真人
+在真终端里按一次才算数。
 
 单测原理上证明不了这件事。本项目的单测入口 `feedKeyForTest` 直接调
 `InputBox.handleKeyEvent`，<b>绕过了 TamboUI 的按键路由器</b>；而按键要先过路由器
 （Bindings → Actions），被默认绑定吃掉的键根本走不到 `onInputKey`。前科在此：
 `Tab` / `Shift+Tab` 曾被默认的 `FOCUS_NEXT` / `FOCUS_PREVIOUS` 先行消费，于是
 斜杠菜单的 Tab 补全、`/mcp` 面板的 Tab 展开<b>长期是死代码而无人发现</b>——因为
-单测走的正是绕过路由器的那个入口。`Ctrl+G`（BEL，0x07）面临完全相同的风险，
+单测走的正是绕过路由器的那个入口。`Ctrl+X`（CAN，0x18）面临完全相同的风险，
 只有真伪终端能给出答案。
 
 覆盖五条（编号与断言输出一一对应）：
-  1. 输入一个真实图片的相对路径 → 附件行出现，含「已附带 1 张图片」「Ctrl+G 取消」；
-  2. 按 Ctrl+G（发 0x07）→ 附件行变成「已取消附件」；★ 本任务的意义所在
+  1. 输入一个真实图片的相对路径 → 附件行出现，含「已附带 1 张图片」「Ctrl+X 取消」；
+  2. 按 Ctrl+X（发 0x18）→ 附件行变成「已取消附件」；★ 本任务的意义所在
   3. 取消后继续打字（路径仍在文本里）→ <b>不该</b>退回「已附带」（取消态在本次输入内保持）；
   4. 清空输入、重新输入同一路径 → 附件行<b>重新出现</b>（取消态已复位，不是永久失效）；
   5. 输入一个非图片路径（pom.xml）→ <b>不出现</b>附件行。
@@ -46,10 +51,12 @@ from clear_smoke import (  # noqa: E402
     WELCOME_1,
 )
 
-# Ctrl+G = BEL = 0x07。EventParser 把 1..26 的控制字符还原成 Ctrl+字母
-# （'a' + c - 1），7 → 'g'，所以应用侧的判据是 k.hasCtrl() && k.isChar('g')。
+# Ctrl+X = CAN = 0x18。EventParser 把 1..26 的控制字符还原成 Ctrl+字母
+# （'a' + c - 1），24 → 'x'，所以应用侧的判据是 k.hasCtrl() && k.isChar('x')。
 # <b>这一步只是解码；键能不能穿过路由器是另一回事，正是本脚本要测的。</b>
-CTRL_G = b"\x07"
+# <b>而「用户按下 Ctrl+X 时终端会不会发出 0x18」，连本脚本也证明不了</b>——直接写字节
+# 就跳过了终端模拟器/输入法/OS 全局热键那一段。前任 Ctrl+G 正是死在那里。
+CTRL_X = b"\x18"
 CTRL_U = b"\x15"                 # 删到行首：用来清空输入框（Ctrl+A/E/U 是本项目的 readline 键位）
 
 # 输入框用 BorderType.ROUNDED，左下角是 ╰。附件行画在<b>盒子底边的下一行</b>
@@ -57,7 +64,7 @@ CTRL_U = b"\x15"                 # 删到行首：用来清空输入框（Ctrl+A
 BOX_BOTTOM_LEFT = "╰"
 
 ATTACHED = "已附带"
-CANCEL_HINT = "Ctrl+G 取消"
+CANCEL_HINT = "Ctrl+X 取消"
 CANCELLED = "已取消附件"
 ATTACH_MARK = "⏎"               # 附件行（两种形态）共有的行首标记，用于「这一行压根不是附件行」的否定断言
 
@@ -208,24 +215,27 @@ def check_attachment_appears(session):
     print("断言 1 OK：附件行出现，含「已附带 1 张图片（%s）」与「%s」." % (IMG_NAME, CANCEL_HINT))
 
 
-def check_ctrl_g_cancels(session):
-    """断言 2：按 Ctrl+G → 附件行变成「已取消附件」。★ 本脚本的意义所在
+def check_ctrl_x_cancels(session):
+    """断言 2：按 Ctrl+X → 附件行变成「已取消附件」。★ 本脚本的意义所在
 
     <b>这一条失败不等于脚本写错了</b>：它恰恰是这个任务要找的东西——键被路由器
     吃掉了。真出现的话别改脚本，去看 configure() 里要不要 unbind 抢键的默认绑定
     （Tab/Shift+Tab 当年就是这么修的）。
+
+    <b>反过来，这一条绿了也不代表用户按 Ctrl+X 就管用</b>：这里是直接写 0x18 进 pty，
+    绕过了终端模拟器/输入法/OS 全局热键。那一段只有真人实机按一次才验得到。
     """
-    session.write(CTRL_G)
+    session.write(CTRL_X)
     wait_row_below(session, CANCELLED, 8,
-                   "Ctrl+G 后附件行变成「已取消附件」"
+                   "Ctrl+X 后附件行变成「已取消附件」"
                    "（若超时：键很可能被 TamboUI 路由器吃掉了，别急着改脚本）")
     anchor = input_box_bottom(session)
     assert_rows_below(session, anchor, [CANCELLED], "断言 2：取消后的附件行")
-    # 取消后刻意不再提示 Ctrl+G（已经取消了，再提示是噪音）——顺手钉住，
+    # 取消后刻意不再提示 Ctrl+X（已经取消了，再提示是噪音）——顺手钉住，
     # 这样「附件行根本没变、只是碰巧含别的字」这种解释也被排除。
     assert_no_rows_below(session, anchor, [ATTACHED, CANCEL_HINT],
                          "断言 2：取消后不该再显示已附带/撤销提示")
-    print("断言 2 OK：Ctrl+G 到达了应用，附件行变成「%s」." % CANCELLED)
+    print("断言 2 OK：Ctrl+X 的字节到达了应用，附件行变成「%s」." % CANCELLED)
 
 
 def check_cancel_sticks_while_typing(session):
@@ -306,7 +316,7 @@ def main():
         print("Startup OK.")
 
         check_attachment_appears(session)
-        check_ctrl_g_cancels(session)
+        check_ctrl_x_cancels(session)
         check_cancel_sticks_while_typing(session)
         check_cancel_resets_after_clear(session)
         check_non_image_ignored(session)

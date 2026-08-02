@@ -18,13 +18,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 输入框附件行 + Ctrl+G 撤销。
+ * 输入框附件行 + Ctrl+X 撤销。
  *
  * <p><b>本类的证据边界</b>：纯函数用例只证「文本内容对不对」，
  * {@link #attachmentLineIsRenderedOnScreen} 证「有没有真的画到屏幕上」（渲染分支顺序类缺陷）。
- * 「Ctrl+G 这个键能否真的到达应用」<b>本类证明不了</b>——{@code feedKeyForTest} 走的是
+ * 「Ctrl+X 这个键能否真的到达应用」<b>本类证明不了</b>——{@code feedKeyForTest} 走的是
  * {@code InputBox.handleKeyEvent}，绕过了 TamboUI 的按键路由器；{@code Tab} 就是这么被
  * {@code FOCUS_NEXT/PREVIOUS} 悄悄吃掉、单测全绿实机死键的。那条证据只能由 pty 冒烟产生。
+ *
+ * <p><b>而 pty 冒烟也只到「字节到了应用能处理」为止</b>，证明不了「用户按下那个组合键时
+ * 终端真的发出那个字节」——中间还隔着终端模拟器、输入法、OS 全局热键。取消键原为
+ * {@code Ctrl+G}，就是栽在这一段上：见 {@link #cancelHintDoesNotAdvertiseCtrlG}。
  */
 class AttachmentLineTest {
 
@@ -33,7 +37,19 @@ class AttachmentLineTest {
         String line = CodeTuiView.attachmentLine(1, 0, "bug.png");
         assertTrue(line.contains("1 张"), line);
         assertTrue(line.contains("bug.png"), line);
-        assertTrue(line.contains("Ctrl+G"), "没告诉用户怎么取消：" + line);
+        assertTrue(line.contains("Ctrl+X"), "没告诉用户怎么取消：" + line);
+    }
+
+    /**
+     * 取消键不能是 Ctrl+G——Chrome 的 Gemini 扩展把它注册成了 OS 级全局热键，
+     * 键根本到不了进程（用户实机撞车：按下去弹的是 Chrome 对话框）。
+     * 这类冲突在代码里修不了，只能换键。
+     */
+    @Test
+    void cancelHintDoesNotAdvertiseCtrlG() {
+        String line = CodeTuiView.attachmentLine(1, 0, "a.png");
+        assertFalse(line.contains("Ctrl+G"), "Ctrl+G 会被 Chrome/Gemini 的全局热键抢走：" + line);
+        assertTrue(line.contains("Ctrl+X"), line);
     }
 
     /** 多张时不逐个列名（会撑爆一行），只给数量。 */
@@ -56,12 +72,12 @@ class AttachmentLineTest {
         assertTrue(CodeTuiView.attachmentLine(0, 0, null).isEmpty());
     }
 
-    /** 取消后改为「已取消」，且不再提示 Ctrl+G——已经取消了，再提示是噪音。 */
+    /** 取消后改为「已取消」，且不再提示 Ctrl+X——已经取消了，再提示是噪音。 */
     @Test
     void cancelledStateIsVisuallyDistinct() {
         String line = CodeTuiView.attachmentLineCancelled();
         assertTrue(line.contains("已取消"), line);
-        assertFalse(line.contains("Ctrl+G"), "已取消还提示 Ctrl+G 是噪音：" + line);
+        assertFalse(line.contains("Ctrl+X"), "已取消还提示 Ctrl+X 是噪音：" + line);
     }
 
     /** 附件行必须是单行——本项目铁律：一个 OutputLine = 一个物理行，多行会被 println 塌成一行截断。 */
@@ -93,8 +109,8 @@ class AttachmentLineTest {
         return p;
     }
 
-    /** Ctrl+G。构造写法照抄 {@code CodeTuiViewEditShortcutTest.ctrl(char)}。 */
-    private static KeyEvent ctrlG() { return KeyEvent.ofChar('g', KeyModifiers.CTRL); }
+    /** Ctrl+X。构造写法照抄 {@code CodeTuiViewEditShortcutTest.ctrl(char)}。 */
+    private static KeyEvent ctrlX() { return KeyEvent.ofChar('x', KeyModifiers.CTRL); }
 
     /** 走真实提交路径（Enter），而不是另开一个只给测试用的后门方法。 */
     private static void submit(CodeTuiView v) { v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER)); }
@@ -111,36 +127,36 @@ class AttachmentLineTest {
         String screen = ViewScreen.of(v);
         assertTrue(screen.contains("已附带 1 张图片（bug.png）"),
                 "附件行没画到屏幕上（纯函数对了不等于画了）：\n" + screen);
-        assertTrue(screen.contains("Ctrl+G"), "屏幕上没有取消提示：\n" + screen);
+        assertTrue(screen.contains("Ctrl+X"), "屏幕上没有取消提示：\n" + screen);
     }
 
     @Test
-    @DisplayName("Ctrl+G 后屏幕改显「已取消附件」")
-    void ctrlGCancelsAttachmentsOnScreen(@TempDir Path root) throws Exception {
+    @DisplayName("Ctrl+X 后屏幕改显「已取消附件」")
+    void ctrlXCancelsAttachmentsOnScreen(@TempDir Path root) throws Exception {
         png(root, "docs/bug.png");
         CodeTuiView v = view(root);
         v.setInputForTest("看下 docs/bug.png 这个报错");
-        v.feedKeyForTest(ctrlG());
+        v.feedKeyForTest(ctrlX());
 
         String screen = ViewScreen.of(v);
-        assertTrue(screen.contains("已取消附件"), "Ctrl+G 没让附件行进入已取消态：\n" + screen);
-        assertFalse(screen.contains("Ctrl+G"), "已取消还提示 Ctrl+G 是噪音：\n" + screen);
+        assertTrue(screen.contains("已取消附件"), "Ctrl+X 没让附件行进入已取消态：\n" + screen);
+        assertFalse(screen.contains("Ctrl+X"), "已取消还提示 Ctrl+X 是噪音：\n" + screen);
     }
 
     /**
-     * Ctrl+G 必须在转交 textArea <b>之前</b>被本视图拦下（HANDLED），文本原样不动。
+     * Ctrl+X 必须在转交 textArea <b>之前</b>被本视图拦下（HANDLED），文本原样不动。
      *
-     * <p>⚠ 只断言「文本没变」是<b>不会失败的测试</b>：变异实测把 Ctrl+G 分支整个删掉，文本照样不变
+     * <p>⚠ 只断言「文本没变」是<b>不会失败的测试</b>：变异实测把 Ctrl+X 分支整个删掉，文本照样不变
      * ——底层 textArea 本就不插入控制字符。故必须同时断言 HANDLED，那才是「被我们拦下了」的证据。
      */
     @Test
-    void ctrlGIsInterceptedNotPassedToEditor(@TempDir Path root) throws Exception {
+    void ctrlXIsInterceptedNotPassedToEditor(@TempDir Path root) throws Exception {
         png(root, "docs/bug.png");
         CodeTuiView v = view(root);
         v.setInputForTest("看下 docs/bug.png");
-        assertTrue(v.feedKeyForTest(ctrlG()).isHandled(), "Ctrl+G 没被拦下，漏给了编辑器");
+        assertTrue(v.feedKeyForTest(ctrlX()).isHandled(), "Ctrl+X 没被拦下，漏给了编辑器");
         assertTrue(v.inputTextForTest().equals("看下 docs/bug.png"),
-                "Ctrl+G 被当普通字符吃进了输入框：" + v.inputTextForTest());
+                "Ctrl+X 被当普通字符吃进了输入框：" + v.inputTextForTest());
     }
 
     /**
@@ -153,12 +169,12 @@ class AttachmentLineTest {
         png(root, "docs/bug.png");
         CodeTuiView v = view(root);
         v.setInputForTest("看下 docs/bug.png");
-        v.feedKeyForTest(ctrlG());
+        v.feedKeyForTest(ctrlX());
         submit(v);                                    // 提交（清空输入框 + 复位取消态）
 
         v.setInputForTest("再看下 docs/bug.png");
         String screen = ViewScreen.of(v);
-        assertTrue(screen.contains("Ctrl+G"),
+        assertTrue(screen.contains("Ctrl+X"),
                 "取消态没在提交后复位，之后的消息永远附不上图：\n" + screen);
         assertFalse(screen.contains("已取消附件"), "提交后还停在已取消态：\n" + screen);
     }
@@ -170,12 +186,12 @@ class AttachmentLineTest {
         png(root, "docs/bug.png");
         CodeTuiView v = view(root);
         v.setInputForTest("看下 docs/bug.png");
-        v.feedKeyForTest(ctrlG());
+        v.feedKeyForTest(ctrlX());
         v.setInputForTest("/help");
         submit(v);                                    // /help：走 inputState.clear() 后 return 的分支
 
         v.setInputForTest("再看下 docs/bug.png");
         String screen = ViewScreen.of(v);
-        assertTrue(screen.contains("Ctrl+G"), "斜杠命令路径漏了复位取消态：\n" + screen);
+        assertTrue(screen.contains("Ctrl+X"), "斜杠命令路径漏了复位取消态：\n" + screen);
     }
 }
