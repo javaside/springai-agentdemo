@@ -8,6 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
+| [v1.6.0](docs/release-notes/v1.6.0.md) | 功能版 | **权限管理**：执行前审批面板、`permissions.json` 规则、计划模式、任何 allow 与 BYPASS 都盖不住的内置底线（⚠️ 默认行为变了，升级前请读发版说明） |
 | [v1.5.0](docs/release-notes/v1.5.0.md) | 功能版 | 联网搜索（博查 + Brave 两家共存）、MCP 远程传输（Streamable HTTP）、Claude Opus 5 设为 Anthropic 默认模型 |
 | [v1.4.0](docs/release-notes/v1.4.0.md) | 功能版 | 通义千问 provider、`*_MODELS` 可配置模型清单、`/mcp` 运行期 MCP 管理 |
 | [v1.3.1](docs/release-notes/v1.3.1.md) | 修订版 | — |
