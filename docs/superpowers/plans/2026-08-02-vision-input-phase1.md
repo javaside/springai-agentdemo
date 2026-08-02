@@ -38,6 +38,26 @@
   | `assertThat(map).containsEntry(k, v)` | `assertEquals(v, map.get(k))` |
   | `assertThat(x).as("第 %d 次", i)...` | 把描述作为最后一个参数：`assertTrue(x, "第 " + i + " 次")` ← **别把消息丢掉**，循环类断言没有序号极难定位 |
 
+- ⚠️ **构造消息对象只能用 builder，`new` 不行。** 已用 javap 核实 spring-ai-model 2.0.0：
+
+  | 想写 | 实际是 | 要写成 |
+  |---|---|---|
+  | `new AssistantMessage(text, meta, toolCalls)` | **protected** | `AssistantMessage.builder().content(text).toolCalls(calls).build()` |
+  | `new ToolResponseMessage(responses)` | **protected** | `ToolResponseMessage.builder().responses(responses).build()` |
+  | `new AssistantMessage(text)` | public ✅ | 可直接用 |
+  | `new UserMessage(text)` | public ✅ | 可直接用；要带 media/metadata 则用 `UserMessage.builder()` |
+  | `new ToolResponseMessage.ToolResponse(id, name, data)` | public ✅ | 可直接用 |
+
+  **本计划书后续任务的测试代码里凡是 `new AssistantMessage(...)` 三参写法、`new ToolResponseMessage(...)` 写法，一律换成 builder。**
+
+- ⚠️ **`Media` 的数据一律传 `byte[]`。** Task 0 真机实测：`data(byte[])` 与 `data(ByteArrayResource)` 运行时**完全等价**
+  （`Media.Builder.data(Resource)` 内部就是 `resource.getContentAsByteArray()`）。用 `byte[]` 少一层包装，
+  也避开 `data(Object)` / `data(Resource)` 的重载歧义。
+
+  **危险点**：`OpenAiChatModel` 组装请求时只认 `URI` / `String` / `byte[]` 三种（字节码可见三个 instanceof 分支），
+  传别的类型会被**跳过而不报错**——图就这么无声丢了。所以绝不要往 `data()` 里塞 `InputStream`、`File`、
+  `ByteArrayInputStream` 之类。
+
 - 提交信息用中文正文，首行 `feat(vision): …` / `test(vision): …` / `refactor(vision): …`。
 - 每个任务结束前跑一次该任务涉及的测试类，**绿了才提交**。
 
@@ -81,7 +101,26 @@
 
 ---
 
-### Task 0：真机验证消息序列（**必须最先做，结果可能推翻整个方案**）
+### Task 0：真机验证消息序列 ✅ **已完成 · 结论 GO**（`57e2117`）
+
+> **实测结论（2026-08-02，网关 `localhost:8080/v1` + `gpt-5.6-sol`）**
+>
+> 1. **序列被接受，HTTP 200**，无 400。
+> 2. **图片确实进了模型**——用颜色判别做的对照实验：发纯红/绿/蓝三张 16×16，模型三次全答对；
+>    **对照组**（同样序列但不挂 `Media`）明确回答「只看到图片文件引用，无法看到实际图像内容」。
+>    这顺带证明了 `[file reference]` 文本块本身**不足以**让模型看见，合成 user 消息这一步是必需的。
+> 3. `Media.data` 用 **`byte[]`**（与 `ByteArrayResource` 运行时等价）。
+> 4. **未验证的部分**：网关是本地兼容中转，不是 `api.openai.com`；Anthropic / 千问 / 智谱**无 key，完全未验证**，
+>    它们第一次真用时仍可能吃 400。文档里必须如实这么写，不得含糊成「已验证各家」。
+>
+> 下面保留原任务描述供追溯。
+
+---
+
+<details>
+<summary>原任务描述（已完成，点开查看）</summary>
+
+### Task 0（原文）：真机验证消息序列（**必须最先做，结果可能推翻整个方案**）
 
 整个设计压在一个**尚无证据**的假设上：`assistant(tool_calls)` → `tool` → **`user`(带图)** 这个序列各家 API 接受。按 OpenAI 规范读是合法的，但本项目在消息序列上已吃过两次 400（连续 user、悬空 tool_calls），不能靠「读规范应该没问题」交付。
 
@@ -179,9 +218,11 @@ git commit -m "test(vision): 真机探针验证 tool→user(带图) 序列各家
 探针默认跳过（无 key 不跑），不进 CI。"
 ```
 
+</details>
+
 ---
 
-### Task 1：`VisionModels` —— 能力名单与全局开关
+### Task 1：`VisionModels` —— 能力名单与全局开关 ✅ **已完成**（`1c21b67`）
 
 **判错方向不对称**：误判「不支持」只是拦住你、看得见、能改配置；误判「支持」会真发出去吃 400，浪费上传时间与费用，且各家错误信息未必看得出是图片的问题。故**未知一律不支持**。
 
@@ -1228,7 +1269,7 @@ OOM 防护用 header-only 读尺寸，解码前就拒超 50MP 的图；
 
 ---
 
-### Task 6：`VisionBudget` —— 分来源配额与每回合累计
+### Task 6：`VisionBudget` —— 分来源配额与每回合累计 ✅ **已完成**（`bae922e`）
 
 **为什么配额要分来源**（这条是从最典型的失败用法倒推出来的）：你贴了张设计稿说「照这个改」，模型接着 `Read` 了 3 张别的图。若一视同仁地「从新到旧」取 3 张，**你的稿子恰好被挤出预算**，模型照着别的图改——功能在最典型的用法上直接失效。
 
@@ -1471,8 +1512,8 @@ class VisionMaterializerTest {
     }
 
     private ToolResponseMessage toolResult(String body) {
-        return new ToolResponseMessage(
-                List.of(new ToolResponseMessage.ToolResponse("c1", "Read", body)));
+        return ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse("c1", "Read", body))).build();
     }
 
     private VisionMaterializer materializer() {
@@ -1484,8 +1525,8 @@ class VisionMaterializerTest {
         png("docs/bug.png");
         Prompt p = new Prompt(List.of(
                 new UserMessage("这是什么报错"),
-                new AssistantMessage("", Map.of(), List.of(
-                        new AssistantMessage.ToolCall("c1", "function", "Read", "{}"))),
+                AssistantMessage.builder().content("").toolCalls(List.of(
+                        new AssistantMessage.ToolCall("c1", "function", "Read", "{}"))).build(),
                 toolResult(ref("bug.png", "docs/bug.png"))));
 
         List<Message> out = materializer().materialize(p, true).getInstructions();
@@ -2464,7 +2505,7 @@ sha 路径一丢图就再也寻址不到。今天不痛是因为图反正投不�
 
 ---
 
-### Task 10：`ArtifactGc` —— 按体积上限淘汰
+### Task 10：`ArtifactGc` —— 按体积上限淘汰 ✅ **已完成**（`60afe22`，AgentTools 接线并入 Task 8）
 
 七月把 GC 记为 Path B，当时合理：那时只有偶尔 `Read` 一张图。接上视觉后，截图循环**每次迭代产一张 2MB 的 4K PNG**，而 `.codetui/artifacts/` 是**按项目共享、跨会话累积、`/clear` 也不清**的。
 
