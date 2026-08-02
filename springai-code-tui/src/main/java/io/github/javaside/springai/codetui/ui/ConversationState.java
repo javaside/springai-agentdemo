@@ -481,6 +481,20 @@ public final class ConversationState implements AgentListener {
         }
     }
 
+    /**
+     * 规则记录结果（工具线程写完后回报，见 {@link AgentListener#onRuleRecorded}）。
+     *
+     * <p>失败走 {@code ERROR} 行而不是普通信息行：写盘失败与「被 deny 遮蔽」都意味着
+     * <b>用户以为记下了、其实没有</b>，那必须显眼。
+     */
+    @Override
+    public synchronized void onRuleRecorded(long turnId, boolean ok, String message) {
+        if (message == null || message.isEmpty()) {
+            return;
+        }
+        pending.add(new OutputLine(message, ok ? OutputLine.Kind.INFO : OutputLine.Kind.ERROR));
+    }
+
     @Override
     public synchronized void onCompactionStarted(String reason) {
         compactStartNanos = System.nanoTime();

@@ -133,8 +133,8 @@ class CodeTuiViewPermissionTest {
     }
 
     @Test
-    @DisplayName("数字 3 = 允许，永久；并下沉一行确认到 scrollback")
-    void allowAlwaysPrintsConfirmation(@TempDir Path root) {
+    @DisplayName("数字 3 = 允许，永久：面板只负责应答，**不**自己打确认行")
+    void allowAlwaysOnlyResponds(@TempDir Path root) {
         ConversationState state = new ConversationState();
         List<PermissionOutcome> sink = new CopyOnWriteArrayList<>();
         CodeTuiView v = inModal(state, perm(1L, sink), root);
@@ -143,12 +143,25 @@ class CodeTuiViewPermissionTest {
         v.feedKeyForTest(enter());
 
         assertEquals(List.of(PermissionOutcome.ALLOW_ALWAYS), sink);
-        String all = drained(state);
-        assertTrue(all.contains("Bash(git push:*)"), "应回显记下的规则，实际：" + all);
-        // 必须打绝对路径：文件落在启动时的工作区，而 .codetui/ 通常被 .gitignore、IDE 默认不显示，
-        // 只说「写入项目 permissions.json」用户会以为没写成（这是实地反馈来的）。
-        assertTrue(all.contains(root.resolve(".codetui").resolve("permissions.json").toString()),
-                "应回显规则文件的绝对路径，实际：" + all);
+        // 应答只是唤醒工具线程，写盘在它醒来之后才做。面板此刻打任何完成时描述都早于事实，
+        // 且写盘失败也无从更正（PermissionOutcome 没有回传通道）——所以这里必须什么都不打。
+        assertFalse(drained(state).contains("已记下"),
+                "面板不该在写盘发生之前就宣布「已记下」");
+    }
+
+    @Test
+    @DisplayName("规则记录结果由工具线程回报：成功走信息行、失败走醒目的错误行")
+    void ruleRecordedIsReportedByToolThread() {
+        ConversationState state = new ConversationState();
+        state.onTurnStarted(1L);
+
+        state.onRuleRecorded(1L, true, "✓ 已记下允许规则：Bash(git push:*) → 已写入 /p/.codetui/permissions.json");
+        String ok = drained(state);
+        assertTrue(ok.contains("已写入"), "成功要说清落点，实际：" + ok);
+
+        state.onRuleRecorded(1L, false, "⚠ 规则 Bash(x:*) 写盘失败（/p/.codetui/permissions.json），仅本次会话生效");
+        String bad = drained(state);
+        assertTrue(bad.contains("写盘失败"), "失败要说明白，实际：" + bad);
     }
 
     @Test

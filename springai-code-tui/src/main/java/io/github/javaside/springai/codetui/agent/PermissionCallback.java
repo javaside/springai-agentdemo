@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionDecision;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoader;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.permission.RuleScope;
 import io.github.javaside.springai.codetui.agent.permission.ToolTargets;
@@ -66,19 +67,41 @@ public final class PermissionCallback implements ToolCallback {
         void ask(long turnId, PermissionRequest request);
     }
 
+    /**
+     * 规则记录结果的出口（生产实现是 {@code listener::onRuleRecorded}）。
+     *
+     * <p>与 {@link Asker} 分成两个窄接缝而不是直接持有 {@code AgentListener}：本类只需要
+     * 「问一次」和「报一次结果」两件事，收窄接缝让测试不必实现十几个无关方法。
+     *
+     * <p><b>漏传只是少一行提示，不会挂死</b>（与 {@code asker} 不同），故默认可为 no-op。
+     */
+    @FunctionalInterface
+    public interface RuleRecorder {
+        void recorded(long turnId, boolean ok, String message);
+    }
+
     private final ToolCallback delegate;
     private final PermissionEngine engine;
     private final Asker asker;
+    private final RuleRecorder recorder;
 
     public PermissionCallback(ToolCallback delegate, PermissionEngine engine, Asker asker) {
+        this(delegate, engine, asker, (t, ok, m) -> { });
+    }
+
+    public PermissionCallback(ToolCallback delegate, PermissionEngine engine,
+                              Asker asker, RuleRecorder recorder) {
         this.delegate = Objects.requireNonNull(delegate, "delegate 不可为 null");
         this.engine = Objects.requireNonNull(engine, "engine 不可为 null");
         this.asker = Objects.requireNonNull(asker, "asker 不可为 null：漏传会让每次 ASK 都 park");
+        this.recorder = recorder == null ? (t, ok, m) -> { } : recorder;
     }
 
-    /** 生产构造：直接挂到 listener 上。 */
+    /** 生产构造：两个接缝都挂到 listener 上。 */
     public PermissionCallback(ToolCallback delegate, PermissionEngine engine, AgentListener listener) {
-        this(delegate, engine, Objects.requireNonNull(listener, "listener 不可为 null")::onPermissionRequested);
+        this(delegate, engine,
+                Objects.requireNonNull(listener, "listener 不可为 null")::onPermissionRequested,
+                listener::onRuleRecorded);
     }
 
     @Override
@@ -177,14 +200,31 @@ public final class PermissionCallback implements ToolCallback {
             log.debug("{} 的这次审批没有可用的建议规则，只放行本次（内置危险检查 / ask 规则引发的 ASK）", toolName);
             return;
         }
+        long turnId = ToolEventCallback.currentTurnId();
         if (scope == RuleScope.SESSION) {
             engine.addSessionRule(rule);
+            recorder.recorded(turnId, true, "✓ 本会话不再询问：" + rule.toDsl());
             return;
         }
-        // 落盘失败时 engine 已自行降级成会话规则；被 deny 遮蔽时什么都不加（两种情况都由 engine 记日志）
-        if (!engine.addPersistentRule(rule)) {
-            log.warn("规则 '{}' 未能写入项目层 permissions.json，仅本次会话生效或未生效（详见上一条日志）",
-                    rule.toDsl());
+        // 被 deny 遮蔽与写盘失败是两回事，必须分开告诉用户：前者写下去也永远不会生效，
+        // 后者只是这次没落盘。engine.addPersistentRule 对两者都返回 false，故先问 denyingRule。
+        PermissionRule blocking = engine.denyingRule(rule);
+        if (blocking != null) {
+            recorder.recorded(turnId, false,
+                    "⚠ 规则 " + rule.toDsl() + " 已被 deny 规则 " + blocking.toDsl() + " 禁止，未记录");
+            log.warn("规则 '{}' 被 deny 规则 '{}' 遮蔽，未写入。", rule.toDsl(), blocking.toDsl());
+            return;
+        }
+        java.nio.file.Path file = scope == RuleScope.USER
+                ? PermissionConfigLoader.userFile()
+                : PermissionConfigLoader.projectFile(engine.root());
+        if (engine.addPersistentRule(rule)) {
+            recorder.recorded(turnId, true,
+                    "✓ 已记下允许规则：" + rule.toDsl() + " → 已写入 " + file);
+        } else {
+            recorder.recorded(turnId, false,
+                    "⚠ 规则 " + rule.toDsl() + " 写盘失败（" + file + "），仅本次会话生效");
+            log.warn("规则 '{}' 未能写入 {}，已降级为会话规则。", rule.toDsl(), file);
         }
     }
 

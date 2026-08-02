@@ -1314,21 +1314,9 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         req.responder().respond(outcome);
-        // 记规则的两个结果给一行确认（只在有建议规则时可选中，故 suggested 必非 null）。
-        // 措辞留了退路：写盘失败时 engine 会降级成会话规则，而 PermissionOutcome 没有回传通道，
-        // 这里无从得知（别臆造一个），所以不把「已永久生效」说成既成事实。
-        if (req.suggested() != null) {
-            if (outcome == PermissionOutcome.ALLOW_SESSION) {
-                state.pushInfo("✓ 本会话不再询问：" + req.suggested().toDsl());
-            } else if (outcome == PermissionOutcome.ALLOW_ALWAYS) {
-                // 打<b>绝对路径</b>而不是「项目 permissions.json」：文件落在 code-tui 启动时的
-                // 工作区，而用户往往在别处找它（且 .codetui/ 通常被 .gitignore，IDE 默认不显示）。
-                // 实地踩过一次——用户以为「选了永久但没写盘」，其实文件就在启动目录下。
-                state.pushInfo("✓ 已记下允许规则：" + req.suggested().toDsl()
-                        + " → " + PermissionConfigLoader.projectFile(root)
-                        + "（写盘失败则仅本会话生效）");
-            }
-        }
+        // 记规则的结果<b>不在这里打</b>：应答只是唤醒工具线程，写盘在它醒来之后才做，
+        // 此处打出的任何完成时描述都早于事实，且写盘失败也无从更正（PermissionOutcome 没有回传通道）。
+        // 改由工具线程写完后经 AgentListener.onRuleRecorded 回报——那一侧才知道成败与落点。
     }
 
     /**

@@ -96,6 +96,21 @@ public interface AgentListener {
         request.responder().respond(PlanOutcome.KEEP_PLANNING, "（当前界面不支持计划审批）");
     }
 
+    /**
+     * 「允许，本会话不再问」/「允许，永久」的<b>记录结果</b>，由工具线程在真正写完之后回报。
+     *
+     * <p><b>为什么必须由这一侧回报</b>：UI 应答的那一刻，写盘还没发生——应答只是把工具线程
+     * 唤醒，写盘在它醒来之后才做。此前 UI 在应答后立刻打一句「✓ 已记下允许规则…（写盘失败则
+     * 仅本会话生效）」，那是<b>在事情发生前用完成时描述它</b>，而且失败了也不会更正：
+     * {@code PermissionOutcome} 没有回传通道，UI 根本无从得知成败。
+     *
+     * <p>四种结果都经这里回报：会话规则、永久写入成功、写盘失败降级、被 deny 规则遮蔽未记录。
+     *
+     * @param ok      是否达成用户选的那个效果（写盘失败 / 被遮蔽都是 false）
+     * @param message 给用户看的一句话，已含规则 DSL 与落点；实现方直接下沉即可
+     */
+    default void onRuleRecorded(long turnId, boolean ok, String message) { }
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);
