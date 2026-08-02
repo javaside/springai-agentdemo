@@ -18,6 +18,12 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoad
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.permission.RuleScope;
+import io.github.javaside.springai.codetui.agent.media.ArtifactSource;
+import io.github.javaside.springai.codetui.agent.media.FileReference;
+import io.github.javaside.springai.codetui.agent.media.MagicSniffer;
+import io.github.javaside.springai.codetui.agent.media.MediaArtifact;
+import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
+import io.github.javaside.springai.codetui.agent.media.VisionModels;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
@@ -44,10 +50,16 @@ import dev.tamboui.widgets.block.Borders;
 import dev.tamboui.widgets.input.TextAreaState;
 import reactor.core.Disposable;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -519,6 +531,122 @@ public final class CodeTuiView extends InlineApp {
                 : attachmentLine(r.images().size(), r.overflow(), r.images().get(0).name());
     }
 
+    // ── 附件兑现：识别结果 → [file reference] 块 ───────────────────────────
+
+    /**
+     * 把识别到的图片渲成 {@code [file reference]} 块追加进待发文本。
+     *
+     * <p><b>为什么走文本注入而不是新开 API</b>：期 1 的 {@code VisionMaterializer} 已经会处理
+     * user 消息里的引用块，只是一直没有入口去产生这种消息。走这条则 {@code SubmitHandler} /
+     * {@code CodingAgent} / 兑现器 / 预算一行都不用改。与斜杠技能注入同套路：会话持久化
+     * 「注入后」的文本，实时 UI 只显示用户原文。
+     *
+     * <p><b>项目内不复制、项目外必须复制</b>：前者是为了「你更新了 design.png，模型该看到新版」
+     * ——复制一份快照会让它永远照着旧稿做；后者是硬约束，按原路径写进引用块会被
+     * {@code FileReferenceParser} 的越界防线整块丢弃，<b>且没有任何报错</b>，图就这么静默消失。
+     * 复制进 {@code .codetui/artifacts/} 之后 path 落回 root 内，解析器才认。
+     */
+    static String injectAttachments(String text, List<DetectedImage> images, Path root) {
+        if (images == null || images.isEmpty()) return text;
+        StringBuilder b = new StringBuilder(text);
+        for (DetectedImage img : images) {
+            MediaArtifact a = img.insideRoot()
+                    ? existingFileArtifact(img, root)
+                    : copyIntoArtifacts(img, root);
+            if (a == null) continue;   // 单张失败不连累其余，也不打断提交
+            b.append('\n').append(FileReference.render(
+                    a, FileReference.DELIVERY_NOT_IN_VIEW,
+                    "user attachment; not currently in view"));
+        }
+        return b.toString();
+    }
+
+    /**
+     * 项目内的图：引用<b>指原文件</b>，不复制。
+     *
+     * <p>sha 用「文件绝对路径的 SHA-256」而非内容哈希——照抄
+     * {@code MediaExternalizingCallback#referenceExistingFile}。两边必须一致：同一个文件经
+     * 「用户附件」与「Read 工具结果」两条路进来时算出同一个 id，模型才认得出是同一张；
+     * 而且原文件随时会被改写，内容哈希会让 id 逐版本漂移（还得整份读盘，附件可能几百 MB）。
+     */
+    private static MediaArtifact existingFileArtifact(DetectedImage img, Path root) {
+        try {
+            Path file = img.file();
+            MagicSniffer.Sniffed s = MagicSniffer.sniff(readHead(file));
+            // 尺寸 0 = 识别器只读了前 64 KiB、没解析出来（见 ImageAttachmentDetector#HEAD_BYTES）。
+            // 两个都传 null：render 只在两者非空时才写 dimensions 行，传 0 会渲出 dimensions: 0x0
+            // 这种假信息——比不写更糟，模型会据此判断该不该看这张图。
+            boolean dimKnown = img.width() > 0 && img.height() > 0;
+            return new MediaArtifact(
+                    sha256Hex(file.toAbsolutePath().normalize().toString()),
+                    file, relativeToRoot(file, root),
+                    s.mimeType(), null, s.kind(), Files.size(file),
+                    dimKnown ? img.width() : null, dimKnown ? img.height() : null, null,
+                    ArtifactSource.EXISTING_FILE, false,
+                    img.name());
+        } catch (RuntimeException | IOException e) {
+            return null;
+        }
+    }
+
+    /** 项目外的图：复制进 artifacts（内容寻址 + 原子写 + 去重都由 store 负责）。 */
+    private static MediaArtifact copyIntoArtifacts(DetectedImage img, Path root) {
+        try {
+            byte[] bytes = Files.readAllBytes(img.file());
+            MediaArtifact a = new MediaArtifactStore(
+                    root.resolve(".codetui").resolve("artifacts"), root)
+                    .put(bytes, null, img.name());
+            // store 的宽高来自<b>完整</b>字节，比识别器只读前 64 KiB 的结果更可信，故这里不拿
+            // img 的 0 去覆盖它；只兜底「万一算出非正数」，绝不让 dimensions: 0x0 流进引用块。
+            boolean dimBogus = a.width() == null || a.height() == null
+                    || a.width() <= 0 || a.height() <= 0;
+            if (!dimBogus) return a;
+            return new MediaArtifact(
+                    a.sha(), a.path(), a.relativePath(),
+                    a.mimeType(), a.declaredMimeType(), a.kind(), a.size(),
+                    null, null, a.lineCount(),
+                    a.source(), a.ownedByStore(), a.originalName());
+        } catch (RuntimeException | IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 相对 root 的短路径。<b>两边都先解符号链接</b>再 relativize：macOS 的 /tmp → /private/tmp
+     * 这类链会让「root 带链、file 已解链」算出 {@code ../../private/tmp/...} 这种跨越式路径，
+     * 写进引用块就过不了解析器的包含校验。逻辑同 {@code PathContainment#relativeToRoot}
+     * ——那个类是包私有的，本包够不着，只能照抄。
+     */
+    private static String relativeToRoot(Path file, Path root) {
+        Path rf = realPath(file), rr = realPath(root);
+        // 仍越界（insideRoot 是按 normalize 判的，解链后可能不成立）→ 回退文件名，不泄漏绝对结构。
+        return rf.startsWith(rr) ? rr.relativize(rf).toString() : rf.getFileName().toString();
+    }
+
+    private static Path realPath(Path p) {
+        try {
+            return p.toRealPath();
+        } catch (IOException e) {
+            return p.toAbsolutePath().normalize();
+        }
+    }
+
+    /** 只读文件头判魔数：附件可能是几百 MB 的原图，整份读盘会把提交卡住（magic 只看前几 KB）。 */
+    private static byte[] readHead(Path file) throws IOException {
+        try (InputStream in = Files.newInputStream(file)) {
+            return in.readNBytes(8 * 1024);
+        }
+    }
+
+    private static String sha256Hex(String s) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
+    }
+
     /** 当前文本在给定内宽下软折行后的总可视行数（≥1）。 */
     private int visualRowCount(int innerWidth) {
         int rows = 0, n = inputState.lineCount();
@@ -940,14 +1068,30 @@ public final class CodeTuiView extends InlineApp {
             quit();
             return;
         }
+        // ── 附件兑现（必须在 clearInput() 之前：那一跑 attachmentsCancelled 就被复位，Ctrl+G 会失效） ──
+        // 位置也必须在全部斜杠命令分支<b>之后</b>：否则 "/help docs/bug.png" 这类文本也会被识别、
+        // 甚至把图注进一条根本不会发给模型的命令里。
+        List<DetectedImage> attached = attachmentsCancelled ? List.of() : attachments().images();
+        if (!attached.isEmpty() && !VisionModels.supportsImage(onSubmit.currentModel())) {
+            // 拦住不发，且<b>绝不 clearInput()</b>：切完模型直接回车重发即可。不保留的话用户得把
+            // 那段话连同路径重贴一遍，这功能不会有人用。
+            // supportsImage 内部已含全局开关 CODETUI_VISION，这里不再判一次 enabled()。
+            state.setNotice("当前模型 " + onSubmit.currentModel()
+                    + " 不支持图片输入，用 /model 换一个（输入已保留）");
+            return;
+        }
+        String effective = injectAttachments(text, attached, root);
+
         clearInput();
         String skill = pendingSkill;                 // 一次性：本条消息取走挂载
         pendingSkill = null;
         if (busy()) {                                // 忙/压缩中/有在飞子 agent：排队，挂载随消息入队
-            state.enqueue(text, skill);              // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
+            // 入队的同样是注入后的文本：出队时直接 dispatch，那时输入框早已换成别的内容，
+            // 再想兑现附件已经无从谈起——排队的消息会静默丢图。
+            state.enqueue(effective, skill);         // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
             return;
         }
-        dispatch(text, skill);
+        dispatch(effective, skill);
     }
 
     /**
