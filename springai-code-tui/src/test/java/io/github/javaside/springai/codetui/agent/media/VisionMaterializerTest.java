@@ -332,4 +332,110 @@ class VisionMaterializerTest {
         assertEquals(1, m.lastSnapshot().images());
         assertTrue(m.lastSnapshot().tokens() > 0, "视觉 token 应被计入");
     }
+
+    /**
+     * 造一个与 {@link #ANCHOR} 同回合的请求：turnKey = 锚点文本 hash + 锚点下标，
+     * 故这里的锚点文本与下标（恒为 0）必须<b>逐字相同</b>，否则下面几条测的就成了「换了回合」，
+     * 什么都验不到。工具结果的内容不参与 turnKey，可以随便换。
+     */
+    private static final String ANCHOR = "同一个回合的提问";
+
+    private Prompt sameTurn(String toolBody) {
+        return new Prompt(List.of(new UserMessage(ANCHOR), toolCall(), toolResult(toolBody)));
+    }
+
+    /** 统计按<b>回合</b>累计：同一回合内第二次迭代又兑现一张，快照该是 2 张而不是覆盖成 1 张。 */
+    @Test
+    void snapshotAccumulatesAcrossIterationsOfSameTurn() throws Exception {
+        png("a.png");
+        png("b.png");
+        VisionMaterializer m = materializer();
+
+        m.materialize(sameTurn(ref("a.png", "a.png")), true);
+        long afterFirst = m.lastSnapshot().tokens();
+        assertEquals(1, m.lastSnapshot().images(), "前置条件：第一次迭代应兑现 1 张");
+
+        m.materialize(sameTurn(ref("b.png", "b.png")), true);
+
+        assertEquals(2, m.lastSnapshot().images(),
+                "同一回合的两次兑现该累计成 2 张，被覆盖成「上一次请求」了");
+        // 两张图尺寸一致（png() 都是 100×80，token 只按尺寸算）→ 累计值恰好翻倍。
+        // 只断言「变大了」抓不到「张数累加、token 忘了累加」。
+        assertEquals(afterFirst * 2, m.lastSnapshot().tokens(), "token 没跟着累计");
+    }
+
+    /**
+     * ★ 核心：同一回合内一次「兑现 0 张」的请求<b>不得</b>清零。
+     *
+     * <p>这正是线上那个 bug：一个回合有几十次工具迭代，回合额度用尽后每次都兑现 0；
+     * 回合一结束引用落进历史，按「当轮兑现」规则更不会再兑现。于是用户按 {@code /context}
+     * 那一刻读到的「上一次请求」几乎必然是 0——这个数字在实践中恒为零，等于没写。
+     */
+    @Test
+    void snapshotSurvivesARequestThatDeliversNothingInSameTurn() throws Exception {
+        png("a.png");
+        VisionMaterializer m = materializer();
+
+        m.materialize(sameTurn(ref("a.png", "a.png")), true);
+        long tokens = m.lastSnapshot().tokens();
+        assertEquals(1, m.lastSnapshot().images(), "前置条件：第一次应兑现 1 张");
+        assertTrue(tokens > 0, "前置条件：第一次应记上 token");
+
+        // 同一条锚点消息、同一个下标 → turnKey 不变；工具结果里没有任何引用块 → 本次兑现 0 张。
+        m.materialize(sameTurn("这次工具只回了文本，没有任何图片引用"), true);
+
+        assertEquals(1, m.lastSnapshot().images(),
+                "同回合内一次没兑现就把账清零——/context 因此恒显示 0，等于这个统计没写");
+        assertEquals(tokens, m.lastSnapshot().tokens(), "token 也不该被清零");
+    }
+
+    /** 换了回合（锚点消息不同 → turnKey 不同）→ 归零重算，不能把上一轮的账带过来。 */
+    @Test
+    void snapshotRestartsWhenTurnChanges() throws Exception {
+        png("a.png");
+        png("b.png");
+        VisionMaterializer m = materializer();
+
+        m.materialize(new Prompt(List.of(new UserMessage("回合一"), toolCall(),
+                toolResult(ref("a.png", "a.png")))), true);
+        long firstTurnTokens = m.lastSnapshot().tokens();
+        assertEquals(1, m.lastSnapshot().images(), "前置条件：回合一应兑现 1 张");
+
+        m.materialize(new Prompt(List.of(new UserMessage("回合二"), toolCall(),
+                toolResult(ref("b.png", "b.png")))), true);
+
+        assertEquals(1, m.lastSnapshot().images(),
+                "新回合该从头算，把上一轮的张数带过来了");
+        assertEquals(firstTurnTokens, m.lastSnapshot().tokens(),
+                "新回合的 token 该只有本轮这一张（两张图尺寸相同故与上轮等值），带过来就会翻倍");
+    }
+
+    /**
+     * 回合额度用尽后统计必须<b>停住</b>——张数和 token 都不再涨。
+     *
+     * <p>token 只能计<b>真发出去</b>的那几张：{@code session.admit} 是先记账、随后才可能被
+     * {@code tryConsumeTurnSlot} 挡下。按请求报时这点误差看不见；改成按回合累计后，额度用尽的
+     * 那几十次迭代会次次记上一笔，张数不涨而 token 一直涨，面板直接变成胡说。
+     */
+    @Test
+    void snapshotStopsGrowingOnceTurnBudgetIsExhausted() throws Exception {
+        png("x.png");
+        VisionMaterializer m = materializer();
+        // 同一个 Prompt 对象反复兑现 → 锚点文本与下标恒定 → turnKey 恒定，全在一个回合里
+        Prompt p = new Prompt(List.of(new UserMessage(ANCHOR + "\n" + ref("x.png", "x.png"))));
+
+        for (int i = 0; i < VisionBudget.MAX_TURN_DELIVERIES; i++) {
+            m.materialize(p, true);
+        }
+        int images = m.lastSnapshot().images();
+        long tokens = m.lastSnapshot().tokens();
+        assertEquals(VisionBudget.MAX_TURN_DELIVERIES, images, "前置条件：应恰好累计到回合上限");
+        assertTrue(tokens > 0, "前置条件：应记上 token");
+
+        m.materialize(p, true);   // 额度已尽：这次兑现 0 张
+
+        assertEquals(images, m.lastSnapshot().images(), "额度用尽后张数还在涨");
+        assertEquals(tokens, m.lastSnapshot().tokens(),
+                "额度用尽后 token 还在涨——把「过闸尝试」当成了「真发出去」");
+    }
 }

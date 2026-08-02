@@ -1,6 +1,7 @@
 package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.ContextStats;
+import io.github.javaside.springai.codetui.agent.media.VisionBudget;
 
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -52,9 +53,13 @@ final class ContextUsage {
         // 视觉占用单列一行，紧跟文本估算之后：图片从不进会话存储，上面那笔 JTokkit 估算<b>看不见它们</b>，
         // 恒比真实请求小（最多差 6k）。不写出来这笔钱就等于不存在，用户没法管理。
         // 用 %,d 原值而不是 /1000 的「k」：一张小图不足 1000 token 会显示成「0k」，读起来像不要钱。
+        // 口径是「本回合累计」而非「上次请求」：一个回合有几十次工具迭代，按请求记则用户按下
+        // /context 那一刻几乎必然是 0（额度用尽后每次都兑现 0、回合结束后引用已成历史更不兑现）。
+        // 顺带写出每回合上限，用户才读得出还剩多少额度——这也是把口径对齐到 VisionBudget 的意义。
+        // 严格说单位是「张·次」（同一张图跨迭代重发计两次，与上限同一口径），面板上从简写作「张」。
         if (s.visionImages() > 0) {
-            sink.accept(String.format("  视觉图片：%,d 张 · 约 %,d token（上次请求，不计入上方文本估算）",
-                    s.visionImages(), s.visionTokens()));
+            sink.accept(String.format("  视觉图片：本回合 %,d 张 · 约 %,d token（每回合上限 %d 张，不计入上方文本估算）",
+                    s.visionImages(), s.visionTokens(), VisionBudget.MAX_TURN_DELIVERIES));
         }
         if (s.tokenThreshold() > 0) {
             sink.accept(String.format("  自动压缩：达 %,d token 触发（当前 %s）· 保留最近 %,d 条",

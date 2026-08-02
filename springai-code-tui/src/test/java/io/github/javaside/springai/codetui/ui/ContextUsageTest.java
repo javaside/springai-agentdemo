@@ -84,6 +84,10 @@ class ContextUsageTest {
         assertTrue(vision.contains("3 张"), "图片张数：" + vision);
         assertTrue(vision.contains("4,800"), "视觉 token 原值，不做 k 舍入（小图会显示成 0k）：" + vision);
         assertTrue(vision.contains("不计入上方文本估算"), "必须说明这是另一笔账：" + vision);
+        // 口径必须写明是「本回合累计」：按「上次请求」记的话，一个回合几十次工具迭代下来，
+        // 用户按 /context 那一刻读到的几乎必然是 0，这一行等于没写。
+        assertTrue(vision.contains("本回合"), "没写明统计口径是本回合累计：" + vision);
+        assertFalse(vision.contains("上次请求"), "口径已改按回合累计，文案还停在「上次请求」：" + vision);
     }
 
     /** 没兑现过图就不占一行——常态是纯文本会话，多一行恒 0 的噪音会稀释真正要看的数字。 */

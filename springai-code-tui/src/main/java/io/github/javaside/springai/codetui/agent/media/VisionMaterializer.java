@@ -62,9 +62,33 @@ public final class VisionMaterializer {
         this.budget = budget;
     }
 
-    /** 上次兑现的统计（供 {@code /context}）。 */
+    /** <b>本回合</b>累计兑现的统计（供 {@code /context}）。 */
     public VisionSnapshot lastSnapshot() {
         return lastSnapshot;
+    }
+
+    /**
+     * 把本次兑现结果并进「本回合累计」快照。
+     *
+     * <p><b>兑现 0 张不清零</b>——这正是这个统计此前恒为零的根因：一个回合有几十次工具迭代，
+     * {@link VisionBudget#MAX_TURN_DELIVERIES} 用尽后每次都兑现 0；回合结束后引用落进历史，
+     * 按「当轮兑现」规则更不会再兑现。用户按 {@code /context} 那一刻的「上一次请求」几乎必然是 0。
+     * 只有 <b>turnKey 变了</b>（换回合、或换 agent）才归零重算。
+     *
+     * <p><b>单槽而非按 turnKey 分桶</b>（{@link VisionBudget} 是分桶的）：那边分桶是<b>正确性</b>
+     * 需要——并发子 agent 共用计数器会互相冲掉额度、真的多发图；这边只是<b>显示</b>，而
+     * {@code /context} 要显示的就是「用户当前这一轮」。分桶反而说不清面板该读哪个桶。
+     * 代价是并发子 agent 的回合会覆盖主 agent 的账，两者交替时数字会跳。
+     *
+     * <p>读旧值→加→写回不是原子的，并发下最坏是丢一次累加（统计信息，可接受）；但每次写出去的
+     * 都是一个完整 record，读侧绝不会看到「张数已加、token 未加」的半截状态。
+     */
+    private void accumulate(String turnKey, int images, long tokens) {
+        VisionSnapshot prev = lastSnapshot;
+        VisionSnapshot base = turnKey.equals(prev.turnKey())
+                ? prev
+                : new VisionSnapshot(turnKey, 0, 0L);
+        lastSnapshot = base.plus(images, tokens);
     }
 
     /**
@@ -86,8 +110,8 @@ public final class VisionMaterializer {
 
     private Prompt doMaterialize(Prompt prompt) {
         List<Message> msgs = prompt.getInstructions();
+        // 空消息列表算不出 turnKey，也不构成「新的一轮」——保留上一回合的账，别把它抹掉。
         if (msgs == null || msgs.isEmpty()) {
-            lastSnapshot = VisionSnapshot.EMPTY;
             return prompt;
         }
 
@@ -118,7 +142,7 @@ public final class VisionMaterializer {
         // 短路条件是「什么都没改」而<b>不是</b>「什么都没兑现」：一张都没兑现但有引用被判超预算时，
         // 那些 delivery 行仍必须改写，否则模型拿到的是「Read 一次就能看」这句假话。
         if (userOutcomes.isEmpty() && toolMedia.isEmpty()) {
-            lastSnapshot = VisionSnapshot.EMPTY;
+            accumulate(turnKey, 0, 0L);   // 本次兑现 0 张：同回合保持原账，换回合才归零
             return prompt;              // 原样返回同一对象，调用方可用 == 判断
         }
 
@@ -131,9 +155,7 @@ public final class VisionMaterializer {
         }
 
         int delivered = deliveredMedia(userOutcomes).size() + toolMedia.size();
-        lastSnapshot = delivered == 0
-                ? VisionSnapshot.EMPTY
-                : new VisionSnapshot(delivered, session.tokensUsed());
+        accumulate(turnKey, delivered, deliveredTokens(userOutcomes) + deliveredTokens(toolOutcomes));
         return prompt.mutate().messages(out).build();
     }
 
@@ -144,7 +166,7 @@ public final class VisionMaterializer {
      * <p>只记成功的不够：被预算挤掉的那些若不留结局，delivery 行就会留在 {@code not_in_view}，
      * 那句话的意思是「Read 一次就能看」——对一张会再次撞上同一个预算的图，这是假话。
      */
-    private record Outcome(Media media, String delivery) {}
+    private record Outcome(Media media, String delivery, long tokens) {}
 
     /** 从结局表里挑出真兑现了的，保持 {@link LinkedHashMap} 的顺序。 */
     private Map<ParsedReference, Media> deliveredMedia(Map<ParsedReference, Outcome> outcomes) {
@@ -153,6 +175,22 @@ public final class VisionMaterializer {
             if (e.getValue().media() != null) out.put(e.getKey(), e.getValue().media());
         }
         return out;
+    }
+
+    /**
+     * 真发出去的那几张的 token 之和。
+     *
+     * <p>不能用 {@code session.tokensUsed()}：那是<b>过闸尝试</b>的累计，
+     * {@link VisionBudget.Session#admit} 先记账、随后可能被 {@code tryConsumeTurnSlot} 挡下。
+     * 按请求报时这点误差看不出来；改成按回合累计后，回合额度用尽的那几十次迭代会次次记上一笔
+     * ——张数不涨、token 一直涨，面板直接变成胡说。
+     */
+    private long deliveredTokens(Map<ParsedReference, Outcome> outcomes) {
+        long sum = 0;
+        for (Outcome o : outcomes.values()) {
+            if (o.media() != null) sum += o.tokens();
+        }
+        return sum;
     }
 
     /**
@@ -241,7 +279,7 @@ public final class VisionMaterializer {
             // 张数已满：直接标注，<b>不</b>再 prepare。这是出站热路径，为几张注定发不出去的图
             // 解码缩放是白花钱。代价是超配额的那张若本身还是 HEIC，标注会略失准——两害取其轻。
             if (delivered >= maxDeliveries) {
-                out.put(r, new Outcome(null, FileReference.DELIVERY_BUDGET_EXCEEDED));
+                out.put(r, new Outcome(null, FileReference.DELIVERY_BUDGET_EXCEEDED, 0L));
                 continue;
             }
             Optional<PreparedImage> prepared = preparer.prepare(r.file(), r.mimeType());
@@ -253,14 +291,15 @@ public final class VisionMaterializer {
             }
             PreparedImage img = prepared.get();
             if (!session.admit(img.estimatedTokens())) {            // 本请求 token 预算满了
-                out.put(r, new Outcome(null, FileReference.DELIVERY_BUDGET_EXCEEDED));
+                out.put(r, new Outcome(null, FileReference.DELIVERY_BUDGET_EXCEEDED, 0L));
                 continue;
             }
             if (!session.tryConsumeTurnSlot()) {                    // 本回合累计额度用尽
-                out.put(r, new Outcome(null, FileReference.DELIVERY_TURN_EXHAUSTED));
+                out.put(r, new Outcome(null, FileReference.DELIVERY_TURN_EXHAUSTED, 0L));
                 continue;
             }
-            out.put(r, new Outcome(toMedia(r, img), FileReference.DELIVERY_DELIVERED));
+            out.put(r, new Outcome(toMedia(r, img), FileReference.DELIVERY_DELIVERED,
+                    img.estimatedTokens()));
             delivered++;
         }
         return out;
