@@ -352,7 +352,7 @@ MediaReferencePreservingCompactionStrategy(delegate) {
 | 问题 | 处置 |
 |---|---|
 | **同一请求内同一 sha 兑现两次**（用户贴了 `bug.png`，模型又 `Read` 了它） | 按 sha 在单次请求内去重，保留位置靠前的那次 |
-| **`EXISTING_FILE` 不是快照**（回合 5 改了文件，历史图跟着变） | 用户贴的图一律 `MATERIALIZED`（复制快照）；工具 `Read` 的图保持 `EXISTING_FILE`（它本就该是当前内容）。二者语义确实不同 |
+| **`EXISTING_FILE` 不是快照**（回合 5 改了文件，历史图跟着变） | ~~用户贴的图一律 `MATERIALIZED`（复制快照）~~ **已被期 2 推翻**，见 [用户贴图设计 §5](2026-08-02-vision-user-attachments-design.md)。反向的失败更严重：**你更新了 `design.png`，模型却还照着旧稿做**。最终规则是「项目内指原文件、项目外才复制」，且后者是被 `FileReferenceParser` 的越界防线**逼出来的硬约束**，不是偏好 |
 | **`-c` 回放会把引用块原样打给用户看**（`HistoryReplay` 读的是存储，存储里那条 user 消息含八行引用块） | `HistoryReplay` 把引用块渲成 `📎 cart.png (1440×900)`。今天不暴露，是因为引用块此前只出现在工具结果里 |
 | **Bash 产图不产生引用**（`python plot.py` 写了 `chart.png`，工具结果是纯文本） | **不改**——Bash 输出里出现路径不代表模型想看。模型想看就 `Read`，那条路通。写进文档，否则会被当 bug 反复报 |
 | **子 agent 产的图主 agent 摸不着**（只有文本报告回流） | 不加机制。在子 agent 系统提示里加一句「产出图片时把 artifact 路径写进报告」。低成本，失败也只退回今天的行为 |
