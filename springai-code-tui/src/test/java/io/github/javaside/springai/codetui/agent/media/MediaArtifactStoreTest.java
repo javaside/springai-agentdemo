@@ -19,7 +19,7 @@ class MediaArtifactStoreTest {
     void put_writesContentAddressedFile_magicOverridesDeclared(@TempDir Path root) throws Exception {
         MediaArtifactStore store = new MediaArtifactStore(root.resolve(".codetui/artifacts"), root);
         // 声明成 jpeg，但字节是 png → 以 magic 为准
-        MediaArtifact a = store.put(png(), "image/jpeg");
+        MediaArtifact a = store.put(png(), "image/jpeg", "t.png");
 
         assertEquals("image/png", a.mimeType());
         assertEquals("image/jpeg", a.declaredMimeType());
@@ -36,8 +36,8 @@ class MediaArtifactStoreTest {
     @Test
     void put_idempotent_sameContentSameFile(@TempDir Path root) {
         MediaArtifactStore store = new MediaArtifactStore(root.resolve(".codetui/artifacts"), root);
-        MediaArtifact a = store.put(png(), "image/png");
-        MediaArtifact b = store.put(png(), "image/png");
+        MediaArtifact a = store.put(png(), "image/png", "t.png");
+        MediaArtifact b = store.put(png(), "image/png", "t.png");
         assertEquals(a.sha(), b.sha());
         assertEquals(a.path(), b.path());
     }
@@ -46,7 +46,7 @@ class MediaArtifactStoreTest {
     void put_lazilyCreatesDir(@TempDir Path root) {
         Path dir = root.resolve(".codetui/artifacts");
         assertFalse(Files.exists(dir));
-        new MediaArtifactStore(dir, root).put(png(), "image/png");
+        new MediaArtifactStore(dir, root).put(png(), "image/png", "t.png");
         assertTrue(Files.exists(dir));
     }
 }

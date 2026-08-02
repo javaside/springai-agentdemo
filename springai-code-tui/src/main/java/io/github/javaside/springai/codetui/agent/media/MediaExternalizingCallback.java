@@ -28,6 +28,8 @@ public final class MediaExternalizingCallback implements ToolCallback {
     private final MediaArtifactStore store;
     private final ToolResultMediaHandler handler;
     private final Path root;
+    /** MCP 图片的序号，仅用于合成可读文件名——同一页面的多次截图靠它区分。 */
+    private int mcpImageSeq = 0;
 
     public MediaExternalizingCallback(ToolCallback delegate, MediaArtifactStore store,
                                       ToolResultMediaHandler handler, Path root) {
@@ -61,7 +63,7 @@ public final class MediaExternalizingCallback implements ToolCallback {
             for (String t : p.textBlocks()) out.append(t).append('\n');
             for (McpMediaParser.MediaBlock mb : p.mediaBlocks()) {
                 try {
-                    MediaArtifact a = store.put(mb.bytes(), mb.declaredMimeType());
+                    MediaArtifact a = store.put(mb.bytes(), mb.declaredMimeType(), synthesizeName(mb.bytes()));
                     out.append(handler.represent(a, caps)).append('\n');
                 } catch (RuntimeException e) {
                     log.warn("媒体块外置失败，已降级为占位（未泄露字节）：{}", e.toString());  // 不打印内容
@@ -87,6 +89,19 @@ public final class MediaExternalizingCallback implements ToolCallback {
 
         // 4) 普通文本 / 文本文件读取：原样放行（文本文件由路径②在回合间换引用）。
         return raw;
+    }
+
+    /** 给无名的 MCP 内联字节合成可读文件名。sha 算失败也不能让整块图丢掉，故回退到序号。 */
+    private String synthesizeName(byte[] bytes) {
+        String ext = MagicSniffer.sniff(bytes).ext();
+        String tool = delegate.getToolDefinition().name();
+        String seq = String.format("%02d", ++mcpImageSeq);
+        try {
+            String hex = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+            return tool + "-" + seq + "-" + hex.substring(0, 8) + "." + ext;
+        } catch (Exception e) {
+            return tool + "-" + seq + "." + ext;
+        }
     }
 
     /** Read 的 toolInput（JSON）里取文件路径，安全解析进 root。 */
@@ -119,7 +134,8 @@ public final class MediaExternalizingCallback implements ToolCallback {
                     PathContainment.relativeToRoot(file, root),
                     s.mimeType(), null, s.kind(), size,
                     dim.map(d -> d[0]).orElse(null), dim.map(d -> d[1]).orElse(null), null,
-                    ArtifactSource.EXISTING_FILE, false);
+                    ArtifactSource.EXISTING_FILE, false,
+                    file.getFileName().toString());
         } catch (RuntimeException | java.io.IOException e) {
             return null;
         }

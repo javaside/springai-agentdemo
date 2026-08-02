@@ -74,7 +74,7 @@ public final class SessionFileExternalizer {
         // 图片/视频/二进制文件：换引用（模型读不懂原字节，引用零损失）。
         MediaArtifact a = referenceExistingFile(original);
         if (a == null) return null;                                   // 取元信息失败：保守放行，绝不臆造引用
-        return FileReference.render(a, "reference_only",
+        return FileReference.render(a, FileReference.DELIVERY_REFERENCE_ONLY,
                 "content externalized from session memory; re-read to view");
     }
 
@@ -115,7 +115,8 @@ public final class SessionFileExternalizer {
             var dim = ImageDimensions.of(head);
             return new MediaArtifact(sha, file, rel, s.mimeType(), null, s.kind(), size,
                     dim.map(d -> d[0]).orElse(null), dim.map(d -> d[1]).orElse(null), null,
-                    ArtifactSource.EXISTING_FILE, false);
+                    ArtifactSource.EXISTING_FILE, false,
+                    file.getFileName().toString());
         } catch (RuntimeException | java.io.IOException e) {
             return null;
         }

@@ -12,7 +12,7 @@ class MediaArtifactTest {
                 "a".repeat(64), Path.of("/x/.codetui/artifacts/" + "a".repeat(64) + ".png"),
                 ".codetui/artifacts/" + "a".repeat(64) + ".png",
                 "image/png", "image/png", MediaKind.IMAGE, 100L, 12, 34, null,
-                ArtifactSource.MATERIALIZED, true);
+                ArtifactSource.MATERIALIZED, true, "a.png");
         assertEquals("a".repeat(16), a.shortId());
     }
 }

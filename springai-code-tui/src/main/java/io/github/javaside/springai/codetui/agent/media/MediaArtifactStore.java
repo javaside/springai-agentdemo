@@ -22,8 +22,10 @@ public final class MediaArtifactStore {
         this.root = root;
     }
 
-    /** 存字节 → 产物（source=MATERIALIZED, ownedByStore=true）。 */
-    public MediaArtifact put(byte[] bytes, String declaredMimeType) {
+    /** 存字节 → 产物（source=MATERIALIZED, ownedByStore=true）。
+     *  {@code originalName} 是给模型看的可读名字：MCP 内联字节无文件名，调用方须合成一个，
+     *  否则模型跨回合只能看到一串 sha，无法指认「哪一张」。 */
+    public MediaArtifact put(byte[] bytes, String declaredMimeType, String originalName) {
         MagicSniffer.Sniffed sniffed = MagicSniffer.sniff(bytes);
         String sha = sha256Hex(bytes);
         String fileName = sha + "." + sniffed.ext();
@@ -43,7 +45,10 @@ public final class MediaArtifactStore {
                 sniffed.mimeType(), declaredMimeType, sniffed.kind(),
                 bytes.length,
                 dim.map(d -> d[0]).orElse(null), dim.map(d -> d[1]).orElse(null), null,
-                ArtifactSource.MATERIALIZED, true);
+                ArtifactSource.MATERIALIZED, true,
+                (originalName == null || originalName.isBlank())
+                        ? sha.substring(0, 8) + "." + sniffed.ext()
+                        : originalName);
     }
 
     private void writeAtomic(Path target, byte[] bytes) throws IOException {

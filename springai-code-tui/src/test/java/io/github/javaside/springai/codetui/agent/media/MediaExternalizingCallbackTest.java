@@ -167,14 +167,26 @@ class MediaExternalizingCallbackTest {
         assertTrue(result.contains("failed"), "失败块须降级为占位文案");
     }
 
+    /** 能力开 → 引用写 not_in_view（「Read 一次就能看」）；字节仍不进会话，真投递由出站侧另做。 */
     @Test
-    void capabilitiesInContext_imageTrue_stillReferenceOnly_noInjector(@TempDir Path root) {
+    void capabilitiesInContext_imageTrue_marksNotInView(@TempDir Path root) {
         String b64 = java.util.Base64.getEncoder().encodeToString(png());
         String mcpOut = "[{\"type\":\"image\",\"data\":\"" + b64 + "\",\"mimeType\":\"image/png\"}]";
         ToolContext ctx = new ToolContext(Map.of(
                 MediaExternalizingCallback.CAPABILITIES_KEY, new ModelCapabilities(true, true)));
         String result = wrap(delegate("shot", mcpOut), root).call("{}", ctx);
         assertTrue(FileReference.isReference(result));
-        assertTrue(result.contains("delivery: reference_only"), "无注入器 → 即便能力开也只引用");
+        assertTrue(result.contains("delivery: not_in_view"), "能力开 → not_in_view，而非 reference_only");
+        assertFalse(result.contains(b64), "无论能力如何，base64 都不得回到会话文本");
+    }
+
+    /** MCP 内联字节没有文件名，须合成 <工具名>-<序号>-<sha8>——否则同一页面的多次截图无法区分。 */
+    @Test
+    void mcpImageGetsSynthesizedName(@TempDir Path root) {
+        String b64 = java.util.Base64.getEncoder().encodeToString(png());
+        String mcpOut = "[{\"type\":\"image\",\"data\":\"" + b64 + "\",\"mimeType\":\"image/png\"}]";
+        String result = wrap(delegate("take_screenshot", mcpOut), root).call("{}", null);
+        assertTrue(result.contains("name: take_screenshot-01-"), "缺少合成文件名：\n" + result);
+        assertTrue(result.contains(".png"), "合成名应带扩展名：\n" + result);
     }
 }

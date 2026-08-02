@@ -10,12 +10,16 @@ import java.nio.file.Path;
  *  @param declaredMimeType 声明类型（MCP 的 mimeType；可空）
  *  @param width/height   仅图片、且能解析时非空
  *  @param lineCount      仅文本、可空
- *  @param ownedByStore   true=artifact store 拥有该文件；false=指向项目内既有文件 */
+ *  @param ownedByStore   true=artifact store 拥有该文件；false=指向项目内既有文件
+ *  @param originalName  原始文件名（EXISTING_FILE=磁盘文件名；MATERIALIZED=用户原名或合成名）。
+ *                       MCP 内联字节没有名字，由调用方合成——否则模型跨回合只能看到一串 sha，
+ *                       无法指认「哪一张」，而截图场景恰恰最需要区分同一页面的不同状态。 */
 public record MediaArtifact(
         String sha, Path path, String relativePath,
         String mimeType, String declaredMimeType, MediaKind kind,
         long size, Integer width, Integer height, Integer lineCount,
-        ArtifactSource source, boolean ownedByStore) {
+        ArtifactSource source, boolean ownedByStore,
+        String originalName) {
 
     /** 显示用短 id = 完整 sha 前 16 位。 */
     public String shortId() { return sha.substring(0, 16); }
