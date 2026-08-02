@@ -303,7 +303,17 @@ MediaReferencePreservingCompactionStrategy(delegate) {
 
 ### 6.3 装饰顺序与两条路径
 
-**顺序**：`Notifying( Preserving( Recursive ) )`。Notifying 在最外层，它上报的 `eventsRemoved` / `tokensEstimatedSaved` 才是**加了附件清单之后的净效果**；反过来包，UI 报的数字会偏乐观。
+**顺序**：`Notifying( Preserving( Recursive ) )`。
+
+> ⚠️ **本文原先在此断言「反过来包 UI 报的数字会偏乐观」——实施时证伪了。**
+> `eventsRemoved()` 就是 `archivedEvents.size()`（javap -c 实锤），而 `Preserving` 只往
+> `compactedEvents` 里插清单、不动 `archivedEvents`，故**两种包法上报的两个数字完全一样**，
+> 行为上不可区分。仍按上述顺序实现（语义上「最外层报净效果」是对的），但**没有也写不出**
+> 针对该顺序的断言——两种顺序的行为无法区分，硬写只会得到一条不会失败的测试。
+>
+> 一处真实但很小的不准：清单本身约 400 token 的开销未从 `tokensEstimatedSaved` 里扣除，
+> 故上报的节省量偏乐观约 2%（压缩通常节省数万 token）。**有意识不修**——为此编一条
+> 估算路径，代价大于收益。
 
 **两条路径都要接**：`autoStrategy` 包了 `NotifyingCompactionStrategy`，而 `manualStrategy` **刻意不包**（`CodingAgent.runCompaction` 自己上报，包了会重复上报）。保留装饰器必须**分别接进两条策略**——只接自动那条，手动 `/compact` 一按图全丢。这种「两条路径只改了一条」的漏接最难在测试里发现，故两条各配一个用例。
 
