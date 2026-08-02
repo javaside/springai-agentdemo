@@ -38,6 +38,11 @@
   | `assertThat(map).containsEntry(k, v)` | `assertEquals(v, map.get(k))` |
   | `assertThat(x).as("第 %d 次", i)...` | 把描述作为最后一个参数：`assertTrue(x, "第 " + i + " 次")` ← **别把消息丢掉**，循环类断言没有序号极难定位 |
 
+  > **为什么不逐节改写正文**：全文仍有约 117 处 `assertThat`。逐处改要动**已完成任务**的文档、
+  > 还会和在途 agent 抢同一个文件，而收益为零——派发时本来就把该任务的测试代码**内联成 JUnit 版**
+  > 给 agent，它根本读不到这里的旧写法。上表是给「直接读计划书」的人兜底的，不是待办。
+  > 唯一的纪律是：**派发 brief 时必须内联 JUnit 版代码，不要让 agent 回来读本文件的代码块。**
+
 - ⚠️ **构造消息对象只能用 builder，`new` 不行。** 已用 javap 核实 spring-ai-model 2.0.0：
 
   | 想写 | 实际是 | 要写成 |
