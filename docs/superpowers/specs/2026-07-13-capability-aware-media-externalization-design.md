@@ -178,6 +178,16 @@ MCP 同数组的 `text` 块（如「Took a screenshot」）保留。UI 可把引
 - **跨消息重读**：上一回合读的文件到下一回合变引用，要用重读一次（cheap、可命中缓存）；想更顺可加「近 K 次读保留全文」的按新近度分级（接既有 `RecursiveSummarizationCompactionStrategy`）——Path B。
 - **旧坏会话不自愈**、**单回合内预算缺席**、**全局文本上限缺席**：均已知、归 Path B / 备查。
 
+> **§9 的 Path B「视觉真注入」已于 2026-08-02 落地**，见
+> [视觉输入设计](2026-08-02-vision-input-design.md) 与
+> [期 1 实施计划](../plans/2026-08-02-vision-input-phase1.md)。
+> 当时被推迟到 Path B 的「**单回合内预算**」也在那一期补上了——截图循环让它从罕见风险变成了常态
+> （每请求 3 用户图 + 1 工具图 + 6k 视觉 token，每回合累计 12 张·次，单回合上限约 21.6k token）。
+> **artifact GC** 也做了，但**不是本节设想的引用扫描式**，改为 500MB 体积上限按 mtime 淘汰。
+>
+> 仍未做：**旧坏会话自愈**（`LegacySessionMediaSanitizer`）、**按新近度分级保全文**、**全局文本兜底**、
+> **视频投递**（`supportsVideoInput` 保留字段但恒不兑现）、**用户直接贴图**（期 2）。
+
 ## 9. 扩展路线（Path B）
 
 视觉真注入（`canDeliver=true` → vision 分支注入原生 `Media`/image 块，有界视觉 token）、旧会话 `LegacySessionMediaSanitizer`、按新近度分级保全文、artifact GC、单回合预算、全局文本兜底。地基即本设计的 `ModelCapabilities` + `ToolResultMediaHandler` + `MediaArtifactStore` + 两条外置路径。

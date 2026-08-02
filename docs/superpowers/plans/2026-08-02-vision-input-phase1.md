@@ -4,6 +4,36 @@
 
 **Goal:** 让工具产生的图片（MCP 截图、`Read` 一张 png）真正进入支持视觉的模型，且上下文占用与花费有可算的硬上限。
 
+> ## ✅ 期 1 已全部完成（2026-08-02）
+>
+> 13 个任务全部落地。`mvn clean test -pl springai-code-tui` 实测 **Tests run: 1044，Failures: 0**
+> （本期新增 91 个 `@Test`）。
+>
+> ⚠️ **这个 1044 不含打真实网络的那类测试**：`CodingAgentSpikeTest` 整类挂
+> `@EnabledIfEnvironmentVariable(named = "DEEPSEEK_API_KEY")`，本次运行的 shell 里没有该 key，
+> **整类被跳过**——包括那条既有 flaky `todoTurnIdBinding`（打真实 DeepSeek、单轮硬上限 60 秒，
+> 历史实测耗时横跨那条线）。它与本期改动无关，但本次统计**没有覆盖它**，别把 0 failures
+> 读成「那条也修好了」。
+>
+> 同理，Task 0 的真机探针（`57e2117`）默认跳过、不进 CI，那 1044 里也没有它。
+>
+> **期间抓到 5 条「不会失败的测试」，全部已修并做过逐个隔离的变异验证**，其中 3 条源自本计划书
+> 自己的示例代码：
+>
+> | # | 缺陷 | 出处 | 提交 |
+> |---|---|---|---|
+> | 1 | `manualPath_doesNotNotify` 造的 listener 从没被接到任何东西上，`startedReason` 恒为 null——手动路径被包上 `Notifying` 它照样绿 | 实施时新写 | `eddf624` |
+> | 2 | 路径逃逸只测 `../../../etc/passwd`，拼到临时 root 后指向不存在的位置，**靠存在性检查就绿了**，拦不住「包含校验被拆掉」这个变异 | 计划书示例 | `9c2890d`（补 `rejectsExistingFileOutsideRoot`） |
+> | 3 | OOM 防护只看返回值，区分不了「拒在解码前」与「解码完再拒」——而这正是 OOM 与不 OOM 的差别 | 计划书示例 | `7bb10df`（补 `decodeCount` 断言） |
+> | 4 | 缓存命中断言写成值比较，缓存没命中也会过 | 计划书示例（assertj 换算表第 2 条陷阱） | `8871950` |
+> | 5 | `VisionModels.enabled()` 直读 `System.getenv`，进程内无法注入——这个 kill switch **此前零测试覆盖** | 实施时发现 | `f95af0d` / `9c2890d`（抽 `enabledFor` 纯函数） |
+>
+> 另有一条**写不出来的断言**如实记在 `ee558a8`：压缩装饰顺序经 `javap -c` 实锤两种包法行为不可区分，
+> 故没有为它硬写断言——硬写只会得到第 6 条不会失败的测试。
+>
+> 用户可见文档见 [README「视觉输入」](../../../springai-code-tui/README.md#视觉输入图片真正进模型)。
+> **期 2（用户贴图）未做**：输入框不认识图片路径，本期的图只能来自工具。
+
 **Architecture:** 会话存储里永远只有文本引用块；一个 `ChatModel` 装饰器在**出站请求组装的最后一刻**把「当轮」的引用兑现成真 `Media`。因 `ToolResponseMessage` 挂不了 `Media`，工具产图靠**合成一条 user 消息追加在消息列表末尾**投递；该合成消息带 `codetui.synthetic` 元数据自证身份，使回合边界判定不依赖框架内部行为。
 
 **Tech Stack:** Java 17（`maven.compiler.release=17`，**无类型模式 switch、无 record pattern**）、Spring AI 2.0、spring-ai-session-management 0.5.0、Apache Tika（已有）、JDK ImageIO（零新依赖）、JUnit 5。
