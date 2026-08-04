@@ -1,4 +1,4 @@
-# 权限模式交互改造设计（BYPASS 运行期解锁 + 状态栏 notice 降级）
+# 权限模式交互改造设计（四档平权 + 状态栏 notice 降级）
 
 **日期**：2026-08-04
 **模块**：`springai-code-tui`
@@ -50,11 +50,14 @@ if (mode == PermissionMode.BYPASS) {
 内置底线（改 `~/.ssh`、`rm -rf`、凭证文件等）在 BYPASS 下**被跳过**，只由
 `PermissionCallback.onGuardrailBypassed` 在 scrollback 留一行 `⚠ BYPASS 放行：…` 事后记录。
 
-这条陈旧 javadoc 直接误导了本次设计的第一版确认框文案。确认框是整个改动里**唯一**
-一处向用户讲清后果的地方，文案错了门槛就白设了。因此：
+这条陈旧 javadoc 已经误导过一次：本设计第一版据它写的确认框文案，把「内置危险检查仍然生效」
+当成事实告诉用户——而那正好是 BYPASS 下**不**成立的那一半。确认框后来被去掉了（见 §3 决策变更），
+但这条错误 javadoc 还在，下一个读它的人会犯同样的错。
 
-- **本次一并修正 `PermissionMode` 的 javadoc**，使其与 `doDecide` 一致；
-- 确认框文案按真实行为写（见 §4.2）。
+因此本次一并修正 `PermissionMode` 的 javadoc，使其与 `doDecide` 一致：
+BYPASS 下只有 **deny 规则**还拦得住，内置底线被跳过、只留痕。
+（README 对应段落本来就是对的——见「BYPASS 放行 … 下面几步全部跳过」那一行，
+只有枚举的 javadoc 与它相左。）
 
 ---
 
@@ -62,207 +65,142 @@ if (mode == PermissionMode.BYPASS) {
 
 ### 目标
 
-- **G1**：运行期可经 Shift+Tab 进入 BYPASS，无需重启进程。
-- **G2**：进入 BYPASS 前有一次讲清后果的确认，手抖按不进去。
-- **G3**：任何 notice（不只是切模式）都不再遮住状态栏的运行指示。
-- **G4**：修正 `PermissionMode` 关于内置底线的错误 javadoc。
+- **G1**：Shift+Tab **四档平权自由循环**，BYPASS 与其余三档一样，无需重启进程、无需任何解锁动作。
+- **G2**：任何 notice（不只是切模式）都不再遮住状态栏的运行指示。
+- **G3**：修正 `PermissionMode` 关于内置底线的错误 javadoc。
 
 ### 非目标
 
 - **N1**：**不**放开配置文件声明 `defaultMode: "BYPASS"`。
 - **N2**：**不**放开 `--permission-mode bypass`。
-- **N3**：解锁状态**不落盘**，重启回到未解锁。
-- **N4**：不改 `doDecide` 的任何判定语义——BYPASS 该放行什么、该拦什么，一个字不动。
+- **N3**：不改 `doDecide` 的任何判定语义——BYPASS 该放行什么、该拦什么，一个字不动。
+- **N4**：不移除 `--dangerously-skip-permissions`——它继续表示「启动即进 BYPASS」，
+  只是不再是**唯一**入口。无人值守 / 容器里的既有脚本不受影响。
 
-N1/N2 与 G1 不矛盾。今天 `bypassAllowed` 一个字段同时把守三条路，而它们的威胁模型不同：
+### 为什么 N1/N2 与 G1 不矛盾
+
+今天 `bypassAllowed` 一个字段同时把守三条路，而它们的威胁模型不同：
 
 | 路径 | 威胁 | 本次 |
 | --- | --- | --- |
 | `permissions.json` 里 `defaultMode:"BYPASS"` | clone 别人的仓库就把你放成裸奔，用户全程无感 | 继续禁 |
-| `--permission-mode bypass` | 给那道显眼开关配一个不显眼的同义词 | 继续禁 |
-| 运行期用户当面按 Shift+Tab | 用户在场、有意图、看得见后果 | **解开** |
+| `--permission-mode bypass` | 给那道显眼开关配一个不显眼的等价路径 | 继续禁 |
+| 运行期用户当面按 Shift+Tab | 用户在场、有意图、当前档位红色常驻可见 | **解开** |
 
 本次改动就是把这三条被合并成一条的禁令拆开，只解开第三条。
 
----
+### 决策变更记录：为什么没有确认模态
 
-## 4. 议题一：BYPASS 运行期解锁
+本设计的第一版在进入 BYPASS 前插了一个确认模态（「y 确认 · 其它键取消」）。
+写实施计划时发现它有一个硬缺陷：
 
-### 4.1 引擎侧：`bypassAllowed` → `bypassUnlocked`
-
-`PermissionEngine`：
-
-```java
-// 旧：private final boolean bypassAllowed;
-private volatile boolean bypassUnlocked;
+```
+默认 → ⏵⏵ → ⏸ 计划模式 → [确认框] ──取消──→ 回到计划模式
+                                └── y ──→ ⚠ BYPASS → 默认
 ```
 
-**必须 volatile**：UI 线程写（确认框按 y）、工具线程读（`doDecide` 经 `cycleMode`/`setMode`
-的结果间接读，以及 `cycleMode` 自身）。旁边的 `mode` 字段已经是 `volatile`，同一纪律。
+取消不推进循环，于是**离开计划模式的唯一出路是先进 BYPASS**——最安全的一档成了陷阱，
+出口是最危险的一档。对照今天的行为可知这是新造的问题而非继承的：
 
-新增：
+| | 从 PLAN 出去 |
+| --- | --- |
+| 今天 · 带 `--dangerously-skip-permissions` | 按两下：PLAN → ⚠ BYPASS → 默认。能出去 |
+| 今天 · 不带 flag | 按一下：PLAN → 默认。能出去 |
+| 确认模态版（取消 = 留在原档） | 永远出不去 |
+
+补救方案有两个：让取消继续走到 DEFAULT（循环一圈就弹一次框，而 PLAN⇄默认是最高频用法），
+或把解锁挪进 `/permissions` 面板（多一步、且形态上等于换了个显式入口）。
+
+最终采用**第三条路：不要门槛**。理由是用户的原话——
+「现在不就是想取消 `--dangerously-skip-permissions` 这个配置，嫌弃太麻烦了吗」。
+给它配个确认框，等于把甩掉的麻烦换个地方装回来。BYPASS 的持续可见性由既有的红色常驻
+`modeTag`（`⚠ 跳过权限检查`）承担，那本来就是为此加的。
+
+---
+
+## 4. 议题一：四档平权
+
+改动的形状是**删掉一道门禁**，不是加一个新单元。
+
+### 4.1 `PermissionMode.next()` 去掉参数
 
 ```java
 /**
- * 解锁 BYPASS 档（UI 的确认模态按 y）。
+ * 循环到下一个模式（UI 的 Shift+Tab）。四档平权，BYPASS 排在 PLAN 之后。
  *
- * <p><b>只有这一个运行期入口</b>。配置文件的 defaultMode 与 --permission-mode
- * 仍然一律拒绝 BYPASS——那两条路上用户可能全程无感（见 PermissionConfigLoader
- * 类注释「为什么配置文件不能声明 BYPASS」），而这里用户当面看过后果说明才走得到。
- *
- * <p>不落盘、不可撤销（本进程内）：重启即回到未解锁。
+ * <p><b>为什么不带门禁参数</b>：BYPASS 是用户当面按键才进得去的一档，
+ * 且进入后状态栏行首常驻红色 {@code ⚠ 跳过权限检查}。
+ * 启动时能不能进 BYPASS 是<b>启动参数</b>的事（{@code --dangerously-skip-permissions}），
+ * 与运行期循环无关；把两件事塞进同一个布尔，结果是运行期切档也被启动开关卡住。
  */
-public void unlockBypass() {
-    this.bypassUnlocked = true;
+public PermissionMode next() {
+    return switch (this) {
+        case DEFAULT -> ACCEPT_EDITS;
+        case ACCEPT_EDITS -> PLAN;
+        case PLAN -> BYPASS;
+        case BYPASS -> DEFAULT;
+    };
 }
 ```
 
-保留读方法，改名以对齐语义：
+循环顺序**不变**（BYPASS 仍排在 PLAN 之后，与今天带 flag 启动时一致），只是不再有三档形态。
+
+### 4.2 `PermissionEngine` 去掉 `bypassAllowed`
+
+删除字段、删除构造器第 4 个参数、删除两处拒绝分支：
 
 ```java
-public boolean bypassUnlocked() { return bypassUnlocked; }
-```
+// 删除：private final boolean bypassAllowed;
+// 删除：public boolean bypassAllowed() { ... }
 
-（`bypassAllowed()` 这个 getter 今天**一个调用方都没有**——全仓 `grep '\.bypassAllowed()'` 为空。
-改名不会波及任何现有代码；它反而是在本次才第一次真正被用上，由 `CodingAgent.bypassUnlocked()` 转发给 UI。）
+public PermissionEngine(Path root, PermissionConfig config, PermissionMode startupMode) {
+    // ...
+    // 删除：if (start == BYPASS && !bypassAllowed) { 降级 DEFAULT }
+    this.mode = startupMode != null ? startupMode : config.defaultMode();
+}
 
-`setMode` 与 `cycleMode` 的**逻辑一个字不改**，只是字段名换掉：
-
-```java
 public PermissionMode setMode(PermissionMode m) {
     if (m == null) return mode;
-    if (m == PermissionMode.BYPASS && !bypassUnlocked) {
-        log.warn("拒绝切到 BYPASS：本会话尚未解锁（需经确认模态或 --dangerously-skip-permissions）。");
-        return mode;
-    }
+    // 删除：if (m == BYPASS && !bypassAllowed) { WARN; return mode; }
     this.mode = m;
     return m;
 }
 
 public PermissionMode cycleMode() {
-    PermissionMode next = mode.next(bypassUnlocked);
+    PermissionMode next = mode.next();
     this.mode = next;
     return next;
 }
 ```
 
-构造器参数 `bypassAllowed` 更名为 `bypassUnlocked`，语义不变：
-`--dangerously-skip-permissions` 启动 = 出生即解锁，永不弹框。
-构造器里「启动模式 BYPASS 未获授权则降级 DEFAULT」的逻辑保持。
+**构造器降级分支为什么能删**：它唯一的作用是「未授权时把 BYPASS 启动模式降成 DEFAULT」。
+启动模式来自 `CodeTuiApplication.startMode`，而那里只有 `--dangerously-skip-permissions`
+这一条路能产出 BYPASS（配置层与 `--permission-mode` 都仍然拒绝，见 §4.3）。
+于是这个分支在本次改动后**永远不会命中**——留着就是一段假装还在守什么的死代码。
 
-`PermissionMode.next(boolean)` 的参数与 javadoc 同步更名（`bypassAllowed` → `bypassUnlocked`），
-`next` 的分支逻辑不变。
+**并发**：`mode` 已是 `volatile`，不变。删掉的是一个 final 字段，不引入新的可变共享状态。
 
-### 4.2 UI 侧：确认模态
+### 4.3 两条禁令原样保留
 
-`CodeTuiView` 新增一个字段与一组方法，与既有的 `pickingPerms` / `pickingTasks` 同构：
+以下代码**一个字不动**，并各配一条回归测试钉住：
 
-```java
-private boolean confirmingBypass;   // BYPASS 解锁确认模态是否在前台
-```
+- `PermissionConfigLoader` 丢弃两层配置里的 `defaultMode: "BYPASS"` 并记 WARN；
+- `CodeTuiApplication.startupMode` 对 `--permission-mode bypass` 返回 `null` 并记 WARN。
 
-**面板内容**（`bypassConfirmChildren()`，首行判空——`scope` 每帧 eager 求值）：
+它们守的是「用户全程无感就被放成裸奔」，与运行期当面按键是两个威胁模型（见 §3 表）。
+拆禁令时最容易顺手拆过头的就是这两处，所以钉子必须先于删改写好。
 
-```
-┌─ ⚠ 切到「跳过权限检查」 ──────────────────────┐
-│                                              │
-│  此后除你自己写的 deny 规则外，全部工具调用  │
-│  不再询问——写文件、执行命令、删除都直接跑。 │
-│                                              │
-│  内置危险检查（~/.ssh、rm -rf、凭证文件…）   │
-│  也会被跳过，只在事后留一行记录。            │
-│                                              │
-│  当前目录：<项目根绝对路径>                  │
-│                                              │
-│  y 确认进入 · 其它任意键取消（留在<当前档>） │
-└──────────────────────────────────────────────┘
-```
+### 4.4 `--dangerously-skip-permissions` 保留
 
-「当前目录」不是装饰：BYPASS 的杀伤范围由工作目录界定，这是用户唯一能当场核对
-「我是不是在错的仓库里裸奔」的信息。取自 `PermissionEngine.root()`，经 `SubmitHandler` 暴露。
+语义从「唯一能进 BYPASS 的入口」变成「启动即进 BYPASS」。启动横幅照打。
+`CodeTuiApplication` 里 `skipPermissions` 变量只剩这一个用途：决定 `startMode`。
+它不再需要传给 `PermissionEngine`。
 
-**注册进 render()**，位置在 `activePlan` 面板之后、斜杠菜单之前：
+### 4.5 `SubmitHandler` / `CodingAgent` 不变
 
-```java
-scope(confirmingBypass, bypassConfirmChildren()),
-```
-
-### 4.3 按键路由
-
-`onInputKey` 里，确认模态的分派**必须排在 Shift+Tab 分支之前**——否则确认框开着时
-按 Shift+Tab 会漏到下面的循环分支去，一边问着「要不要进」一边把模式切走了。
-
-```java
-if (!state.notice().isEmpty()) state.setNotice("");     // 既有：任意键清 notice
-if (confirmingBypass) return onBypassConfirmKey(k);     // 新增：早于 Shift+Tab
-if (k.code() == KeyCode.TAB && k.hasShift()) { ... }    // 既有：模式循环
-```
-
-Shift+Tab 分支改为：
-
-```java
-if (k.code() == KeyCode.TAB && k.hasShift()) {
-    // 问枚举「下一档是不是 BYPASS」，不在 UI 里写死循环顺序——
-    // 顺序改了这里不用跟着改，改漏了才是静默错档。
-    boolean wantsBypass = onSubmit.permissionMode().next(true) == PermissionMode.BYPASS;
-    if (wantsBypass && !onSubmit.bypassUnlocked()) {
-        if (modalActive()) {
-            // 模态在前台：不开确认框，模式不动，只解释。
-            state.setNotice("先处理完当前审批，再切「跳过权限检查」");
-        } else {
-            confirmingBypass = true;    // 模式不动，等确认
-        }
-        return EventResult.HANDLED;
-    }
-    state.setNotice("已切到 " + onSubmit.cyclePermissionMode().label());
-    return EventResult.HANDLED;
-}
-```
-
-其中 `modalActive()` 为 `activePermission != null || activePlan != null || activeAsk != null`
-（与 `permsPanelChildren` / `tasksPanelChildren` 里既有的同一组判空口径一致，抽成方法复用）。
-
-**为什么模态在前台时拒绝而不是排队**：那些模态背后 park 着工具线程，`y` 在权限审批面板里
-本身就是有效键；更要命的是语义——在「正等你批准这次调用」的时刻问「要不要从此不再问」，
-用户没法确定当前这次算不算被一并放行了。
-
-### 4.4 确认模态的按键
-
-```java
-private EventResult onBypassConfirmKey(KeyEvent k) {
-    confirmingBypass = false;
-    if (k.isChar('y') || k.isChar('Y')) {
-        onSubmit.unlockBypass();
-        state.setNotice("已切到 " + onSubmit.cyclePermissionMode().label());
-    } else {
-        // 取消 = 留在原档，不动模式。
-        state.setNotice("已取消，仍在 " + onSubmit.permissionMode().label());
-    }
-    return EventResult.HANDLED;
-}
-```
-
-**取消为什么留在原档而不是走到 DEFAULT**：未解锁时今天的循环是 `PLAN → DEFAULT`，
-沿用它意味着「用户看完危险后果说算了，系统回他一个**更宽松**的档」。取消一个危险动作
-不该让权限放宽。代价是未解锁时想从 PLAN 出去得先看一次框再取消——多一次按键，
-换掉一次静默放宽。
-
-### 4.5 `SubmitHandler` 接口增量
-
-```java
-/** BYPASS 档本会话是否已解锁（未解锁时 Shift+Tab 循环不含它，UI 据此决定弹不弹确认）。 */
-default boolean bypassUnlocked() { return false; }
-
-/** 解锁 BYPASS 档（确认模态按 y）。默认空实现，便于回显桩/测试桩省略。 */
-default void unlockBypass() { }
-
-/** 权限判定的工作目录（确认模态展示，让用户当场核对裸奔范围）。 */
-default String permissionRoot() { return ""; }
-```
-
-`CodingAgent` 三个方法均委托 `permissionEngine`，`permissionEngine == null` 时分别退回
-`false` / 空操作 / `""`——与既有 `permissionMode()` 的降级纪律一致（桩缺引擎不该让 UI 崩，
-且退回值都是最严的那一侧）。
+不新增任何接口方法。UI 侧 Shift+Tab 分支也**不改**——它本来就是
+`state.setNotice("…" + onSubmit.cyclePermissionMode().label())`，四档循环是引擎侧的事。
+（唯一的改动是 notice 文案，属议题二，见 §5.3。）
 
 ---
 
@@ -325,28 +263,38 @@ IDLE 分支不动（notice 非空且 idle 时已在上面独占返回；idle 且
 
 ---
 
+
 ## 6. 改动清单
+
+### 生产代码
 
 | 文件 | 改动 |
 | --- | --- |
-| `agent/permission/PermissionMode.java` | 修正 BYPASS 的错误 javadoc（§2）；`next` 参数更名 `bypassAllowed` → `bypassUnlocked` |
-| `agent/permission/PermissionEngine.java` | `final boolean bypassAllowed` → `volatile boolean bypassUnlocked`；新增 `unlockBypass()`；`bypassAllowed()` → `bypassUnlocked()`；`setMode`/`cycleMode` 逻辑不变 |
-| `agent/SubmitHandler.java` | 新增 `bypassUnlocked()` / `unlockBypass()` / `permissionRoot()` 三个 default 方法 |
-| `agent/CodingAgent.java` | 三个新方法委托引擎，`null` 引擎降级 |
-| `ui/CodeTuiView.java` | `confirmingBypass` 字段 + `bypassConfirmChildren()` + `onBypassConfirmKey()` + `modalActive()`；Shift+Tab 分支改写；`drain` 里模态上前台时清确认框；`statusLine()` notice 降级 |
-| `CodeTuiApplication.java` | 只跟 `PermissionEngine` 构造参数更名，行为不变 |
-| `springai-code-tui/README.md` | 权限章节：BYPASS 的进入方式与内置底线的真实行为 |
+| `agent/permission/PermissionMode.java` | 修正 BYPASS 的错误 javadoc（§2）；`next(boolean)` → `next()`，四档恒定 |
+| `agent/permission/PermissionEngine.java` | 删 `bypassAllowed` 字段、构造器第 4 参、`bypassAllowed()` getter、构造器降级分支、`setMode` 的拒绝分支 |
+| `agent/AgentTools.java:567` | 隔离引擎构造少传一个 `false` |
+| `CodeTuiApplication.java:83` | 构造少传 `skipPermissions`；`skipPermissions` 只剩决定 `startMode` 一个用途 |
+| `ui/CodeTuiView.java` | `statusLine()` 的 notice 降级（§5.2）；Shift+Tab 分支的 notice 文案（§5.3） |
+| `springai-code-tui/README.md` | 权限章节（§10） |
 
-无新增生产文件。改动集中在既有单元内部，接口只增不改。
+**无新增文件、无新增接口方法。** 净删除多于净新增。
 
-**现有测试的连带更名**（都是局部名，不是行为改动）：
+### 编译期必然暴露的连带更新
 
-- `PermissionStartupTest` 的辅助方法参数 `bypassAllowed`
-- `CodeTuiViewModeIndicatorTest` 里模拟启动开关的桩字段 `bypassAllowed`
-- `PermissionTestSupport` 里解释「为什么传 true」的那段注释
+这两处改签名，漏改就是编译错误——不存在静默漏网：
 
-这些改名不该让任何断言变绿或变红——若某条测试因更名而行为改变，说明它依赖的是名字之外的东西，
-停下来查清楚再动。
+| 签名 | 调用点 |
+| --- | --- |
+| `PermissionMode.next(boolean)` → `next()` | 1 处生产（`PermissionEngine.cycleMode`）+ 10 处测试 |
+| `PermissionEngine` 构造器去掉第 4 参 | 2 处生产 + 18 处测试 |
+
+测试侧多数只是删一个 `true` / `false` 实参。三处需要**改断言**：
+
+- `PermissionModeTest.cyclesThreeWithoutBypass` —— 三档循环的断言不再成立，改写为四档；
+- `CodeTuiViewPermissionModeTest.shiftTabThriceReturnsToDefault` —— 连按三次到的是 BYPASS 不是 DEFAULT，
+  改为连按四次回默认；
+- `CodeTuiViewModeIndicatorTest` —— 桩字段 `bypassAllowed` 删除；
+  断言里的 `"权限模式：自动接受编辑"` 随 §5.3 改为 `"已切到 自动接受编辑"`。
 
 ---
 
@@ -354,31 +302,30 @@ IDLE 分支不动（notice 非空且 idle 时已在上面独占返回；idle 且
 
 | 情形 | 行为 | 理由 |
 | --- | --- | --- |
-| 已解锁后再按 Shift+Tab | 四档正常循环，不再弹框 | 解锁是一次性的 |
-| `--dangerously-skip-permissions` 启动 | 出生即解锁，从 PLAN 一按直接进 BYPASS，全程无框 | 命令行本身已是显式意图 |
-| 确认框开着时到达一个工具审批请求 | **清掉确认框**（`confirmingBypass = false`），模式不动，审批面板接管 | 审批背后 park 着工具线程，优先级更高；两个面板并存会让 `y` 键归属不明。在 `drain` 里模态上前台的那一处清 |
-| 有审批/计划/作答模态在前台时按 Shift+Tab 想进 BYPASS | 不开框，模式不动，notice 解释 | §4.3 |
-| 有模态在前台时按 Shift+Tab 切**其它**档 | 照常切（既有行为，不变） | 模式只影响后续判定，不动 pending 请求 |
-| 确认框开着时按 Ctrl+C | 照常退出（`isCtrlC()` 在 `onInputKey` 最顶） | 退出永远最优先 |
-| 解锁后执行 `/clear` | **仍然解锁**，模式也不动 | 解锁是进程级；`/clear` 换的是会话不是权限态 |
-| 确认框开着时想敲 `/clear` | 敲不出来——第一个字符被确认框吃掉并当作「取消」 | 模态的定义就是接管全部按键；取消后再敲即可 |
-| 运行期切到 BYPASS 时有后台子 agent 在飞 | 立刻对它们生效（后续工具调用不再被 ASK→DENY 挡） | 模式是进程全局的；这是预期而非缺陷 |
-| notice 为空 | `ns` 为空串，不产生悬空的 ` · ` | 见 §5.2 |
-| `unlockBypass()` 重复调用 | 幂等 | 单向布尔 |
+| 从 PLAN 按一下 Shift+Tab | 进 ⚠ BYPASS（不再是 DEFAULT） | 四档平权；与今天带 flag 启动时完全一致 |
+| 从 PLAN 回到默认 | 按两下（PLAN → ⚠ → 默认） | 同上。**这是本次唯一的行为回退点**：不带 flag 时今天只需一下 |
+| 有审批/计划/作答模态在前台时按 Shift+Tab | 照常切档（既有行为，不变） | 模式只影响后续判定，不动任何 pending 请求 |
+| 运行期切到 BYPASS 时有后台子 agent 在飞 | 立刻对它们生效（后续调用不再被 ASK→DENY 挡） | 模式是进程全局的；预期行为 |
+| 运行期切到 BYPASS 时有审批面板正等着 | 那个 pending 请求**照旧等人应答**，不被追认放行 | 请求早已决策完毕并 park 在队列上，模式只管下一次判定 |
+| `--dangerously-skip-permissions` 启动 | 起始档 BYPASS，横幅照打 | §4.4 |
+| `permissions.json` 声明 `defaultMode:"BYPASS"` | 丢弃 + WARN（不变） | §4.3 |
+| `--permission-mode bypass` | 拒绝 + WARN（不变） | §4.3 |
+| notice 为空 | `ns` 为空串，不产生悬空的 ` · ` | §5.2 |
+
+「从 PLAN 回到默认要按两下」是这次唯一会让老用户手感变化的地方。它是四档平权的直接推论，
+且与带 flag 启动时的既有手感一致，故接受。
 
 ---
 
 ## 8. 错误处理
 
-这个改动没有 IO、没有网络、没有并发任务，错误面很窄：
+本改动没有 IO、没有网络、没有新增并发状态，错误面只有一处：
 
-- **`permissionEngine == null`（测试桩路径）**：`bypassUnlocked()` 退 `false`、
-  `unlockBypass()` 空操作、`permissionRoot()` 退空串。三个退回值都倒向「更严」那一侧，
-  且都不让 UI 渲染崩——与既有 `permissionMode()` 退 `DEFAULT` 同纪律。
-- **`permissionRoot()` 为空串时的确认框**：省掉「当前目录」那一行，其余照渲染。
-  一个测试桩缺目录不该让确认框整个消失（那会让最危险的一档反而没了门槛）。
-- **未解锁时被绕过的尝试**：`setMode(BYPASS)` 与 `cycleMode()` 各自记 WARN 后返回原档，
-  不抛异常——它们是 UI 反复调用的路径，抛异常等于让一次误按崩掉整个 TUI。
+- **`setMode(null)`**：保持既有的「返回当前档、不改状态」，不抛。它是 UI 反复调用的路径，
+  抛异常等于让一次误按崩掉整个 TUI。
+
+删掉的两处 `log.warn`（拒绝进 BYPASS）随分支一起消失——它们描述的情况不再存在，
+留着会在日志里制造「系统还在拦什么」的错觉。
 
 ---
 
@@ -387,98 +334,90 @@ IDLE 分支不动（notice 非空且 idle 时已在上面独占返回；idle 且
 命令一律带模块作用域：`mvn test -pl springai-code-tui -Dtest='...'`。
 （整仓 `-Dtest` 会被三个空模块打挂。）
 
-### 9.1 引擎层（`PermissionStartupTest` 或新建同级测试）
+### 9.1 四档循环
 
 | 断言 | 要杀掉的变异 |
 | --- | --- |
-| 未解锁时 `setMode(BYPASS)` 返回原档、`mode()` 未变 | 把解锁默认改成 `true` |
-| 未解锁时 `cycleMode()` 从 PLAN 走到 DEFAULT（不含 BYPASS） | `next(true)` 写死 |
-| `unlockBypass()` 后 `setMode(BYPASS)` 生效 | 解锁不落到字段 |
-| `unlockBypass()` 后 `cycleMode()` 从 PLAN 走到 BYPASS | `cycleMode` 仍读死值 |
-| 构造时传 `bypassUnlocked=true` 即可直接进 | 构造参数没接上 |
+| `DEFAULT.next()` == `ACCEPT_EDITS`、`ACCEPT_EDITS.next()` == `PLAN`、`PLAN.next()` == `BYPASS`、`BYPASS.next()` == `DEFAULT` | 顺序写错、某档自环 |
+| 从 DEFAULT 连调四次 `next()` 回到 DEFAULT，且四次结果互不相同 | 漏掉一档导致三档循环 |
+| `engine.cycleMode()` 连调四次走遍四档 | 引擎没接上新的 `next()` |
+| `engine.setMode(BYPASS)` 直接生效，`mode()` == `BYPASS` | 拒绝分支没删干净 |
+| 构造 `new PermissionEngine(root, empty, BYPASS)` 后 `mode()` == `BYPASS`（不降级） | 构造器降级分支没删 |
 
-### 9.2 禁令回归钉（防止拆禁令时拆过头）
+### 9.2 禁令回归钉（防止拆过头）
 
-| 断言 | 位置 |
-| --- | --- |
-| `PermissionConfigLoader` 仍丢弃 `defaultMode:"BYPASS"`（两层皆然） | 既有测试若已覆盖则确认其仍绿，未覆盖则补 |
-| `CodeTuiApplication.startupMode("--permission-mode bypass")` 仍返回 `null` | 既有测试同上 |
-
-这两条不是新功能的测试，是**护栏**：它们钉住「解开的只有运行期这一条路」。
-
-### 9.3 UI 层（`CodeTuiViewModeIndicatorTest` 及新建测试）
+**这两条必须先写、先跑绿，再动 §4.2 的删除**——它们是本次唯一还在守东西的地方：
 
 | 断言 | 要杀掉的变异 |
 | --- | --- |
-| PLAN + 未解锁 + Shift+Tab → `confirmingBypass == true` **且模式仍是 PLAN** | 弹框的同时已经切过去了 |
-| 确认框中按 `y` → 解锁被调用、模式变为 BYPASS、`confirmingBypass == false` | 只解锁不切档 |
-| 确认框中按任意其它键 → 模式**仍是 PLAN**、`confirmingBypass == false` | 取消后退回 DEFAULT（放宽） |
-| 确认框开着时按 Shift+Tab → 被确认框当作取消，**没有**发生模式循环 | 路由顺序写反 |
-| `activePermission != null` 时 Shift+Tab 想进 BYPASS → 不开框、模式不动 | 模态叠模态 |
-| `activePermission != null` 时 Shift+Tab 从 DEFAULT 切 ACCEPT_EDITS → 照常切 | 把拒绝写宽了，连普通切档也拦 |
-| 已解锁后 Shift+Tab 到 BYPASS → 不开框，直接切 | 每次都弹（用户选的是「记住」） |
-| 确认框开着时模态请求上前台 → `confirmingBypass` 被清 | 两个面板并存 |
-| `permissionRoot()` 返回空串 → 确认框仍渲染出来（少一行） | 空目录让框整个消失 |
+| 用户层与项目层配置里的 `defaultMode:"BYPASS"` 均被丢弃，引擎起始档不是 BYPASS | 拆禁令时把 `PermissionConfigLoader` 的检查一起删了 |
+| `CodeTuiApplication.startupMode(new String[]{"--permission-mode","bypass"})` 返回 `null` | 同上，删了 CLI 侧的检查 |
+| `startupMode(new String[]{"--permission-mode","plan"})` 仍返回 `PLAN` | 上一条写成「一律返回 null」的假绿 |
 
-### 9.4 状态栏（离屏 Buffer 渲染）
+最后一条是**反向断言的配套**：只断言「bypass 被拒」，一个把整个方法改成 `return null`
+的变异也能让它通过。必须有一条正向用例证明这个方法还在正常工作。
 
-用 `Frame.forTesting` + 反射 `markAsRenderThread` 渲染进离屏 Buffer 后**读回屏幕文本**，
-不是断言 `statusLine()` 的返回对象——后者测不到 shimmer 有没有把 suffix 真的拼进去。
+### 9.3 状态栏（离屏 Buffer 渲染）
+
+用 `ViewScreen.of(view)` 渲染进离屏 Buffer 后**读回屏幕文本**，不是断言 `statusLine()`
+的返回对象——后者测不到 shimmer 有没有把 suffix 真的拼进去。
 
 | 断言 | 要杀掉的变异 |
 | --- | --- |
-| THINKING + 非空 notice → 屏幕文本**同时**含「思考中」和 notice 文字 | 恢复 notice 独占 |
-| RUNNING_TOOL + 非空 notice → 同时含工具名和 notice 文字 | 只改了 THINKING 分支 |
-| IDLE + 非空 notice → 独占整行，**不**含模型名 | 把独占也一并删了 |
-| draining + 非空 notice → 同时含收尾提示和 notice | 漏掉 draining 分支 |
-| 空 notice → 屏幕上没有悬空的 ` · ·` | `ns` 拼接没判空 |
+| THINKING + 非空 notice → 屏幕**同时**含「思考中」与 notice 文字 | 恢复 notice 独占 |
+| RUNNING_TOOL + 非空 notice → 同时含工具名与 notice 文字 | 只改了 THINKING 分支 |
+| IDLE + 非空 notice → 独占整行，**不**含当前模型名 | 把独占也一并删了 |
+| 空 notice + THINKING → 屏幕上没有 ` ·  · ` 这样的空段 | `ns` 拼接没判空 |
 
-### 9.5 pty 冒烟（`src/test/resources/scripts/`）
+驱动状态用 `state.onTurnStarted(1L)`（→ THINKING）与
+`state.onToolStarted(1L, "Bash", "{\"command\":\"npm test\"}")`（→ RUNNING_TOOL）。
 
-必须实机跑，两幕：
+### 9.4 pty 冒烟
 
-1. **解锁流程**：连按 Shift+Tab，第三下屏幕上出现确认框（读到「跳过权限检查」与
-   「y 确认进入」字样）；按 `y` 后行首出现 `⚠`；再按 Shift+Tab 一圈能回到 `⚠`。
-2. **运行中切档**：起一个会跑一会儿的回合，运行中按 Shift+Tab，读**当前帧**，
-   断言同一屏里既有转轮标签（`思考中` 或 `运行 `）又有新模式标识。
+`src/test/resources/scripts/permission_smoke.py` 需**更新**（不是新增）：
 
-**第二幕的断言必须读当前帧，不能用 `wait_for` 子串**——历史 scrollback 里会有旧的
-模式行，子串匹配会假绿（见 `pty wait_for 会命中陈旧 scrollback` 的既有教训）。
-窗口须先 `ioctl TIOCSWINSZ` 且 `TERM=xterm-256color`，否则渲染全空白。
+1. `MODE_DEFAULT` / `MODE_ACCEPT` / `MODE_PLAN` 三个常量的文案随 §5.3 改为「已切到 …」，
+   并新增 `MODE_BYPASS = "已切到 跳过权限检查"`。
+2. 全部 `PLAN → DEFAULT` 的一键跳转（约 10 处）改为两键，中间经过 BYPASS。
+3. 新增一幕：**运行中切档**——起一个会跑一会儿的回合，运行中按 Shift+Tab，
+   读**当前帧**，断言同一屏里既有转轮标签（`思考中` 或 `运行 `）又有新模式标识。
+
+第 3 幕的断言**必须读当前帧，不能用 `wait_for` 子串**：历史 scrollback 里会有旧的模式行，
+子串匹配会假绿。窗口须先 `ioctl TIOCSWINSZ` 且 `TERM=xterm-256color`，否则渲染全空白。
 
 ---
 
 ## 10. 文档更新
 
-`springai-code-tui/README.md` 的权限章节今天有两处会因本次改动而失真：
+`README.md` 需改的位置及改法：
 
-1. 「仅 `--dangerously-skip-permissions` 启动可进 BYPASS」——改为「Shift+Tab 循环到该档时
-   经一次确认即可进入；`--dangerously-skip-permissions` 启动则免确认。解锁不跨进程。」
-2. 若 README 沿用了 `PermissionMode` 那句错的「内置危险检查仍然生效」，一并按 §2 改对，
-   并说明 BYPASS 下内置底线只留痕不拦截。
+| 位置 | 现状 | 改为 |
+| --- | --- | --- |
+| 特性列表 | 「`Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式」三档间循环」 | 四档，含「跳过权限检查」 |
+| 权限模式表下方 | 「**BYPASS 只能由 `--dangerously-skip-permissions` 启动进入**，键盘和配置文件都进不去」 | 「`Shift+Tab` 四档循环，BYPASS 也在其中；**配置文件仍进不去**（clone 的仓库不该让你启动即裸奔）。`--dangerously-skip-permissions` 表示启动即进该档」 |
+| `--permission-mode` 段 | 「全放行只能由 `--dangerously-skip-permissions` 进，否则那道启动开关就等于有了第二个入口」 | 「不接受 `bypass`——`--dangerously-skip-permissions` 已经是启动进该档的写法，不再设第二条等价路径」 |
+| 快捷键表 | 「循环权限模式（默认 → 自动接受编辑 → 计划模式 → 默认）」 | 四档 |
 
-`--dangerously-skip-permissions` 与 `--permission-mode` 的说明保持——两个启动参数都还在，
-语义也没变。
+`--dangerously-skip-permissions` 关于「真的跳过全部检查」的那几段**不改**——那些描述的是
+BYPASS 档的判定语义，本次一个字没动（§3 N3）。
 
 ---
 
 ## 11. 验收标准
 
-1. 不带任何权限参数启动，连按 Shift+Tab 能走到确认框，按 `y` 后状态栏行首出现红色 `⚠ 跳过权限检查`。
-2. 同一进程内此后 Shift+Tab 四档自由循环，不再弹框。
-3. 退出重启后，Shift+Tab 又会在 BYPASS 位弹框。
-4. 确认框按非 `y` 键取消后，模式**仍是计划模式**（不是默认）。
-5. 有工具审批面板在前台时按 Shift+Tab 想进 BYPASS，不弹框、模式不动、有一句解释。
-6. `permissions.json` 写 `defaultMode: "BYPASS"` 仍被忽略并记 WARN。
-7. `--permission-mode bypass` 仍被拒绝并记 WARN。
-8. 回合运行中按 Shift+Tab，波光转轮**不消失**，切换反馈出现在右侧后缀。
-9. `mvn test -pl springai-code-tui` 全绿。
-10. 两幕 pty 冒烟通过。
+1. 不带任何权限参数启动，连按 Shift+Tab 三下进入 BYPASS，状态栏行首出现红色 `⚠ 跳过权限检查`。
+2. 第四下回到默认，标识消失。
+3. `permissions.json` 写 `defaultMode: "BYPASS"` 仍被忽略并记 WARN。
+4. `--permission-mode bypass` 仍被拒绝并记 WARN；`--permission-mode plan` 仍正常生效。
+5. `--dangerously-skip-permissions` 启动仍直接进 BYPASS 并打横幅。
+6. 回合运行中按 Shift+Tab，波光转轮**不消失**，切换反馈出现在右侧后缀。
+7. `PermissionMode` 的 javadoc 不再宣称 BYPASS 下内置危险检查仍然生效。
+8. `mvn test -pl springai-code-tui` 全绿。
+9. `permission_smoke.py` 通过（含新增的「运行中切档」一幕）。
 
 **不在验收范围内**：
 
-- BYPASS 判定语义本身（§3 N4），本次一行没动。
+- BYPASS 的判定语义本身（§3 N3），本次一行没动。
 - **空闲态 notice 仍会独占整行**，从而暂时盖住「⏱ N 个后台任务 · /tasks」与「有结果待处理」
-  那两个后缀。这是同一类缺陷，但空闲态下「是不是还在跑」不存在歧义（用户面前就是输入框），
-  且 notice 在下一次按键即被清掉。刻意留着，不在本次扩大范围——记在这里是为了它别成为静默的漏。
-
+  两个后缀。同一类缺陷，但空闲态下「是不是还在跑」不存在歧义（用户面前就是输入框），
+  且 notice 在下一次按键即被清掉。刻意留着，记在这里是为了它别成为静默的漏。
