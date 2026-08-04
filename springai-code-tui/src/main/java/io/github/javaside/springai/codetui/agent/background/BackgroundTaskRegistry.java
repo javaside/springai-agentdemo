@@ -29,15 +29,9 @@ public final class BackgroundTaskRegistry {
     private final Supplier<Long> clock;
 
     public BackgroundTaskRegistry(int capacity) {
-        this(capacity, () -> "task_" + UUID.randomUUID().toString().substring(0, 8),
-                System::currentTimeMillis);
-    }
-
-    /** 测试用：可注入确定性的 id 与时钟。 */
-    BackgroundTaskRegistry(int capacity, Supplier<String> idSupplier, Supplier<Long> clock) {
         this.capacity = Math.max(1, capacity);
-        this.idSupplier = idSupplier;
-        this.clock = clock;
+        this.idSupplier = () -> "task_" + UUID.randomUUID().toString().substring(0, 8);
+        this.clock = System::currentTimeMillis;
     }
 
     /** 登记一个新任务（RUNNING），返回 taskId。超容量时先淘汰最旧的已完成任务。 */
@@ -53,12 +47,6 @@ public final class BackgroundTaskRegistry {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return;
         t.finish(ok ? BackgroundTask.Status.DONE : BackgroundTask.Status.FAILED, result, clock.get());
-    }
-
-    /** 更新"当前正在跑的工具"（供 ⏱ 面板显示）。未知 id 静默忽略。 */
-    public synchronized void updateCurrentTool(String taskId, String toolName) {
-        BackgroundTask t = tasks.get(taskId);
-        if (t != null && !t.finished()) t.setCurrentTool(toolName);
     }
 
     /** 终止一个运行中的任务（标记 KILLED）。返回是否真的改变了状态——已结束的返回 false。 */

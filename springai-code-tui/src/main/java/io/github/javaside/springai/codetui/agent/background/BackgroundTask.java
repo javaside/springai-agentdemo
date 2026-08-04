@@ -3,7 +3,7 @@ package io.github.javaside.springai.codetui.agent.background;
 /**
  * 一个后台子 agent 任务的身份 + 可变状态。
  *
- * <p><b>刻意不是 record</b>：status / result / currentTool 都要就地更新，而 taskId 等身份字段不变。
+ * <p><b>刻意不是 record</b>：status / result 都要就地更新，而 taskId 等身份字段不变。
  * 用可变类比"每次改都造一个新 record"更贴合它的用法——注册表按 taskId 索引，
  * 换对象等于每次更新都要替换 map 里的值。
  *
@@ -26,7 +26,6 @@ public final class BackgroundTask {
     private Status status = Status.RUNNING;
     private long finishedAt;
     private String result = "";
-    private String currentTool = "";
     private boolean consumed;
 
     BackgroundTask(String taskId, String agentName, String description, long startedAt) {
@@ -43,7 +42,6 @@ public final class BackgroundTask {
     public Status status() { return status; }
     public long finishedAt() { return finishedAt; }
     public String result() { return result; }
-    public String currentTool() { return currentTool; }
     public boolean consumed() { return consumed; }
 
     /** 是否已结束（不再运行）。KILLED 也算结束。 */
@@ -56,10 +54,7 @@ public final class BackgroundTask {
         this.status = newStatus;
         this.result = result == null ? "" : result;
         this.finishedAt = at;
-        this.currentTool = "";
     }
-
-    void setCurrentTool(String tool) { this.currentTool = tool == null ? "" : tool; }
 
     void setConsumed() { this.consumed = true; }
 
