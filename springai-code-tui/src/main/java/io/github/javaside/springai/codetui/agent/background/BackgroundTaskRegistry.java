@@ -26,19 +26,17 @@ public final class BackgroundTaskRegistry {
     private final Map<String, BackgroundTask> tasks = new LinkedHashMap<>();
     private final int capacity;
     private final Supplier<String> idSupplier;
-    private final Supplier<Long> clock;
 
     public BackgroundTaskRegistry(int capacity) {
         this.capacity = Math.max(1, capacity);
         this.idSupplier = () -> "task_" + UUID.randomUUID().toString().substring(0, 8);
-        this.clock = System::currentTimeMillis;
     }
 
     /** 登记一个新任务（RUNNING），返回 taskId。超容量时先淘汰最旧的已完成任务。 */
     public synchronized String register(String agentName, String description) {
         evictIfNeeded();
         String id = idSupplier.get();
-        tasks.put(id, new BackgroundTask(id, agentName, description, clock.get()));
+        tasks.put(id, new BackgroundTask(id, agentName, description));
         return id;
     }
 
@@ -46,14 +44,14 @@ public final class BackgroundTaskRegistry {
     public synchronized void complete(String taskId, String result, boolean ok) {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return;
-        t.finish(ok ? BackgroundTask.Status.DONE : BackgroundTask.Status.FAILED, result, clock.get());
+        t.finish(ok ? BackgroundTask.Status.DONE : BackgroundTask.Status.FAILED, result);
     }
 
     /** 终止一个运行中的任务（标记 KILLED）。返回是否真的改变了状态——已结束的返回 false。 */
     public synchronized boolean kill(String taskId) {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return false;
-        t.finish(BackgroundTask.Status.KILLED, "已被用户终止", clock.get());
+        t.finish(BackgroundTask.Status.KILLED, "已被用户终止");
         return true;
     }
 
@@ -61,7 +59,7 @@ public final class BackgroundTaskRegistry {
     public synchronized void killAll() {
         for (BackgroundTask t : tasks.values()) {
             if (!t.finished()) {
-                t.finish(BackgroundTask.Status.KILLED, "已被用户终止", clock.get());
+                t.finish(BackgroundTask.Status.KILLED, "已被用户终止");
             }
         }
     }

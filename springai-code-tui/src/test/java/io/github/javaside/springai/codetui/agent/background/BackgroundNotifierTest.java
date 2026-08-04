@@ -11,14 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BackgroundNotifierTest {
 
     private static BackgroundTask done(String id, String agent, String desc, String result) {
-        BackgroundTask t = new BackgroundTask(id, agent, desc, 0L);
-        t.finish(BackgroundTask.Status.DONE, result, 1000L);
+        BackgroundTask t = new BackgroundTask(id, agent, desc);
+        t.finish(BackgroundTask.Status.DONE, result);
         return t;
     }
 
     private static BackgroundTask failed(String id, String agent, String desc, String why) {
-        BackgroundTask t = new BackgroundTask(id, agent, desc, 0L);
-        t.finish(BackgroundTask.Status.FAILED, why, 1000L);
+        BackgroundTask t = new BackgroundTask(id, agent, desc);
+        t.finish(BackgroundTask.Status.FAILED, why);
         return t;
     }
 
