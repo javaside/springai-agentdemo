@@ -517,11 +517,20 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
-     * 终止全部后台任务（/clear 与退出）。
+     * 终止全部后台任务（{@code /clear} 与退出共用这一个入口）。
      *
      * <p><b>两件事都得做</b>：{@code killAll()} 只改注册表里的状态，线程池里的任务照样在跑；
-     * {@code shutdownBackground()} 才是真正把它们停下来（有界 2s，不卡退出）。只做前者的话
-     * 面板上显示"已终止"而 CPU 上还在烧。
+     * {@code restartBackground()} 才是真正把它们打断。只做前者的话面板上显示"已终止"而 CPU 上还在烧。
+     *
+     * <p><b>为什么是 restart 而不是 shutdown</b>（这一句是本方法存在的全部理由，别删）：
+     * {@code ThreadPoolExecutor} 一旦 shutdown 就是终态、永不可复用，而
+     * {@code SubagentRunner.enableBackground} 全仓只在装配期调一次（{@code AgentTools.build}）。
+     * 于是在这里关池 = {@code /clear} 之后这个进程<b>再也派不出任何后台任务</b>，
+     * 而模型只会读到「队列已满，等在跑的任务完成后重试」——队列其实是空的、池是死的，它会永远等下去。
+     *
+     * <p>退出路径目前也走这里（{@code CodeTuiView.shutdownAndQuit}）：多重建一个零线程的空池，
+     * {@code ThreadPoolExecutor} 不预启线程，代价为零。把 {@code /exit} 拆成独立的「关池」语义
+     * （{@code SubagentRunner.shutdownBackground}，已就位）留作后续。
      */
     @Override
     public void killAllBackgroundTasks() {
@@ -529,7 +538,7 @@ public final class CodingAgent implements SubmitHandler {
             backgroundRegistry.killAll();
         }
         if (subagentRunner != null) {
-            subagentRunner.shutdownBackground();
+            subagentRunner.restartBackground();
         }
     }
 

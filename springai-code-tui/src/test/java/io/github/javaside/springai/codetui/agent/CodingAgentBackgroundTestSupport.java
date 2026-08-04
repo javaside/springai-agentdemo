@@ -13,16 +13,16 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>目的是让后台四个方法的断言不必联网、也不必把 17 个参数抄进每个测试。
  * 走的仍是生产全参构造，不是另开一条构造路径。
  */
-final class CodingAgentBackgroundTestSupport {
+public final class CodingAgentBackgroundTestSupport {
 
     private CodingAgentBackgroundTestSupport() {
     }
 
-    static CodingAgent stub(Path root, BackgroundTaskRegistry registry) {
+    public static CodingAgent stub(Path root, BackgroundTaskRegistry registry) {
         return stub(root, registry, null);
     }
 
-    static CodingAgent stub(Path root, BackgroundTaskRegistry registry, SubagentRunner runner) {
+    public static CodingAgent stub(Path root, BackgroundTaskRegistry registry, SubagentRunner runner) {
         return new CodingAgent(null, null, new StubListener(), "test-session", new AtomicLong(),
                 null, null, null, List.of(), null, null, null, runner,
                 null, null, null, null, registry, new TaskResultStore(root));

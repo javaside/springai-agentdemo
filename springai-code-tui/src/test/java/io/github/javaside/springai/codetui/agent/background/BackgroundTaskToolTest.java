@@ -8,6 +8,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BackgroundTaskToolTest {
@@ -32,6 +33,30 @@ class BackgroundTaskToolTest {
         String out = tool(reg, root).fetch(new BackgroundTaskTool.Query("task_nope", false));
         assertTrue(out.contains("未知任务"), out);
         assertTrue(out.contains("已结束的进程"), "要提示可能是 -c 恢复后的陈旧 id");
+    }
+
+    /**
+     * ★ 被<b>淘汰</b>的任务也走「未知任务」这一支，而它是<b>本进程丢的</b>——
+     * {@link BackgroundTaskRegistry#evictIfNeeded} 超容量时会移除最旧的已结束任务，
+     * 其中完全可能含已完成但还没送达的那条。
+     *
+     * <p>只说「可能来自已结束的进程」是在给模型一个<b>错误的因果解释</b>：它会以为这是上个进程的陈旧 id
+     * 而放弃，实际上那是它自己这轮派出去、跑完了、被挤掉的结果。文案须同时涵盖两种可能。
+     */
+    @Test
+    void evictedTaskExplainsItMayHaveBeenEvictedInThisProcess(@TempDir Path root) {
+        BackgroundTaskRegistry reg = new BackgroundTaskRegistry(2);   // 容量 2，第 3 次登记必触发淘汰
+        String oldest = reg.register("explore", "最早那条");
+        reg.complete(oldest, "结论", true);                            // 已完成但从未被消费
+        reg.register("explore", "第二条");
+        reg.register("explore", "第三条");
+        assertNull(reg.find(oldest), "前置：最旧的已结束任务确实被淘汰了，否则本用例是空转的");
+
+        String out = tool(reg, root).fetch(new BackgroundTaskTool.Query(oldest, false));
+
+        assertTrue(out.contains("未知任务"), out);
+        assertTrue(out.contains("淘汰"),
+                "被本进程淘汰是另一种可能，不能只说「来自已结束的进程」。实际=" + out);
     }
 
     @Test

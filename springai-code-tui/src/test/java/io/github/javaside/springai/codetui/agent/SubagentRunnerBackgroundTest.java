@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.background.BackgroundTask;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
+import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -184,6 +185,37 @@ class SubagentRunnerBackgroundTest {
         assertTrue(third.contains("队列已满"), "拒绝要说清楚，别静默排队：" + third);
         assertTrue(reg.completedUnconsumed().isEmpty(),
                 "被拒的任务不得成为可送达结果——否则会被自动送给模型，读起来像它真跑过");
+
+        gate.countDown();
+    }
+
+    /**
+     * ★ 派发被拒时必须补一次结束事件，否则 ⏱ 面板上留下一条<b>永远在转的幽灵任务</b>。
+     *
+     * <p>顺序是 register → onBackgroundTaskStarted → execute，rejected 分支原来只做了
+     * {@code registry.kill}——注册表干净了，但 UI 镜像那条 BackgroundEntry 永远停在 RUNNING。
+     *
+     * <p><b>断言打在 {@link ConversationState#backgroundRunningCount()} 上而不是「listener 被调过」</b>：
+     * 卡在 RUNNING 才是用户看得见的症状（状态栏永久挂「⏱ N 个后台任务」、耗时涨到天荒地老），
+     * 而他按 k 想终止它时，注册表里那条已是 KILLED → 回「终止失败」，那行却还在转。
+     */
+    @Test
+    void rejectedDispatchDoesNotLeaveGhostRunningTask() throws Exception {
+        CountDownLatch gate = new CountDownLatch(1);
+        BackgroundTaskRegistry reg = new BackgroundTaskRegistry(64);
+        ConversationState state = new ConversationState();   // 真 UI 镜像，不是计数桩
+        SubagentRunner r = new SubagentRunner(
+                new ProviderRegistry(List.of(provider(chatModel("结论", gate)))), List.of(),
+                state, "");
+        r.enableBackground(reg, 1, 1);          // 并发 1、队列 1 → 第 3 次必被拒
+
+        r.runInBackground(spec(), "hi", "a");   // 占住唯一线程（卡在 gate 上）
+        r.runInBackground(spec(), "hi", "b");   // 占住唯一队列位
+        r.runInBackground(spec(), "hi", "c");   // 被拒
+
+        assertEquals(2, state.backgroundRunningCount(),
+                "只有 a、b 真的在跑；被拒的 c 必须立刻结束，否则 ⏱ 面板永远转下去。实际面板="
+                        + state.backgroundTasks());
 
         gate.countDown();
     }
