@@ -6,9 +6,9 @@ in-process test can reach:
 
   1. Shift+Tab (ESC[Z) really routes to the permission-mode cycle through the
      full JLine backend + EventParser + CodeTuiView chain, and the status bar
-     shows the new mode.  期 2 起循环是三档
-     (DEFAULT -> ACCEPT_EDITS -> PLAN -> BYPASS -> DEFAULT，四档平权：BYPASS
-     不再需要 --dangerously-skip-permissions).  Also that the two
+     shows the new mode.  循环是四档平权
+     (DEFAULT -> ACCEPT_EDITS -> PLAN -> BYPASS -> DEFAULT)：BYPASS
+     不再需要 --dangerously-skip-permissions.  Also that the two
      pre-existing bare-Tab handlers (slash-menu completion, /mcp panel expand)
      still work AND no longer swallow Shift+Tab.
   2. /permissions prints its read-only report into the scrollback.
@@ -884,7 +884,7 @@ def check_slash_tab_guard(session):
     assert_mode_via_report(session, "自动接受编辑")
     print("斜杠菜单：Shift+Tab 确实切了模式（/permissions 报告为准）.")
 
-    restore_default_mode(session)                   # 三档：要按两下才回到 DEFAULT
+    restore_default_mode(session)                   # 四档：要按三下才回到 DEFAULT
 
 
 def check_mcp_tab_guard(session):
@@ -912,7 +912,7 @@ def check_mcp_tab_guard(session):
     assert_mode_via_report(session, "自动接受编辑")
     print("MCP 面板：Shift+Tab 确实切了模式（/permissions 报告为准）.")
 
-    restore_default_mode(session)                   # 三档：要按两下才回到 DEFAULT
+    restore_default_mode(session)                   # 四档：要按三下才回到 DEFAULT
 
 
 def check_panel_layout(session):
