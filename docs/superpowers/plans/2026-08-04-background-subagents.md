@@ -31,6 +31,12 @@
 4. **测试里需要固定迭代顺序时用 `LinkedHashMap`，不要用 `Map.of`**——`Map.of` 的迭代序随 JVM 随机，"取错元素"类缺陷只有一半概率被抓到。
 5. 每个任务结束都提交。
 
+6. **凡是断言"某个阻塞路径没被走到"的测试，桩必须真的会应答。**
+   `PermissionCallback` / `UserQuestionBridge` 这类握手代码在 `handoff.take()` 上**无超时阻塞**（见其类注释"活性依赖"：它们刻意不自保，靠 UI 总会应答 + 回合 dispose 中断这两条外部逃生口）。
+   如果桩只记数不应答，那么**缺陷出现时不是用例变红，而是整个构建挂死**——CI 上看到的是超时，不是一条指着问题的红线。
+   T13 实测：删掉后台分流后该测试类 600 秒无输出被迫中止；把桩改成应答 `ALLOW_ONCE` 后，**2.3 秒当场变红**并指向正确断言。
+   再加一层 `@Timeout(10, unit = SECONDS, threadMode = SEPARATE_THREAD)` 兜底——**必须是 `SEPARATE_THREAD`**，默认的 `SAME_THREAD` 只在用例返回后才检查，对永久阻塞完全无效。
+
 ---
 
 ## 文件结构
@@ -2978,7 +2984,7 @@ git commit -m "test(background): pty 实机冒烟（面板、状态栏、通知�
 把 `BackgroundTaskRegistry.markConsumed` 改成恒 `return true;` 但不置位 `consumed`。
 
 ```bash
-mvn -pl springai-code-tui test -Dtest='BackgroundTaskRegistryTest+BackgroundTaskToolTest'
+mvn -pl springai-code-tui test -Dtest='BackgroundTaskRegistryTest,BackgroundTaskToolTest'
 ```
 Expected: **FAIL**（`markConsumedIsIdempotentAndRemovesFromUnconsumed`、`finishedTaskReturnsResultAndMarksConsumed`）。还原。
 
@@ -3016,7 +3022,7 @@ Expected: **FAIL**（`backgroundAskBecomesDenyAndNeverReachesTheAsker`）。还�
 把 `TaskResultStore.storeAndTruncate` 改成恒 `return full;`。
 
 ```bash
-mvn -pl springai-code-tui test -Dtest='TaskResultStoreTest+BackgroundTaskToolTest'
+mvn -pl springai-code-tui test -Dtest='TaskResultStoreTest,BackgroundTaskToolTest'
 ```
 Expected: **FAIL**（`longResultIsTruncatedAndFullTextWrittenToDisk`、`longResultIsTruncatedThroughResultStore`）。还原。
 
