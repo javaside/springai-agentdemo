@@ -83,6 +83,18 @@ public interface SubmitHandler {
     default void shutdownBackground() { }
 
     /**
+     * {@code /continue} 用的后台任务摘要——拼进提示词，让模型知道哪些活正在做 / 已经做完。
+     *
+     * <p><b>为什么由门面出而不是让 UI 读自己的镜像</b>：{@code ConversationState} 里那份
+     * {@code BackgroundView} 是<b>显示镜像</b>，注册表才是「唯一并发真相源」。
+     * 用一个为渲染而生的副本去构造喂给模型的指令，等于让它承担正确性责任。
+     *
+     * <p>无需提醒时返回<b>空串</b>，调用方据此保持提示词一个字不变。
+     * 默认空串，便于回显桩/测试桩省略。
+     */
+    default String backgroundDigestForContinue() { return ""; }
+
+    /**
      * 一条可送达的后台任务结果。<b>刻意是 UI 层能直接消费的扁平结构</b>——
      * 不让 UI 去 import agent.background 包的领域类型，接缝两侧各自演进。
      */

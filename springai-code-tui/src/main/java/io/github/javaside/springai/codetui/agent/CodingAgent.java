@@ -506,6 +506,21 @@ public final class CodingAgent implements SubmitHandler {
         return out;
     }
 
+    /**
+     * 取一次注册表快照交给 {@code BackgroundDigest}。
+     *
+     * <p><b>只取一次</b>：注册表方法都是 synchronized，取两次之间状态会变；
+     * {@code BackgroundTask.consumed()} 是 public 的，一份 {@code all()} 足以筛出所有分组。
+     */
+    @Override
+    public String backgroundDigestForContinue() {
+        if (backgroundRegistry == null) {
+            return "";     // 桩路径：没有后台子系统，也就没有可提醒的
+        }
+        return io.github.javaside.springai.codetui.agent.background.BackgroundDigest
+                .forContinue(backgroundRegistry.all());
+    }
+
     @Override
     public boolean markBackgroundConsumed(String taskId) {
         return backgroundRegistry != null && backgroundRegistry.markConsumed(taskId);
