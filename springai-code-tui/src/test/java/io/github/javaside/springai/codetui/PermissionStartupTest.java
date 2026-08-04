@@ -23,7 +23,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,8 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PermissionStartupTest {
 
-    private static PermissionEngine engine(Path root, PermissionMode mode, boolean bypassAllowed) {
-        return new PermissionEngine(root, PermissionConfig.empty(), mode, bypassAllowed);
+    private static PermissionEngine engine(Path root, PermissionMode mode) {
+        return new PermissionEngine(root, PermissionConfig.empty(), mode);
     }
 
     /** 只装权限门面所需的最小 CodingAgent（其余协作者一律 null，本类不触发 submit）。 */
@@ -81,13 +80,15 @@ class PermissionStartupTest {
     }
 
     @Test
-    @DisplayName("不给、给错、或想用它进 BYPASS —— 一律回退 null（由调用方落到配置的 defaultMode）")
+    @DisplayName("--permission-mode：不给、给错、或写 bypass 一律回退 null（bypass 另有 --dangerously-skip-permissions）")
     void rejectsBadPermissionMode() {
         assertNull(CodeTuiApplication.startupMode(new String[]{}));
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode"}), "缺值不得读到越界");
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "banana"}));
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "bypass"}),
-                "BYPASS 只能由 --dangerously-skip-permissions 进；这里认了就等于开了第二个后门");
+                "--dangerously-skip-permissions 已经是「启动即进 BYPASS」的写法，"
+                        + "不再设第二条等价路径。注意：运行期 Shift+Tab 进 BYPASS 是允许的，"
+                        + "本条约束的是启动参数，两者威胁模型不同（见权限模式 spec §3）");
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-modex", "plan"}),
                 "前缀相近的参数不得误判");
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "--continue"}),
@@ -114,7 +115,7 @@ class PermissionStartupTest {
                 new PermissionConfig(PermissionMode.DEFAULT,
                         List.of(new PermissionRule("Bash", "git status:*",
                                 PermissionBehavior.ALLOW, RuleScope.PROJECT))),
-                PermissionMode.DEFAULT, false);
+                PermissionMode.DEFAULT);
         CodingAgent agent = agentWith(engine);
 
         assertEquals(PermissionMode.DEFAULT, agent.permissionMode());
@@ -127,18 +128,20 @@ class PermissionStartupTest {
     }
 
     @Test
-    @DisplayName("未获授权时门面也进不了 BYPASS（引擎那道闸门不能被门面绕过）")
-    void facadeCannotEnterBypassWithoutFlag(@TempDir Path root) {
-        CodingAgent agent = agentWith(engine(root, PermissionMode.ACCEPT_EDITS, false));
+    @DisplayName("门面可在运行期切进 BYPASS——不再需要 --dangerously-skip-permissions")
+    void facadeCanEnterBypassAtRuntime(@TempDir Path root) {
+        CodingAgent agent = agentWith(engine(root, PermissionMode.PLAN));
 
-        assertNotEquals(PermissionMode.BYPASS, agent.cyclePermissionMode(),
-                "没带 --dangerously-skip-permissions 时 BYPASS 不该在循环里");
+        assertEquals(PermissionMode.BYPASS, agent.cyclePermissionMode(),
+                "四档平权：PLAN 的下一档就是 BYPASS，启动参数不再是前置条件");
+        assertEquals(PermissionMode.BYPASS, agent.permissionMode(),
+                "切完读回的必须是新档，否则状态栏说一套、工具做另一套");
     }
 
     @Test
     @DisplayName("/clear 开新会话时清掉会话规则（「本会话不再问」不跨会话继承）")
     void clearContextClearsSessionRules(@TempDir Path root) {
-        PermissionEngine engine = engine(root, PermissionMode.DEFAULT, false);
+        PermissionEngine engine = engine(root, PermissionMode.DEFAULT);
         engine.addSessionRule(new PermissionRule("Bash", "ls:*", PermissionBehavior.ALLOW, RuleScope.SESSION));
         CodingAgent agent = agentWith(engine);
         assertEquals(1, agent.permissionRules().size(), "前置条件：会话规则已在");

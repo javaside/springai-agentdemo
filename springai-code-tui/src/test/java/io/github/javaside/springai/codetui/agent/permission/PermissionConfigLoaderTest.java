@@ -127,8 +127,12 @@ class PermissionConfigLoaderTest {
     // ── 提权防线 ────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("配置文件不得声明 BYPASS——那扇门只有 --dangerously-skip-permissions 能开")
+    @DisplayName("配置文件不得声明 BYPASS——clone 来的仓库不该让你启动即裸奔（键盘切进去则是允许的）")
     void configCannotDeclareBypass(@TempDir Path dir) throws Exception {
+        // ⚠ 本条与「Shift+Tab 四档平权」不矛盾，别一起删：
+        // 键盘切档时用户在场、有意图，且切完状态栏行首常驻红色「⚠ 跳过权限检查」；
+        // 而 .codetui/permissions.json 是 clone 仓库时一起带过来的，进目录一启动，
+        // 模型的第一次工具调用就零检查跑了——用户一个键都没按、屏幕上什么都没变。
         Path user = dir.resolve("user.json");
         Path project = dir.resolve("project.json");
 

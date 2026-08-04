@@ -49,7 +49,7 @@ class PermissionCallbackTest {
     }
 
     private static PermissionEngine engine(Path root, PermissionMode mode) {
-        return new PermissionEngine(root, new PermissionConfig(mode, List.of()), mode, true);
+        return new PermissionEngine(root, new PermissionConfig(mode, List.of()), mode);
     }
 
     private static ToolContext ctx(long turnId) {
@@ -109,7 +109,7 @@ class PermissionCallbackTest {
                                 "Bash(curl:*)",
                                 io.github.javaside.springai.codetui.agent.permission.PermissionBehavior.DENY,
                                 io.github.javaside.springai.codetui.agent.permission.RuleScope.PROJECT))),
-                PermissionMode.DEFAULT, true);
+                PermissionMode.DEFAULT);
         PermissionCallback cb = new PermissionCallback(tool, e,
                 (t, r) -> { throw new AssertionError("deny 规则不该弹审批"); });
 

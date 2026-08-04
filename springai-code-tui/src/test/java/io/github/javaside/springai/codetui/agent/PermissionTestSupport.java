@@ -45,8 +45,6 @@ final class PermissionTestSupport {
     /** {@code *(*)} 规则 = 任意工具的任意调用都命中，behavior 决定恒定结论。 */
     private static PermissionEngine fixed(PermissionMode mode, PermissionBehavior behavior) {
         PermissionRule all = new PermissionRule("*", null, behavior, RuleScope.SESSION);
-        // bypassAllowed 传 true：否则以 BYPASS 启动会被静默降级成 DEFAULT，
-        // 「BYPASS 零特殊处理」那条用例就会在一台其实不是 BYPASS 的引擎上通过。
-        return new PermissionEngine(Path.of("."), new PermissionConfig(mode, List.of(all)), mode, true);
+        return new PermissionEngine(Path.of("."), new PermissionConfig(mode, List.of(all)), mode);
     }
 }

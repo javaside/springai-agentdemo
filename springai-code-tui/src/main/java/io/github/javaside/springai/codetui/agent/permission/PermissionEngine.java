@@ -164,7 +164,6 @@ public final class PermissionEngine {
      * <p>只在这一处用折叠 root：allow 方向与内置检查一律用原 {@link #root}。
      */
     private final Path foldedRoot;
-    private final boolean bypassAllowed;
     private final List<PermissionRule> fileRules = new CopyOnWriteArrayList<>();
     private final List<PermissionRule> sessionRules = new CopyOnWriteArrayList<>();
     /**
@@ -184,22 +183,17 @@ public final class PermissionEngine {
      *                      与其在这里补一层「容忍 null」的伪装，不如启动时就炸
      * @param config        两层 permissions.json 合并结果
      * @param startupMode   启动模式（启动参数 &gt; config.defaultMode，由调用方定好后传入）；
-     *                      null 则取 {@code config.defaultMode()}
-     * @param bypassAllowed 是否允许进入 BYPASS（{@code --dangerously-skip-permissions}）
+     *                      null 则取 {@code config.defaultMode()}。
+     *                      <b>接受 BYPASS</b>——{@code --dangerously-skip-permissions} 走这条路；
+     *                      拦住「用户全程无感就被放成裸奔」是 {@link PermissionConfigLoader} 与
+     *                      {@code CodeTuiApplication.startupMode} 的职责，不在这里重复。
      */
-    public PermissionEngine(Path root, PermissionConfig config,
-                            PermissionMode startupMode, boolean bypassAllowed) {
+    public PermissionEngine(Path root, PermissionConfig config, PermissionMode startupMode) {
         this.root = Objects.requireNonNull(root, "root 不可为 null：漏传会让全部路径规则静默失效").normalize();
         this.foldedRoot = foldPath(this.root);
         Objects.requireNonNull(config, "config 不可为 null");
-        this.bypassAllowed = bypassAllowed;
         this.fileRules.addAll(config.rules());
-        PermissionMode start = startupMode != null ? startupMode : config.defaultMode();
-        if (start == PermissionMode.BYPASS && !bypassAllowed) {
-            log.warn("启动模式 BYPASS 未获授权（没有 --dangerously-skip-permissions），已降级为 DEFAULT。");
-            start = PermissionMode.DEFAULT;
-        }
-        this.mode = start;
+        this.mode = startupMode != null ? startupMode : config.defaultMode();
         warnDeadRules(config.rules());
     }
 
@@ -238,17 +232,12 @@ public final class PermissionEngine {
     }
 
     /**
-     * 直接设模式。<b>未获授权时拒绝进入 BYPASS</b>——否则 UI 的任意一处 {@code setMode(BYPASS)}
-     * 就把 {@code --dangerously-skip-permissions} 这道启动开关架空了。
+     * 直接设模式（{@code /permissions} 等非循环入口走它）。
      *
-     * @return 设置后的实际模式（可能因未获授权而不是入参）
+     * @return 设置后的实际模式（入参为 null 时返回当前模式，不改状态）
      */
     public PermissionMode setMode(PermissionMode m) {
         if (m == null) {
-            return mode;
-        }
-        if (m == PermissionMode.BYPASS && !bypassAllowed) {
-            log.warn("拒绝切到 BYPASS：本次启动没有 --dangerously-skip-permissions。");
             return mode;
         }
         this.mode = m;
@@ -257,13 +246,9 @@ public final class PermissionEngine {
 
     /** 循环到下一个模式并返回新模式（UI 的 Shift+Tab）。 */
     public PermissionMode cycleMode() {
-        PermissionMode next = mode.next(bypassAllowed);
+        PermissionMode next = mode.next();
         this.mode = next;
         return next;
-    }
-
-    public boolean bypassAllowed() {
-        return bypassAllowed;
     }
 
     /** 项目根（UI 展示 / 装配点复用）。 */
