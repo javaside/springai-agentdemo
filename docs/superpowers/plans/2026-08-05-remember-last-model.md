@@ -207,7 +207,11 @@ class ModelPreferenceTest {
 mvn test -pl springai-code-tui -Dtest=ModelPreferenceTest
 ```
 
-预期：**编译通过**，`Tests run: 9, Failures: 8`（`missingFileIsEmpty` 会绿，因为空壳 `read` 就返回 `empty`——这条是搭便车绿的，不代表实现对了）。红的理由必须是断言失败，**不能有 compilation error**。
+预期：**编译通过**，`Tests run: 9, Failures: 3`。
+
+只有 3 条真正红：`writeThenReadRoundTrips` / `writeCreatesCodetuiDirectory` / `noTempFileLeftBehind`——它们都要求 `write` 返回 true。**另外 6 条是搭便车绿的**：空壳 `read` 返回 `empty`，5 条读侧降级测试自动满足；空壳 `write` 返回 false，`writeFailureReturnsFalse` 也自动满足。
+
+**这 6 条对「什么都不做」的实现毫无鉴别力**，所以它们的价值必须靠 Step 5 之后的隔离变异来证明（见 Task 6 Step 3，以及实施记录里补的两轮）。红的理由必须是断言失败，**不能有 compilation error**。
 
 - [ ] **Step 4: 写实现**
 
