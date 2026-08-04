@@ -18,6 +18,7 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoad
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.permission.RuleScope;
+import io.github.javaside.springai.codetui.agent.background.BackgroundNotifier;
 import io.github.javaside.springai.codetui.agent.media.ArtifactSource;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.agent.media.MagicSniffer;
@@ -49,6 +50,8 @@ import dev.tamboui.widgets.block.Block;
 import dev.tamboui.widgets.block.BorderType;
 import dev.tamboui.widgets.block.Borders;
 import dev.tamboui.widgets.input.TextAreaState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 
 import java.io.IOException;
@@ -98,6 +101,8 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  */
 public final class CodeTuiView extends InlineApp {
 
+    private static final Logger log = LoggerFactory.getLogger(CodeTuiView.class);
+
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     private static final String INDENT = "  ";  // 对话内容缩进；工具/计划行自带前缀
@@ -112,6 +117,8 @@ public final class CodeTuiView extends InlineApp {
     private final StatusBar statusBar = new StatusBar();             // 状态行动画内容（波光/压缩条）渲染
     private final ScrollbackPrinter printer;                        // scrollback 打印（欢迎/用户块/工具 diff/助手正文）
     private final ContextUsage ctxUsage;                             // 上下文用量追踪/报告（/context 报告 + 状态栏后缀）
+    /** 后台任务结果的自动送达判定与失控刹车（纯状态机，见其类注释）。只在渲染线程（drain）读写。 */
+    private final BackgroundNotifier notifier = new BackgroundNotifier();
     private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
@@ -207,12 +214,14 @@ public final class CodeTuiView extends InlineApp {
     protected Element render() {
         List<String> todos = state.todoSnapshot();
         List<ConversationState.SubtaskView> subs = state.subtaskSnapshot();
+        List<ConversationState.BackgroundView> bgTasks = state.backgroundTasks();
         List<String> queued = state.queuedSnapshot();
         String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
         return column(
                 scope(!tail.isEmpty(), richText(printer.preview(tail)).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
                 scope(!subs.isEmpty(), subtaskChildren(subs)),
+                scope(!bgTasks.isEmpty(), backgroundChildren(bgTasks)),   // ⏱ 后台任务面板（零任务时不占行）
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
@@ -323,7 +332,45 @@ public final class CodeTuiView extends InlineApp {
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!busy()) {   // 空闲、非压缩中、且无在飞子 agent 才出队（见 busy()）
             ConversationState.Queued next = state.pollQueued();
-            if (next != null) dispatch(next.text(), next.skill());
+            if (next != null) {
+                notifier.onUserInput();      // 用户的真实输入：重置自动回合刹车
+                dispatch(next.text(), next.skill());
+                return;                      // 本帧已提交，后台送达让到下一帧——用户排的队优先
+            }
+            deliverBackgroundResults();
+        }
+    }
+
+    /**
+     * 后台任务结果的自动送达：空闲 + 输入框为空 + 有已完成未消费任务时，起一个新回合交给模型。
+     *
+     * <p><b>判定与提交在同一帧内完成</b>：drain 跑在渲染线程（单线程），「读输入框是否为空」
+     * 与「调 submit」之间不会被用户按键插入，故不存在「判定时为空、提交时用户已开始打字」的竞态。
+     *
+     * <p><b>{@code shouldNotifyResults} 有副作用</b>（判定为该送达时消耗一次刹车额度），故只调一次、
+     * 且调了就必须真的用返回值去起回合。状态栏想显示刹车状态请读 {@code brakeEngaged()}，别再试探一次。
+     *
+     * <p><b>submit 抛异常时不标记已消费</b>：一次提交失败不能把结果丢掉，下一帧会再试。代价是重试也各
+     * 消耗一次额度——连续失败三次就会踩下刹车、等用户回车放行。这是刹车该有的样子：与其对着炸掉的
+     * 网关每 33ms 重投一次，不如停下来告诉用户。
+     */
+    private void deliverBackgroundResults() {
+        List<SubmitHandler.BackgroundResult> done = onSubmit.completedBackgroundTasks();
+        if (done.isEmpty()) return;
+        // ⚠ 输入框的真相在 inputState，不在 state——ConversationState.currentInput() 是输入迁移后留下的
+        // 死代码（见 typeChar 那一串），读它永远得到空串，等于「用户正在打字」这道闸门形同虚设。
+        String typed = inputState.text();
+        boolean inputEmpty = typed == null || typed.isEmpty();   // 连空格都算在打字：抢跑一次比晚送一帧讨厌得多
+        var text = notifier.shouldNotifyResults(done, !busy(), inputEmpty);
+        if (text.isEmpty()) return;
+        try {
+            dispatch(text.get(), null);
+        } catch (RuntimeException e) {
+            log.warn("后台任务结果自动送达失败，保持未消费、下一帧重试", e);
+            return;                         // ⚠ 不标记已消费：标记了就等于把结果丢了
+        }
+        for (SubmitHandler.BackgroundResult r : done) {
+            onSubmit.markBackgroundConsumed(r.taskId());
         }
     }
 
@@ -1079,7 +1126,11 @@ public final class CodeTuiView extends InlineApp {
         clearInput();
         String skill = pendingSkill;                 // 一次性：本条消息取走挂载
         pendingSkill = null;
-        if (busy()) {                                // 忙/压缩中/有在飞子 agent：排队，挂载随消息入队
+        // 用户真实提交了一条消息（入队与立即提交都算）：重置自动回合刹车。刹车防的是「人不在电脑前时
+        // 自动回合无限套娃」，人一开口就说明这个前提不成立了。必须挂在提交上而不是每次按键——
+        // 挂按键则用户随手一个方向键就把刹车松开，等于没有刹车。
+        notifier.onUserInput();
+        if (busy()) {                              // 忙/压缩中/有在飞子 agent：排队，挂载随消息入队
             // 入队的同样是注入后的文本：出队时直接 dispatch，那时输入框早已换成别的内容，
             // 再想兑现附件已经无从谈起——排队的消息会静默丢图。
             state.enqueue(effective, skill);         // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
@@ -1994,6 +2045,62 @@ public final class CodeTuiView extends InlineApp {
         return "  " + icon + " " + s.agentName() + "  " + s.description() + tail;
     }
 
+    /**
+     * ⏱ 后台任务面板：计数标题 + 每个任务一行（▶/✓/✗ 分色 + id + agent + 描述 + 耗时 + 当前工具）。
+     *
+     * <p><b>首行必须判空</b>——TamboUI 的 {@code scope(cond, children)} 每帧 <b>eager 求值</b>：
+     * 即使 cond 为 false，children 也会被构造一次。不判空会在零任务时越界（同 {@link #subtaskChildren}）。
+     *
+     * <p><b>与 ⟐ 任务面板分开显示</b>：那个是本回合的前台子 agent（回合一结束就清），这个跨回合存活。
+     * 混在一起用户分不清「关掉这个回合还在不在跑」。
+     */
+    private Element[] backgroundChildren(List<ConversationState.BackgroundView> tasks) {
+        if (tasks == null || tasks.isEmpty()) return new Element[0];   // scope eager 求值：首行判空
+        long running = tasks.stream()
+                .filter(t -> t.status() == ConversationState.BackgroundStatus.RUNNING).count();
+        long finished = tasks.size() - running;
+        List<Element> els = new ArrayList<>();
+        els.add(text("⏱ 后台任务 (" + running + " 运行 · " + finished + " 完成)").style(TODO_TITLE));
+        long now = System.currentTimeMillis();
+        int inner = Math.max(8, terminalWidth() - 2);   // 超宽行截断，避免把输入框顶出屏幕
+        for (ConversationState.BackgroundView t : tasks) {
+            Style st = switch (t.status()) {
+                case DONE -> OK;
+                case FAILED -> ERROR;
+                case RUNNING -> TODO_RUN;
+            };
+            String row = backgroundRowText(t, now);
+            if (displayWidth(row) > inner) {
+                row = dev.tamboui.text.CharWidth.substringByWidth(row, inner - 1) + "…";
+            }
+            els.add(text(row).style(st));
+        }
+        return els.toArray(new Element[0]);
+    }
+
+    /** 一条后台任务的行文本："  <图标> <id> <agent>  <描述>  <耗时>[  <当前工具>]"。 */
+    static String backgroundRowText(ConversationState.BackgroundView t, long now) {
+        String icon = switch (t.status()) {
+            case DONE -> "✓";
+            case FAILED -> "✗";
+            case RUNNING -> "▶";
+        };
+        // 已结束的任务用钉住的 finishedAt 算耗时，否则数字会一直涨、看着像还在跑。
+        long end = t.finishedAt() > 0 ? t.finishedAt() : now;
+        String tail = (t.currentTool() != null && !t.currentTool().isEmpty()) ? "  " + t.currentTool() : "";
+        return "  " + icon + " " + t.taskId() + " " + t.agentName() + "  " + t.description()
+                + "  " + elapsedText(end - t.startedAt()) + tail;
+    }
+
+    /**
+     * 耗时渲染：{@code 1m42s}。秒补零——{@code 2m3s} 与 {@code 2m30s} 扫一眼会看错。
+     * 负数（时钟回拨 / NTP 校时）兜成 0，面板上出现负耗时只会让人怀疑整个面板。
+     */
+    static String elapsedText(long millis) {
+        long sec = Math.max(0, millis) / 1000;
+        return (sec / 60) + "m" + String.format("%02d", sec % 60) + "s";
+    }
+
     /** 排队消息面板：固定在输入框上方，每条一行（暗灰底、› 前缀、超宽截断），仿 Claude Code。 */
     private Element[] queuedChildren(List<String> queued) {
         List<Element> els = new ArrayList<>();
@@ -2033,7 +2140,7 @@ public final class CodeTuiView extends InlineApp {
         return switch (state.status()) {
             case IDLE -> {
                 String hint = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · "
-                        + onSubmit.currentModel() + ctxUsage.suffix();
+                        + onSubmit.currentModel() + ctxUsage.suffix() + backgroundStatusSuffix();
                 yield mode == null ? text(hint).style(HINT)
                         : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
             }
@@ -2044,6 +2151,24 @@ public final class CodeTuiView extends InlineApp {
                         qs + " · Esc 取消", RUNNING, animTick, mode));
             }
         };
+    }
+
+    /**
+     * 空闲态状态行的后台任务后缀：还有几个在跑 + 刹车踩下时的手动放行提示。
+     *
+     * <p><b>挂在权限模式标识<em>之后</em>、绝不占行首</b>：状态行本就接近终端宽度、尾部先被截断，
+     * 而「现在会不会问你」比「有几个后台任务」更不该被截掉。
+     *
+     * <p>刹车状态读 {@code brakeEngaged()} 而不是再调一次判定——那个方法有副作用（会消耗刹车额度），
+     * 拿它来试探等于每帧烧掉一次自动回合的名额。
+     */
+    private String backgroundStatusSuffix() {
+        StringBuilder sb = new StringBuilder();
+        int running = state.backgroundRunningCount();
+        if (running > 0) sb.append(" · ⏱ ").append(running).append(" 个后台任务 · /tasks");
+        // 刹车踩下时结果就停在那儿不动了，不说一句用户会以为任务被吃了。
+        if (notifier.brakeEngaged()) sb.append(" · ⏱ 有结果待处理 · 回车交给模型");
+        return sb.toString();
     }
 
     /**

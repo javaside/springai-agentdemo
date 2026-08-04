@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent.background;
 
+import io.github.javaside.springai.codetui.agent.SubmitHandler;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -50,7 +52,29 @@ public final class BackgroundNotifier {
         if (!idle || !inputEmpty) return Optional.empty();
         if (consecutive >= maxConsecutive) return Optional.empty();
         consecutive++;
-        return Optional.of(compose(completedUnconsumed));
+        return Optional.of(compose(completedUnconsumed.stream().map(Row::of).toList()));
+    }
+
+    /**
+     * 同上，但入参是 UI 层那份扁平结构（{@link SubmitHandler.BackgroundResult}）。
+     *
+     * <p><b>为什么要第二个入口而不是让 UI 转成 {@link BackgroundTask}</b>：{@code BackgroundTask} 是
+     * 带可变状态的领域对象，UI 手工造一个只为了过判定，早晚会造出个状态自相矛盾的假货。
+     * 两个入口都归到同一段 {@link #compose}——文本模板复制两份必然漂移。
+     *
+     * <p><b>名字不叫 {@code shouldNotify} 的唯一原因是泛型擦除</b>：{@code List<BackgroundTask>} 与
+     * {@code List<BackgroundResult>} 擦除后同签名，重载编译不过。
+     *
+     * <p>⚠ <b>有副作用</b>：真正判定为「该送达」时会消耗一次刹车额度。调用方必须真的用返回值去起回合，
+     * 调了却丢弃返回值等于白白烧掉额度。
+     */
+    public Optional<String> shouldNotifyResults(List<SubmitHandler.BackgroundResult> results,
+                                                boolean idle, boolean inputEmpty) {
+        if (results == null || results.isEmpty()) return Optional.empty();
+        if (!idle || !inputEmpty) return Optional.empty();
+        if (consecutive >= maxConsecutive) return Optional.empty();
+        consecutive++;
+        return Optional.of(compose(results.stream().map(Row::of).toList()));
     }
 
     /** 用户有真实输入（提交了一条消息）：重置刹车。 */
@@ -63,16 +87,27 @@ public final class BackgroundNotifier {
         return consecutive >= maxConsecutive;
     }
 
+    /** 两个入口共用的行视图：只留合成文本真正要的四个字段，谁来的都先摊平成它。 */
+    private record Row(String taskId, String agentName, String description, String result, boolean ok) {
+        static Row of(BackgroundTask t) {
+            return new Row(t.taskId(), t.agentName(), t.description(), t.result(),
+                    t.status() == BackgroundTask.Status.DONE);
+        }
+        static Row of(SubmitHandler.BackgroundResult r) {
+            return new Row(r.taskId(), r.agentName(), r.description(), r.result(), r.ok());
+        }
+    }
+
     /**
      * 合成通知文本。<b>多个任务合并成一条</b>——起 N 个回合会让模型在没读完第一条时就被第二条打断。
      */
-    private String compose(List<BackgroundTask> tasks) {
+    private String compose(List<Row> rows) {
         StringBuilder sb = new StringBuilder("[后台任务完成]\n");
-        for (BackgroundTask t : tasks) {
+        for (Row t : rows) {
             sb.append('\n')
               .append(t.taskId()).append(" · ").append(t.agentName())
               .append(" · ").append(t.description())
-              .append(t.status() == BackgroundTask.Status.DONE ? " · ✓" : " · ✗")
+              .append(t.ok() ? " · ✓" : " · ✗")
               .append('\n')
               .append(t.result())
               .append('\n');

@@ -48,6 +48,27 @@ public interface SubmitHandler {
      */
     default boolean hasInFlightSubagents() { return false; }
 
+    // ── 后台子 agent（/tasks 面板与自动送达用；默认空实现，便于回显桩/测试桩省略） ──
+
+    /** 已结束、可送达、尚未消费的后台任务结果（供自动送达判定）。 */
+    default List<BackgroundResult> completedBackgroundTasks() { return List.of(); }
+
+    /** 标记某个后台任务的结果已交给模型。返回是否本次真的完成了标记（互斥闸，见注册表）。 */
+    default boolean markBackgroundConsumed(String taskId) { return false; }
+
+    /** 终止一个运行中的后台任务（/tasks 面板的 k 键）。 */
+    default boolean killBackgroundTask(String taskId) { return false; }
+
+    /** 终止全部后台任务（/clear 与退出）。 */
+    default void killAllBackgroundTasks() { }
+
+    /**
+     * 一条可送达的后台任务结果。<b>刻意是 UI 层能直接消费的扁平结构</b>——
+     * 不让 UI 去 import agent.background 包的领域类型，接缝两侧各自演进。
+     */
+    record BackgroundResult(String taskId, String agentName, String description,
+                            String result, boolean ok) { }
+
     // ── MCP 管理（/mcp 面板用；默认空实现，便于回显桩/测试桩省略） ──
     /** 已安装 MCP server 视图（含禁用项）。 */
     default List<McpRegistry.ServerView> mcpServers() { return List.of(); }
