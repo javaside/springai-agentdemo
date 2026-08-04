@@ -1260,10 +1260,12 @@ mvn test -pl springai-code-tui
 ```
 
 Expected: BUILD SUCCESS，`Failures: 0, Errors: 0`。
-基线是 1244（本分支起点）。本次净新增：`BackgroundDigestTest` +9、
-`CodeTuiViewContinueDigestTest` +4、`BackgroundTaskToolUnknownIdTest` +2、
-`AgentToolsBackgroundWiringTest` +2 ⇒ **预期 1261**。
-比这个数少，说明有测试被删而没有等价替代，回去查。
+基线是 1244（**本分支起点** `87ae298`，不是你那个任务的起点）。本次净新增：
+`BackgroundDigestTest` +9、`CodeTuiViewContinueDigestTest` +4、
+`BackgroundTaskToolUnknownIdTest` +2、`AgentToolsBackgroundWiringTest` **+3**
+（含后补的 `ToolRegistry` 登记断言）⇒ **预期 1262**。
+对不上就查清楚**差在哪一条**，别当成「差不多」放过去——测试数字对不上，
+要么是有测试被删而没有等价替代，要么是有人多写/漏写了一条，两种都值得知道。
 
 - [ ] **Step 2: 措辞出处唯一性核对**
 
