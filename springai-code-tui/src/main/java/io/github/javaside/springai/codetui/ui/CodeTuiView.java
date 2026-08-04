@@ -1077,6 +1077,9 @@ public final class CodeTuiView extends InlineApp {
      */
     private void shutdownAndQuit() {
         onSubmit.killAllBackgroundTasks();
+        // 再真正关池（终态，有界 2s）。与 /clear 的区别就在这一行：那条路之后进程还要继续
+        // 派后台任务，故只重建池；退出之后不会再有下一批，才该关。
+        onSubmit.shutdownBackground();
         quit();
     }
 

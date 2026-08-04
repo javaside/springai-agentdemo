@@ -60,13 +60,26 @@ public interface SubmitHandler {
     default boolean killBackgroundTask(String taskId) { return false; }
 
     /**
-     * 终止全部后台任务（{@code /clear} 与退出共用这一个入口）。
+     * 终止全部后台任务（{@code /clear} 与退出都会先调它）。
      *
      * <p><b>落地端不得在这里关线程池</b>：{@code ThreadPoolExecutor} 一关就是终态、不可复用，
      * 而后台模式只在装配期启用一次——{@code /clear} 上关了池，这个进程此后就再也派不出后台任务了。
      * 正确做法是打断旧线程后<b>重建</b>一个新池，见 {@code SubagentRunner.restartBackground}。
+     * 真正的关池是 {@link #shutdownBackground()}，只在退出时走。
      */
     default void killAllBackgroundTasks() { }
+
+    /**
+     * 关闭后台线程池——<b>终态，只在退出时调</b>（{@code CodeTuiView.shutdownAndQuit}）。
+     *
+     * <p>与 {@link #killAllBackgroundTasks()} 的分工：那个是「停掉当前这批任务、但这个进程还要
+     * 继续用」（{@code /clear} 走它，故重建池）；这个是「不会再有下一批了」，于是真关池并走
+     * <b>有界 2s</b> 的收尾窗口，照抄 MCP 子进程清理的「不卡退出优先」取舍。
+     *
+     * <p><b>两者共用一个方法会二选一地坏掉</b>：要么 {@code /clear} 之后后台模式永久失效，
+     * 要么退出时那 2s 收尾窗口悄悄消失（而 README 写着「清理有界 2s」）。
+     */
+    default void shutdownBackground() { }
 
     /**
      * 一条可送达的后台任务结果。<b>刻意是 UI 层能直接消费的扁平结构</b>——

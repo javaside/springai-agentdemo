@@ -28,10 +28,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CodeTuiViewTasksPanelTest {
 
-    /** 可编程桩：记录 kill / killAll 调用。 */
+    /** 可编程桩：记录 kill / killAll / shutdown 调用。 */
     private static final class TasksStub implements SubmitHandler {
         final List<String> killed = new ArrayList<>();
         final AtomicInteger killAlls = new AtomicInteger();
+        final AtomicInteger shutdowns = new AtomicInteger();
         boolean killResult = true;
 
         @Override public Disposable submit(String text) { return null; }
@@ -40,6 +41,7 @@ class CodeTuiViewTasksPanelTest {
             return killResult;
         }
         @Override public void killAllBackgroundTasks() { killAlls.incrementAndGet(); }
+        @Override public void shutdownBackground() { shutdowns.incrementAndGet(); }
     }
 
     private static void openPanel(CodeTuiView v) {
@@ -377,6 +379,10 @@ class CodeTuiViewTasksPanelTest {
         }
 
         assertEquals(1, h.killAlls.get(), "退出前应终止全部后台任务");
+        // 退出是<b>终态</b>，与 /clear 不同：/clear 之后还要能继续派后台任务（故那条路重建线程池），
+        // 退出则该真正关掉池、走有界 2s 的收尾窗口。两者共用一个方法的话，要么 /clear 之后
+        // 后台模式永久失效，要么退出时那 2s 收尾窗口悄悄消失——README 写着「清理有界 2s」。
+        assertEquals(1, h.shutdowns.get(), "退出应关闭后台线程池（有界收尾），而不只是终止任务");
     }
 
     // ── 断言小工具 ──────────────────────────────────────────────────────

@@ -528,9 +528,7 @@ public final class CodingAgent implements SubmitHandler {
      * 于是在这里关池 = {@code /clear} 之后这个进程<b>再也派不出任何后台任务</b>，
      * 而模型只会读到「队列已满，等在跑的任务完成后重试」——队列其实是空的、池是死的，它会永远等下去。
      *
-     * <p>退出路径目前也走这里（{@code CodeTuiView.shutdownAndQuit}）：多重建一个零线程的空池，
-     * {@code ThreadPoolExecutor} 不预启线程，代价为零。把 {@code /exit} 拆成独立的「关池」语义
-     * （{@code SubagentRunner.shutdownBackground}，已就位）留作后续。
+     * <p>退出走的是 {@link #shutdownBackground()}（真关池 + 有界 2s 收尾），不是这里。
      */
     @Override
     public void killAllBackgroundTasks() {
@@ -539,6 +537,19 @@ public final class CodingAgent implements SubmitHandler {
         }
         if (subagentRunner != null) {
             subagentRunner.restartBackground();
+        }
+    }
+
+    /**
+     * 退出时关闭后台线程池：终态，不重建。有界 2s，绝不为清理卡住退出。
+     *
+     * <p>与 {@link #killAllBackgroundTasks()} 分开，是因为两者的前提相反——那个之后进程还要
+     * 继续派后台任务（故重建池），这个之后不会再有下一批。共用一个方法必然二选一地坏掉。
+     */
+    @Override
+    public void shutdownBackground() {
+        if (subagentRunner != null) {
+            subagentRunner.shutdownBackground();
         }
     }
 
