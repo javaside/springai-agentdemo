@@ -378,11 +378,18 @@ class CodeTuiViewTasksPanelTest {
             // 测试态 runner()==null，quit() 可能抛——终止必须发生在 quit() 之前，故不影响本断言
         }
 
-        assertEquals(1, h.killAlls.get(), "退出前应终止全部后台任务");
+        // 终止任务这件事仍然要发生，但由 shutdownBackground 一并完成（它先 registry.killAll
+        // 再关真池），而不是先调 killAllBackgroundTasks——后者会重建池，见下方断言。
         // 退出是<b>终态</b>，与 /clear 不同：/clear 之后还要能继续派后台任务（故那条路重建线程池），
         // 退出则该真正关掉池、走有界 2s 的收尾窗口。两者共用一个方法的话，要么 /clear 之后
         // 后台模式永久失效，要么退出时那 2s 收尾窗口悄悄消失——README 写着「清理有界 2s」。
         assertEquals(1, h.shutdowns.get(), "退出应关闭后台线程池（有界收尾），而不只是终止任务");
+        // ⚠ 且<b>不得</b>先走重建池那条路。restart 会把在飞任务所在的池换成一个全新空池，
+        // 随后 shutdownBackground 的 awaitTermination(2s) 等的就是那个空池——0ms 返回，
+        // 真正在跑的子 agent 一秒宽限都没拿到（实测：空池 0ms 返回时旧任务还要 800ms 才收尾）。
+        // 这条断言钉的是调用序列本身，因为「等错了池」在计数桩上看不出来。
+        assertEquals(0, h.killAlls.get(),
+                "/exit 不得走 killAllBackgroundTasks（那会重建池），应直接 shutdownBackground");
     }
 
     // ── 断言小工具 ──────────────────────────────────────────────────────

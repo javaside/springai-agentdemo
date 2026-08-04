@@ -70,14 +70,15 @@ public interface SubmitHandler {
     default void killAllBackgroundTasks() { }
 
     /**
-     * 关闭后台线程池——<b>终态，只在退出时调</b>（{@code CodeTuiView.shutdownAndQuit}）。
+     * 退出时的后台清理：<b>终止全部任务 + 关闭线程池</b>（终态，走有界 2s 收尾）。
      *
-     * <p>与 {@link #killAllBackgroundTasks()} 的分工：那个是「停掉当前这批任务、但这个进程还要
-     * 继续用」（{@code /clear} 走它，故重建池）；这个是「不会再有下一批了」，于是真关池并走
-     * <b>有界 2s</b> 的收尾窗口，照抄 MCP 子进程清理的「不卡退出优先」取舍。
+     * <p><b>调用方只调这一个，不要先调 {@link #killAllBackgroundTasks()}</b>：那个方法会
+     * <b>重建</b>线程池，把在飞任务所在的池换掉；随后这里的 awaitTermination 就等在一个空池上、
+     * 0ms 返回，真正在跑的子 agent 一秒宽限都拿不到（若正卡在 Write 中间会被切成半个文件）。
+     * 终止任务这件事由落地端在本方法内一并完成。
      *
-     * <p><b>两者共用一个方法会二选一地坏掉</b>：要么 {@code /clear} 之后后台模式永久失效，
-     * 要么退出时那 2s 收尾窗口悄悄消失（而 README 写着「清理有界 2s」）。
+     * <p>与 {@link #killAllBackgroundTasks()} 的分工：那个是「停掉这批、进程还要继续用」
+     * （{@code /clear} 走它，故重建池）；这个是「不会再有下一批了」。
      */
     default void shutdownBackground() { }
 

@@ -1076,9 +1076,12 @@ public final class CodeTuiView extends InlineApp {
      * 让在飞的工具调用有机会停手，但绝不为它卡住退出。
      */
     private void shutdownAndQuit() {
-        onSubmit.killAllBackgroundTasks();
-        // 再真正关池（终态，有界 2s）。与 /clear 的区别就在这一行：那条路之后进程还要继续
-        // 派后台任务，故只重建池；退出之后不会再有下一批，才该关。
+        // ⚠ <b>只调 shutdownBackground，绝不先调 killAllBackgroundTasks</b>。后者走
+        // restartBackground：把在飞任务所在的池换成一个全新空池、再对旧池 shutdownNow 且不等。
+        // 随后 shutdownBackground 的 awaitTermination(2s) 就作用在那个<b>空池</b>上——0ms 返回，
+        // 真正在跑的子 agent 一秒宽限都没拿到，若正卡在 Write 中间会被切成半个文件。
+        // （实测：空池 0ms 返回时，旧任务还要 800ms 才收尾。）
+        // shutdownBackground 自己会先 registry.killAll 再关真池，终止任务这件事不会漏。
         onSubmit.shutdownBackground();
         quit();
     }

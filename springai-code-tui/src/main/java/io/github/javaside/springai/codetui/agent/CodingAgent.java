@@ -541,13 +541,18 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
-     * 退出时关闭后台线程池：终态，不重建。有界 2s，绝不为清理卡住退出。
+     * 退出时的后台清理：终止全部任务 + 关闭线程池（终态，不重建，有界 2s）。
      *
-     * <p>与 {@link #killAllBackgroundTasks()} 分开，是因为两者的前提相反——那个之后进程还要
-     * 继续派后台任务（故重建池），这个之后不会再有下一批。共用一个方法必然二选一地坏掉。
+     * <p><b>自己做 killAll，不要求调用方先调 {@link #killAllBackgroundTasks()}</b>——那个方法走
+     * restart，会把在飞任务所在的池换成全新空池，随后这里的 awaitTermination 就等在一个空池上、
+     * 0ms 返回，真正在跑的子 agent 一秒宽限都拿不到。把两件事合在这一个方法里，调用方就没有
+     * "顺序写反"的机会。
      */
     @Override
     public void shutdownBackground() {
+        if (backgroundRegistry != null) {
+            backgroundRegistry.killAll();
+        }
         if (subagentRunner != null) {
             subagentRunner.shutdownBackground();
         }
