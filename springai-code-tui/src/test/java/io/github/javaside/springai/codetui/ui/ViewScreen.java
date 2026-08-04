@@ -32,9 +32,7 @@ final class ViewScreen {
      * 否则回读文本里多出空格，子串匹配全部落空。
      */
     static String of(CodeTuiView view) {
-        Buffer buf = Buffer.empty(new Rect(0, 0, 120, 20));
-        Frame f = Frame.forTesting(buf);
-        onRenderThread(() -> view.renderForTest().render(f, f.area(), RenderContext.empty()));
+        Buffer buf = bufferOf(view);
         StringBuilder sb = new StringBuilder();
         for (int y = 0; y < buf.height(); y++) {
             for (int x = 0; x < buf.width(); x++) {
@@ -45,6 +43,17 @@ final class ViewScreen {
             sb.append('\n');
         }
         return sb.toString();
+    }
+
+    /**
+     * 同 {@link #of}，但返回渲染后的 {@link Buffer} 本身——回读文本丢掉了样式，而有些断言必须落在样式上
+     * （如「选中高亮不得带底色」：底色在本 TUI 的 InlineDisplay 下会串到下一项，只看文本永远绿）。
+     */
+    static Buffer bufferOf(CodeTuiView view) {
+        Buffer buf = Buffer.empty(new Rect(0, 0, 120, 20));
+        Frame f = Frame.forTesting(buf);
+        onRenderThread(() -> view.renderForTest().render(f, f.area(), RenderContext.empty()));
+        return buf;
     }
 
     /**

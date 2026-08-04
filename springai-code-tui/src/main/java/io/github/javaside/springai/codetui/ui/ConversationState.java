@@ -82,8 +82,13 @@ public final class ConversationState implements AgentListener {
         }
     }
 
-    /** 后台任务状态——⏱ 面板显示。与 {@link SubtaskStatus} 分开：生命周期不同，别复用。 */
-    public enum BackgroundStatus { RUNNING, DONE, FAILED }
+    /**
+     * 后台任务状态——⏱ 面板显示。与 {@link SubtaskStatus} 分开：生命周期不同，别复用。
+     *
+     * <p><b>{@code KILLED} 不是 {@code FAILED} 的同义词</b>：失败是任务自己出的事，终止是用户下的手。
+     * 混成一个会让 {@code /tasks} 面板对着用户刚亲手终止的任务写「✗ 失败」，读起来像是"它崩了"。
+     */
+    public enum BackgroundStatus { RUNNING, DONE, FAILED, KILLED }
 
     /**
      * 后台任务只读快照（供渲染线程读）。
@@ -94,10 +99,14 @@ public final class ConversationState implements AgentListener {
      *
      * <p>{@code finishedAt} 为 0 表示仍在跑。<b>结束了就得把耗时钉住</b>：否则已完成任务的耗时会
      * 一直往上涨，读起来像是它还在跑。
+     *
+     * <p>{@code result} 是子 agent 的<b>完整</b>结果（未结束则为空串），供 {@code /tasks} 面板展开查看。
+     * 这是用户能看到全文的<b>唯一</b>途径：后台任务的过程与结果都不进 scrollback，交给模型的那份还会被
+     * {@code TaskResultStore} 限幅。多存一份不额外占内存——与注册表里那份是<b>同一个 String 引用</b>。
      */
     public record BackgroundView(String taskId, String agentName, String description,
                                  BackgroundStatus status, String currentTool,
-                                 long startedAt, long finishedAt) {}
+                                 long startedAt, long finishedAt, String result) {}
 
     /** 内部可变持有者。仅本类访问。 */
     private static final class BackgroundEntry {
@@ -108,6 +117,7 @@ public final class ConversationState implements AgentListener {
         long finishedAt;                  // 0 = 仍在跑
         BackgroundStatus status = BackgroundStatus.RUNNING;
         String currentTool = "";
+        String result = "";               // 完整结果正文（/tasks 面板展开用）
         BackgroundEntry(String taskId, String agentName, String description) {
             this.taskId = taskId;
             this.agentName = agentName;
@@ -414,14 +424,34 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) {
         BackgroundEntry e = findBackground(taskId);
+        // 已被用户终止的任务<b>不再接受完成事件</b>：注册表的 kill 只改状态、并不打断那条线程
+        // （见 SubagentRunner.runBackgroundBody——它跑完照样发完成事件），不挡住就会把用户亲手终止的
+        // 任务翻回「✓ 已完成」，面板对着他撒谎；那份迟到结果也不该再进 scrollback。
+        if (e != null && e.status == BackgroundStatus.KILLED) return;
         if (e != null) {
             e.status = ok ? BackgroundStatus.DONE : BackgroundStatus.FAILED;
             e.currentTool = "";
+            e.result = finalText == null ? "" : finalText;   // 完整正文留给 /tasks 面板展开
             e.finishedAt = System.currentTimeMillis();   // 钉住耗时，见 BackgroundView
         }
         pending.add(new OutputLine((ok ? "✓ 后台任务完成  " : "✗ 后台任务失败  ") + taskId
                 + (e == null ? "" : " · " + e.description)
                 + (ok ? "" : " · " + summarize(firstLine(finalText))), OutputLine.Kind.INFO));
+    }
+
+    /**
+     * 标记某个后台任务已被用户终止（{@code /tasks} 面板的 {@code k}）。返回是否真的改了状态。
+     *
+     * <p><b>UI 镜像必须自己记这一笔</b>：真正的终止发生在注册表里，而注册表不发事件——不补这一下，
+     * 用户按完 k 面板上那条会一直转到天荒地老（那条线程确实还在跑，但结果已经不会被送达了）。
+     */
+    public synchronized boolean markBackgroundKilled(String taskId) {
+        BackgroundEntry e = findBackground(taskId);
+        if (e == null || e.status != BackgroundStatus.RUNNING) return false;
+        e.status = BackgroundStatus.KILLED;
+        e.currentTool = "";
+        e.finishedAt = System.currentTimeMillis();
+        return true;
     }
 
     private BackgroundEntry findBackground(String taskId) {
@@ -436,7 +466,7 @@ public final class ConversationState implements AgentListener {
         List<BackgroundView> out = new ArrayList<>(backgroundTasks.size());
         for (BackgroundEntry e : backgroundTasks) {
             out.add(new BackgroundView(e.taskId, e.agentName, e.description, e.status, e.currentTool,
-                    e.startedAt, e.finishedAt));
+                    e.startedAt, e.finishedAt, e.result));
         }
         return out;
     }
