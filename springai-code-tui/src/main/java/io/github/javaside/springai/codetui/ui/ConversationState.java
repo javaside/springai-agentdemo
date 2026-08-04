@@ -85,15 +85,27 @@ public final class ConversationState implements AgentListener {
     /** 后台任务状态——⏱ 面板显示。与 {@link SubtaskStatus} 分开：生命周期不同，别复用。 */
     public enum BackgroundStatus { RUNNING, DONE, FAILED }
 
-    /** 后台任务只读快照（供渲染线程读）。 */
+    /**
+     * 后台任务只读快照（供渲染线程读）。
+     *
+     * <p>{@code startedAt} / {@code finishedAt} 是<b>本镜像自己</b>记的时刻（epoch 毫秒），面板据此渲染耗时。
+     * 刻意不去读注册表里那份时间——UI 只认 {@code ConversationState} 这一个真相源，
+     * 两份时间迟早会各说各话（事件迟到、任务被淘汰），而面板上「跑了多久」正是判断任务是否卡死的唯一线索。
+     *
+     * <p>{@code finishedAt} 为 0 表示仍在跑。<b>结束了就得把耗时钉住</b>：否则已完成任务的耗时会
+     * 一直往上涨，读起来像是它还在跑。
+     */
     public record BackgroundView(String taskId, String agentName, String description,
-                                 BackgroundStatus status, String currentTool) {}
+                                 BackgroundStatus status, String currentTool,
+                                 long startedAt, long finishedAt) {}
 
     /** 内部可变持有者。仅本类访问。 */
     private static final class BackgroundEntry {
         final String taskId;
         final String agentName;
         final String description;
+        final long startedAt = System.currentTimeMillis();
+        long finishedAt;                  // 0 = 仍在跑
         BackgroundStatus status = BackgroundStatus.RUNNING;
         String currentTool = "";
         BackgroundEntry(String taskId, String agentName, String description) {
@@ -405,6 +417,7 @@ public final class ConversationState implements AgentListener {
         if (e != null) {
             e.status = ok ? BackgroundStatus.DONE : BackgroundStatus.FAILED;
             e.currentTool = "";
+            e.finishedAt = System.currentTimeMillis();   // 钉住耗时，见 BackgroundView
         }
         pending.add(new OutputLine((ok ? "✓ 后台任务完成  " : "✗ 后台任务失败  ") + taskId
                 + (e == null ? "" : " · " + e.description)
@@ -422,7 +435,8 @@ public final class ConversationState implements AgentListener {
     public synchronized List<BackgroundView> backgroundTasks() {
         List<BackgroundView> out = new ArrayList<>(backgroundTasks.size());
         for (BackgroundEntry e : backgroundTasks) {
-            out.add(new BackgroundView(e.taskId, e.agentName, e.description, e.status, e.currentTool));
+            out.add(new BackgroundView(e.taskId, e.agentName, e.description, e.status, e.currentTool,
+                    e.startedAt, e.finishedAt));
         }
         return out;
     }
