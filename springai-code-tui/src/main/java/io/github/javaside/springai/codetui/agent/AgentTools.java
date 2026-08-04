@@ -1,5 +1,8 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
+import io.github.javaside.springai.codetui.agent.background.BackgroundTaskTool;
+import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
 import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
@@ -87,6 +90,8 @@ import java.util.List;
  * 只是越界前会停下来问一次。
  */
 public final class AgentTools {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentTools.class);
 
     private AgentTools() {
     }
@@ -379,10 +384,20 @@ public final class AgentTools {
         SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener,
                 projectInstructions, subagentConcurrency, mcpRegistry, permissionEngine::mode);
         java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
+
+        // 后台子 agent 子系统：注册表（进程内、不落盘）+ 结果限幅落盘 + 常驻线程池。
+        // 必须在建 Task / ParallelTasks 之前接上：那两个工具的后台分支拿到的就是这里的派发器引用，
+        // 不调 enableBackground 的话模型传 run_in_background=true 只会得到「后台模式不可用」。
+        BackgroundTaskRegistry backgroundRegistry = new BackgroundTaskRegistry(64);
+        TaskResultStore backgroundResults = new TaskResultStore(root);
+        subagentRunner.enableBackground(backgroundRegistry, resolveBackgroundConcurrency());
+
         ToolCallback taskTool = SubagentTool.create(subagentSpecs,
                 (spec, prompt, desc, turnIgnored) ->
                         // 真实 parentTurnId 从 ThreadLocal 取（Task 工具被 ToolEventCallback 装饰，call 时已压入）
-                        subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()));
+                        subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()),
+                // 后台派发不带 turnId：后台任务没有归属回合（见 SubagentRunner.runBackgroundBody 传 -1）。
+                subagentRunner::runInBackground);
         // Task / ParallelTasks 也包一层：它们类别是 INTERNAL、恒放行，包一层零行为差异，
         // 只为「所有工具走同一条链」——否则以后给它们加类别时会漏掉这两个。
         ToolCallback decoratedTaskTool =
@@ -392,9 +407,20 @@ public final class AgentTools {
         // 再由 runAll 显式传入每个子任务闭包（子线程不读 ThreadLocal）。
         ToolCallback parallelTool = SubagentTool.createParallel(subagentSpecs,
                 (dispatches, turnIgnored) ->
-                        subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()));
+                        subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()),
+                subagentRunner::runInBackground);
         ToolCallback decoratedParallelTool = new PermissionCallback(
                 new ToolEventCallback(parallelTool, listener), permissionEngine, listener);
+
+        // TaskOutput：<b>仅主 agent</b>——不进 decoratedList（照记忆工具/ExitPlanMode 的既有做法）。
+        // 子 agent 拿不到 Task，自然也没有属于自己的后台任务；给了它只会让它去捞别人的结果。
+        // 装饰层数与 Task / ParallelTasks 一致（不包 MediaExternalizingCallback：返回值是纯文本）。
+        ToolCallback decoratedTaskOutputTool = new PermissionCallback(
+                new ToolEventCallback(
+                        BackgroundTaskTool.create(backgroundRegistry, backgroundResults,
+                                resolveTaskOutputTimeout()),
+                        listener),
+                permissionEngine, listener);
 
         // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
         ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine);
@@ -409,14 +435,18 @@ public final class AgentTools {
                 new ToolEventCallback(PlanApprovalBridge.exitPlanModeTool(planBridge), listener),
                 permissionEngine, listener);
 
-        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ ExitPlanMode（仅主 agent）+ Task 工具 + ParallelTasks 工具
-        // 注意：ParallelTasks 仅给主 agent，不进 decoratedList，故子 agent 不能再派并行子 agent（禁递归 fan-out）。
-        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 3];
+        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ ExitPlanMode（仅主 agent）+ Task + ParallelTasks + TaskOutput
+        // 注意：ParallelTasks / TaskOutput 仅给主 agent，不进 decoratedList，故子 agent 不能再派并行子 agent（禁递归 fan-out）、
+        // 也拿不到别人的后台结果。
+        // ⚠ 尾部四个下标是「相对末尾」的：往这里加工具必须同时改数组长度<b>和每一个既有下标</b>——
+        // 漏改不会编译失败，只会让某个工具静默变成 null 或被覆盖，运行期才炸且报错离原因很远。
+        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 4];
         System.arraycopy(decorated, 0, toolsWithTask, 0, decorated.length);
         System.arraycopy(memoryDecorated, 0, toolsWithTask, decorated.length, memoryDecorated.length);
-        toolsWithTask[toolsWithTask.length - 3] = decoratedExitPlanTool;
-        toolsWithTask[toolsWithTask.length - 2] = decoratedTaskTool;
-        toolsWithTask[toolsWithTask.length - 1] = decoratedParallelTool;
+        toolsWithTask[toolsWithTask.length - 4] = decoratedExitPlanTool;
+        toolsWithTask[toolsWithTask.length - 3] = decoratedTaskTool;
+        toolsWithTask[toolsWithTask.length - 2] = decoratedParallelTool;
+        toolsWithTask[toolsWithTask.length - 1] = decoratedTaskOutputTool;
 
         // 事件溯源会话记忆：文件仓库（<root>/.codetui/sessions/，按项目隔离，进程重启后可加载）+ 「回合/token 感知」压缩。
         // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 裁剪半截历史（DefaultSessionService 不暴露该能力）。
@@ -502,7 +532,8 @@ public final class AgentTools {
 
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
-                reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels);
+                reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
+                backgroundRegistry, backgroundResults);
     }
 
     /**
@@ -546,6 +577,48 @@ public final class AgentTools {
             return Math.min(32, Math.max(1, Integer.parseInt(raw.trim())));
         } catch (NumberFormatException e) {
             return 4;
+        }
+    }
+
+    /** 后台子 agent 并发上限：环境变量 CODETUI_BACKGROUND_CONCURRENCY，非法/缺失回退 4，钳制到 [1, 32]。 */
+    private static int resolveBackgroundConcurrency() {
+        return clampConcurrency(System.getenv("CODETUI_BACKGROUND_CONCURRENCY"), 4);
+    }
+
+    /** TaskOutput 阻塞等待上限（秒）：环境变量 CODETUI_TASK_OUTPUT_TIMEOUT_SECONDS，非法/缺失回退 300，钳制到 [1, 3600]。 */
+    private static int resolveTaskOutputTimeout() {
+        return clampTaskOutputTimeout(System.getenv("CODETUI_TASK_OUTPUT_TIMEOUT_SECONDS"));
+    }
+
+    /**
+     * 解析并钳制到 {@code [1, 32]}，缺失/非法回落 {@code fallback}。
+     *
+     * <p><b>抽成纯函数是为了能被单测直接盯住</b>：env 读取那一层没法在测试里安全改（改进程环境变量会
+     * 泄漏到同 JVM 里跑的其它用例），而"用户在 env 里写了个 abc"恰恰是最该被钉住的一条——
+     * 它必须回落默认而不是让启动崩掉。形状照 {@link #resolveSubagentConcurrency}。
+     */
+    static int clampConcurrency(String raw, int fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Math.min(32, Math.max(1, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException e) {
+            log.warn("CODETUI_BACKGROUND_CONCURRENCY 不是合法整数（{}），回落默认 {}", raw, fallback);
+            return fallback;
+        }
+    }
+
+    /** 同上，用于 TaskOutput 超时：钳到 {@code [1, 3600]} 秒，缺失/非法回落 300。 */
+    static int clampTaskOutputTimeout(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return 300;
+        }
+        try {
+            return Math.min(3600, Math.max(1, Integer.parseInt(raw.trim())));
+        } catch (NumberFormatException e) {
+            log.warn("CODETUI_TASK_OUTPUT_TIMEOUT_SECONDS 不是合法整数（{}），回落默认 300", raw);
+            return 300;
         }
     }
 
@@ -667,7 +740,9 @@ public final class AgentTools {
                                SubagentRunner subagentRunner,
                                SessionFileExternalizer fileExternalizer,
                                PermissionEngine permissionEngine,
-                               java.util.Map<String, VisionMaterializingChatModel> visionModels) {
+                               java.util.Map<String, VisionMaterializingChatModel> visionModels,
+                               BackgroundTaskRegistry backgroundRegistry,
+                               TaskResultStore backgroundResults) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
