@@ -132,6 +132,27 @@ public interface AgentListener {
      */
     default void onGuardrailBypassed(long turnId, String what) { }
 
+    // ── 后台子 agent（run_in_background；跨回合存活，故<b>不带 turnId</b>） ──
+
+    /**
+     * 后台任务已启动。<b>刻意不带 turnId</b>：后台任务跨回合存活，带 turnId 会被
+     * {@code ConversationState} 的迟到过滤丢弃（那正是前台事件想要的行为，对后台却是致命的）。
+     *
+     * <p>默认空实现，便于回显桩 / 测试桩省略。
+     */
+    default void onBackgroundTaskStarted(String taskId, String agentName, String description) { }
+
+    /**
+     * 后台任务结束。ok=false 表示执行抛错（finalText 是摊平后的原因）。
+     *
+     * <p><b>刻意没有配套的「进度」事件</b>：后台任务「当前在跑哪个工具」不走这条通道，
+     * 而是照常经 {@link ToolEventCallback} 发 {@code onToolStarted(turnId, taskId, ...)}，
+     * 由 UI 层按 taskId 认出后台任务、写进它自己的镜像状态。多摆一个没有发射点的
+     * {@code onBackgroundTaskProgress} 只会立一块「后台进度该从这里报」的假路标，
+     * 照着接线的人会发现事件永远不来。
+     */
+    default void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) { }
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);
