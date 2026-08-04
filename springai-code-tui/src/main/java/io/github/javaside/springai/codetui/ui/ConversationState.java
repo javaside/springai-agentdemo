@@ -82,6 +82,27 @@ public final class ConversationState implements AgentListener {
         }
     }
 
+    /** 后台任务状态——⏱ 面板显示。与 {@link SubtaskStatus} 分开：生命周期不同，别复用。 */
+    public enum BackgroundStatus { RUNNING, DONE, FAILED }
+
+    /** 后台任务只读快照（供渲染线程读）。 */
+    public record BackgroundView(String taskId, String agentName, String description,
+                                 BackgroundStatus status, String currentTool) {}
+
+    /** 内部可变持有者。仅本类访问。 */
+    private static final class BackgroundEntry {
+        final String taskId;
+        final String agentName;
+        final String description;
+        BackgroundStatus status = BackgroundStatus.RUNNING;
+        String currentTool = "";
+        BackgroundEntry(String taskId, String agentName, String description) {
+            this.taskId = taskId;
+            this.agentName = agentName;
+            this.description = description;
+        }
+    }
+
     private final Deque<OutputLine> pending = new ArrayDeque<>();
 
     /** 排队的用户消息 + 其挂载技能（可空）。挂载随消息入队，出队时一并带出。 */
@@ -91,6 +112,15 @@ public final class ConversationState implements AgentListener {
     private final StringBuilder streaming = new StringBuilder();
     private final List<String> todo = new ArrayList<>();          // 主 agent（控制器）的 todo/计划（todo 面板，不进 scrollback）
     private final List<Subtask> subtasks = new ArrayList<>();     // 本回合派出的子 agent 状态（任务面板，不进 scrollback）
+
+    /**
+     * 后台子 agent（run_in_background）状态——⏱ 面板，<b>不进 scrollback 的中间态</b>。
+     *
+     * <p><b>与 {@link #subtasks} 分开的理由是生命周期</b>：subtasks 由 {@link #onTurnStarted}
+     * 清空（回合级），后台任务跨回合存活。混在一个列表里，清空语义迟早会写错——
+     * 而写错的后果是「任务凭空消失」，用户无从判断它是跑完了还是被吃了。
+     */
+    private final List<BackgroundEntry> backgroundTasks = new ArrayList<>();
     private final StringBuilder input = new StringBuilder();
     private volatile Status status = Status.IDLE;
     private volatile String notice = "";
@@ -159,6 +189,7 @@ public final class ConversationState implements AgentListener {
         clearModals();      // 别把待处理模态留给新会话：它们背后各有一个 park 着的工具线程
         todo.clear();
         subtasks.clear();
+        backgroundTasks.clear();     // /clear：⏱ 面板一并清空（任务本身的终止由 CodeTuiView 调注册表完成）
         pending.clear();
         queued.clear();
         notice = "";
@@ -358,10 +389,61 @@ public final class ConversationState implements AgentListener {
         }
     }
 
+    // ── 后台子 agent（不带 turnId，故<b>不做迟到过滤</b>，也不被 onTurnStarted 清空） ──
+
+    @Override
+    public synchronized void onBackgroundTaskStarted(String taskId, String agentName, String description) {
+        String d = summarize(description);      // 折叠换行：守住「一 OutputLine = 一物理行」
+        backgroundTasks.add(new BackgroundEntry(taskId, agentName, d));
+        pending.add(new OutputLine("⏱ 后台任务已启动  " + taskId + " · " + agentName
+                + (d.isEmpty() ? "" : " · " + d), OutputLine.Kind.INFO));
+    }
+
+    @Override
+    public synchronized void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) {
+        BackgroundEntry e = findBackground(taskId);
+        if (e != null) {
+            e.status = ok ? BackgroundStatus.DONE : BackgroundStatus.FAILED;
+            e.currentTool = "";
+        }
+        pending.add(new OutputLine((ok ? "✓ 后台任务完成  " : "✗ 后台任务失败  ") + taskId
+                + (e == null ? "" : " · " + e.description)
+                + (ok ? "" : " · " + summarize(firstLine(finalText))), OutputLine.Kind.INFO));
+    }
+
+    private BackgroundEntry findBackground(String taskId) {
+        for (BackgroundEntry e : backgroundTasks) {
+            if (e.taskId.equals(taskId)) return e;
+        }
+        return null;
+    }
+
+    /** ⏱ 面板只读快照。 */
+    public synchronized List<BackgroundView> backgroundTasks() {
+        List<BackgroundView> out = new ArrayList<>(backgroundTasks.size());
+        for (BackgroundEntry e : backgroundTasks) {
+            out.add(new BackgroundView(e.taskId, e.agentName, e.description, e.status, e.currentTool));
+        }
+        return out;
+    }
+
+    /** 是否有后台任务在跑（状态栏后缀用）。 */
+    public synchronized int backgroundRunningCount() {
+        int n = 0;
+        for (BackgroundEntry e : backgroundTasks) {
+            if (e.status == BackgroundStatus.RUNNING) n++;
+        }
+        return n;
+    }
+
     /** 子 agent 内部工具（taskId 非空）：缩进一级挂在当前 Task 块下；taskId 为空则走主流工具路径。 */
     @Override
     public synchronized void onToolStarted(long turnId, String taskId, String toolName, String input) {
         if (taskId == null) { onToolStarted(turnId, toolName, input); return; }
+        // 后台任务：只更新 ⏱ 面板的「当前工具」，绝不进 scrollback（否则会插进你与主 agent 的对话里），
+        // 也绝不做 turnId 迟到过滤（后台任务的 turnId 恒为 -1，过滤会把它全丢掉）。
+        BackgroundEntry bg = findBackground(taskId);
+        if (bg != null) { bg.currentTool = toolName; return; }
         if (turnId != acceptingTurnId) return;
         String s = summarize(input);
         pending.add(new OutputLine("    ⎿ " + toolName + (s.isEmpty() ? "" : " " + s),
@@ -374,6 +456,7 @@ public final class ConversationState implements AgentListener {
     @Override
     public synchronized void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
         if (taskId == null) { onToolFinished(turnId, toolName, output, ok); return; }
+        if (findBackground(taskId) != null) return;   // 后台任务的工具结束不出行
         // 子 agent 内部工具：仅在失败时补一行更深缩进的告警，成功时静默（起始行已展示活动）。
         if (turnId != acceptingTurnId || ok) return;
         pending.add(new OutputLine("      ✗ " + toolName, OutputLine.Kind.SUBAGENT_TOOL));
