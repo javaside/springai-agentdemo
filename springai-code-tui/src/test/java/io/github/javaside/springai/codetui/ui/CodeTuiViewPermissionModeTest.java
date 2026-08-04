@@ -38,7 +38,7 @@ class CodeTuiViewPermissionModeTest {
         @Override public PermissionMode permissionMode() { return mode; }
         @Override public PermissionMode cyclePermissionMode() {
             cycles.incrementAndGet();
-            mode = mode.next(false);
+            mode = mode.next();
             return mode;
         }
         @Override public List<PermissionRule> permissionRules() {
@@ -101,18 +101,21 @@ class CodeTuiViewPermissionModeTest {
     }
 
     @Test
-    @DisplayName("连按三次回到默认（未授权 BYPASS 时三态循环）")
-    void shiftTabThriceReturnsToDefault(@TempDir Path root) {
+    @DisplayName("连按四次回到默认（四档平权：默认→自动接受编辑→计划模式→跳过权限检查→默认）")
+    void shiftTabFourTimesReturnsToDefault(@TempDir Path root) {
         ConversationState state = new ConversationState();
         ModeStub stub = new ModeStub();
         CodeTuiView v = new CodeTuiView(state, stub, root);
 
         v.feedKeyForTest(shiftTab());
         v.feedKeyForTest(shiftTab());
-        assertEquals(PermissionMode.PLAN, stub.mode, "期 2 起中间多了一档计划模式");
+        assertEquals(PermissionMode.PLAN, stub.mode, "第二下到计划模式");
+        v.feedKeyForTest(shiftTab());
+        assertEquals(PermissionMode.BYPASS, stub.mode,
+                "第三下到「跳过权限检查」——它不再需要 --dangerously-skip-permissions");
         v.feedKeyForTest(shiftTab());
 
-        assertEquals(3, stub.cycles.get());
+        assertEquals(4, stub.cycles.get());
         assertEquals(PermissionMode.DEFAULT, stub.mode);
         assertTrue(state.notice().contains("默认"), "最后一次切换的反馈不该被「按任意键清 notice」吃掉，"
                 + "实际 notice：" + state.notice());

@@ -35,13 +35,12 @@ class CodeTuiViewModeIndicatorTest {
     private static final String BYPASS_TAG = "⚠ 跳过权限检查";
     private static final String PLAN_TAG = "⏸ 计划模式";
 
-    /** 可切到任意档的桩（{@code bypassAllowed} 模拟 --dangerously-skip-permissions 启动）。 */
+    /** 可切到任意档的桩。四档平权后不再需要模拟启动开关。 */
     private static class Stub implements SubmitHandler {
         PermissionMode mode = PermissionMode.DEFAULT;
-        boolean bypassAllowed;
         @Override public reactor.core.Disposable submit(String text) { return null; }
         @Override public PermissionMode permissionMode() { return mode; }
-        @Override public PermissionMode cyclePermissionMode() { mode = mode.next(bypassAllowed); return mode; }
+        @Override public PermissionMode cyclePermissionMode() { mode = mode.next(); return mode; }
     }
 
     private static KeyEvent shiftTab() {
@@ -72,20 +71,28 @@ class CodeTuiViewModeIndicatorTest {
         assertTrue(screen(v).contains(ACCEPT_TAG),
                 "notice 清掉后模式标识必须仍在状态栏，否则用户无从得知自己在哪一档:\n" + screen(v));
 
-        // 期 2 起是三档循环（DEFAULT → ACCEPT_EDITS → PLAN → DEFAULT），从 ACCEPT_EDITS
-        // 回到 DEFAULT 要按两次 Shift+Tab；中途的 PLAN 也得换上自己的标识，防「标识粘住不更新」。
+        // 四档循环（DEFAULT → ACCEPT_EDITS → PLAN → BYPASS → DEFAULT），从 ACCEPT_EDITS
+        // 回到 DEFAULT 要按三次 Shift+Tab；中途各档也得换上自己的标识，防「标识粘住不更新」。
         v.feedKeyForTest(shiftTab());
         v.feedKeyForTest(KeyEvent.ofChar('b'));
         assertEquals(PermissionMode.PLAN, stub.mode);
         assertTrue(screen(v).contains(PLAN_TAG), "切到计划模式后应换成计划模式的标识:\n" + screen(v));
         assertTrue(!screen(v).contains("⏵⏵"), "已离开「自动接受编辑」，它的标识不该还粘在状态栏");
 
-        // 切回 DEFAULT 后标识必须消失——常态不该有噪声。
+        // 四档平权后 PLAN 的下一档是 BYPASS，再一下才回 DEFAULT。
+        // 中途的 BYPASS 也顺手验一下标识换上了——它是最该可见的一档。
         v.feedKeyForTest(shiftTab());
         v.feedKeyForTest(KeyEvent.ofChar('c'));
+        assertEquals(PermissionMode.BYPASS, stub.mode);
+        assertTrue(screen(v).contains(BYPASS_TAG), "切到 BYPASS 后应换成红色警示标识:\n" + screen(v));
+
+        // 切回 DEFAULT 后标识必须消失——常态不该有噪声。
+        v.feedKeyForTest(shiftTab());
+        v.feedKeyForTest(KeyEvent.ofChar('d'));
         assertEquals(PermissionMode.DEFAULT, stub.mode);
         assertTrue(!screen(v).contains("⏵⏵"), "切回 DEFAULT 后标识必须消失");
         assertTrue(!screen(v).contains("⏸"), "切回 DEFAULT 后计划模式标识也必须消失");
+        assertTrue(!screen(v).contains("⚠ 跳过权限检查"), "切回 DEFAULT 后 BYPASS 标识也必须消失");
     }
 
     @Test
@@ -93,7 +100,6 @@ class CodeTuiViewModeIndicatorTest {
     void bypassTagIsPersistentAndRed(@TempDir Path root) {
         ConversationState state = new ConversationState();
         Stub stub = new Stub();
-        stub.bypassAllowed = true;
         stub.mode = PermissionMode.BYPASS;
         CodeTuiView v = new CodeTuiView(state, stub, root);
 

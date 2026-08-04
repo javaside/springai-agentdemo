@@ -257,7 +257,7 @@ public final class PermissionEngine {
 
     /** 循环到下一个模式并返回新模式（UI 的 Shift+Tab）。 */
     public PermissionMode cycleMode() {
-        PermissionMode next = mode.next(bypassAllowed);
+        PermissionMode next = mode.next();
         this.mode = next;
         return next;
     }

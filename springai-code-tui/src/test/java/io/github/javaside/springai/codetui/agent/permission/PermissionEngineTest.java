@@ -680,17 +680,16 @@ class PermissionEngineTest {
         }
 
         @Test
-        @DisplayName("未获授权时进不了 BYPASS：cycleMode 与 setMode 都不行，配置声明也不行")
-        void bypassRequiresFlag(@TempDir Path root) {
+        @DisplayName("BYPASS 就在 Shift+Tab 环上：构造时没给任何「授权」也到得了")
+        void bypassIsOnTheCycle(@TempDir Path root) {
+            // noBypass 这个辅助方法此刻仍给构造器传 false——刻意用它，
+            // 这条断言的分量正在于「传了 false 也照样到得了」。
+            // （该辅助方法在 Task 3 随构造器参数一起删掉。）
             PermissionEngine e = noBypass(root, PermissionMode.ACCEPT_EDITS);
             assertEquals(PermissionMode.PLAN, e.cycleMode());
-            assertEquals(PermissionMode.DEFAULT, e.cycleMode(), "循环应跳过 BYPASS");
-            assertEquals(PermissionMode.DEFAULT, e.setMode(PermissionMode.BYPASS));
-            assertEquals(PermissionMode.DEFAULT, e.mode());
-
-            PermissionEngine fromConfig = new PermissionEngine(
-                    root, config(PermissionMode.BYPASS), PermissionMode.BYPASS, false);
-            assertEquals(PermissionMode.DEFAULT, fromConfig.mode(), "配置/启动参数也不能架空这道开关");
+            assertEquals(PermissionMode.BYPASS, e.cycleMode(),
+                    "四档平权：运行期切档不再受启动参数管");
+            assertEquals(PermissionMode.DEFAULT, e.cycleMode(), "再一次回到起点");
         }
 
         @Test

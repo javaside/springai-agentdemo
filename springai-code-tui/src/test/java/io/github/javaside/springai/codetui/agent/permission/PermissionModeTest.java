@@ -3,32 +3,43 @@ package io.github.javaside.springai.codetui.agent.permission;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PermissionModeTest {
 
     @Test
-    @DisplayName("无启动参数：三档循环 DEFAULT → ACCEPT_EDITS → PLAN → DEFAULT，BYPASS 不混入")
-    void cyclesThreeWithoutBypass() {
-        PermissionMode m = PermissionMode.DEFAULT;
-        m = m.next(false);
-        assertEquals(PermissionMode.ACCEPT_EDITS, m);
-        m = m.next(false);
-        assertEquals(PermissionMode.PLAN, m);
-        m = m.next(false);
-        assertEquals(PermissionMode.DEFAULT, m, "无 --dangerously-skip-permissions 时不得走到 BYPASS");
-
-        assertEquals(PermissionMode.DEFAULT, PermissionMode.BYPASS.next(false));
+    @DisplayName("四档平权循环：默认 → 自动接受编辑 → 计划模式 → 跳过权限检查 → 默认")
+    void cyclesFourModes() {
+        assertEquals(PermissionMode.ACCEPT_EDITS, PermissionMode.DEFAULT.next());
+        assertEquals(PermissionMode.PLAN, PermissionMode.ACCEPT_EDITS.next());
+        assertEquals(PermissionMode.BYPASS, PermissionMode.PLAN.next());
+        assertEquals(PermissionMode.DEFAULT, PermissionMode.BYPASS.next());
     }
 
+    /**
+     * 只断言「按四次回到起点」是不够的：一个把 PLAN 直接接回 DEFAULT 的三档实现，
+     * 按四次同样回得到 DEFAULT（DEFAULT→ACCEPT→PLAN→DEFAULT→ACCEPT，不对，
+     * 但按三次就回来了、第四次在 ACCEPT）——所以还要断言四次经过的档位<b>互不相同</b>，
+     * 这条才真正钉住「四档都在环上」。
+     */
     @Test
-    @DisplayName("带启动参数：四档循环，BYPASS 排在 PLAN 之后")
-    void cyclesFourWithBypass() {
-        assertEquals(PermissionMode.ACCEPT_EDITS, PermissionMode.DEFAULT.next(true));
-        assertEquals(PermissionMode.PLAN, PermissionMode.ACCEPT_EDITS.next(true));
-        assertEquals(PermissionMode.BYPASS, PermissionMode.PLAN.next(true));
-        assertEquals(PermissionMode.DEFAULT, PermissionMode.BYPASS.next(true));
+    @DisplayName("连按四次遍历全部四档，一个不漏、一个不重")
+    void fourPressesVisitEveryMode() {
+        Set<PermissionMode> seen = new LinkedHashSet<>();
+        PermissionMode m = PermissionMode.DEFAULT;
+        for (int i = 0; i < 4; i++) {
+            m = m.next();
+            seen.add(m);
+        }
+        assertEquals(PermissionMode.DEFAULT, m, "四次之后必须回到起点");
+        assertEquals(4, seen.size(), "四次必须经过四个互不相同的档位，实际经过：" + seen);
+        assertTrue(seen.contains(PermissionMode.BYPASS),
+                "BYPASS 必须在环上——它不再需要任何启动参数");
     }
 
     @Test

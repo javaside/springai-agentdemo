@@ -23,7 +23,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -129,12 +128,14 @@ class PermissionStartupTest {
     }
 
     @Test
-    @DisplayName("未获授权时门面也进不了 BYPASS（引擎那道闸门不能被门面绕过）")
-    void facadeCannotEnterBypassWithoutFlag(@TempDir Path root) {
-        CodingAgent agent = agentWith(engine(root, PermissionMode.ACCEPT_EDITS, false));
+    @DisplayName("门面可在运行期切进 BYPASS——不再需要 --dangerously-skip-permissions")
+    void facadeCanEnterBypassAtRuntime(@TempDir Path root) {
+        CodingAgent agent = agentWith(engine(root, PermissionMode.PLAN, false));
 
-        assertNotEquals(PermissionMode.BYPASS, agent.cyclePermissionMode(),
-                "没带 --dangerously-skip-permissions 时 BYPASS 不该在循环里");
+        assertEquals(PermissionMode.BYPASS, agent.cyclePermissionMode(),
+                "四档平权：PLAN 的下一档就是 BYPASS，启动参数不再是前置条件");
+        assertEquals(PermissionMode.BYPASS, agent.permissionMode(),
+                "切完读回的必须是新档，否则状态栏说一套、工具做另一套");
     }
 
     @Test
