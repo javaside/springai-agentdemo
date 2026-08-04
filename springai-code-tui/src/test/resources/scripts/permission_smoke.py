@@ -7,7 +7,8 @@ in-process test can reach:
   1. Shift+Tab (ESC[Z) really routes to the permission-mode cycle through the
      full JLine backend + EventParser + CodeTuiView chain, and the status bar
      shows the new mode.  期 2 起循环是三档
-     (DEFAULT -> ACCEPT_EDITS -> PLAN -> DEFAULT).  Also that the two
+     (DEFAULT -> ACCEPT_EDITS -> PLAN -> BYPASS -> DEFAULT，四档平权：BYPASS
+     不再需要 --dangerously-skip-permissions).  Also that the two
      pre-existing bare-Tab handlers (slash-menu completion, /mcp panel expand)
      still work AND no longer swallow Shift+Tab.
   2. /permissions prints its read-only report into the scrollback.
@@ -62,13 +63,18 @@ ESC = b"\x1b"
 CTRL_U = b"\x15"
 BACKSPACE = b"\x7f"
 
-MODE_DEFAULT = "权限模式：默认"
-MODE_ACCEPT = "权限模式：自动接受编辑"
-MODE_PLAN = "权限模式：计划模式"
+# 切档时的一次性 notice（CodeTuiView#onInputKey 的 Shift+Tab 分支）。
+# ⚠ 这与 /permissions 报告里的「权限模式：X（Shift+Tab 循环切换）」是<b>两处不同的文案</b>，
+#   后者没改，last_mode_line() 仍按老串找它。别把两者混用。
+MODE_DEFAULT = "已切到 默认"
+MODE_ACCEPT = "已切到 自动接受编辑"
+MODE_PLAN = "已切到 计划模式"
+MODE_BYPASS = "已切到 跳过权限检查"
 # The persistent status-bar tag (CodeTuiView#modeTag) — distinct wording from the
 # transient notice above precisely so a test cannot confuse the two.
 MODE_TAG_ACCEPT = "⏵⏵ 自动接受编辑"
 MODE_TAG_PLAN = "⏸ 计划模式"
+MODE_TAG_BYPASS = "⚠ 跳过权限检查"
 PERM_BOTTOM_LINE = "内置底线"
 PERM_PANEL_TITLE = "🔑 权限规则"
 MCP_PANEL_TITLE = "MCP 服务器"
@@ -106,6 +112,8 @@ PLAN_FEEDBACK_HINT = "Esc 返回选项"             # 自由文本子模式的�
 PUSH_MARKER = "PUSHNOW"      # -> Bash(git push …)   : 5-option form
 SSH_MARKER = "SSHNOW"        # -> Write(.ssh/config) : 3-option form (built-in floor)
 PLAN_MARKER = "PLANNOW"      # -> ExitPlanMode(plan) : 计划审批面板
+SLOW_MARKER = "SLOWNOW"      # -> 桩先睡 6 秒再回，制造一个稳定的「思考中」窗口
+SLOW_REPLY = "冒烟回复：慢速回合结束。"
 DENIED_REPLY = "好的，我不推送了。"
 PLAIN_REPLY = "冒烟回复：一切正常。"
 PLAN_TEXT = "# 测试计划\n\n- 第一步\n- 第二步"
@@ -159,6 +167,7 @@ class StubModel(BaseHTTPRequestHandler):
         # same-role messages, so an older "…PUSHNOW" user turn would otherwise
         # keep re-triggering the tool call forever.
         tail = (content.strip().splitlines() or [""])[-1]
+        slow = False
 
         if role == "tool":
             kind, chunks = "text", self._text_chunks(DENIED_REPLY)
@@ -169,6 +178,10 @@ class StubModel(BaseHTTPRequestHandler):
             # 计划模式的唯一出口：模型提交一份 markdown 计划等待人批准。
             kind, chunks = "plan_call", self._tool_call_chunks(
                 "ExitPlanMode", {"plan": PLAN_TEXT})
+        elif SLOW_MARKER in tail:
+            # 只为把应用钉在「思考中」上够久，好让冒烟按下 Shift+Tab 并读到那一帧。
+            kind, chunks = "slow_text", self._text_chunks(SLOW_REPLY)
+            slow = True
         elif SSH_MARKER in tail:
             # Relative path: the app resolves it against cwd (the temp dir), so
             # the `.ssh` path segment is what trips the built-in check — nothing
@@ -181,6 +194,10 @@ class StubModel(BaseHTTPRequestHandler):
         with StubModel.lock:
             StubModel.requests.append((role, kind))
             StubModel.sent.append(messages)
+
+        if slow:
+            # 睡在应答之前：此刻应用已提交、处于「思考中」，而 SSE 流还没开始。
+            time.sleep(6.0)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -354,7 +371,10 @@ def last_mode_line(session):
 
 
 def restore_default_mode(session):
-    """从 ACCEPT_EDITS 循环回 DEFAULT（期 2 起是三档，要按<b>两下</b>）并核实。
+    """从 ACCEPT_EDITS 循环回 DEFAULT（四档平权后要按<b>三下</b>）并核实。
+
+    <b>档位数每变一次，这里的按键次数就得跟着变</b>，而写死的次数一旦错位就是静默的错档，
+    不是红。所以结尾那次 assert_mode_via_report 是本函数的命根子，别为了省时间删掉。
 
     <b>不能</b>用 {@code wait_for(MODE_DEFAULT)} 核实：屏幕上一旦留有 /permissions 报告
     （"权限模式：默认（Shift+Tab 循环切换）"），这句 wait 就会命中那条<b>陈旧的 scrollback</b>
@@ -363,7 +383,9 @@ def restore_default_mode(session):
     """
     session.write(SHIFT_TAB)                 # ACCEPT_EDITS -> PLAN
     session.pump(0.4)
-    session.write(SHIFT_TAB)                 # PLAN -> DEFAULT
+    session.write(SHIFT_TAB)                 # PLAN -> BYPASS
+    session.pump(0.4)
+    session.write(SHIFT_TAB)                 # BYPASS -> DEFAULT
     session.pump(0.4)
     assert_mode_via_report(session, "默认")
 
@@ -389,29 +411,81 @@ def assert_mode_via_report(session, label):
 
 # ── scenarios ────────────────────────────────────────────────────────────
 def check_mode_cycle(session):
-    """Shift+Tab cycles DEFAULT -> ACCEPT_EDITS -> PLAN -> DEFAULT (期 2 起是三档；
-    no BYPASS: the app was started without --dangerously-skip-permissions)."""
+    """Shift+Tab 四档平权循环：DEFAULT -> ACCEPT_EDITS -> PLAN -> BYPASS -> DEFAULT.
+
+    本进程是<b>不带</b> --dangerously-skip-permissions 启动的，所以「BYPASS 出现在环上」
+    这件事本身就是四档平权的证据。
+
+    此处曾有四条 assert_absent("跳过权限检查", "BYPASS 不该出现在无启动参数的循环里")，
+    随四档平权一并删除——它们钉的约束已被推翻。<b>刻意删掉而不是反过来断言它存在</b>：
+    留一条名字与内容相反的断言，比没有断言更糟。BYPASS 在环上由下面的
+    wait_for(MODE_BYPASS) 正面钉住。
+    """
     session.write(SHIFT_TAB)
     session.wait_for(MODE_ACCEPT)
-    assert_absent(session, "跳过权限检查", "BYPASS 不该出现在无启动参数的循环里")
     print("Shift+Tab OK: 切到「自动接受编辑」.")
 
     session.write(SHIFT_TAB)
     session.wait_for(MODE_PLAN)
-    assert_absent(session, "跳过权限检查", "BYPASS 不该出现在无启动参数的循环里")
-    print("Shift+Tab OK: 第二下到「计划模式」（期 2 新增的第三档）.")
+    print("Shift+Tab OK: 第二下到「计划模式」.")
+
+    session.write(SHIFT_TAB)
+    session.wait_for(MODE_BYPASS)
+    # ⚠ 此刻<b>还看不到</b>常驻标识：状态行正被空闲态的 notice 独占，而 modeTag 按设计
+    # 只挂常态三行、不挂 notice 独占行（见 CodeTuiView#modeTag 的 javadoc）。
+    # 得先按一个键把 notice 清掉，标识才回来——这一步本身就是在验「标识不随 notice 一起走」，
+    # 而 BYPASS 是最该常驻可见的一档，此前实机上没有任何场景验过它。
+    session.write(b"x")
+    session.pump(0.5)
+    if MODE_TAG_BYPASS not in session.screen_text():
+        die("notice 清掉后 BYPASS 的红色常驻标识应出现在行首（%r）" % MODE_TAG_BYPASS,
+            session.screen.display)
+    session.write(CTRL_U)                    # 清掉刚才那个 x，别留在输入框里
+    session.pump(0.3)
+    print("Shift+Tab OK: 第三下到「跳过权限检查」（无启动参数也进得去，且标识常驻）.")
 
     session.write(SHIFT_TAB)
     session.wait_for(MODE_DEFAULT)
-    assert_absent(session, "跳过权限检查", "BYPASS 不该出现在无启动参数的循环里")
-    print("Shift+Tab OK: 第三下回「默认」（三档闭环）.")
+    print("Shift+Tab OK: 第四下回「默认」（四档闭环）.")
 
-    # 再走一整圈：确认循环是稳定的三档，而不是首圈碰巧对。
-    for expect in (MODE_ACCEPT, MODE_PLAN, MODE_DEFAULT):
+    # 再走一整圈：确认循环是稳定的四档，而不是首圈碰巧对。
+    for expect in (MODE_ACCEPT, MODE_PLAN, MODE_BYPASS, MODE_DEFAULT):
         session.write(SHIFT_TAB)
         session.wait_for(expect)
-        assert_absent(session, "跳过权限检查", "BYPASS 不该出现在无启动参数的循环里")
-    print("Shift+Tab OK: 第二圈同样是 默认→自动接受编辑→计划模式→默认（BYPASS 未混入）.")
+    print("Shift+Tab OK: 第二圈同样是 默认→自动接受编辑→计划模式→跳过权限检查→默认.")
+
+
+def check_mode_switch_during_turn(session):
+    """回合运行中切权限模式：波光转轮不能消失.
+
+    钉的缺陷：statusLine 里 notice 分支曾排在 status 开关之前且<b>无条件 return</b>，
+    于是切档的 notice 把「● 思考中…」整条盖掉，而且是 sticky 的——不按下一个键不还回来。
+    用户看不出回合还在跑。
+
+    <b>断言必须落在「同一个物理行」上</b>，不能只查两个子串都在屏上：
+    屏幕上留着前面场景的旧「思考中」与旧 notice，两个独立的 `in screen_text()`
+    可以各自命中一条陈旧 scrollback 而双双变绿（与 wait_for 命中陈旧 scrollback 同族）。
+    只有「转轮与切换反馈在同一行」才真正证明后缀降级生效了。
+
+    进入时 mode=DEFAULT，离开时 mode=DEFAULT。
+    """
+    session.write(SLOW_MARKER.encode() + b"\r")
+    wait_until(session, lambda: "思考中" in session.screen_text(), 10, "进入思考态")
+
+    session.write(SHIFT_TAB)
+    session.pump(0.8)
+
+    row = find_row(session, MODE_ACCEPT)
+    if row < 0:
+        die("运行中切档没有给出反馈（屏上找不到 %r）" % MODE_ACCEPT, session.screen.display)
+    line = session.screen.display[row]
+    if "思考中" not in line:
+        die("转轮与切换反馈不在同一行 —— notice 仍然独占了状态行：%r" % line,
+            session.screen.display)
+    print("运行中切档 OK: 转轮与切换反馈同屏同行（%r）." % line.strip())
+
+    session.wait_for(SLOW_REPLY, timeout=30)
+    restore_default_mode(session)          # 当前在 ACCEPT_EDITS，按三下回默认
 
 
 def check_mode_indicator_persists(session):
@@ -455,7 +529,9 @@ def check_mode_indicator_persists(session):
     print("计划模式标识 OK: 单物理行、尾部未被挤掉、无背景色残留.")
 
     session.write(CTRL_U)
-    session.write(SHIFT_TAB)                         # PLAN -> DEFAULT
+    session.write(SHIFT_TAB)                         # PLAN -> BYPASS
+    session.pump(0.4)
+    session.write(SHIFT_TAB)                         # BYPASS -> DEFAULT
     session.wait_for(MODE_DEFAULT)
     session.write(b"x")
     wait_until(session, lambda: MODE_TAG_PLAN not in session.screen_text(),
@@ -566,7 +642,9 @@ def check_plan_approval(session):
     session.wait_for("继续完善计划", timeout=20)      # finishPlan 下沉的确认行
     print("计划反馈子模式 OK: 反馈只落在面板里（主输入框为空）、Enter 提交后面板收起.")
 
-    session.write(SHIFT_TAB)                          # PLAN -> DEFAULT
+    session.write(SHIFT_TAB)                          # PLAN -> BYPASS
+    session.pump(0.4)
+    session.write(SHIFT_TAB)                          # BYPASS -> DEFAULT
     session.wait_for(MODE_DEFAULT)
     session.write(b"x")
     session.pump(0.3)
@@ -669,7 +747,9 @@ def check_plan_cancel_turn(session):
     print("计划 Esc 中断 OK: 面板收起、回合结束、下一条消息正常，"
           "且发出的历史里无悬空 tool_calls（回滚生效）.")
 
-    session.write(SHIFT_TAB)                          # PLAN -> DEFAULT
+    session.write(SHIFT_TAB)                          # PLAN -> BYPASS
+    session.pump(0.4)
+    session.write(SHIFT_TAB)                          # BYPASS -> DEFAULT
     session.pump(0.4)
     assert_mode_via_report(session, "默认")
 
@@ -1025,6 +1105,7 @@ def main():
         print("Startup OK.")
 
         check_mode_cycle(session)
+        check_mode_switch_during_turn(session)
         check_mode_indicator_persists(session)
         check_plan_approval(session)
         check_plan_cancel_turn(session)
