@@ -142,6 +142,9 @@ class StubModel(BaseHTTPRequestHandler):
     daemon_threads = True
     lock = threading.Lock()
     requests = []          # (角色, 回复种类)，供诊断
+    sent = []              # 每次请求的整串 messages —— 断言「模型到底收到了什么」的唯一依据。
+                           # 提示词是发出去的、屏幕上一个字都看不到，只看屏幕的话
+                           # 「/continue 有没有带上后台摘要」这类断言永远测不到。
 
     def log_message(self, fmt, *args):   # 别把 HTTP 日志喷进 pty
         pass
@@ -174,6 +177,7 @@ class StubModel(BaseHTTPRequestHandler):
 
         with StubModel.lock:
             StubModel.requests.append((role, kind))
+            StubModel.sent.append(messages)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -419,6 +423,49 @@ def check_auto_turn_wraps_lines(session):
     print("场景 3 OK：⏱ 面板翻成「0 运行 · 1 完成」.")
 
 
+# ── 场景 3.5：/continue 把后台摘要带给模型 ────────────────────────────────
+def check_continue_carries_background_digest(session):
+    """/continue 必须把「哪些后台任务正在跑」告诉模型，否则它会把正在跑的活再派一遍.
+
+    <b>断言落在请求体而不是屏幕上</b>：/continue 的提示词是发出去的，屏幕上一个字都看不到。
+    只看屏幕的话这条永远测不到——那正是这类接缝缺陷能活很久的原因。
+
+    进入时可能已有后台任务（前面场景留下的）；本幕自己再派三个 FOREVER 任务，
+    确保断言时一定有 RUNNING 的。
+    """
+    session.write(("派活 " + BG_THREE_MARKER).encode() + b"\r")
+    wait_until(session, lambda: "个后台任务" in session.screen_text(), 30,
+               "后台任务起来（⏱ 面板出现）")
+
+    with StubModel.lock:
+        before = len(StubModel.sent)
+
+    session.write(b"/continue\r")
+    wait_until(session, lambda: len(StubModel.sent) > before, 30, "/continue 把请求发了出去")
+
+    with StubModel.lock:
+        msgs = StubModel.sent[-1]
+
+    users = [m for m in msgs if m.get("role") == "user"]
+    if not users:
+        die("发出的历史里没有 user 消息（角色序列=%s）" % [m.get("role") for m in msgs],
+            session.screen.display)
+    content = users[-1].get("content") or ""
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False)
+
+    if "继续执行上一批未完成的计划" not in content:
+        die("最后一条 user 消息不是 /continue 的提示词：%r" % content[:200], session.screen.display)
+    if "当前进程仍有后台任务" not in content:
+        die("/continue 没把后台任务摘要带上——模型会把正在跑的活再派一遍：%r" % content,
+            session.screen.display)
+    if "不要重复委派" not in content:
+        die("摘要缺行动指引：%r" % content, session.screen.display)
+    if "task_" not in content:
+        die("摘要没点名 taskId，模型无从对应：%r" % content, session.screen.display)
+    print("场景 3.5 OK：/continue 的提示词里带上了后台任务摘要（模型确实收到了）.")
+
+
 # ── 场景 4：/tasks → k → 确认 → 已终止 ───────────────────────────────────
 def check_kill_from_panel(session):
     """在 /tasks 面板里选中第二条、按 k、Enter 确认，那一条变成 ⊘ … 已终止。
@@ -506,6 +553,7 @@ def main():
     session, _ = launch(base_url, 40, 120, "codetui-bg-smoke-b-")
     try:
         check_auto_turn_wraps_lines(session)
+        check_continue_carries_background_digest(session)
         quit_app(session)
     finally:
         session.close()
