@@ -69,14 +69,26 @@ public final class ModelPreference {
         return root.resolve(".codetui").resolve("model.json");
     }
 
-    /** 读上次用的模型 id。缺失/坏文件/空值一律 {@link Optional#empty()}，绝不抛。 */
+    /**
+     * 读上次用的模型 id。缺失/坏文件/空值一律 {@link Optional#empty()}，绝不抛。
+     *
+     * <h2>往 {@link #doRead} 加守卫的人请读这段</h2>
+     * <p>下面那个 catch-all 有代价：它会把<b>会抛的</b>显式守卫的变异检测力吃掉。
+     * 守卫删掉后异常被它吸收成 {@code empty}，与正确路径输出<b>一模一样</b>，只断返回值的测试杀不掉——
+     * 那条守卫等于没有保护。故新加<b>会抛的</b>守卫时，必须连带加一条<b>「这条路不打日志」</b>的断言
+     * （照 {@code ModelPreferenceTest} 里那三条的写法）。
+     *
+     * <p><b>只有会抛的守卫受此限。</b>守卫没了只是返回错值的（如 {@code id.isEmpty()} 会返回
+     * {@code Optional.of("")}），返回值断言照样杀得掉，不用加。
+     *
+     * <p>当前会抛的守卫共三条，均已钉死：{@code root == null}、{@code v == null}、{@code !v.isString()}。
+     */
     public static Optional<String> read(Path root) {
         try {
             return doRead(root);
         } catch (Exception e) {
             // 「绝不抛」是硬契约：这个类跑在启动路径上，漏一个异常就是 code-tui 起不来。
-            // 上面每条已知路径都各自降级了，能到这里的是「将来改这段的人漏判的那个」——
-            // 类注释里的绊线（长出第二个键就要改写侧）正指着这段代码。
+            // 上面每条已知路径都各自降级了，能到这里的只可能是「将来改 doRead 的人漏判的那个」。
             //
             // 这里带上整个异常（末尾多传一个 e）而不是像别处那样只取 getMessage()：
             // 别处兜的是已知路径，消息就够了；这里兜的是「不知道是什么」，
@@ -98,7 +110,9 @@ public final class ModelPreference {
         try {
             text = Files.readString(file);
         } catch (Exception e) {
-            log.warn("读不出模型偏好 {}（{}），本次按无记忆处理。", file, e.getMessage());
+            // 用 toString() 而不是 getMessage()：NoSuchFileException 之流的 getMessage()
+            // 返回的就是路径本身，只取消息会把路径打两遍，括号里本该说的是「出了什么事」
+            log.warn("读不出模型偏好 {}（{}），本次按无记忆处理。", file, e.toString());
             return Optional.empty();
         }
         if (text.isBlank()) {

@@ -62,6 +62,26 @@ class ModelPreferenceTest {
         }
     }
 
+    /**
+     * 第三条、也是最后一条「不加就抛」的守卫：没有 {@code root == null} 判定，
+     * {@code fileFor(null)} 上来就是 NPE。同样会被兜底 catch 吸收，故连日志一起断。
+     */
+    @Test
+    @DisplayName("read(null)：显式挡掉，不该靠兜底 catch")
+    void nullRootIsEmpty() {
+        Logger logger = (Logger) LoggerFactory.getLogger(ModelPreference.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            assertEquals(Optional.empty(), ModelPreference.read(null));
+            assertTrue(appender.list.isEmpty(),
+                    "null root 该被显式挡掉，不该惊动兜底 catch:" + appender.list);
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
     @Test
     @DisplayName("JSON 非法 → empty，且绝不抛")
     void malformedJsonIsEmpty(@TempDir Path root) throws Exception {
@@ -71,13 +91,30 @@ class ModelPreferenceTest {
         assertEquals(Optional.empty(), ModelPreference.read(root));
     }
 
+    /**
+     * 键不存在必须被 {@code v == null} <b>显式</b>挡掉：没有它，{@code v.stringValue()} 就是一发 NPE。
+     *
+     * <p>和 {@link #nonStringValueIsEmpty} 同一个形状——异常会被兜底 catch 吸收成 empty，
+     * 与正确路径输出一模一样，只断返回值杀不掉变异。故连日志一起断。
+     */
     @Test
-    @DisplayName("缺 lastModel 键 → empty")
+    @DisplayName("缺 lastModel 键 → empty，且走的是显式守卫不是兜底 catch")
     void missingKeyIsEmpty(@TempDir Path root) throws Exception {
         Path f = ModelPreference.fileFor(root);
         Files.createDirectories(f.getParent());
         Files.writeString(f, "{\"somethingElse\": \"x\"}");
-        assertEquals(Optional.empty(), ModelPreference.read(root));
+
+        Logger logger = (Logger) LoggerFactory.getLogger(ModelPreference.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            assertEquals(Optional.empty(), ModelPreference.read(root));
+            assertTrue(appender.list.isEmpty(),
+                    "这是一条已知的、该被显式挡掉的路，不该惊动兜底 catch:" + appender.list);
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     /**
