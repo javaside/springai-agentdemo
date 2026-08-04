@@ -6,11 +6,11 @@
 
 ## 模块用途
 
-- 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、输入框、底部状态栏。
+- 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、**⏱ 后台任务面板**（跨回合存活的后台子 agent，零任务时不占行）、输入框、底部状态栏。
 - **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `ZhipuProvider` / `QwenProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。智谱与千问走 OpenAI 兼容通路（复用 `spring-ai-openai`，`ZHIPU_BASE_URL` 默认 `.../api/paas/v4`、`DASHSCOPE_BASE_URL` 默认 `.../compatible-mode/v1`）。五家统一 read 超时（`CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300s）。
 - 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取网页正文）、`BochaWebSearch`（联网搜索·中文内容优先，博查 API，需配 `BOCHA_API_KEY`）、`BraveWebSearch`（联网搜索·英文内容优先，Brave API，需配 `BRAVE_API_KEY`；两家可共存，模型按内容语言自选，都不配则均不注册）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task` 委派单个子 agent + `ParallelTasks` 并发派多个独立子 agent）、`AutoMemoryTools`（`Memory*` 六件套：跨会话长期记忆的读写/增删/改名，仅主 agent）。
 - **权限管理（审批面板 + 规则）**：有副作用的工具调用**在执行之前**被拦下弹审批面板（↑↓ 选择、1-5 快选、Enter 确认、Esc 中断），你可以「允许一次 / 本会话不再问 / 永久允许（写入 `.codetui/permissions.json`）/ 拒绝（回合继续，模型换做法）/ 拒绝并中断回合」。只读操作直接放行；**网络工具每次都问**（请求内容会离开本机），允许后可按域名永久放行。`Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式」三档间循环，当前档位**常驻状态栏**；**计划模式**只放行只读调查、写与命令一律**拒绝**，模型改用 `ExitPlanMode` 交一份计划，经你批准（自动接受编辑 / 逐个确认 / 打回继续完善）后才动手；`/permissions` 查看生效模式与规则。另有一层**任何 allow 规则都盖不住**的内置底线（写 `.ssh`/`.aws`/`.kube`/`.gnupg`/`.git`/`.codetui` 配置、写 shell 启动文件、读私钥与凭据、`rm -rf /` 或 `~` 或变量目标…）；**`--dangerously-skip-permissions` 是唯一的例外——它连内置底线与 `ask` 规则都跳过，只留 deny 规则**。详见下方「权限管理」。
-- **子 agent（Task / ParallelTasks）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`）。`Task` 委派单个子 agent 前台阻塞执行；`ParallelTasks` 一次并发派多个独立子 agent（有界线程池，`CODETUI_SUBAGENT_CONCURRENCY` 默认 4、范围 [1,32]；失败隔离、按序汇总）。内部工具活动带 taskId 内联嵌套显示。
+- **子 agent（Task / ParallelTasks）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`）。`Task` 委派单个子 agent 前台阻塞执行；`ParallelTasks` 一次并发派多个独立子 agent（有界线程池，`CODETUI_SUBAGENT_CONCURRENCY` 默认 4、范围 [1,32]；失败隔离、按序汇总）。内部工具活动带 taskId 内联嵌套显示。两个工具都可传 `run_in_background=true` **转后台**：立刻返回 task id，你和主 agent 都能继续干别的，结果经 `TaskOutput` 取回或空闲时自动送达（**⏱ 面板** + `/tasks` 管理，详见下方「后台子 agent」）。
 - **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
 - **MCP（接入外部工具）**：启动时读 `.codetui/mcp.json`（两层：用户 `~/.codetui/mcp.json` + 项目 `<项目根>/.codetui/mcp.json`，项目级同名覆盖用户级）连接外部 [MCP](https://modelcontextprotocol.io/) server（**stdio** 本地子进程，如 `npx`/`uvx` 起的 `chrome-devtools-mcp`、官方 filesystem server；以及 **Streamable HTTP** 远程 server，如 Context7），把其工具注入**主 agent 与子 agent**。工具名带 `mcp__<server>__<工具>` 前缀避免撞名。**`/mcp` 运行期管理**：面板列出全部 server（含禁用/连接失败项），逐个启用/禁用即时生效（下一回合模型即见/不见其工具）并回写 `mcp.json` 的 `enabled` 字段。连不上的 server **静默降级**（记 WARN、不崩启动）；退出时**有界清理**子进程（≤2s，绝不拖慢 `/exit`）。配置见下方「MCP 配置」。
 - **上下文管理**：窗口记忆多轮会话，token 用量估算（`/context` 查看），超阈值自动压缩 + `/compact` 手动压缩。把 cwd / git 状态 / 模型名注入系统提示做 grounding。
@@ -84,6 +84,8 @@ export DEEPSEEK_API_KEY=你的key          # DeepSeek（默认现役，默认 de
 #   DEEPSEEK_MODELS / ZHIPU_MODELS / DASHSCOPE_MODELS / ANTHROPIC_MODELS / OPENAI_MODELS
 #   例：export DEEPSEEK_MODELS=deepseek-v4-pro,deepseek-v4-flash
 # 可选调优：CODETUI_LLM_READ_TIMEOUT_SECONDS（默认 300）、CODETUI_SUBAGENT_CONCURRENCY（默认 4）
+#           CODETUI_BACKGROUND_CONCURRENCY（后台子 agent 并发，默认 4，范围 [1,32]）
+#           CODETUI_TASK_OUTPUT_TIMEOUT_SECONDS（TaskOutput 阻塞等待上限，默认 300，范围 [1,3600]）
 
 # 切到一个可以随意丢弃、且被版本控制干净纳管的目录再运行
 cd /path/to/some/disposable/project
@@ -146,7 +148,7 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
   - **命令** → 单段且首词安全时给前缀规则（`mvn test -pl x` → `Bash(mvn test:*)`）。首词能跑任意代码或有破坏性时（`git` `bash` `python` `sudo` `rm` `find` `make`…）**不给前缀**——那会把 `Bash(rm:*)`（此后任何 `rm` 都不再问）当成「以后别问了」发出去；这类命令与多段命令一律给**整串字面量**（`Bash(git push origin main)`），逐字相等才命中，不可能比你批准的那次更宽。`mvn`/`npm`/`docker`/`kubectl` 一类**必须带子命令**（`Bash(mvn test:*)` 可以，`Bash(mvn:*)` 不行）；命令拆不动时不给建议，面板只剩允许一次/拒绝；
   - **网络** → 域名前缀 `WebFetch(https://host/:*)`（结尾的 `/` 不能省，否则会一并命中 `host.evil.com`）。搜索类工具的 query 每次都不同，按整个工具授权；
   - **未登记工具（含全部 MCP）** → 只给 `工具名(*)`，**绝不**把每次都变的入参写成 pattern（那条规则下次必然不命中 → 反复弹窗 → 用户转去开 BYPASS，比放宽更糟）。
-- 子 agent（`Task`/`ParallelTasks`）用**同一个**权限引擎，面板同样会为它们弹出；并发触发时逐个排队。
+- 子 agent（`Task`/`ParallelTasks`）用**同一个**权限引擎，面板同样会为它们弹出；并发触发时逐个排队。**唯一例外是后台任务**（`run_in_background=true`）：它弹不出面板，判出 ASK 时直接拒绝并说明原因，见下方「后台子 agent」。
 
 ### 判定顺序
 
@@ -270,6 +272,91 @@ java -jar springai-code-tui.jar --permission-mode plan
 `--dangerously-skip-permissions` 启动时打一条 ⚠ 提示，进入 BYPASS。**它真的跳过全部检查**：上面那层内置底线与 `ask` 规则都不再执行，只有 **deny 规则**还拦得住你，且拦下时直接拒绝、把结果告诉模型（不弹窗）——所以这一档**不会停下来等人**，这正是半无人值守能用的原因。想保留某些禁令，就自己写 deny 规则进 `permissions.json`。踩到内置底线仍被放行的操作会**留痕**（即时一行 + 回合末汇总）。
 
 `--permission-mode <default|acceptEdits|plan>` 指定起始档位（也支持 `--permission-mode=plan` 写法）。**它不接受 `bypass`**：全放行只能由 `--dangerously-skip-permissions` 进，否则那道启动开关就等于有了第二个入口。两个参数同时出现时 `--dangerously-skip-permissions` 优先，并打一行「已忽略 --permission-mode …」。取值非法或缺值只记一条 warn 并忽略，不影响启动。优先级：`--dangerously-skip-permissions` > `--permission-mode` > 配置文件 `defaultMode`。
+
+## 后台子 agent（`run_in_background`）
+
+`Task` 与 `ParallelTasks` 新增一个 `run_in_background` 参数（默认 `false`，**不传时的行为与从前逐字一致**）。传 `true` 时它**立刻返回一个 task id**，子 agent 在一个常驻线程池里跑：主 agent 可以接着调别的工具、接着说话、接着追派任务，你也能立刻提交下一条消息——**后台任务不计入 busy 闸门**。
+
+```
+> 让 explore 在后台把整个权限层的判定顺序摸一遍，你先接着改 README
+  ⏱ 后台任务已启动  task_3f9ac21b · explore · 摸清权限层判定顺序
+```
+
+### 结果怎么回来（两条路，互斥）
+
+结果有两条回收路径，靠一个「已消费」标记互斥——**同一个结果绝不会送两遍**：
+
+1. **模型主动取**：调 `TaskOutput` 工具（传 task id；可选阻塞等待）。等待超时返回的是「任务仍在运行」，**不是失败**——把「还没跑完」说成失败，模型会去重派一个一模一样的任务。
+2. **自动送达**：**空闲且输入框为空**时，程序自动起一个新回合，把已完成任务的结果交给模型。多个任务合成**一条**通知（起 N 个回合会让模型在没读完第一条时就被第二条打断）。
+
+「输入框为空」是这条判据里最实用的一半：你正在打字时它不会插进来抢走回合。想让它现在就送，把输入框清空即可。
+
+### 面板
+
+- **⏱ 后台任务面板**常驻输入框上方，列出全部后台任务（`▶` 运行 / `✓` 完成 / `✗` 失败 / `⊘` 已终止 + 耗时 + 当前工具）。**零任务时不占行**。
+- **`/tasks`** 打开管理面板：↑↓ 选择、Enter 展开结果、`k` 终止运行中的任务（**先确认**）、Esc 关闭。**任何时候可开**（同 `/permissions`，不像 `/mcp` 要求空闲）——后台任务的意义就在于「回合还在跑的时候也能看一眼」。
+  - 面板里**不提供 `j`/`k` 移动**（与本应用其余选择器不同）：`k` 在这里是**终止**键，两者撞车，「想上移却弹出终止确认」是最糟的形态。
+  - 后台任务**只有起止各一行**进滚动区（`⏱ 已启动` / `✓ 完成` / `✗ 失败`）；它的**工具活动与结果正文都不进**——否则会一行行插进你与主 agent 的对话里。故 `/tasks` 展开是界面上唯一能看到结果正文的地方；行内面板最多展开 **8 行**（再多会把输入框顶出屏幕），超出的注明还剩多少，**完整那份在模型手里**（超 4000 字符时还落了盘，见下）。
+- **跨回合存活**：`Esc` 取消当前回合**不会**碰后台任务。它们的生命周期与回合无关，这正是它们的用处。
+- `/clear` 与退出（`/exit` 与 Ctrl+C 两个入口）**终止全部后台任务**，清理有界 2s（照抄 MCP 子进程清理的「不卡退出优先」取舍）。
+
+### ⚠️ 权限：后台任务的 ASK 一律 DENY
+
+**这一小节是这个功能最容易踩的地方。** 不先看它，你第一次派后台任务会撞上一串莫名其妙的拒绝，然后自己去猜原因。
+
+后台任务走**同一个**权限引擎（判定顺序、规则、内置底线一字不差），差别只在**最后一步**：引擎判出 `ASK` 时，前台弹审批面板，**后台直接拒绝**。
+
+| 档位 | 后台任务的额外处理 |
+|---|---|
+| **默认** | 文件写 / 非白名单命令 / 网络 / 未登记与 MCP 的 ASK → **DENY** |
+| **自动接受编辑** | 工作区内的写与文件系统命令本就 ALLOW → **照常放行**；区外与网络的 ASK → DENY |
+| **计划模式** | 写与命令本就是 DENY → **与前台无差别**；网络的 ASK → DENY |
+| **跳过权限检查**（BYPASS） | **零特殊处理，与前台完全一致**（那一档不产生 ASK，走不到这一步） |
+
+**为什么后台任务不弹审批面板**：它的 turnId 早已过期，请求会被 UI 的迟到过滤**当场静默拒绝**——模型只看到一个没有理由的失败，然后对同一个操作反复重试直到耗光回合。所以这里主动拒绝，并在工具结果里写明原因、当前档位与正确的下一步（回前台重试 / 加 allow 规则 / 计划模式下别重试，把发现整理成结论）。**这与 BYPASS 档「永远不停下来等人」是同一条设计推理**：一个不会停下来等人的执行路径，必须把「等不到人」这件事变成一个模型看得懂、能据此改道的结果。
+
+> 计划模式下的拒绝理由里**刻意不提** `run_in_background=false`：那一档改前台一样被拒，指这条路只会让它白试一次。
+
+#### 后台任务能真干活的三条路
+
+1. **事先写窄 allow 规则**——`Bash(mvn test:*)` 这类进 `permissions.json`，命中 allow 的调用根本不产生 ASK，后台照跑。这是精度最高的一条。
+2. **切到「自动接受编辑」档**——工作区内的编辑与文件系统命令自动放行，区外与网络仍挡得住。这是实用的中间档，多数「让子 agent 在后台改一批文件」的场景到这里就够了。
+3. **`--dangerously-skip-permissions` 启动**——全放行，后台与前台再无差别。只适合一次性容器（先读完上方「安全声明」）。
+
+只读调查（`Read`/`Grep`/`Glob` + 只读命令）在**所有档位**都不受影响——这也是后台任务最顺的一类用法：派出去摸一遍代码，你继续干别的。
+
+### 三个刹车
+
+后台任务**没人看着**，所以它比前台多三道限制。都是花代价换来的，不是可有可无的保险：
+
+**1. 结果限幅（4000 字符）** — 超过 4000 字符的结果落盘 `.codetui/artifacts/task-<id>.txt`，进模型的通知里只放**前 4000 字符** + 一行可用 `Read` 取回的绝对路径。理由很直接：一个话痨子 agent 能在没人看着的时候把上下文打满。限幅做在**结果进入会话的唯一入口**上（自动送达与 `TaskOutput` 都经它），绕不过去。落盘失败时截断照做，并在文本里明说「截断之外的内容已丢失」——不说的话你会以为它还在盘上。
+
+**2. 自动回合失控刹车（3 次）** — 「空闲 + 输入框为空就自动起回合」这条规则本身可以自激：模型收到结果 → 又派一批后台任务 → 又空闲 → 又自动起回合。故记**连续**自动回合数，中间没有任何用户输入时连续起跑超过 **3** 次即停手，改为状态栏提示 `⏱ 有结果待处理 · 回车交给模型`——把方向盘交回给你，而不是继续替你烧钱。**任何真实用户输入都重置计数**。
+
+**3. 任务数上限** — 三层，各管一件事：
+
+| 限制 | 值 | 满了会怎样 |
+|---|---|---|
+| 并发 | `CODETUI_BACKGROUND_CONCURRENCY`，默认 4、范围 [1,32] | 排进等待队列 |
+| 等待队列 | 16 | **直接拒绝并说明**（「后台队列已满…请改用前台 Task，或等在跑的任务完成后重试」），**不静默排队** |
+| 注册表总容量 | 64 | 按**最旧的已完成**任务淘汰；**运行中的永不淘汰**（淘汰一个还在跑的，它跑完时就再也找不到自己了） |
+
+> 被队列拒绝的任务在注册表里记成**已终止**而不是**失败**：送一条「它失败了」给模型，读起来像它真的跑过——而它根本没启动。
+
+### 两个环境变量
+
+```bash
+export CODETUI_BACKGROUND_CONCURRENCY=4          # 后台子 agent 并发，默认 4，范围 [1,32]
+export CODETUI_TASK_OUTPUT_TIMEOUT_SECONDS=300   # TaskOutput 阻塞等待上限（秒），默认 300，范围 [1,3600]
+```
+
+`CODETUI_TASK_OUTPUT_TIMEOUT_SECONDS` **刻意不复用** `CODETUI_LLM_READ_TIMEOUT_SECONDS`：一个是「等自己派出的子 agent 跑完」，一个是「等 provider 回包」，语义不同，合成一个会让调其中任何一个都变成猜。两者非法/缺失都记 WARN 后回落默认值并钳制到范围内，不影响启动。
+
+### 什么时候别用后台
+
+- **要写文件或跑非白名单命令、而你没有事先加规则**——见上方权限矩阵，默认档下它会一路被拒。用前台，或先切档/加规则。
+- **结果马上就要用**——后台的收益是「你能同时干别的」，任务本身不会更快；下一步就要拿结果的话，前台 `Task` 更直接。
+- **要跨会话/跨进程留住结果**——后台任务只活在当前进程里，`/clear` 与退出都会终止它们。
 
 ## 视觉输入（图片真正进模型）
 
@@ -573,7 +660,7 @@ cd /path/to/some/disposable/project
 | Ctrl+U / Ctrl+K | 删到行首 / 删到行尾（以当前逻辑行为界，不跨行） |
 | Ctrl+X | 取消本次输入识别出的图片附件（见「视觉输入」；某些全局热键会抢占按键，撞上时按了没反应） |
 | Shift+Tab | 循环权限模式（默认 → 自动接受编辑 → 计划模式 → 默认；当前档位常驻状态栏） |
-| Esc | 取消当前正在进行的回合（工具调用/模型生成）；审批面板打开时 = 拒绝并中断本回合 |
+| Esc | 取消当前正在进行的回合（工具调用/模型生成）**；后台任务不受影响**，要停它去 `/tasks` 按 `k`；审批面板打开时 = 拒绝并中断本回合 |
 | Ctrl+C | 退出程序 |
 
 审批面板打开时：↑↓ 选择、`1`-`5` 快选（只移动高亮，仍需 Enter 确认）、Enter 确认、Esc 中断。
@@ -588,13 +675,14 @@ cd /path/to/some/disposable/project
 | --- | --- |
 | `/model` | 打开模型选择器，在当前 provider 的模型间切换 |
 | `/compact` | 手动压缩会话历史 |
-| `/clear` | 清空当前上下文、开一个全新空会话（旧会话留盘，可 `-c` 恢复）；同时清屏并复位面板 |
+| `/clear` | 清空当前上下文、开一个全新空会话（旧会话留盘，可 `-c` 恢复）；同时清屏并复位面板、**终止全部后台任务**（新会话不该有旧会话的任务还在烧钱） |
 | `/context` | 查看上下文用量（事件数 / token） |
 | `/skill` | 为本条消息指定技能 |
 | `/skills` | 查看可用技能清单（模型按需自动调用） |
 | `/reload` | 重新扫描技能目录（运行中新增/删除的 `SKILL.md` 生效，无需重启） |
 | `/mcp` | 管理 MCP 服务器：列出全部（含禁用/失败项），Enter 启用/禁用（即时生效 + 回写 `mcp.json`），Tab 展开工具清单（仅空闲时可用） |
 | `/permissions` | 打开权限规则面板：↑↓ 选择、`d` 删除（先确认）、Esc 关闭；当前模式与内置底线摘要仍打进对话区。**新增**规则走审批面板的「允许，永久」 |
+| `/tasks` | 打开后台任务面板：↑↓ 选择、Enter 展开结果、`k` 终止运行中的任务（先确认）、Esc 关闭（任何时候可开，不要求空闲） |
 | `/continue` | 续跑上次未完成的计划 |
 | `/help` | 显示可用命令与快捷键 |
 | `/exit` | 退出程序 |
@@ -613,7 +701,7 @@ cd /path/to/some/disposable/project
   - **计划模式下子 agent 只能做只读调查**：它与主 agent 共用同一个引擎，故写操作照样被 DENY。它会收到一段**专属的**系统提示（说明自己处于只读调查阶段、把发现报告回主 agent 就是交付），但**没有 `ExitPlanMode`**——提交计划是主 agent 的事。所以计划模式下派子 agent 去调查是正常用法，派它去做会落盘的事则做不成。
     > 子 agent 的提示段刻意**不与主 agent 版统一**：主 agent 版结尾指向 `ExitPlanMode`，而子 agent 的工具集里根本没有这个工具，照抄等于指一条走不通的路——把「不知道为什么被拒」换成「知道了、照做了、还是失败」，比不给提示更糟。
 - **无程序内会话选择器**：会话已持久化并按项目隔离（见上「会话持久化与恢复」），但程序内不能浏览/切换历史会话；`-c` 只恢复**最近一次**会话（按 mtime），要挑更早的需手动操作会话文件。
-- **子 agent 无后台模式**：`Task` 单个前台阻塞、`ParallelTasks` 一批并发前台执行（有界并发，全部 join 后返回）；暂不支持后台任务（`run_in_background` + 轮询回收）与 `/tasks` 详情面板（列为后续增强）。
+- **后台任务不跨进程**：后台子 agent 只活在当前进程里（注册表是内存态，不落盘）。退出或 `/clear` 会终止全部后台任务，重启后 `TaskOutput` 拿旧 id 只会得到「未知任务」。`-c` 恢复的是会话历史，不是在跑的任务。
 - **长期记忆无「自动整理」**：跨会话长期记忆已具备（见上「长期记忆」），但暂未接入定期 consolidation（自动汇总/去重冗余记忆）触发器；记忆的增删改全由模型按需驱动。
 - **视觉输入的边界**（详见上方「视觉输入」）：**终端里显示不了图片**（只会看到一行文件路径）；**`Bash` 生成的图片文件不会自动产生引用**（有意为之，模型想看就 `Read` 它）；**不支持 `Ctrl+V` 直接粘剪贴板里的图**（贴图靠写路径/拖文件）；**裸路径自动识别必然有误附**（附件行可见 + `Ctrl+X` 撤销兜底，不靠规则消灭）；**取消键可能被 OS 级全局热键抢走**（已知：Chrome 的 Gemini 扩展抢 `Ctrl+G`，故取消键已从 `Ctrl+G` 改为 `Ctrl+X`；这类冲突在代码里修不了，只能换键，而换给谁都有被抢的可能）；**视频恒不投递**。另外，消息序列只在**一个本地兼容网关 + `gpt-5.6-sol`** 上真机验证过，`api.openai.com` 原生端点与 Anthropic / 千问 / 智谱三家**完全未验证**，第一次真用仍可能 400。
 - **MCP 仅 stdio、管理粒度为整 server**：本期只支持 stdio 传输（`sse`/`streamable-http` 远程 server 已预留传输接缝但未实现，配了会跳过）。`/mcp` 可运行期启用/禁用**启动时已声明**的 server（即时生效 + 回写 `enabled`），但**新增/删除条目或改 `command`/`args` 等仍需重启**（面板条目集在启动期定型）；管理粒度为整个 server，不细到单个工具。工具名未做长度截断与跨 server 碰撞去重——默认 DeepSeek 无 64 字符上限、实测工具名远短于此且碰撞需刻意构造，故本期可接受。**退出清理为「有界优先」**：`/exit` 时关闭子进程硬限 2s，若某 server 恰在 2s 内未优雅关完，进程会被 JVM 退出带走、可能短暂残留由 OS 回收——这是「不卡退出」优先于「保证优雅清理」的有意取舍。
