@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.background.BackgroundTaskListTool;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskTool;
 import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
@@ -422,6 +423,11 @@ public final class AgentTools {
                         listener),
                 permissionEngine, listener);
 
+        // ListTasks：同样<b>仅主 agent</b>——理由与 TaskOutput 逐字相同（子 agent 没有属于自己的后台任务）。
+        ToolCallback decoratedListTasksTool = new PermissionCallback(
+                new ToolEventCallback(BackgroundTaskListTool.create(backgroundRegistry), listener),
+                permissionEngine, listener);
+
         // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
         ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine);
 
@@ -435,18 +441,19 @@ public final class AgentTools {
                 new ToolEventCallback(PlanApprovalBridge.exitPlanModeTool(planBridge), listener),
                 permissionEngine, listener);
 
-        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ ExitPlanMode（仅主 agent）+ Task + ParallelTasks + TaskOutput
-        // 注意：ParallelTasks / TaskOutput 仅给主 agent，不进 decoratedList，故子 agent 不能再派并行子 agent（禁递归 fan-out）、
-        // 也拿不到别人的后台结果。
-        // ⚠ 尾部四个下标是「相对末尾」的：往这里加工具必须同时改数组长度<b>和每一个既有下标</b>——
+        // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ ExitPlanMode（仅主 agent）+ Task + ParallelTasks + TaskOutput + ListTasks
+        // 注意：ParallelTasks / TaskOutput / ListTasks 仅给主 agent，不进 decoratedList，故子 agent 不能再派并行子 agent（禁递归 fan-out）、
+        // 也拿不到、看不到别人的后台任务。
+        // ⚠ 尾部五个下标是「相对末尾」的：往这里加工具必须同时改数组长度<b>和每一个既有下标</b>——
         // 漏改不会编译失败，只会让某个工具静默变成 null 或被覆盖，运行期才炸且报错离原因很远。
-        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 4];
+        Object[] toolsWithTask = new Object[decorated.length + memoryDecorated.length + 5];
         System.arraycopy(decorated, 0, toolsWithTask, 0, decorated.length);
         System.arraycopy(memoryDecorated, 0, toolsWithTask, decorated.length, memoryDecorated.length);
-        toolsWithTask[toolsWithTask.length - 4] = decoratedExitPlanTool;
-        toolsWithTask[toolsWithTask.length - 3] = decoratedTaskTool;
-        toolsWithTask[toolsWithTask.length - 2] = decoratedParallelTool;
-        toolsWithTask[toolsWithTask.length - 1] = decoratedTaskOutputTool;
+        toolsWithTask[toolsWithTask.length - 5] = decoratedExitPlanTool;
+        toolsWithTask[toolsWithTask.length - 4] = decoratedTaskTool;
+        toolsWithTask[toolsWithTask.length - 3] = decoratedParallelTool;
+        toolsWithTask[toolsWithTask.length - 2] = decoratedTaskOutputTool;
+        toolsWithTask[toolsWithTask.length - 1] = decoratedListTasksTool;
 
         // 事件溯源会话记忆：文件仓库（<root>/.codetui/sessions/，按项目隔离，进程重启后可加载）+ 「回合/token 感知」压缩。
         // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 裁剪半截历史（DefaultSessionService 不暴露该能力）。

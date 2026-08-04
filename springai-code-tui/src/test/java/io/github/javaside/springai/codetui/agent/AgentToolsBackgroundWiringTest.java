@@ -2,6 +2,10 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.background.BackgroundTask;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
+import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
+import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,6 +46,54 @@ class AgentToolsBackgroundWiringTest {
                 "主 agent 须能取回后台任务结果，实际工具集=" + runtime.keySet());
         // 防空转：确认读回的确实是真装配产物（否则「含 TaskOutput」对任何胡乱构造的 map 也可能成立）。
         assertTrue(runtime.containsKey("Task"), "同一份工具集里应有 Task，实际=" + runtime.keySet());
+    }
+
+    @Test
+    @DisplayName("主 agent 工具集含 ListTasks，且 Task/ParallelTasks/TaskOutput 一个都没被挤掉")
+    void mainAgentToolSetContainsListTasks(@TempDir Path root) {
+        Map<String, ToolCallback> runtime = RuntimeToolSet.byRegisteredName(root);
+
+        // 这四个必须同时在：AgentTools 的尾部下标是「相对末尾」的，加一个工具若漏改某个下标，
+        // 会让某个既有工具静默变成 null 或被覆盖——不编译错、不测试错，运行期才炸。
+        for (String name : List.of("Task", "ParallelTasks", "TaskOutput", "ListTasks")) {
+            assertTrue(runtime.containsKey(name),
+                    "主 agent 工具集缺 " + name + "（尾部下标漏改？），实际=" + runtime.keySet());
+            assertNotNull(runtime.get(name), name + " 是 null——下标撞车了");
+        }
+    }
+
+    @Test
+    @DisplayName("子 agent 拿不到 ListTasks——它没有属于自己的后台任务，列出来的只会是别人的")
+    void subagentToolSetOmitsListTasks(@TempDir Path root) {
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
+        List<String> subNames = rt.subagentRunner().toolNamesForTest();
+
+        assertFalse(subNames.contains("ListTasks"),
+                "子 agent 不该能列出主 agent 的后台任务，实际=" + subNames);
+        // 防空转：确认读回的列表真实非空。
+        assertTrue(subNames.contains("TodoWrite"),
+                "子 agent 应含共享工具（如 TodoWrite），证明列表真实非空，实际=" + subNames);
+    }
+
+    /**
+     * 第二个登记点：{@code ToolRegistry}。它决定这个工具<b>要不要弹审批</b>，
+     * 与 {@code AgentTools} 的数组（决定<b>有没有</b>这个工具）是两回事，漏掉不会编译错。
+     *
+     * <p>漏登记 ⇒ 落进 {@code UNKNOWN} 兜底 ⇒ 保守 ASK ⇒ 模型每次列后台任务都弹一次审批面板。
+     *
+     * <p><b>连 TaskOutput 一起断言</b>：那行登记至今没有任何测试盖住，现在删掉它
+     * 全仓不会有一条测试变红。既然来了就一起钉上。
+     */
+    @Test
+    @DisplayName("ListTasks / TaskOutput 都已在 ToolRegistry 登记——否则每次调用都弹审批")
+    void backgroundQueryToolsAreAllowedWithoutAsking(@TempDir Path root) {
+        PermissionEngine engine = new PermissionEngine(
+                root, PermissionConfig.empty(), PermissionMode.DEFAULT);
+
+        for (String name : List.of("ListTasks", "TaskOutput")) {
+            assertEquals(PermissionBehavior.ALLOW, engine.decide(name, "{}").behavior(),
+                    name + " 未在 ToolRegistry 登记 ⇒ 落进 UNKNOWN ⇒ 每次调用都弹审批面板");
+        }
     }
 
     /**
