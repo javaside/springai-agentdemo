@@ -1195,6 +1195,13 @@ public final class CodeTuiView extends InlineApp {
             String prompt = "继续执行上一批未完成的计划。请先回顾你的 todo 列表，从第一个尚未完成的任务开始委派子 agent 继续："
                     + "相互独立、无共享状态的子任务用 ParallelTasks 并行委派，有依赖或需共享上下文的用 Task 串行委派"
                     + "（与你先前采用的方式保持一致）；已完成的任务不要重做。若没有未完成的计划，直接说明即可。";
+            // 后台任务不在 todo 的视野里：Esc 掐掉前台回合后它们照跑，而 todo 上仍是「进行中」。
+            // 不说的话模型会把正在跑的活再派一遍（或把已经跑完、结果还没送出去的活重做一遍）。
+            // ⚠ 空串时一个字都不能加——没用后台功能的人不该为此付噪声。
+            String digest = onSubmit.backgroundDigestForContinue();
+            if (!digest.isEmpty()) {
+                prompt = prompt + "\n\n" + digest;
+            }
             if (busy()) state.enqueue(prompt, null);   // 忙/压缩中/有在飞子 agent：排队，清空后自动出队（同普通消息）
             else dispatch(prompt, null);
             return;
