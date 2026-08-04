@@ -151,7 +151,7 @@ class McpRegistryTest {
                 new PermissionConfig(PermissionMode.DEFAULT,
                         List.of(new PermissionRule("mcp__s1__ping", null,
                                 PermissionBehavior.ALLOW, RuleScope.SESSION))),
-                PermissionMode.DEFAULT, false);
+                PermissionMode.DEFAULT);
         McpRegistry reg = McpRegistry.initForTest(root, listener, List.of(), engine);
         try {
             ToolCallback decorated = reg.decorate(fakeTool("mcp__s1__ping"));

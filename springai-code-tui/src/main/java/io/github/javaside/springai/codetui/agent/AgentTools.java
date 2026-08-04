@@ -557,14 +557,14 @@ public final class AgentTools {
     }
 
     /**
-     * 测试/兼容用的隔离引擎：空配置 + DEFAULT 模式 + 不许 BYPASS。
+     * 测试/兼容用的隔离引擎：空配置 + DEFAULT 模式。
      *
      * <p><b>刻意不读两层 {@code permissions.json}</b>：用户层在 {@code ~/.codetui/permissions.json}，
      * 读了就会让测试结果随开发者本机的个人规则漂移（在 CI 上绿、在某人机器上红，或反过来）。
      * 生产的引擎由 {@code CodeTuiApplication} 用 {@code PermissionConfigLoader.load(root)} 建。
      */
     static PermissionEngine testEngine(Path root) {
-        return new PermissionEngine(root, PermissionConfig.empty(), PermissionMode.DEFAULT, false);
+        return new PermissionEngine(root, PermissionConfig.empty(), PermissionMode.DEFAULT);
     }
 
     /** 子 agent 并行并发度：环境变量 CODETUI_SUBAGENT_CONCURRENCY，非法/缺失回退 4，钳制到 [1, 32]。 */

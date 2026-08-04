@@ -43,7 +43,7 @@ class PermissionEngineAliasTest {
 
     private static PermissionEngine engine(Path root, PermissionMode mode, PermissionRule... rules) {
         return new PermissionEngine(root, new PermissionConfig(PermissionMode.DEFAULT, List.of(rules)),
-                mode, false);
+                mode);
     }
 
     /** @TempDir 自带一层符号链接，先解掉——见类注释。 */

@@ -182,7 +182,7 @@ class AgentToolsSecurityTest {
     @DisplayName("护栏：默认模式下，写工作区文件会被拦下要求授权（不是直接放行）")
     void engine_defaultMode_asksBeforeWrite(@TempDir Path root) {
         PermissionEngine engine = new PermissionEngine(root,
-                PermissionConfig.empty(), PermissionMode.DEFAULT, false);
+                PermissionConfig.empty(), PermissionMode.DEFAULT);
 
         PermissionDecision d = engine.decide("Write",
                 "{\"filePath\":\"" + json(root.resolve("a.txt")) + "\"}");
@@ -198,7 +198,7 @@ class AgentToolsSecurityTest {
                 new PermissionConfig(PermissionMode.BYPASS, List.of(
                         PermissionRule.parse("Bash(git push:*)",
                                 PermissionBehavior.DENY, RuleScope.USER))),
-                PermissionMode.BYPASS, true);
+                PermissionMode.BYPASS);
 
         assertEquals(PermissionBehavior.DENY,
                 engine.decide("Bash", "{\"command\":\"git push origin main\"}").behavior(),
@@ -264,7 +264,7 @@ class AgentToolsSecurityTest {
     void KNOWN_UNSAFE_rawToolCallback_bypassesPermissionLayer(@TempDir Path root) throws Exception {
         // 引擎说「这次写 root 之外要先问」……
         PermissionEngine engine = new PermissionEngine(root,
-                PermissionConfig.empty(), PermissionMode.DEFAULT, false);
+                PermissionConfig.empty(), PermissionMode.DEFAULT);
         Path outsideDir = Files.createTempDirectory("raw_bypass_");
         Path outside = outsideDir.resolve("escape.txt");
         assertEquals(PermissionBehavior.ASK,

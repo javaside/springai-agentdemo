@@ -24,7 +24,7 @@ class PermissionEngineRemoveRuleTest {
 
     private static PermissionEngine engine(Path root) {
         return new PermissionEngine(root, new PermissionConfig(PermissionMode.DEFAULT, List.of()),
-                PermissionMode.DEFAULT, false);
+                PermissionMode.DEFAULT);
     }
 
     private static PermissionBehavior mvnTest(PermissionEngine e) {

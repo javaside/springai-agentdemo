@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AcceptEditsCommandScopeTest {
 
     private static PermissionEngine engine(Path root, PermissionMode mode) {
-        return new PermissionEngine(root, PermissionConfig.empty(), mode, false);
+        return new PermissionEngine(root, PermissionConfig.empty(), mode);
     }
 
     private static String bash(String cmd) {

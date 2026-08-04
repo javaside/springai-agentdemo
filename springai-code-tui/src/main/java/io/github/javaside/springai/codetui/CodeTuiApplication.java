@@ -80,8 +80,7 @@ public class CodeTuiApplication {
         // 前者是显式的「我知道我在做什么」，不该被一个同时出现的 --permission-mode plan 悄悄改掉语义。
         PermissionMode startMode = skipPermissions ? PermissionMode.BYPASS
                 : (cliMode != null ? cliMode : permissionConfig.defaultMode());
-        PermissionEngine permissionEngine = new PermissionEngine(root, permissionConfig,
-                startMode, skipPermissions);
+        PermissionEngine permissionEngine = new PermissionEngine(root, permissionConfig, startMode);
         if (skipPermissions) {
             state.pushInfo("⚠ 已启用 --dangerously-skip-permissions：除 deny 规则与内置危险检查外，"
                     + "全部工具调用不再询问。");

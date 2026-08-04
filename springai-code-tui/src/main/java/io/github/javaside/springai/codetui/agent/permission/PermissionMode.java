@@ -34,7 +34,7 @@ public enum PermissionMode {
     /**
      * 循环到下一个模式（UI 的 {@code Shift+Tab}）。<b>四档平权</b>，BYPASS 排在 PLAN 之后。
      *
-     * <p><b>为什么不带门禁参数</b>：这里曾有一个 {@code bypassAllowed} 参数，
+     * <p><b>为什么不带门禁参数</b>：这里曾有一个布尔门禁参数，
      * 由 {@code --dangerously-skip-permissions} 决定 BYPASS 在不在环上。那把两件事
      * 合并成了一个布尔：「启动时能否<b>起步于</b> BYPASS」和「运行期用户能否<b>切进</b> BYPASS」。
      * 前者该受启动参数管（clone 来的配置、命令行别名都可能让用户全程无感），

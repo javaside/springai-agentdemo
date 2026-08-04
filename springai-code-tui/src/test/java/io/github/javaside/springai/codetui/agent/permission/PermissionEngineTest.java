@@ -32,12 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PermissionEngineTest {
 
     private static PermissionEngine engine(Path root, PermissionMode mode, String... dsl) {
-        return new PermissionEngine(root, config(mode, dsl), mode, true);
-    }
-
-    /** 未开 {@code --dangerously-skip-permissions} 的引擎。 */
-    private static PermissionEngine noBypass(Path root, PermissionMode mode, String... dsl) {
-        return new PermissionEngine(root, config(mode, dsl), mode, false);
+        return new PermissionEngine(root, config(mode, dsl), mode);
     }
 
     private static PermissionConfig config(PermissionMode mode, String... dsl) {
@@ -680,16 +675,22 @@ class PermissionEngineTest {
         }
 
         @Test
-        @DisplayName("BYPASS 就在 Shift+Tab 环上：构造时没给任何「授权」也到得了")
-        void bypassIsOnTheCycle(@TempDir Path root) {
-            // noBypass 这个辅助方法此刻仍给构造器传 false——刻意用它，
-            // 这条断言的分量正在于「传了 false 也照样到得了」。
-            // （该辅助方法在 Task 3 随构造器参数一起删掉。）
-            PermissionEngine e = noBypass(root, PermissionMode.ACCEPT_EDITS);
+        @DisplayName("BYPASS 是普通一档：环上到得了、setMode 进得去、当启动模式也不被降级")
+        void bypassIsAnOrdinaryMode(@TempDir Path root) {
+            PermissionEngine e = engine(root, PermissionMode.ACCEPT_EDITS);
             assertEquals(PermissionMode.PLAN, e.cycleMode());
-            assertEquals(PermissionMode.BYPASS, e.cycleMode(),
-                    "四档平权：运行期切档不再受启动参数管");
+            assertEquals(PermissionMode.BYPASS, e.cycleMode(), "四档平权：运行期切档不受启动参数管");
             assertEquals(PermissionMode.DEFAULT, e.cycleMode(), "再一次回到起点");
+
+            // setMode 直接指定也进得去（/permissions 面板等非循环入口走它）
+            assertEquals(PermissionMode.BYPASS, e.setMode(PermissionMode.BYPASS));
+            assertEquals(PermissionMode.BYPASS, e.mode(), "setMode 的返回值与读回的档位必须一致");
+
+            // 以 BYPASS 为启动模式构造，不再被静默降级成 DEFAULT
+            PermissionEngine started = new PermissionEngine(
+                    root, config(PermissionMode.BYPASS), PermissionMode.BYPASS);
+            assertEquals(PermissionMode.BYPASS, started.mode(),
+                    "--dangerously-skip-permissions 启动即进 BYPASS，构造器不该再降级");
         }
 
         @Test
@@ -763,7 +764,7 @@ class PermissionEngineTest {
         @DisplayName("root 漏传立即失败——少一个 root 会让全部路径规则静默失效")
         void nullRootFailsFast() {
             assertThrows(NullPointerException.class,
-                    () -> new PermissionEngine(null, PermissionConfig.empty(), PermissionMode.DEFAULT, false));
+                    () -> new PermissionEngine(null, PermissionConfig.empty(), PermissionMode.DEFAULT));
         }
     }
 

@@ -36,8 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PermissionStartupTest {
 
-    private static PermissionEngine engine(Path root, PermissionMode mode, boolean bypassAllowed) {
-        return new PermissionEngine(root, PermissionConfig.empty(), mode, bypassAllowed);
+    private static PermissionEngine engine(Path root, PermissionMode mode) {
+        return new PermissionEngine(root, PermissionConfig.empty(), mode);
     }
 
     /** 只装权限门面所需的最小 CodingAgent（其余协作者一律 null，本类不触发 submit）。 */
@@ -115,7 +115,7 @@ class PermissionStartupTest {
                 new PermissionConfig(PermissionMode.DEFAULT,
                         List.of(new PermissionRule("Bash", "git status:*",
                                 PermissionBehavior.ALLOW, RuleScope.PROJECT))),
-                PermissionMode.DEFAULT, false);
+                PermissionMode.DEFAULT);
         CodingAgent agent = agentWith(engine);
 
         assertEquals(PermissionMode.DEFAULT, agent.permissionMode());
@@ -130,7 +130,7 @@ class PermissionStartupTest {
     @Test
     @DisplayName("门面可在运行期切进 BYPASS——不再需要 --dangerously-skip-permissions")
     void facadeCanEnterBypassAtRuntime(@TempDir Path root) {
-        CodingAgent agent = agentWith(engine(root, PermissionMode.PLAN, false));
+        CodingAgent agent = agentWith(engine(root, PermissionMode.PLAN));
 
         assertEquals(PermissionMode.BYPASS, agent.cyclePermissionMode(),
                 "四档平权：PLAN 的下一档就是 BYPASS，启动参数不再是前置条件");
@@ -141,7 +141,7 @@ class PermissionStartupTest {
     @Test
     @DisplayName("/clear 开新会话时清掉会话规则（「本会话不再问」不跨会话继承）")
     void clearContextClearsSessionRules(@TempDir Path root) {
-        PermissionEngine engine = engine(root, PermissionMode.DEFAULT, false);
+        PermissionEngine engine = engine(root, PermissionMode.DEFAULT);
         engine.addSessionRule(new PermissionRule("Bash", "ls:*", PermissionBehavior.ALLOW, RuleScope.SESSION));
         CodingAgent agent = agentWith(engine);
         assertEquals(1, agent.permissionRules().size(), "前置条件：会话规则已在");

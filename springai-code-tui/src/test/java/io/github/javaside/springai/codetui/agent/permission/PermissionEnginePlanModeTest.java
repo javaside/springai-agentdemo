@@ -20,7 +20,7 @@ class PermissionEnginePlanModeTest {
 
     private static PermissionEngine plan(Path root, PermissionRule... rules) {
         return new PermissionEngine(root, new PermissionConfig(PermissionMode.DEFAULT, List.of(rules)),
-                PermissionMode.PLAN, false);
+                PermissionMode.PLAN);
     }
 
     @Test

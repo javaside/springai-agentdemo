@@ -314,7 +314,7 @@ class PermissionWiringTest {
                 new PermissionConfig(PermissionMode.DEFAULT,
                         List.of(new PermissionRule("MemoryView", null,
                                 PermissionBehavior.ASK, RuleScope.SESSION))),
-                PermissionMode.DEFAULT, false);
+                PermissionMode.DEFAULT);
         ToolCallback[] tools = AgentTools.buildMemoryTools(root, state, engine);
 
         assertAskReachesQueue(byName(List.of(tools), "MemoryView"), "{\"path\":\"/\"}",
