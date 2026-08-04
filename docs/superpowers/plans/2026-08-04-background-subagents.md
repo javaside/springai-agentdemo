@@ -16,6 +16,12 @@
 
 ## ⚠️ 全局纪律（每个任务都适用）
 
+0. **判断"输入框是否为空"必须用 `CodeTuiView.inputState.text()`，绝不能用 `ConversationState.currentInput()`。**
+   后者是输入迁移后留下的**死代码**——生产代码里没有任何地方写入那个 `StringBuilder`，它**永远返回空串**。
+   拿它做闸门，等于那道闸门根本不存在，而且所有测试照样绿（T9 实测：改回 `currentInput()` 后
+   `nonEmptyInput_doesNotDeliver` 立刻红）。用 `isEmpty()` 而非 `isBlank()`——敲了个空格也算在打字。
+
+
 1. **测试命令必须带 `-pl springai-code-tui`**。整仓 `mvn test -Dtest=X` 会被仓库里 3 个空模块打挂。**不要**用 `-DfailIfNoSpecifiedTests=false` 去盖这个问题。
    ```bash
    mvn -pl springai-code-tui test -Dtest=SomeTest
@@ -2601,7 +2607,7 @@ Expected: 断言失败（`drain` 目前不认识后台任务）
     private void deliverBackgroundResults() {
         List<SubmitHandler.BackgroundResult> done = onSubmit.completedBackgroundTasks();
         if (done.isEmpty()) return;
-        var text = notifier.compose(done, state.currentInput().isEmpty());
+        var text = notifier.shouldNotifyResults(done, true, inputState.text().isEmpty());
         if (text.isEmpty()) return;
         try {
             dispatch(text.get(), null);
