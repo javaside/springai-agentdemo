@@ -63,7 +63,7 @@ class CodeTuiViewModeIndicatorTest {
 
         v.feedKeyForTest(shiftTab());
         assertEquals(PermissionMode.ACCEPT_EDITS, stub.mode);
-        assertTrue(screen(v).contains("权限模式：自动接受编辑"), "切换当下应有 notice 反馈");
+        assertTrue(screen(v).contains("已切到 自动接受编辑"), "切换当下应有 notice 反馈");
 
         // 关键一步：notice 被下一次按键清掉之后——这正是修复前模式彻底消失的时刻。
         v.feedKeyForTest(KeyEvent.ofChar('a'));
