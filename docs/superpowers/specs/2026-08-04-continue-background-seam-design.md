@@ -322,5 +322,3 @@ Background tasks do not survive a process restart.
 
 **不在验收范围内**：后台任务跨进程持久化（N3）、`busy()` 闸门（N4）、
 每回合自动注入（N5）、FAILED/KILLED 的特殊处理（N2）。
-
-<!-- CHUNK-5 -->
