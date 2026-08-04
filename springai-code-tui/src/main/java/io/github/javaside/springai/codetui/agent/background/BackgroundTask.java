@@ -8,6 +8,9 @@ package io.github.javaside.springai.codetui.agent.background;
  * 换对象等于每次更新都要替换 map 里的值。
  *
  * <p>并发：所有读写都在 {@link BackgroundTaskRegistry} 的锁内完成，本类自身不加锁。
+ *
+ * <p><b>刻意不记时间</b>：面板要显示的耗时由 UI 层 {@code ConversationState.BackgroundView}
+ * 自己的 startedAt / finishedAt 承载。这里再记一份就是第二个真相源，两边会各说各话。
  */
 public final class BackgroundTask {
 
@@ -21,26 +24,21 @@ public final class BackgroundTask {
     private final String taskId;
     private final String agentName;
     private final String description;
-    private final long startedAt;
 
     private Status status = Status.RUNNING;
-    private long finishedAt;
     private String result = "";
     private boolean consumed;
 
-    BackgroundTask(String taskId, String agentName, String description, long startedAt) {
+    BackgroundTask(String taskId, String agentName, String description) {
         this.taskId = taskId;
         this.agentName = agentName;
         this.description = description == null ? "" : description;
-        this.startedAt = startedAt;
     }
 
     public String taskId() { return taskId; }
     public String agentName() { return agentName; }
     public String description() { return description; }
-    public long startedAt() { return startedAt; }
     public Status status() { return status; }
-    public long finishedAt() { return finishedAt; }
     public String result() { return result; }
     public boolean consumed() { return consumed; }
 
@@ -50,16 +48,10 @@ public final class BackgroundTask {
     /** 是否"跑完且有结果值得送给模型"——KILLED 不算（用户主动杀的，不该再回灌）。 */
     public boolean deliverable() { return status == Status.DONE || status == Status.FAILED; }
 
-    void finish(Status newStatus, String result, long at) {
+    void finish(Status newStatus, String result) {
         this.status = newStatus;
         this.result = result == null ? "" : result;
-        this.finishedAt = at;
     }
 
     void setConsumed() { this.consumed = true; }
-
-    /** 耗时毫秒：未结束则算到现在。 */
-    public long elapsedMillis(long now) {
-        return (finished() ? finishedAt : now) - startedAt;
-    }
 }

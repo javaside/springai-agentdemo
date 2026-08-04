@@ -235,10 +235,13 @@ package io.github.javaside.springai.codetui.agent.background;
  * 一个后台子 agent 任务的身份 + 可变状态。
  *
  * <p><b>刻意不是 record</b>：status / result 都要就地更新，而 taskId 等身份字段不变。
- * 用可变类 + 只读快照（{@link #snapshot()}）比"每次改都造一个新 record"更贴合它的用法——
+ * 用可变类比"每次改都造一个新 record"更贴合它的用法——
  * 注册表按 taskId 索引，换对象等于每次更新都要替换 map 里的值。
  *
  * <p>并发：所有读写都在 {@link BackgroundTaskRegistry} 的锁内完成，本类自身不加锁。
+ *
+ * <p><b>刻意不记时间</b>：面板要显示的耗时由 UI 层 {@code ConversationState.BackgroundView}
+ * 自己的 startedAt / finishedAt 承载。这里再记一份就是第二个真相源，两边会各说各话。
  */
 public final class BackgroundTask {
 
@@ -252,26 +255,21 @@ public final class BackgroundTask {
     private final String taskId;
     private final String agentName;
     private final String description;
-    private final long startedAt;
 
     private Status status = Status.RUNNING;
-    private long finishedAt;
     private String result = "";
     private boolean consumed;
 
-    BackgroundTask(String taskId, String agentName, String description, long startedAt) {
+    BackgroundTask(String taskId, String agentName, String description) {
         this.taskId = taskId;
         this.agentName = agentName;
         this.description = description == null ? "" : description;
-        this.startedAt = startedAt;
     }
 
     public String taskId() { return taskId; }
     public String agentName() { return agentName; }
     public String description() { return description; }
-    public long startedAt() { return startedAt; }
     public Status status() { return status; }
-    public long finishedAt() { return finishedAt; }
     public String result() { return result; }
     public boolean consumed() { return consumed; }
 
@@ -281,18 +279,12 @@ public final class BackgroundTask {
     /** 是否"跑完且有结果值得送给模型"——KILLED 不算（用户主动杀的，不该再回灌）。 */
     public boolean deliverable() { return status == Status.DONE || status == Status.FAILED; }
 
-    void finish(Status newStatus, String result, long at) {
+    void finish(Status newStatus, String result) {
         this.status = newStatus;
         this.result = result == null ? "" : result;
-        this.finishedAt = at;
     }
 
     void setConsumed() { this.consumed = true; }
-
-    /** 耗时毫秒：未结束则算到现在。 */
-    public long elapsedMillis(long now) {
-        return (finished() ? finishedAt : now) - startedAt;
-    }
 }
 ```
 
@@ -327,19 +319,17 @@ public final class BackgroundTaskRegistry {
     private final Map<String, BackgroundTask> tasks = new LinkedHashMap<>();
     private final int capacity;
     private final Supplier<String> idSupplier;
-    private final Supplier<Long> clock;
 
     public BackgroundTaskRegistry(int capacity) {
         this.capacity = Math.max(1, capacity);
         this.idSupplier = () -> "task_" + UUID.randomUUID().toString().substring(0, 8);
-        this.clock = System::currentTimeMillis;
     }
 
     /** 登记一个新任务（RUNNING），返回 taskId。超容量时先淘汰最旧的已完成任务。 */
     public synchronized String register(String agentName, String description) {
         evictIfNeeded();
         String id = idSupplier.get();
-        tasks.put(id, new BackgroundTask(id, agentName, description, clock.get()));
+        tasks.put(id, new BackgroundTask(id, agentName, description));
         return id;
     }
 
@@ -347,14 +337,14 @@ public final class BackgroundTaskRegistry {
     public synchronized void complete(String taskId, String result, boolean ok) {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return;
-        t.finish(ok ? BackgroundTask.Status.DONE : BackgroundTask.Status.FAILED, result, clock.get());
+        t.finish(ok ? BackgroundTask.Status.DONE : BackgroundTask.Status.FAILED, result);
     }
 
     /** 终止一个运行中的任务（标记 KILLED）。返回是否真的改变了状态——已结束的返回 false。 */
     public synchronized boolean kill(String taskId) {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return false;
-        t.finish(BackgroundTask.Status.KILLED, "已被用户终止", clock.get());
+        t.finish(BackgroundTask.Status.KILLED, "已被用户终止");
         return true;
     }
 
@@ -362,7 +352,7 @@ public final class BackgroundTaskRegistry {
     public synchronized void killAll() {
         for (BackgroundTask t : tasks.values()) {
             if (!t.finished()) {
-                t.finish(BackgroundTask.Status.KILLED, "已被用户终止", clock.get());
+                t.finish(BackgroundTask.Status.KILLED, "已被用户终止");
             }
         }
     }
@@ -642,14 +632,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BackgroundNotifierTest {
 
     private static BackgroundTask done(String id, String agent, String desc, String result) {
-        BackgroundTask t = new BackgroundTask(id, agent, desc, 0L);
-        t.finish(BackgroundTask.Status.DONE, result, 1000L);
+        BackgroundTask t = new BackgroundTask(id, agent, desc);
+        t.finish(BackgroundTask.Status.DONE, result);
         return t;
     }
 
     private static BackgroundTask failed(String id, String agent, String desc, String why) {
-        BackgroundTask t = new BackgroundTask(id, agent, desc, 0L);
-        t.finish(BackgroundTask.Status.FAILED, why, 1000L);
+        BackgroundTask t = new BackgroundTask(id, agent, desc);
+        t.finish(BackgroundTask.Status.FAILED, why);
         return t;
     }
 
