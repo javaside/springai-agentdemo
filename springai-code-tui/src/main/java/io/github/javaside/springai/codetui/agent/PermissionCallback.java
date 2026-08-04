@@ -161,7 +161,42 @@ public final class PermissionCallback implements ToolCallback {
         if (decision.behavior() == PermissionBehavior.DENY) {
             return denyMessage(decision.reason());
         }
+        // 后台任务不弹审批面板：它的 turnId 早已过期，请求会被 ConversationState 的迟到过滤
+        // 当场 DENY——那是"静默拒绝"，模型只会看到一个没有理由的失败。这里主动拒绝并说明原因。
+        // 与 BYPASS 档"永远不停下来等人"同源；BYPASS 本身走不到这里（那一档不产生 ASK）。
+        //
+        // ⚠ 判据只能是 backgroundTaskId，不能是 taskId：前台子 agent 也有 taskId，
+        // 用它判后台会让前台子 agent 的审批面板静默消失（只在"派了子 agent 且需要审批"时才出现）。
+        String backgroundTaskId = ToolEventCallback.extractBackgroundTaskId(toolContext);
+        if (backgroundTaskId != null) {
+            log.info("后台任务 {} 的 {} 调用需要审批，已就地拒绝（后台不弹面板）：{}",
+                    backgroundTaskId, name, decision.reason());
+            return denyMessage(backgroundDenyReason(decision.reason()));
+        }
         return askThenAct(name, toolInput, toolContext, decision);
+    }
+
+    /**
+     * 后台任务被拒时的理由文本：说清<b>三件事</b>——为什么被拒、当前是哪一档、正确的下一步。
+     *
+     * <p><b>按档位分支不是锦上添花</b>：只说"被拒了"的话，模型会对同一个操作反复重试直到耗光回合。
+     * 这与计划模式当初必须给子 agent 专属提示是同一个教训——把"不知道为什么被拒"换成
+     * "知道了、照做了、还是失败"，比不给提示更糟，所以给的那条路必须真的走得通。
+     *
+     * <p>故计划模式下<b>刻意不提</b> {@code run_in_background=false}：那一档改前台一样被拒，
+     * 指这条路等于让它白试一次。
+     */
+    private String backgroundDenyReason(String engineReason) {
+        String head = "后台任务不能弹出审批面板，本次调用已被拒绝。原因：" + engineReason + "。";
+        return switch (engine.mode()) {
+            case PLAN -> head + " 当前处于计划模式，写操作与非只读命令本来就会被拒绝——"
+                    + "请把已有发现整理成结论返回，不要重试。";
+            case ACCEPT_EDITS -> head + " 当前处于自动接受编辑档：工作区内的写操作本可自动放行，"
+                    + "该目标在工作区外。请改用 run_in_background=false 的前台 Task 重试，"
+                    + "或先为该操作添加 allow 规则。";
+            default -> head + " 请改用 run_in_background=false 的前台 Task 重试"
+                    + "（前台会弹审批面板让用户确认），或先为该操作添加 allow 规则。";
+        };
     }
 
     /**
