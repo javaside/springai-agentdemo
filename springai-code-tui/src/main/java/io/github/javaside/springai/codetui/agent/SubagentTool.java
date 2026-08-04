@@ -11,8 +11,9 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * 自写的 Task 工具：把子任务委派给一个子 agent。精简输入 schema（v1 无 run_in_background/resume）。
- * 不依赖框架 TaskTool——路由（subagent_type → SubagentSpec）就在本类，执行交给注入的 {@link Dispatcher}。
+ * 自写的 Task 工具：把子任务委派给一个子 agent。精简输入 schema（暴露 run_in_background，仍不暴露 resume）。
+ * 不依赖框架 TaskTool——路由（subagent_type → SubagentSpec）就在本类，执行交给注入的 {@link Dispatcher}
+ * 或（后台时）{@link BackgroundDispatcher}。
  */
 public final class SubagentTool {
 
@@ -51,16 +52,35 @@ public final class SubagentTool {
     private SubagentTool() {
     }
 
-    /** 子 agent 调用入参（精简）：只有 description / prompt / subagent_type。 */
+    /** 子 agent 调用入参。{@code run_in_background} 缺省 / null 均视为前台（向后兼容）。 */
     public record SubagentCall(
             @ToolParam(description = "3-5 word summary of what the subagent will do") String description,
             @ToolParam(description = "Detailed, self-contained task prompt for the subagent") String prompt,
-            @ToolParam(description = "Which subagent type to use") String subagent_type) {
+            @ToolParam(description = "Which subagent type to use") String subagent_type,
+            @ToolParam(required = false, description =
+                    "Run in background: return a task id immediately instead of blocking. "
+                    + "Use for long investigations you want to continue working alongside. "
+                    + "Retrieve the result with TaskOutput, or wait for the completion notice. "
+                    + "Background tasks CANNOT prompt for permission: calls that would need approval "
+                    + "are denied. Use foreground (false) when the task must write files or run commands "
+                    + "that are not already allowed.") Boolean run_in_background) {
+
+        /** null-safe：模型省略该字段时 Jackson 给 null，默认前台。 */
+        public boolean background() {
+            return Boolean.TRUE.equals(run_in_background);
+        }
     }
 
-    /** 批量子 agent 调用入参：一组子任务，每个复用单任务的三元组。 */
+    /** 批量子 agent 调用入参。 */
     public record ParallelCall(
-            @ToolParam(description = "List of independent subtasks to run concurrently") List<SubagentCall> tasks) {
+            @ToolParam(description = "List of independent subtasks to run concurrently") List<SubagentCall> tasks,
+            @ToolParam(required = false, description =
+                    "Run the whole batch in background: return task ids immediately instead of blocking.")
+            Boolean run_in_background) {
+
+        public boolean background() {
+            return Boolean.TRUE.equals(run_in_background);
+        }
     }
 
     /** 把一次委派交给执行器（SubagentRunner.run 的函数式视图）。turnId=当前回合。 */
@@ -75,47 +95,107 @@ public final class SubagentTool {
         List<String> dispatch(List<SubagentRunner.Dispatch> dispatches, long parentTurnId);
     }
 
-    /** 构建名为 "Task" 的 ToolCallback。turnId 从 ThreadLocal 取（同主流工具，装配时落实）。 */
+    /** 后台派发（{@code SubagentRunner.runInBackground} 的函数式视图）：立刻返回含 taskId 的文本。 */
+    @FunctionalInterface
+    public interface BackgroundDispatcher {
+        String dispatch(SubagentSpec spec, String prompt, String description);
+    }
+
+    /** 无后台能力的装配（回显桩 / 测试桩）：请求后台时明确告知不可用，<b>不</b>静默跑成前台。 */
     public static ToolCallback create(Map<String, SubagentSpec> specs, Dispatcher dispatcher) {
+        return create(specs, dispatcher, null);
+    }
+
+    /** 构建名为 "Task" 的 ToolCallback。turnId 从 ThreadLocal 取（同主流工具，装配时落实）。 */
+    public static ToolCallback create(Map<String, SubagentSpec> specs, Dispatcher dispatcher,
+                                      BackgroundDispatcher background) {
         String roster = specs.values().stream()
                 .map(s -> "- " + s.name() + ": " + s.description())
                 .collect(Collectors.joining("\n"));
-        return FunctionToolCallback.builder("Task", function(specs, dispatcher))
+        return FunctionToolCallback.builder("Task", function(specs, dispatcher, background))
                 .description(DESCRIPTION_TEMPLATE.formatted(roster))
                 .inputType(SubagentCall.class)
                 .build();
     }
 
-    /** 构建名为 "ParallelTasks" 的批量 ToolCallback。parentTurnId 由 BatchDispatcher 实现内部经 ThreadLocal 取，这里占位 -1L。 */
+    /** 无后台能力的批量装配：同 {@link #create(Map, Dispatcher)}，后台请求逐条明确拒绝。 */
     public static ToolCallback createParallel(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher) {
+        return createParallel(specs, dispatcher, null);
+    }
+
+    /** 构建名为 "ParallelTasks" 的批量 ToolCallback。parentTurnId 由 BatchDispatcher 实现内部经 ThreadLocal 取，这里占位 -1L。 */
+    public static ToolCallback createParallel(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher,
+                                              BackgroundDispatcher background) {
         String roster = specs.values().stream()
                 .map(s -> "- " + s.name() + ": " + s.description())
                 .collect(Collectors.joining("\n"));
-        return FunctionToolCallback.builder("ParallelTasks", batchFunction(specs, dispatcher))
+        return FunctionToolCallback.builder("ParallelTasks", batchFunction(specs, dispatcher, background))
                 .description(PARALLEL_DESCRIPTION_TEMPLATE.formatted(roster))
                 .inputType(ParallelCall.class)
                 .build();
     }
 
-    /** 纯路由函数：subagent_type → spec，未知则抛清晰错误；命中则交 dispatcher（turnId 由 Dispatcher 实现内部经 ThreadLocal 取，这里传 -1L 占位）。 */
+    static final String NO_BACKGROUND =
+            "后台模式不可用（当前装配未提供后台派发器）。请改用 run_in_background=false。";
+
+    /** 无后台派发器的路由函数（老装配）。 */
     static Function<SubagentCall, String> function(Map<String, SubagentSpec> specs, Dispatcher dispatcher) {
+        return function(specs, dispatcher, null);
+    }
+
+    /** 纯路由函数：subagent_type → spec，未知则抛清晰错误；命中后按 run_in_background 决定交前台还是后台派发器（turnId 由 Dispatcher 实现内部经 ThreadLocal 取，这里传 -1L 占位）。 */
+    static Function<SubagentCall, String> function(Map<String, SubagentSpec> specs, Dispatcher dispatcher,
+                                                   BackgroundDispatcher background) {
         return callArgs -> {
             SubagentSpec spec = specs.get(callArgs.subagent_type());
             if (spec == null) {
                 throw new RuntimeException("No subagent found with type: " + callArgs.subagent_type()
                         + ". Available: " + String.join(", ", specs.keySet()));
             }
+            if (callArgs.background()) {
+                return background == null
+                        ? NO_BACKGROUND
+                        : background.dispatch(spec, callArgs.prompt(), callArgs.description());
+            }
             return dispatcher.dispatch(spec, callArgs.prompt(), callArgs.description(), -1L);
         };
+    }
+
+    /** 无后台派发器的批量路由函数（老装配）。 */
+    static Function<ParallelCall, String> batchFunction(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher) {
+        return batchFunction(specs, dispatcher, null);
     }
 
     /**
      * 批量路由函数：把每个 SubagentCall 路由成 SubagentRunner.Dispatch（未知类型该条降级为失败、<b>不抛</b>，
      * 服从失败隔离——与单任务 Task 抛异常有意不同）。已知条交 BatchDispatcher 并发执行，最后按入参顺序结构化汇总。
      */
-    static Function<ParallelCall, String> batchFunction(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher) {
+    static Function<ParallelCall, String> batchFunction(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher,
+                                                        BackgroundDispatcher background) {
         return call -> {
             List<SubagentTool.SubagentCall> tasks = call.tasks() == null ? List.of() : call.tasks();
+            // 整批后台：逐条派发，每条各自成败（含"队列已满未启动"），不整批拒绝——与既有失败隔离语义一致。
+            // 放在前台路由之前短路，是为了让下面那段前台并发/汇总代码保持原样不被后台语义污染。
+            boolean anyBackground = call.background() || tasks.stream().anyMatch(SubagentCall::background);
+            if (anyBackground) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < tasks.size(); i++) {
+                    SubagentCall t = tasks.get(i);
+                    SubagentSpec spec = t.subagent_type() == null ? null : specs.get(t.subagent_type());
+                    String body;
+                    if (spec == null) {
+                        body = "未知 subagent 类型: " + t.subagent_type()
+                                + "（可用: " + String.join(", ", specs.keySet()) + "）";
+                    } else if (background == null) {
+                        body = NO_BACKGROUND;
+                    } else {
+                        body = background.dispatch(spec, t.prompt(), t.description());
+                    }
+                    if (i > 0) sb.append("\n\n");
+                    sb.append("[").append(i + 1).append("] ").append(t.subagent_type()).append("\n").append(body);
+                }
+                return sb.toString();
+            }
             List<SubagentRunner.Dispatch> dispatchable = new ArrayList<>();
             List<Integer> dispatchIndex = new ArrayList<>();
             String[] failure = new String[tasks.size()];

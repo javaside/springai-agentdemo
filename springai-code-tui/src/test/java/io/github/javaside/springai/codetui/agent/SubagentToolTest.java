@@ -13,19 +13,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SubagentToolTest {
 
     private static SubagentTool.SubagentCall call(String type) {
-        return new SubagentTool.SubagentCall("do things", "the prompt", type);
+        // run_in_background 传 null：既有用例覆盖的都是前台语义，null 正是模型省略该字段时的取值
+        return new SubagentTool.SubagentCall("do things", "the prompt", type, null);
     }
 
     @Test
-    void toolNameIsTaskAndSchemaHasThreeParams() {
+    void toolNameIsTaskAndSchemaHasFourParams() {
         ToolCallback tc = SubagentTool.create(Map.of(), (spec, prompt, desc, turn) -> "unused");
         assertEquals("Task", tc.getToolDefinition().name());
         String schema = tc.getToolDefinition().inputSchema();
         assertTrue(schema.contains("subagent_type"));
         assertTrue(schema.contains("prompt"));
         assertTrue(schema.contains("description"));
-        // v1 不暴露后台/续跑参数
-        assertTrue(!schema.contains("run_in_background"));
+        assertTrue(schema.contains("run_in_background"));
+        // 续跑仍未暴露
         assertTrue(!schema.contains("resume"));
     }
 
@@ -66,8 +67,8 @@ class SubagentToolTest {
                 dispatches.stream().map(d -> "ran " + d.spec().name()).toList();
         var fn = SubagentTool.batchFunction(specs, batch);
         SubagentTool.ParallelCall pc = new SubagentTool.ParallelCall(List.of(
-                new SubagentTool.SubagentCall("do a", "pa", "explore"),
-                new SubagentTool.SubagentCall("do b", "pb", "no-such")));
+                new SubagentTool.SubagentCall("do a", "pa", "explore", null),
+                new SubagentTool.SubagentCall("do b", "pb", "no-such", null)), null);
         String out = fn.apply(pc);
         assertTrue(out.contains("[1] explore"), out);
         assertTrue(out.contains("ran explore"), out);
@@ -84,9 +85,9 @@ class SubagentToolTest {
                 dispatches.stream().map(d -> "RESULT:" + d.prompt()).toList();
         var fn = SubagentTool.batchFunction(specs, batch);
         SubagentTool.ParallelCall pc = new SubagentTool.ParallelCall(List.of(
-                new SubagentTool.SubagentCall("a", "pa", "explore"),
-                new SubagentTool.SubagentCall("b", "pb", "no-such"),
-                new SubagentTool.SubagentCall("c", "pc", "explore")));
+                new SubagentTool.SubagentCall("a", "pa", "explore", null),
+                new SubagentTool.SubagentCall("b", "pb", "no-such", null),
+                new SubagentTool.SubagentCall("c", "pc", "explore", null)), null);
         String out = fn.apply(pc);
         // 三段按输入顺序：[1] explore ✓ RESULT:pa / [2] no-such ✗ 未知 / [3] explore ✓ RESULT:pc
         int i1 = out.indexOf("[1] explore ✓");
