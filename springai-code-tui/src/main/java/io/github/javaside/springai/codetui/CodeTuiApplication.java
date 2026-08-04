@@ -171,8 +171,10 @@ public class CodeTuiApplication {
      * 是否带「跳过权限检查」启动选项（仿 Claude Code 的 {@code --dangerously-skip-permissions}）。
      *
      * <p><b>必须整串精确相等</b>：前缀相近的参数（{@code --dangerously-skip}）不得误判成开了裸奔模式。
-     * 这是唯一能进 BYPASS 的入口——{@code PermissionEngine.setMode}/{@code cycleMode} 都会
-     * 拒绝在没有它的启动里切到 BYPASS。
+     *
+     * <p><b>它只决定「起步于 BYPASS」，不再是唯一入口</b>：BYPASS 已在 {@code Shift+Tab} 环上四档平权
+     * （见 {@link PermissionMode#next()}），运行期不带本参数也切得进去。本参数保留的意义只剩
+     * 「启动即裸奔」——半无人值守的脚本化启动仍需要它。
      */
     static boolean hasBypassFlag(String[] args) {
         for (String a : args) {
@@ -187,8 +189,10 @@ public class CodeTuiApplication {
      * 解析 {@code --permission-mode <值>} 或 {@code --permission-mode=<值>}；无/非法/想进 BYPASS 一律返回 null
      * （调用方回退到配置文件的 {@code defaultMode}）。
      *
-     * <p><b>刻意不认 {@code bypass}</b>：BYPASS 的契约是「仅 {@code --dangerously-skip-permissions} 可进」。
-     * 这里认了它，那道显眼的开关就有了一个不显眼的同义词——用户看着命令行以为只是「选了个模式」。
+     * <p><b>刻意不认 {@code bypass}</b>：<b>启动即裸奔</b>只该有一个显眼的开关
+     * （{@code --dangerously-skip-permissions}）。这里认了它，那道开关就多出一个不显眼的同义词——
+     * 用户看着命令行以为只是「选了个模式」。运行期切进 BYPASS 是另一回事：用户当面按 {@code Shift+Tab}、
+     * 在场、有意图，那条路四档平权、不受本方法约束。
      *
      * <p><b>必须整串精确相等</b>：{@code --permission-modex} 这种前缀相近的参数不得误判
      * （与 {@link #hasBypassFlag} 同纪律）。
