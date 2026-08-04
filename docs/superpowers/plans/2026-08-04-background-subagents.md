@@ -861,7 +861,7 @@ public final class BackgroundNotifier {
 ```bash
 mvn -pl springai-code-tui test -Dtest=BackgroundNotifierTest
 ```
-Expected: `Tests run: 12, Failures: 0, Errors: 0`
+Expected: `Tests run: 11, Failures: 0, Errors: 0`
 
 - [ ] **Step 5: 提交**
 
