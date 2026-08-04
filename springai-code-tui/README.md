@@ -9,7 +9,7 @@
 - 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、**⏱ 后台任务面板**（跨回合存活的后台子 agent，零任务时不占行）、输入框、底部状态栏。
 - **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `ZhipuProvider` / `QwenProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。智谱与千问走 OpenAI 兼容通路（复用 `spring-ai-openai`，`ZHIPU_BASE_URL` 默认 `.../api/paas/v4`、`DASHSCOPE_BASE_URL` 默认 `.../compatible-mode/v1`）。五家统一 read 超时（`CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300s）。
 - 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取网页正文）、`BochaWebSearch`（联网搜索·中文内容优先，博查 API，需配 `BOCHA_API_KEY`）、`BraveWebSearch`（联网搜索·英文内容优先，Brave API，需配 `BRAVE_API_KEY`；两家可共存，模型按内容语言自选，都不配则均不注册）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task` 委派单个子 agent + `ParallelTasks` 并发派多个独立子 agent）、`AutoMemoryTools`（`Memory*` 六件套：跨会话长期记忆的读写/增删/改名，仅主 agent）。
-- **权限管理（审批面板 + 规则）**：有副作用的工具调用**在执行之前**被拦下弹审批面板（↑↓ 选择、1-5 快选、Enter 确认、Esc 中断），你可以「允许一次 / 本会话不再问 / 永久允许（写入 `.codetui/permissions.json`）/ 拒绝（回合继续，模型换做法）/ 拒绝并中断回合」。只读操作直接放行；**网络工具每次都问**（请求内容会离开本机），允许后可按域名永久放行。`Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式」三档间循环，当前档位**常驻状态栏**；**计划模式**只放行只读调查、写与命令一律**拒绝**，模型改用 `ExitPlanMode` 交一份计划，经你批准（自动接受编辑 / 逐个确认 / 打回继续完善）后才动手；`/permissions` 查看生效模式与规则。另有一层**任何 allow 规则都盖不住**的内置底线（写 `.ssh`/`.aws`/`.kube`/`.gnupg`/`.git`/`.codetui` 配置、写 shell 启动文件、读私钥与凭据、`rm -rf /` 或 `~` 或变量目标…）；**`--dangerously-skip-permissions` 是唯一的例外——它连内置底线与 `ask` 规则都跳过，只留 deny 规则**。详见下方「权限管理」。
+- **权限管理（审批面板 + 规则）**：有副作用的工具调用**在执行之前**被拦下弹审批面板（↑↓ 选择、1-5 快选、Enter 确认、Esc 中断），你可以「允许一次 / 本会话不再问 / 永久允许（写入 `.codetui/permissions.json`）/ 拒绝（回合继续，模型换做法）/ 拒绝并中断回合」。只读操作直接放行；**网络工具每次都问**（请求内容会离开本机），允许后可按域名永久放行。`Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式 / 跳过权限检查」四档间循环，当前档位**常驻状态栏**；**计划模式**只放行只读调查、写与命令一律**拒绝**，模型改用 `ExitPlanMode` 交一份计划，经你批准（自动接受编辑 / 逐个确认 / 打回继续完善）后才动手；`/permissions` 查看生效模式与规则。另有一层**任何 allow 规则都盖不住**的内置底线（写 `.ssh`/`.aws`/`.kube`/`.gnupg`/`.git`/`.codetui` 配置、写 shell 启动文件、读私钥与凭据、`rm -rf /` 或 `~` 或变量目标…）；**「跳过权限检查」档是唯一的例外——它连内置底线与 `ask` 规则都跳过，只留 deny 规则**。详见下方「权限管理」。
 - **子 agent（Task / ParallelTasks）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`）。`Task` 委派单个子 agent 前台阻塞执行；`ParallelTasks` 一次并发派多个独立子 agent（有界线程池，`CODETUI_SUBAGENT_CONCURRENCY` 默认 4、范围 [1,32]；失败隔离、按序汇总）。内部工具活动带 taskId 内联嵌套显示。两个工具都可传 `run_in_background=true` **转后台**：立刻返回 task id，你和主 agent 都能继续干别的，结果经 `TaskOutput` 取回或空闲时自动送达（**⏱ 面板** + `/tasks` 管理，详见下方「后台子 agent」）。
 - **技能（Skills）**：`/skills` 查看可用技能清单（模型按需自动调用），`/skill` 为本条消息手动指定技能，`/reload` 重新扫描技能目录——运行中新增/删除 `SKILL.md` 无需重启即对模型与 `/skills` 生效（即便启动时零技能，也能 `/reload` 出第一个新增技能）。
 - **MCP（接入外部工具）**：启动时读 `.codetui/mcp.json`（两层：用户 `~/.codetui/mcp.json` + 项目 `<项目根>/.codetui/mcp.json`，项目级同名覆盖用户级）连接外部 [MCP](https://modelcontextprotocol.io/) server（**stdio** 本地子进程，如 `npx`/`uvx` 起的 `chrome-devtools-mcp`、官方 filesystem server；以及 **Streamable HTTP** 远程 server，如 Context7），把其工具注入**主 agent 与子 agent**。工具名带 `mcp__<server>__<工具>` 前缀避免撞名。**`/mcp` 运行期管理**：面板列出全部 server（含禁用/连接失败项），逐个启用/禁用即时生效（下一回合模型即见/不见其工具）并回写 `mcp.json` 的 `enabled` 字段。连不上的 server **静默降级**（记 WARN、不崩启动）；退出时**有界清理**子进程（≤2s，绝不拖慢 `/exit`）。配置见下方「MCP 配置」。
@@ -38,7 +38,7 @@
 - **权限层自身的已知弱点**（诚实列出，别高估它）：
   - **审批疲劳**是最现实的风险——弹得多就容易一路按「允许」，那与没有权限层无异。这也是「允许，永久」刻意生成**最窄规则**（该文件本身 / 该命令前缀 / 该域名）的原因。
   - **内置底线是黑名单，不是白名单**：它枚举已知的高危目标（密钥、shell 启动文件、`rm -rf /`…），没枚举到的自然漏过。
-  - **命令判定是尽力而为**：含命令替换 `` ` ``/`$()`、进程替换、引号不配对等**拆不动**的命令一律退回人工确认（失败关闭），但规则 DSL **不做空白归一**（`rm  -rf /` 双空格不命中 `Bash(rm -rf /:*)`）。**deny 规则是尽力而为，兜底靠内置底线。** ⚠️ 但**只在前三档**如此——`--dangerously-skip-permissions` 会跳过内置底线，那一档里 **deny 规则反过来成了唯一还拦得住的东西**。
+  - **命令判定是尽力而为**：含命令替换 `` ` ``/`$()`、进程替换、引号不配对等**拆不动**的命令一律退回人工确认（失败关闭），但规则 DSL **不做空白归一**（`rm  -rf /` 双空格不命中 `Bash(rm -rf /:*)`）。**deny 规则是尽力而为，兜底靠内置底线。** ⚠️ 但**只在前三档**如此——「跳过权限检查」档会跳过内置底线，那一档里 **deny 规则反过来成了唯一还拦得住的东西**。
   - **同一个文件的多种写法**：`deny`/`ask` 规则与内置底线会**折叠大小写**、并**解析符号链接**（含目标尚不存在的悬空链接），故 `deny Write(/etc/**)` 也拦得住 `/ETC/passwd`，经链接指向 `.ssh/` 的写入同样认得出。**但两者力度不同：`deny` 规则是拒绝，内置底线只是强制询问**（护栏不是牢笼）——认得出不等于挡得住，一路按「允许」照样过。
     > **`allow` 规则只认原写法，这是设计不是疏漏**：deny 误拦你看得见、能调整；allow 误放行**不可逆**。所以放宽匹配只在「问一下无害」的方向上做。
     >
@@ -57,7 +57,7 @@
 - **只在可以随意丢弃、且已被版本控制干净纳管的目录中运行本工具**，方便万一出问题时用 `git checkout`/`git clean` 恢复或直接丢弃整个目录。
 - **不要在 `$HOME`、系统关键目录，或任何重要仓库的根目录下直接运行。**
 - **别把审批面板当橡皮图章**：面板会显示这次要动的具体目标（文件路径 / 命令段 / URL）与拦下它的理由，值得看一眼再按。
-- **`--dangerously-skip-permissions` 真的跳过全部检查**，只在你完全清楚后果时用（如一次性容器里）；想在无人值守下保留某些禁令，得自己写 deny 规则进 `permissions.json`。
+- **「跳过权限检查」档真的跳过全部检查**——`Shift+Tab` 切进去与 `--dangerously-skip-permissions` 启动进去是**同一档**，键盘那条路不比启动参数温和半分。只在你完全清楚后果时用（如一次性容器里）；想在无人值守下保留某些禁令，得自己写 deny 规则进 `permissions.json`。
 
 真正的目录级强制沙箱（自写 `SandboxedShellTool` 校验所有工具的路径参数）留作后续的安全增强，本版本不包含——权限层是**执行前确认**，不是边界强制。
 
@@ -157,7 +157,7 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 | # | 步骤 | 说明 |
 |---|---|---|
 | 1 | **deny 规则** | 最高优先级，**BYPASS 下也生效** |
-| — | **BYPASS 放行** | `--dangerously-skip-permissions` 到此为止：下面几步全部跳过，**这一档不会产生任何询问** |
+| — | **BYPASS 放行** | 处于「跳过权限检查」档时到此为止：下面几步全部跳过，**这一档不会产生任何询问** |
 | 2 | **内置危险检查** | 排在 allow 之前，故**任何 allow 规则都盖不住**；命中强制询问（护栏不是牢笼，人确认了就该能做） |
 | 3 | *(工具自审插槽)* | 本期无实现方，预留 |
 | 4 | **ask 规则** | 每次都问 |
@@ -201,7 +201,8 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 | **计划模式** | `⏸ 计划模式`（冷薄荷） | 只读放行（含只读命令），写与命令一律**拒绝**（不是询问）；产出计划经批准后切档 |
 | **跳过权限检查**（BYPASS） | `⚠ 跳过权限检查`（红） | 全放行——内置底线与 `ask` 规则都**不再执行**，只剩 **deny 规则**（直接拒，不弹窗） |
 
-- `Shift+Tab` 在**前三档**之间循环（默认 → 自动接受编辑 → 计划模式 → 默认）。**BYPASS 只能由 `--dangerously-skip-permissions` 启动进入**，键盘和配置文件都进不去（否则一个按键或一次 `git clone` 就把这道启动开关架空了）。
+- `Shift+Tab` 在**四档**之间循环（默认 → 自动接受编辑 → 计划模式 → 跳过权限检查 → 默认）。BYPASS 也在环上，**不需要任何启动参数**——你当面按键、人在场，且进去之后行首常驻红色 `⚠ 跳过权限检查`。
+- **配置文件仍然进不去**：`.codetui/permissions.json` 里写 `defaultMode: "BYPASS"` 一律被丢弃并记 WARN。它与键盘切档是两个威胁模型——那个文件是 `git clone` 时一起带过来的，进目录一启动，模型的第一次工具调用就零检查跑了，你一个键都没按、屏幕上什么都没变。
 - **计划模式为什么是「拒绝」而不是「询问」**：能当场批准，这一档就名存实亡了。被拒的工具结果里会写明当前档位与正确的下一步（改调 `ExitPlanMode`），否则模型会对同一个写操作反复重试、把回合耗光。网络工具在这一档仍是**每次询问**（不是拒绝）——调研常要读文档。
 - **BYPASS 下永远不会停下来等人**：内置底线与 `ask` 规则都不再执行，命中 deny 时直接拒绝、把结果告诉模型（不弹窗），回合继续——这正是它在半无人值守下能用的原因。想保留某些禁令，就把它写成 deny 规则放进 `permissions.json`。
 - **放行会留痕**：踩到内置底线仍被放行时，**即时**打一行 `⚠ BYPASS 放行：<理由>` 进对话区，**回合末**再汇总一次（只列本回合的），方便你回来时看到不在期间发生了什么。
@@ -271,7 +272,7 @@ java -jar springai-code-tui.jar --permission-mode plan
 
 `--dangerously-skip-permissions` 启动时打一条 ⚠ 提示，进入 BYPASS。**它真的跳过全部检查**：上面那层内置底线与 `ask` 规则都不再执行，只有 **deny 规则**还拦得住你，且拦下时直接拒绝、把结果告诉模型（不弹窗）——所以这一档**不会停下来等人**，这正是半无人值守能用的原因。想保留某些禁令，就自己写 deny 规则进 `permissions.json`。踩到内置底线仍被放行的操作会**留痕**（即时一行 + 回合末汇总）。
 
-`--permission-mode <default|acceptEdits|plan>` 指定起始档位（也支持 `--permission-mode=plan` 写法）。**它不接受 `bypass`**：全放行只能由 `--dangerously-skip-permissions` 进，否则那道启动开关就等于有了第二个入口。两个参数同时出现时 `--dangerously-skip-permissions` 优先，并打一行「已忽略 --permission-mode …」。取值非法或缺值只记一条 warn 并忽略，不影响启动。优先级：`--dangerously-skip-permissions` > `--permission-mode` > 配置文件 `defaultMode`。
+`--permission-mode <default|acceptEdits|plan>` 指定起始档位（也支持 `--permission-mode=plan` 写法）。**它不接受 `bypass`**：`--dangerously-skip-permissions` 已经是「启动即进该档」的写法，不再设第二条等价路径（运行期用 `Shift+Tab` 切进去则是允许的）。两个参数同时出现时 `--dangerously-skip-permissions` 优先，并打一行「已忽略 --permission-mode …」。取值非法或缺值只记一条 warn 并忽略，不影响启动。优先级：`--dangerously-skip-permissions` > `--permission-mode` > 配置文件 `defaultMode`。
 
 ## 后台子 agent（`run_in_background`）
 
@@ -321,7 +322,7 @@ java -jar springai-code-tui.jar --permission-mode plan
 
 1. **事先写窄 allow 规则**——`Bash(mvn test:*)` 这类进 `permissions.json`，命中 allow 的调用根本不产生 ASK，后台照跑。这是精度最高的一条。
 2. **切到「自动接受编辑」档**——工作区内的编辑与文件系统命令自动放行，区外与网络仍挡得住。这是实用的中间档，多数「让子 agent 在后台改一批文件」的场景到这里就够了。
-3. **`--dangerously-skip-permissions` 启动**——全放行，后台与前台再无差别。只适合一次性容器（先读完上方「安全声明」）。
+3. **切到「跳过权限检查」档**（从默认档按 `Shift+Tab` 三下，或 `--dangerously-skip-permissions` 启动即进）——全放行，后台与前台再无差别。只适合一次性容器或你完全清楚后果的场合（先读完上方「安全声明」）。
 
 只读调查（`Read`/`Grep`/`Glob` + 只读命令）在**所有档位**都不受影响——这也是后台任务最顺的一类用法：派出去摸一遍代码，你继续干别的。
 
@@ -659,7 +660,7 @@ cd /path/to/some/disposable/project
 | Ctrl+W / Alt+Backspace | 删除光标前一个词（空白为界；中文按单字删） |
 | Ctrl+U / Ctrl+K | 删到行首 / 删到行尾（以当前逻辑行为界，不跨行） |
 | Ctrl+X | 取消本次输入识别出的图片附件（见「视觉输入」；某些全局热键会抢占按键，撞上时按了没反应） |
-| Shift+Tab | 循环权限模式（默认 → 自动接受编辑 → 计划模式 → 默认；当前档位常驻状态栏） |
+| Shift+Tab | 循环权限模式（默认 → 自动接受编辑 → 计划模式 → 跳过权限检查 → 默认；当前档位常驻状态栏） |
 | Esc | 取消当前正在进行的回合（工具调用/模型生成）**；后台任务不受影响**，要停它去 `/tasks` 按 `k`；审批面板打开时 = 拒绝并中断本回合 |
 | Ctrl+C | 退出程序 |
 
