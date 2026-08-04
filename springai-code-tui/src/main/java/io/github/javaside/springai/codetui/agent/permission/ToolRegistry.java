@@ -59,6 +59,8 @@ public final class ToolRegistry {
         put("ParallelTasks",       ToolCategory.INTERNAL, null, false);
         // 取自己进程内后台任务的结果，无外部副作用；不登记的话会落进 UNKNOWN→每次取结果都弹审批。
         put("TaskOutput",          ToolCategory.INTERNAL, null, false);
+        // 列自己进程内的后台任务，只读、无外部副作用；同 TaskOutput，不登记会落进 UNKNOWN→每次都弹审批。
+        put("ListTasks",           ToolCategory.INTERNAL, null, false);
         put("ExitPlanMode",        ToolCategory.INTERNAL, null, false);   // 提交计划本身无副作用，PLAN 下必须放行
         // ── 记忆工具：路径已被库侧钳在 memories root 内（见类注释） ──
         put("MemoryView",       ToolCategory.INTERNAL, "path", false);
