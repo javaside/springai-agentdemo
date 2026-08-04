@@ -132,6 +132,22 @@ public interface AgentListener {
      */
     default void onGuardrailBypassed(long turnId, String what) { }
 
+    // ── 后台子 agent（run_in_background；跨回合存活，故<b>不带 turnId</b>） ──
+
+    /**
+     * 后台任务已启动。<b>刻意不带 turnId</b>：后台任务跨回合存活，带 turnId 会被
+     * {@code ConversationState} 的迟到过滤丢弃（那正是前台事件想要的行为，对后台却是致命的）。
+     *
+     * <p>默认空实现，便于回显桩 / 测试桩省略。
+     */
+    default void onBackgroundTaskStarted(String taskId, String agentName, String description) { }
+
+    /** 后台任务内部正在跑的工具变了（只更新面板，<b>不进 scrollback</b>——否则会插进你与主 agent 的对话里）。 */
+    default void onBackgroundTaskProgress(String taskId, String toolName) { }
+
+    /** 后台任务结束。ok=false 表示执行抛错（finalText 是摊平后的原因）。 */
+    default void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) { }
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);

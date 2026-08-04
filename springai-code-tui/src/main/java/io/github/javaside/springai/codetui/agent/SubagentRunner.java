@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,11 +14,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -57,13 +62,24 @@ public final class SubagentRunner {
      */
     private final Supplier<PermissionMode> modeSupplier;
 
-    /** 当前在飞的子 agent 总数（串行 run + 并行 runAll 都计）；供 UI 的 busy 闸门判断「取消后是否还有旧子 agent 未清」。 */
+    /** 当前在飞的<b>前台</b>子 agent 数（串行 run + 并行 runAll）。供 UI busy 闸门判断「取消后是否还有旧子 agent 未清」。 */
     private final AtomicInteger inFlight = new AtomicInteger();
+    /**
+     * 当前在飞的<b>后台</b>子 agent 数。<b>刻意与前台分开计</b>：
+     * 混在一起的话，只要有后台任务在跑，{@code hasInFlightSubagents()} 就会挡住新回合——
+     * 后台化等于没做（这正是变异测试要钉的那一条）。本计数只供面板显示与退出清理。
+     */
+    private final AtomicInteger backgroundInFlight = new AtomicInteger();
     /**
      * 按 parentTurnId 索引的并行线程池集合：一个回合可发多次 ParallelTasks，故每 turn 是一组池。
      * 取消（{@link #cancelTurn}）据此 {@code shutdownNow} 拆掉该回合所有在飞并行子 agent（best-effort，见 runAll 中断语义）。
      */
     private final Map<Long, Set<ExecutorService>> poolsByTurn = new ConcurrentHashMap<>();
+
+    /** 后台任务注册表；null 表示未启用后台模式（老测试与回显桩不受影响）。 */
+    private BackgroundTaskRegistry backgroundRegistry;
+    /** 后台常驻线程池；与回合级临时池<b>完全分开</b>——回合取消 shutdownNow 临时池时碰不到它。 */
+    private ThreadPoolExecutor backgroundPool;
 
     public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                           String projectInstructions) {
@@ -128,25 +144,10 @@ public final class SubagentRunner {
         // 计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。故放在 onSubagentStarted 之后、try 之前。
         inFlight.incrementAndGet();   // 进入在飞（finally 递减）——喂给 UI busy 闸门，取消后仍未清的旧子 agent 会挡住 /continue
         try {
-            // Spring AI 2.0：defaultTools 取代已废弃的 defaultToolCallbacks；工具调用 advisor 由 ChatClient 自动注册，
-            // 不再显式挂（见类注释）。传 Object[]（每个元素是 ToolCallback）——与主 agent 的 defaultTools(toolsWithTask) 同构。
-            // RetryingChatModel：子 agent 走阻塞 call()，代理网关会间歇性回 200+空 body（SDK 抛
-            // *InvalidDataException、自带重试不覆盖），在 ChatModel 层按 LLM call 粒度重试（见该类注释）。
-            ChatClient client = ChatClient.builder(RetryingChatModel.wrap(registry.active().chatModel()))
-                    .defaultTools(effectiveTools(spec).toArray())
-                    .build();
-            ChatOptions options = resolveOptions(spec);
-            String result = client.prompt()
-                    .system(effectiveSystemPrompt(spec))
-                    .user(prompt)
-                    // .options 接收 native builder（与 CodingAgent.submit 一致，mutate 保留 maxTokens 等）
-                    .options(options.mutate())
-                    // 子 agent 内部工具事件带上 parentTurnId + taskId（供 TUI 缩进）
-                    .toolContext(Map.of(ToolEventCallback.TURN_ID_KEY, parentTurnId,
-                            ToolEventCallback.TASK_ID_KEY, taskId))
-                    .call()
-                    .content();
-            String finalText = result == null ? "" : result;
+            // 子 agent 内部工具事件带上 parentTurnId + taskId（供 TUI 缩进）
+            String finalText = execute(spec, prompt,
+                    Map.of(ToolEventCallback.TURN_ID_KEY, parentTurnId,
+                           ToolEventCallback.TASK_ID_KEY, taskId));
             listener.onSubagentFinished(parentTurnId, taskId, finalText, true);
             return finalText;
         } catch (RuntimeException ex) {
@@ -161,6 +162,34 @@ public final class SubagentRunner {
         } finally {
             inFlight.decrementAndGet();   // 无论成功/失败/被中断（shutdownNow → interrupt → 网络调用抛出）都退出在飞
         }
+    }
+
+    /**
+     * 前台与后台共用的执行体：建子 agent 专用 ChatClient 并跑一次完整的工具循环。
+     *
+     * <p>抽出来的唯一目的是让前台/后台<b>只在 toolContext 与事件上报上不同</b>，
+     * 模型、工具集、系统提示、重试策略全部同源——否则两条路会各自漂移，
+     * 而「后台任务的行为和前台不一样」是最难排查的那类缺陷。
+     *
+     * <p>Spring AI 2.0：defaultTools 取代已废弃的 defaultToolCallbacks；工具调用 advisor 由 ChatClient
+     * 自动注册，不再显式挂（见类注释）。传 Object[]（每个元素是 ToolCallback）——与主 agent 的
+     * defaultTools(toolsWithTask) 同构。RetryingChatModel：子 agent 走阻塞 call()，代理网关会间歇性回
+     * 200+空 body（SDK 抛 *InvalidDataException、自带重试不覆盖），在 ChatModel 层按 LLM call 粒度重试。
+     */
+    private String execute(SubagentSpec spec, String prompt, Map<String, Object> toolContext) {
+        ChatClient client = ChatClient.builder(RetryingChatModel.wrap(registry.active().chatModel()))
+                .defaultTools(effectiveTools(spec).toArray())
+                .build();
+        ChatOptions options = resolveOptions(spec);
+        String result = client.prompt()
+                .system(effectiveSystemPrompt(spec))
+                .user(prompt)
+                // .options 接收 native builder（与 CodingAgent.submit 一致，mutate 保留 maxTokens 等）
+                .options(options.mutate())
+                .toolContext(toolContext)
+                .call()
+                .content();
+        return result == null ? "" : result;
     }
 
     /**
@@ -242,9 +271,101 @@ public final class SubagentRunner {
         }
     }
 
+    /** 默认后台等待队列容量。 */
+    public static final int DEFAULT_BACKGROUND_QUEUE = 16;
+
+    /** 启用后台模式（默认队列 16）。装配层调用；不调则 {@link #runInBackground} 返回不可用提示。 */
+    public void enableBackground(BackgroundTaskRegistry registry, int concurrency) {
+        enableBackground(registry, concurrency, DEFAULT_BACKGROUND_QUEUE);
+    }
+
+    /** 启用后台模式，显式指定并发与队列容量（测试用）。 */
+    public void enableBackground(BackgroundTaskRegistry registry, int concurrency, int queueCapacity) {
+        this.backgroundRegistry = registry;
+        int n = Math.min(32, Math.max(1, concurrency));
+        AtomicLong seq = new AtomicLong();
+        this.backgroundPool = new ThreadPoolExecutor(n, n, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(Math.max(1, queueCapacity)),
+                r -> {
+                    Thread t = new Thread(r, "subagent-background-" + seq.incrementAndGet());
+                    t.setDaemon(true);   // 守护线程：绝不阻止 JVM 退出（退出清理是有界的，见 shutdownBackground）
+                    return t;
+                });
+    }
+
+    /**
+     * 后台派发：<b>立刻</b>返回一段含 taskId 的文本，子 agent 在常驻池里跑。
+     *
+     * <p>返回的文本<b>就是本次工具调用的结果</b>——所以不会留下悬空 {@code tool_calls}，
+     * 「回合被中断后残留 assistant(tool_calls)、下一轮 400」那个已知坑在这条路上不存在。
+     *
+     * <p><b>绝不抛异常</b>：后台任务的失败是它自己的事，不该炸掉主 agent 正在进行的回合。
+     */
+    public String runInBackground(SubagentSpec spec, String prompt, String description) {
+        if (backgroundRegistry == null || backgroundPool == null) {
+            return "后台模式不可用（未装配后台注册表）。请改用 run_in_background=false 的前台 Task。";
+        }
+        String taskId = backgroundRegistry.register(spec.name(), description);
+        listener.onBackgroundTaskStarted(taskId, spec.name(), description);
+        backgroundInFlight.incrementAndGet();
+        try {
+            backgroundPool.execute(() -> runBackgroundBody(spec, prompt, taskId));
+        } catch (RejectedExecutionException rejected) {
+            backgroundInFlight.decrementAndGet();
+            // 标记 KILLED 而不是 FAILED：KILLED 不可送达，绝不会被自动送给模型。
+            // 送一条「它失败了」给模型，读起来像它真的跑过——而它根本没启动。
+            backgroundRegistry.kill(taskId);
+            return "后台队列已满（并发上限已占满且等待队列已满），本次未启动。"
+                    + "请改用 run_in_background=false 的前台 Task，或等待在跑的任务完成后重试。";
+        }
+        return "已在后台启动：" + taskId + "（" + spec.name() + " · " + description + "）。"
+                + "用 TaskOutput 取结果，或等待完成通知。";
+    }
+
+    /** 后台任务体：跑完把结果写回注册表并发事件。<b>任何异常都不得逃出本方法</b>（池线程死掉没人知道）。 */
+    private void runBackgroundBody(SubagentSpec spec, String prompt, String taskId) {
+        try {
+            // turnId 传 -1：后台任务没有归属回合，塞一个真 turnId 只会让它的工具事件被迟到过滤丢弃。
+            String finalText = execute(spec, prompt,
+                    Map.of(ToolEventCallback.TURN_ID_KEY, -1L,
+                           ToolEventCallback.TASK_ID_KEY, taskId,
+                           ToolEventCallback.BACKGROUND_TASK_ID_KEY, taskId));
+            backgroundRegistry.complete(taskId, finalText, true);
+            listener.onBackgroundTaskFinished(taskId, finalText, true);
+        } catch (RuntimeException ex) {
+            log.error("后台子 agent 执行失败：spec={} taskId={}", spec.name(), taskId, ex);
+            String detail = describe(ex);
+            backgroundRegistry.complete(taskId, detail, false);
+            listener.onBackgroundTaskFinished(taskId, detail, false);
+        } catch (Throwable fatal) {
+            // Error 也要兜：漏掉它，池线程静默死亡，任务永远停在 RUNNING，面板上转到天荒地老。
+            log.error("后台子 agent 遇到致命错误：taskId={}", taskId, fatal);
+            backgroundRegistry.complete(taskId, String.valueOf(fatal), false);
+            listener.onBackgroundTaskFinished(taskId, String.valueOf(fatal), false);
+        } finally {
+            backgroundInFlight.decrementAndGet();
+        }
+    }
+
+    /** 退出清理：<b>有界</b>关闭后台池（硬限 2s），照抄 MCP 子进程清理的「不卡退出优先」取舍。 */
+    public void shutdownBackground() {
+        if (backgroundPool == null) return;
+        backgroundPool.shutdownNow();
+        try {
+            backgroundPool.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /** 当前在飞子 agent 总数（串行 + 并行）。供 UI busy 闸门判断取消后是否仍有旧子 agent 未清。 */
     public int inFlightCount() {
         return inFlight.get();
+    }
+
+    /** 当前在飞的后台子 agent 数（只供面板与退出清理，<b>绝不</b>进 busy 闸门）。 */
+    public int backgroundInFlightCount() {
+        return backgroundInFlight.get();
     }
 
     /**
