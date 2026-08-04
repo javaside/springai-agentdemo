@@ -228,7 +228,7 @@ package io.github.javaside.springai.codetui.agent.background;
 /**
  * 一个后台子 agent 任务的身份 + 可变状态。
  *
- * <p><b>刻意不是 record</b>：status / result / currentTool 都要就地更新，而 taskId 等身份字段不变。
+ * <p><b>刻意不是 record</b>：status / result 都要就地更新，而 taskId 等身份字段不变。
  * 用可变类 + 只读快照（{@link #snapshot()}）比"每次改都造一个新 record"更贴合它的用法——
  * 注册表按 taskId 索引，换对象等于每次更新都要替换 map 里的值。
  *
@@ -251,7 +251,6 @@ public final class BackgroundTask {
     private Status status = Status.RUNNING;
     private long finishedAt;
     private String result = "";
-    private String currentTool = "";
     private boolean consumed;
 
     BackgroundTask(String taskId, String agentName, String description, long startedAt) {
@@ -268,7 +267,6 @@ public final class BackgroundTask {
     public Status status() { return status; }
     public long finishedAt() { return finishedAt; }
     public String result() { return result; }
-    public String currentTool() { return currentTool; }
     public boolean consumed() { return consumed; }
 
     /** 是否已结束（不再运行）。KILLED 也算结束。 */
@@ -281,10 +279,7 @@ public final class BackgroundTask {
         this.status = newStatus;
         this.result = result == null ? "" : result;
         this.finishedAt = at;
-        this.currentTool = "";
     }
-
-    void setCurrentTool(String tool) { this.currentTool = tool == null ? "" : tool; }
 
     void setConsumed() { this.consumed = true; }
 
@@ -329,15 +324,9 @@ public final class BackgroundTaskRegistry {
     private final Supplier<Long> clock;
 
     public BackgroundTaskRegistry(int capacity) {
-        this(capacity, () -> "task_" + UUID.randomUUID().toString().substring(0, 8),
-                System::currentTimeMillis);
-    }
-
-    /** 测试用：可注入确定性的 id 与时钟。 */
-    BackgroundTaskRegistry(int capacity, Supplier<String> idSupplier, Supplier<Long> clock) {
         this.capacity = Math.max(1, capacity);
-        this.idSupplier = idSupplier;
-        this.clock = clock;
+        this.idSupplier = () -> "task_" + UUID.randomUUID().toString().substring(0, 8);
+        this.clock = System::currentTimeMillis;
     }
 
     /** 登记一个新任务（RUNNING），返回 taskId。超容量时先淘汰最旧的已完成任务。 */
@@ -353,12 +342,6 @@ public final class BackgroundTaskRegistry {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return;
         t.finish(ok ? BackgroundTask.Status.DONE : BackgroundTask.Status.FAILED, result, clock.get());
-    }
-
-    /** 更新"当前正在跑的工具"（供 ⏱ 面板显示）。未知 id 静默忽略。 */
-    public synchronized void updateCurrentTool(String taskId, String toolName) {
-        BackgroundTask t = tasks.get(taskId);
-        if (t != null && !t.finished()) t.setCurrentTool(toolName);
     }
 
     /** 终止一个运行中的任务（标记 KILLED）。返回是否真的改变了状态——已结束的返回 false。 */
@@ -898,7 +881,7 @@ git commit -m "feat(background): 自动送达判定与失控刹车"
 - Modify: `src/main/java/io/github/javaside/springai/codetui/agent/SubagentRunner.java`
 - Test: `src/test/java/io/github/javaside/springai/codetui/agent/SubagentRunnerBackgroundTest.java`
 
-- [ ] **Step 1: 加 3 个 listener 方法**
+- [ ] **Step 1: 加 2 个 listener 方法**
 
 在 `AgentListener.java` 的 `onGuardrailBypassed` 之后、`// ── 会话压缩` 注释之前插入：
 
@@ -912,9 +895,6 @@ git commit -m "feat(background): 自动送达判定与失控刹车"
      * <p>默认空实现，便于回显桩 / 测试桩省略。
      */
     default void onBackgroundTaskStarted(String taskId, String agentName, String description) { }
-
-    /** 后台任务内部正在跑的工具变了（只更新面板，<b>不进 scrollback</b>——否则会插进你与主 agent 的对话里）。 */
-    default void onBackgroundTaskProgress(String taskId, String toolName) { }
 
     /** 后台任务结束。ok=false 表示执行抛错（finalText 是摊平后的原因）。 */
     default void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) { }
@@ -2283,7 +2263,6 @@ class ConversationStateBackgroundTest {
         ConversationState s = started(1L);
         s.onBackgroundTaskStarted("task_ab12", "explore", "调查");
         s.cancelCurrent();                              // acceptingTurnId = -1，前台事件此后全被丢弃
-        s.onBackgroundTaskProgress("task_ab12", "Grep");
         s.onBackgroundTaskFinished("task_ab12", "结论", true);
 
         assertEquals(ConversationState.BackgroundStatus.DONE, s.backgroundTasks().get(0).status(),
@@ -2415,12 +2394,6 @@ Expected: 编译失败，`找不到符号: 方法 backgroundTasks()`
         backgroundTasks.add(new BackgroundEntry(taskId, agentName, d));
         pending.add(new OutputLine("⏱ 后台任务已启动  " + taskId + " · " + agentName
                 + (d.isEmpty() ? "" : " · " + d), OutputLine.Kind.INFO));
-    }
-
-    @Override
-    public synchronized void onBackgroundTaskProgress(String taskId, String toolName) {
-        BackgroundEntry e = findBackground(taskId);
-        if (e != null) e.currentTool = toolName == null ? "" : toolName;
     }
 
     @Override
