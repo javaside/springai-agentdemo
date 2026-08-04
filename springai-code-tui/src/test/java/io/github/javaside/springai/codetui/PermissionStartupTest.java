@@ -81,13 +81,15 @@ class PermissionStartupTest {
     }
 
     @Test
-    @DisplayName("不给、给错、或想用它进 BYPASS —— 一律回退 null（由调用方落到配置的 defaultMode）")
+    @DisplayName("--permission-mode：不给、给错、或写 bypass 一律回退 null（bypass 另有 --dangerously-skip-permissions）")
     void rejectsBadPermissionMode() {
         assertNull(CodeTuiApplication.startupMode(new String[]{}));
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode"}), "缺值不得读到越界");
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "banana"}));
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "bypass"}),
-                "BYPASS 只能由 --dangerously-skip-permissions 进；这里认了就等于开了第二个后门");
+                "--dangerously-skip-permissions 已经是「启动即进 BYPASS」的写法，"
+                        + "不再设第二条等价路径。注意：运行期 Shift+Tab 进 BYPASS 是允许的，"
+                        + "本条约束的是启动参数，两者威胁模型不同（见权限模式 spec §3）");
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-modex", "plan"}),
                 "前缀相近的参数不得误判");
         assertNull(CodeTuiApplication.startupMode(new String[]{"--permission-mode", "--continue"}),
