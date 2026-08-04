@@ -778,7 +778,10 @@ public final class CodeTuiView extends InlineApp {
         // 放在最前：模态/菜单激活时也应能切模式（模式只影响后续判定，不动任何 pending 请求）；
         // 但必须晚于上面那句「按任意键清 notice」，否则本次设的 notice 当场被清掉、用户看不到反馈。
         if (k.code() == KeyCode.TAB && k.hasShift()) {
-            state.setNotice("权限模式：" + onSubmit.cyclePermissionMode().label());
+            // 「已切到」而不是「权限模式：」：这条 notice 现在会出现在忙时的后缀位置，
+            // 那里读起来必须像一个刚发生的<b>事件</b>；「当前是哪一档」这个常驻状态由行首
+            // 的 modeTag 负责，两者分工分开后就不再是同一件事说两遍。
+            state.setNotice("已切到 " + onSubmit.cyclePermissionMode().label());
             return EventResult.HANDLED;
         }
         if (activePermission != null) return onPermissionKey(k);   // 审批模态优先于一切文本编辑（背后 park 着工具线程）
@@ -2412,11 +2415,20 @@ public final class CodeTuiView extends InlineApp {
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
         String notice = state.notice();
-        if (!notice.isEmpty()) return text(notice + " · Ctrl+C 退出").style(THINK);
         // 空闲但仍有已取消子 agent 在收尾：给提示，避免「消息静默入队、无转轮」被误判为卡死（见 busy()/drainingSubagentsHint）。
+        // ⚠ 必须算在 notice 判定之前：它也是一条动态信息，不能被 notice 盖掉。
         String draining = drainingSubagentsHint(state.isIdle(), onSubmit.hasInFlightSubagents());
+        // notice 独占整行只留给「真空闲」：那时本来就没有动态信息要保。
+        // ⚠ 这一句以前无条件 return 且排在 status 开关之前，于是<b>任何</b>忙时 notice 都会把
+        // 波光转轮整条盖掉——回合正跑着按一下 Shift+Tab，用户就看不出还在跑了，且 sticky，
+        // 不按下一个键不还回来。修法是改结构而不是给 Shift+Tab 开小灶：忙时降级为后缀、与转轮共存。
+        if (!notice.isEmpty() && state.isIdle() && draining == null) {
+            return text(notice + " · Ctrl+C 退出").style(THINK);
+        }
+        // 忙时的 notice 后缀。<b>空串必须判</b>：不判会渲染出一段悬空的 " · "。
+        String ns = notice.isEmpty() ? "" : " · " + notice;
         Span mode = modeTag(onSubmit.permissionMode());
-        if (draining != null) return richText(statusBar.shimmer(draining, qs + " · Ctrl+C 退出", THINK, animTick, mode));
+        if (draining != null) return richText(statusBar.shimmer(draining, qs + ns + " · Ctrl+C 退出", THINK, animTick, mode));
         return switch (state.status()) {
             case IDLE -> {
                 String hint = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · "
@@ -2424,11 +2436,11 @@ public final class CodeTuiView extends InlineApp {
                 yield mode == null ? text(hint).style(HINT)
                         : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
             }
-            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
+            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + ns + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
                 yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
-                        qs + " · Esc 取消", RUNNING, animTick, mode));
+                        qs + ns + " · Esc 取消", RUNNING, animTick, mode));
             }
         };
     }
@@ -2463,8 +2475,10 @@ public final class CodeTuiView extends InlineApp {
      * 看不出自己在哪一档</b>，只能重新敲 {@code /permissions} 查。对「这次工具调用会不会问我」这种
      * 有安全后果的状态，不可见等同于不存在——BYPASS 尤甚：那是最该持续可见的一档，横幅却只出现一次。
      *
-     * <p>只挂在常态三行（空闲 / 思考 / 跑工具）上，不挂菜单、模态与 notice 行：那些是<b>临时接管</b>
-     * 状态行的覆盖层，收起后标识自然回来；挂上去反而会和 notice 里的「权限模式：X」重复成两遍。
+     * <p>只挂在常态三行（空闲 / 思考 / 跑工具）上，不挂菜单、模态与<b>空闲态</b>的 notice 独占行：
+     * 那些是<b>临时接管</b>状态行的覆盖层，收起后标识自然回来。
+     * <b>忙时的 notice 后缀是例外</b>——那一行本就是常态行，标识与后缀分工不同、刻意并存：
+     * 行首的标识说「现在是哪一档」（常驻状态），后缀的「已切到 X」说「刚刚发生了什么」（一次性事件）。
      *
      * <p>纯函数（不读实例态），故可直接单测；真实屏幕上的可见性由 pty 冒烟钉。
      */
