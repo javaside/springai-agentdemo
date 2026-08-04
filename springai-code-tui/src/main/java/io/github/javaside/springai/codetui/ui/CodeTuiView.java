@@ -128,6 +128,10 @@ public final class CodeTuiView extends InlineApp {
     private boolean pickingPerms;                                    // /permissions 规则面板是否激活
     private int permsIndex;                                          // 权限面板高亮项下标
     private PermissionRule permsPendingDelete;                       // 非 null = 删除确认态（待确认的那条规则）
+    private boolean pickingTasks;                                    // /tasks 后台任务面板是否激活
+    private int taskIndex;                                           // 任务面板高亮项下标
+    private boolean taskExpanded;                                    // Enter 展开选中任务的结果正文
+    private String taskPendingKill;                                  // 非 null = 终止确认态（待确认的 taskId）
     private volatile String mcpConnecting;                           // 非 null = 正在后台连接的 server 名（渲染线程读）
     private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
     private AskRequest activeAsk;                                     // 当前正在作答的问询（null=非作答态）
@@ -175,6 +179,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/reload",  "重新扫描技能目录（新增/删除的 SKILL.md 生效）"),
             new SlashCommand("/mcp",     "管理 MCP 服务器（启用/禁用）"),
             new SlashCommand("/permissions", "查看权限模式与生效规则"),
+            new SlashCommand("/tasks",   "查看后台任务（可展开结果 / 终止）"),
             new SlashCommand("/continue", "继续执行上一批未完成的计划"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
@@ -221,12 +226,15 @@ public final class CodeTuiView extends InlineApp {
                 scope(!tail.isEmpty(), richText(printer.preview(tail)).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
                 scope(!subs.isEmpty(), subtaskChildren(subs)),
-                scope(!bgTasks.isEmpty(), backgroundChildren(bgTasks)),   // ⏱ 后台任务面板（零任务时不占行）
+                // ⏱ 后台任务面板（零任务时不占行）。/tasks 打开时收起：那个面板列的是同一批任务，
+                // 两份并排只会把输入框往上顶，且用户分不清该按哪一份。
+                scope(!bgTasks.isEmpty() && !pickingTasks, backgroundChildren(bgTasks)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
                 scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
                 scope(pickingPerms, permsPanelChildren()),          // /permissions 规则面板（可删）
+                scope(pickingTasks, tasksPanelChildren()),          // /tasks 后台任务面板（可展开结果 / 终止）
                 scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
                 scope(activePermission != null, permissionChildren()),   // 权限审批面板
                 scope(activePlan != null, planChildren()),          // 计划审批面板（正文在 scrollback，面板只放选项）
@@ -708,7 +716,7 @@ public final class CodeTuiView extends InlineApp {
         // 只认 Ctrl+C 退出。绝不用 isQuit()——默认绑定里 quit 含裸 q/Q，会把输入/粘贴到输入框的
         // 含 q 文本误判为退出（本类是唯一焦点，每个按键都先过这里）。绑定已在 configure() 收敛，此处再兜一层。
         if (k.isCtrlC()) {
-            quit();
+            shutdownAndQuit();
             return EventResult.HANDLED;
         }
         // 任意按键消费掉上一条 sticky notice（如「已取消当前回合」），恢复状态栏常态行。
@@ -730,6 +738,7 @@ public final class CodeTuiView extends InlineApp {
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
         if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
         if (pickingPerms) return onPermsPanelKey(k);    // 权限规则面板同理
+        if (pickingTasks) return onTasksPanelKey(k);    // 后台任务面板同理
         // 取消图片附件。⚠️ 不要改回 Ctrl+G：Chrome 的 Gemini 扩展把它注册成 OS 级全局热键，
         // 键在任何终端应用看到它之前就被抢走（用户实机撞车，按下去弹的是 Chrome 对话框）。
         // 这类冲突在代码里修不了。Ctrl+X 在 readline 里是前缀键、单按无动作，不撞肌肉记忆，
@@ -1007,6 +1016,20 @@ public final class CodeTuiView extends InlineApp {
         attachmentsCancelled = false;
     }
 
+    /**
+     * 退出：先终止全部后台任务，再走 {@code quit()}。
+     *
+     * <p><b>两个退出入口共用一处</b>——{@code /exit} 与 Ctrl+C。计划只点名了 {@code /exit}，但 Ctrl+C 才是
+     * 状态行上写着的那个退出键、也是实际用得最多的一个；只管一个入口等于这道清理有一半时间不生效。
+     *
+     * <p>清理是<b>有界</b>的（{@code SubagentRunner.shutdownBackground} 硬限 2s），与 MCP 子进程清理同一取舍：
+     * 让在飞的工具调用有机会停手，但绝不为它卡住退出。
+     */
+    private void shutdownAndQuit() {
+        onSubmit.killAllBackgroundTasks();
+        quit();
+    }
+
     /** 提交：忙时把消息入队（回合结束由 {@link #drain} 自动出队提交），空闲时立即提交。均清空输入框。 */
     private void submitInput() {
         String text = inputState.text();
@@ -1036,6 +1059,10 @@ public final class CodeTuiView extends InlineApp {
                 state.setNotice("忙碌中，无法清空");
                 return;
             }
+            // 必须在 resetForNewSession() 之前、且在上面的忙碌闸门之后：前者只清 ⏱ 面板这份 UI 镜像，
+            // 任务本身还在池子里跑——不补这一刀就是「清完屏任务还在烧钱，而界面上已看不见」；
+            // 后者保证被拒的 /clear 不会顺手杀掉任务（都没换会话，凭什么杀）。
+            onSubmit.killAllBackgroundTasks();       // 新会话不该有旧会话的任务在跑
             onSubmit.clearContext();                 // (A) 换 sessionId
             state.resetForNewSession();              // 复位面板/排队/提示
             lastShownModel = "";                     // 新会话首个回合重新打「⚙ 使用模型 X」
@@ -1088,6 +1115,13 @@ public final class CodeTuiView extends InlineApp {
             openPermsPanel();
             return;
         }
+        if (cmd.equals("/tasks")) {             // 后台任务面板：<b>任何时候可开</b>（同 /permissions，不像 /mcp 要求空闲）
+            // 不设忙碌闸门是有理由的：后台任务与当前回合跑在两套线程上，终止一个后台任务不会撞在飞的
+            // 工具调用；而「回合正忙」恰恰是最想查看后台进度的时刻，此时拒绝等于在最需要时把功能关掉。
+            clearInput();
+            openTasksPanel();
+            return;
+        }
         if (cmd.equals("/continue")) {               // 续跑：上一批计划被 Esc/报错中断后，据会话里保留的 todo 从首个未完成项接着做
             clearInput();
             // 工具中立：别硬点 Task/串行——上一批若是 ParallelTasks 并行跑的，"逐个用 Task" 会把独立任务逼回串行、丢掉并行。
@@ -1106,7 +1140,7 @@ public final class CodeTuiView extends InlineApp {
         }
         if (cmd.equals("/exit") || cmd.equals("/quit")) {
             clearInput();
-            quit();
+            shutdownAndQuit();
             return;
         }
         // ── 附件兑现（必须在 clearInput() 之前：那一跑 attachmentsCancelled 就被复位，Ctrl+X 会失效） ──
@@ -1936,6 +1970,166 @@ public final class CodeTuiView extends InlineApp {
     // 测试钩子
     boolean pickingPermsForTest() { return pickingPerms; }
 
+    // ── /tasks 后台任务面板 ──────────────────────────────────────────────
+    /** 展开结果时最多占几个物理行；再多会把输入框顶出屏幕（同 {@link #printPlan} 的取舍）。 */
+    private static final int TASK_RESULT_LINES = 8;
+
+    /** 打开后台任务面板。<b>零任务也照常打开</b>——面板会说明后台任务从哪来，比什么都不弹更有用。 */
+    private void openTasksPanel() {
+        taskIndex = 0;
+        taskExpanded = false;
+        taskPendingKill = null;
+        pickingTasks = true;
+    }
+
+    /**
+     * 面板按键：↑↓ 移动、Enter 展开/收起结果、{@code k} 请求终止、Esc 关闭；
+     * 确认态只认 Enter（确认）/ Esc（取消）。始终 HANDLED。
+     *
+     * <p><b>刻意不提供 j/k 移动</b>（与本应用其余选择器不同）：{@code k} 在这里是<b>终止</b>键，
+     * 两者撞车。「想上移却弹出终止确认」是最糟的形态，宁可少一组 vim 键位。
+     *
+     * <p><b>{@code k} 只对运行中的任务有效</b>：对已结束的按下去不弹确认——弹一个「确认终止一个已经
+     * 结束的任务？」只会让人怀疑自己看错了状态。
+     */
+    private EventResult onTasksPanelKey(KeyEvent k) {
+        List<ConversationState.BackgroundView> tasks = state.backgroundTasks();
+        if (taskPendingKill != null) {                    // 确认态：只认 Enter / Esc，别的键一概忽略
+            if (k.isCancel()) { taskPendingKill = null; return EventResult.HANDLED; }
+            if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+                confirmKillTask();
+                return EventResult.HANDLED;
+            }
+            return EventResult.HANDLED;
+        }
+        if (k.isCancel()) { pickingTasks = false; return EventResult.HANDLED; }
+        int n = tasks.size();
+        if (n == 0) return EventResult.HANDLED;           // 空列表：除 Esc 外无事可做（别让 % n 除零）
+        taskIndex = clampIndex(taskIndex, n);
+        if (k.code() == KeyCode.UP)   { taskIndex = (taskIndex - 1 + n) % n; taskExpanded = false; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN) { taskIndex = (taskIndex + 1) % n;     taskExpanded = false; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            taskExpanded = !taskExpanded;
+            return EventResult.HANDLED;
+        }
+        if (k.isChar('k') || k.isChar('K')) {
+            ConversationState.BackgroundView t = tasks.get(taskIndex);
+            if (t.status() != ConversationState.BackgroundStatus.RUNNING) {
+                // 说一句而不是静默吞掉：「按了没反应」比报错更难排查（同 confirmPermsDelete 的老账）。
+                state.setNotice("任务已结束，无需终止");
+                return EventResult.HANDLED;
+            }
+            taskPendingKill = t.taskId();   // 只是「请求」——真正的终止在 confirmKillTask
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;                       // 其余键一律吞掉，不落进输入框
+    }
+
+    /**
+     * 确认后才真的终止。<b>UI 镜像要自己补一笔 KILLED</b>：注册表的 kill 只改它自己那份状态、不发事件，
+     * 也不打断那条线程——不补就是「按完 k 面板上那条一直转」。落空也把结果说清楚。
+     */
+    private void confirmKillTask() {
+        String id = taskPendingKill;
+        taskPendingKill = null;
+        if (id == null) return;
+        boolean ok = onSubmit.killBackgroundTask(id);
+        if (ok) state.markBackgroundKilled(id);
+        state.setNotice(ok ? "已终止后台任务 " + id
+                : "终止失败：" + id + "（它可能刚好已经结束）");
+        taskIndex = clampIndex(taskIndex, state.backgroundTasks().size());
+    }
+
+    /**
+     * 后台任务面板：标题 + 每个任务一行（沿用 ⏱ 面板的行文本），选中项可 Enter 展开结果正文，
+     * 末尾一行说明结果怎么进模型。确认态<b>替换</b>整个列表为一行确认提示——叠加显示会让
+     * 「要确认什么」淹没在列表里（同 {@link #permsPanelChildren}）。
+     *
+     * <p>高亮走纯前景 {@link Theme#PICK_SEL}（底色条会串到下一项，见 {@code Theme.PICK_SEL} 注释）。
+     */
+    private Element[] tasksPanelChildren() {
+        // scope 每帧 eager 求值（非面板态也会进来）：首行判空，否则每帧崩渲染线程
+        if (!pickingTasks) return new Element[0];
+        // 模态在前台时按键归它们（见 onInputKey 的分支顺序），此时把面板收起来，
+        // 免得屏幕上并排两个面板、而其中一个根本按不动。
+        if (activePermission != null || activePlan != null || activeAsk != null) return new Element[0];
+        List<ConversationState.BackgroundView> tasks = state.backgroundTasks();
+        List<Element> els = new ArrayList<>();
+        if (taskPendingKill != null) {
+            els.add(text("  ⚠ 确认终止 " + taskPendingKill + "？已跑出的进度会丢失，结果不会再交给模型"
+                    + " · Enter 确认 · Esc 取消").style(PICK_TITLE));
+            return els.toArray(new Element[0]);
+        }
+        els.add(text("  ⏱ 后台任务（↑↓ 选择 · Enter 展开结果 · k 终止 · Esc 关闭）").style(PICK_TITLE));
+        if (tasks.isEmpty()) {
+            els.add(text("    （暂无后台任务）让模型用 Task 的 run_in_background 派活，"
+                    + "跑起来的任务会出现在这里。").style(PICK_DESC));
+            return els.toArray(new Element[0]);
+        }
+        int sel = clampIndex(taskIndex, tasks.size());
+        long now = System.currentTimeMillis();
+        int inner = Math.max(8, terminalWidth() - 2);
+        for (int i = 0; i < tasks.size(); i++) {
+            ConversationState.BackgroundView t = tasks.get(i);
+            boolean isSel = i == sel;
+            els.add(text(clipToWidth("  " + (isSel ? "❯ " : "  ") + backgroundRowText(t, now).strip(), inner))
+                    .style(isSel ? PICK_SEL : PICK_ITEM));
+            if (isSel && taskExpanded) els.addAll(resultRows(t, inner));
+        }
+        // 这一行是整个后台模式最容易被误解的地方：结果不会自己蹦到屏幕上，也不需要你去粘贴——
+        // 空闲且输入框为空时它自动起一个回合交给模型。不说清楚，用户会以为任务白跑了。
+        els.add(text("    完成的结果会自动送达：清空输入框后自动交给模型").style(PICK_DESC));
+        return els.toArray(new Element[0]);
+    }
+
+    /**
+     * 展开的结果正文，<b>按 {@code \n} 逐行拆</b>——一个 Element = 一个物理行，整块多行字符串会被塌成一行截断。
+     * 超过 {@link #TASK_RESULT_LINES} 行只显示开头并注明还有多少：行内面板放不下几十行（会把输入框顶出屏幕）。
+     */
+    private List<Element> resultRows(ConversationState.BackgroundView t, int inner) {
+        List<Element> els = new ArrayList<>();
+        String result = t.result() == null ? "" : t.result();
+        if (result.isBlank()) {
+            els.add(text(t.status() == ConversationState.BackgroundStatus.RUNNING
+                    ? "      （仍在运行，还没有结果）" : "      （没有结果正文）").style(PICK_DESC));
+            return els;
+        }
+        String[] lines = result.split("\n", -1);
+        int shown = Math.min(lines.length, TASK_RESULT_LINES);
+        for (int i = 0; i < shown; i++) {
+            els.add(text(clipToWidth("      " + lines[i], inner)).style(PICK_DESC));
+        }
+        if (lines.length > shown) {
+            els.add(text("      … 还有 " + (lines.length - shown) + " 行（行内面板放不下，完整结果已交给模型）")
+                    .style(DIM));
+        }
+        return els;
+    }
+
+    /** 按显示宽度截断（中文占 2 列），超出补省略号。守住「一行内容一物理行」，长行不撑爆面板。 */
+    private static String clipToWidth(String s, int width) {
+        if (displayWidth(s) <= width) return s;
+        return dev.tamboui.text.CharWidth.substringByWidth(s, Math.max(1, width - 1)) + "…";
+    }
+
+    /**
+     * 面板态的状态行。
+     *
+     * <p><b>必须自己回显 notice</b>：{@link #statusLine} 的面板分支早于通用 notice 分支 return，
+     * 不在这里回显的话，「已终止 / 终止失败」这类反馈<b>永远看不见</b>（同 {@link #permsStatusText} 的老账）。
+     */
+    String tasksStatusText() {
+        String notice = state.notice();
+        if (notice != null && !notice.isEmpty()) return notice + " · Esc 关闭";
+        return taskPendingKill != null
+                ? "⚠ 确认终止 · Enter 确认 · Esc 取消"
+                : "⏱ 后台任务 · ↑↓ 选择 · Enter 展开结果 · k 终止 · Esc 关闭";
+    }
+
+    // 测试钩子
+    boolean pickingTasksForTest() { return pickingTasks; }
+    String tasksStatusTextForTest() { return tasksStatusText(); }
+
     /** /reload：重扫两层技能目录后打一行结果 + 复用 {@link #printSkills} 展示最新清单（运行中增删 SKILL.md 即时生效，无需重启）。 */
     private void reloadSkills() {
         onSubmit.reloadSkills();
@@ -2067,6 +2261,7 @@ public final class CodeTuiView extends InlineApp {
             Style st = switch (t.status()) {
                 case DONE -> OK;
                 case FAILED -> ERROR;
+                case KILLED -> DIM;      // 用户自己终止的：不是错误，也没什么可看的，退到背景里
                 case RUNNING -> TODO_RUN;
             };
             String row = backgroundRowText(t, now);
@@ -2078,16 +2273,19 @@ public final class CodeTuiView extends InlineApp {
         return els.toArray(new Element[0]);
     }
 
-    /** 一条后台任务的行文本："  <图标> <id> <agent>  <描述>  <耗时>[  <当前工具>]"。 */
+    /** 一条后台任务的行文本："  <图标> <id> <agent>  <描述>  <耗时>[  <当前工具/已终止>]"。 */
     static String backgroundRowText(ConversationState.BackgroundView t, long now) {
         String icon = switch (t.status()) {
             case DONE -> "✓";
             case FAILED -> "✗";
+            case KILLED -> "⊘";
             case RUNNING -> "▶";
         };
         // 已结束的任务用钉住的 finishedAt 算耗时，否则数字会一直涨、看着像还在跑。
         long end = t.finishedAt() > 0 ? t.finishedAt() : now;
-        String tail = (t.currentTool() != null && !t.currentTool().isEmpty()) ? "  " + t.currentTool() : "";
+        // 「已终止」要写成字，不能只靠 ⊘ 图标：这是用户自己按 k 干的，得能一眼确认那一下生效了。
+        String tail = t.status() == ConversationState.BackgroundStatus.KILLED ? "  已终止"
+                : (t.currentTool() != null && !t.currentTool().isEmpty()) ? "  " + t.currentTool() : "";
         return "  " + icon + " " + t.taskId() + " " + t.agentName() + "  " + t.description()
                 + "  " + elapsedText(end - t.startedAt()) + tail;
     }
@@ -2124,6 +2322,7 @@ public final class CodeTuiView extends InlineApp {
         if (activePlan != null) return text(planStatusText()).style(THINK);
         if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingPerms) return text(permsStatusText()).style(THINK);
+        if (pickingTasks) return text(tasksStatusText()).style(THINK);
         if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
