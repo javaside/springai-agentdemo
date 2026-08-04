@@ -349,9 +349,15 @@ Expected: `Tests run: 9, Failures: 0, Errors: 0`。
 
 - [ ] **Step 5: 变异验证——证明那条最要紧的测试真抓得住**
 
+> ⚠ **必须先做完 Step 6（commit）再做本步。**
+> `git worktree add --detach HEAD` 拿到的是**已提交**的状态。若此刻 `BackgroundDigest.java`
+> 还没提交，新工作树里根本没有这个文件，跑出来是「找不到符号」的编译错——
+> **编译错也算红，但它红的理由是错的**，证不了那条语义被钉住。
+> 变异验证的全部价值在于「为**正确的**理由失败」，理由错了等于没验。
+
 ```bash
 cd /Users/zxh/IdeaProjects/springai-agentdemo
-git worktree add .worktrees/mut-digest --detach HEAD
+git worktree add .worktrees/mut-digest --detach <你刚才那个提交的 SHA>
 ```
 
 在 `.worktrees/mut-digest` 里给 `forContinue` 的循环加一支：
