@@ -2,18 +2,29 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 后台任务撞到 ASK 时不弹面板、直接 DENY，且按档位给建议；BYPASS 档零特殊处理。 */
+/**
+ * 后台任务撞到 ASK 时不弹面板、直接 DENY，且按档位给建议；BYPASS 档零特殊处理。
+ *
+ * <p><b>为什么整类挂超时</b>：{@code askThenAct} 会在 {@code handoff.take()} 上无限阻塞等 UI 应答。
+ * 只要「后台 ASK 就地降级」这段分流被去掉，后台用例就会走进那个 take() ——若没有超时，
+ * 缺陷表现为<b>构建挂死</b>而不是用例变红，等于没有测试。变异验证时实测过：删掉后台分支，
+ * 本类原样卡住 10 分钟无输出。SEPARATE_THREAD 是必须的——默认的 SAME_THREAD 只在用例返回后才检查，
+ * 对永久阻塞完全无效。
+ */
+@Timeout(value = 10, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class PermissionCallbackBackgroundTest {
 
     /** 记录是否真的执行了底层工具。 */
@@ -35,6 +46,20 @@ class PermissionCallbackBackgroundTest {
         return new ToolContext(m);
     }
 
+    /**
+     * <b>会应答</b>的审批出口桩，并记录被问了几次。
+     *
+     * <p>后台用例断言的是「压根没问」，看起来给个只记数的空桩就够了——<b>不够</b>。空桩在缺陷存在时
+     * 让工具线程永久 park 在 {@code handoff.take()}，整个测试类挂死，CI 上看到的是超时而不是失败。
+     * 真实 UI 总会应答，桩也必须应答：这样缺陷一出现就是断言当场变红（asked 从 0 变 1）。
+     */
+    private static PermissionCallback.Asker respondingAsker(AtomicInteger asked) {
+        return (turnId, req) -> {
+            asked.incrementAndGet();
+            req.responder().respond(PermissionOutcome.ALLOW_ONCE);
+        };
+    }
+
     /** 前台调用的 ToolContext：有真实 turnId，无后台标记。 */
     private static ToolContext foregroundCtx(long turnId, String taskId) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -48,8 +73,7 @@ class PermissionCallbackBackgroundTest {
         Spy spy = new Spy();
         AtomicInteger asked = new AtomicInteger();
         var engine = PermissionTestSupport.engineAlwaysAsk(PermissionMode.DEFAULT);
-        PermissionCallback pc = new PermissionCallback(spy, engine,
-                (turnId, req) -> asked.incrementAndGet());
+        PermissionCallback pc = new PermissionCallback(spy, engine, respondingAsker(asked));
 
         String out = pc.call("{\"path\":\"/tmp/x\"}", backgroundCtx("task_ab12"));
 
@@ -114,7 +138,8 @@ class PermissionCallbackBackgroundTest {
     @Test
     void denyMessageSuggestsForegroundRetryInDefaultMode() {
         var engine = PermissionTestSupport.engineAlwaysAsk(PermissionMode.DEFAULT);
-        PermissionCallback pc = new PermissionCallback(new Spy(), engine, (t, r) -> { });
+        PermissionCallback pc = new PermissionCallback(new Spy(), engine,
+                respondingAsker(new AtomicInteger()));
         String out = pc.call("{}", backgroundCtx("task_ab12"));
         assertTrue(out.contains("run_in_background=false"), "要给出可执行的下一步：" + out);
     }
@@ -122,7 +147,8 @@ class PermissionCallbackBackgroundTest {
     @Test
     void denyMessageSuggestsAcceptEditsWorkspaceHintInAcceptEditsMode() {
         var engine = PermissionTestSupport.engineAlwaysAsk(PermissionMode.ACCEPT_EDITS);
-        PermissionCallback pc = new PermissionCallback(new Spy(), engine, (t, r) -> { });
+        PermissionCallback pc = new PermissionCallback(new Spy(), engine,
+                respondingAsker(new AtomicInteger()));
         String out = pc.call("{}", backgroundCtx("task_ab12"));
         assertTrue(out.contains("工作区"), "这一档区内本可自动放行，要提示目标在区外：" + out);
     }
@@ -130,7 +156,8 @@ class PermissionCallbackBackgroundTest {
     @Test
     void denyMessageInPlanModeTellsModelToReportBackInsteadOfRetrying() {
         var engine = PermissionTestSupport.engineAlwaysAsk(PermissionMode.PLAN);
-        PermissionCallback pc = new PermissionCallback(new Spy(), engine, (t, r) -> { });
+        PermissionCallback pc = new PermissionCallback(new Spy(), engine,
+                respondingAsker(new AtomicInteger()));
         String out = pc.call("{}", backgroundCtx("task_ab12"));
         assertTrue(out.contains("计划模式"), out);
         assertTrue(!out.contains("run_in_background=false"),
