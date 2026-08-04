@@ -59,7 +59,13 @@ public interface SubmitHandler {
     /** 终止一个运行中的后台任务（/tasks 面板的 k 键）。 */
     default boolean killBackgroundTask(String taskId) { return false; }
 
-    /** 终止全部后台任务（/clear 与退出）。 */
+    /**
+     * 终止全部后台任务（{@code /clear} 与退出共用这一个入口）。
+     *
+     * <p><b>落地端不得在这里关线程池</b>：{@code ThreadPoolExecutor} 一关就是终态、不可复用，
+     * 而后台模式只在装配期启用一次——{@code /clear} 上关了池，这个进程此后就再也派不出后台任务了。
+     * 正确做法是打断旧线程后<b>重建</b>一个新池，见 {@code SubagentRunner.restartBackground}。
+     */
     default void killAllBackgroundTasks() { }
 
     /**

@@ -29,6 +29,19 @@ public final class BackgroundTaskTool {
     /** 轮询间隔：200ms。够快（人感知不到），又不会把 CPU 转满。 */
     private static final long POLL_INTERVAL_MS = 200;
 
+    /**
+     * 查无此 id 的解释——<b>两种可能都要说</b>。
+     *
+     * <p>原来只说「可能来自已结束的进程」，但那只是其中一种：注册表满 64 条时
+     * {@link BackgroundTaskRegistry} 会淘汰最旧的<b>已结束</b>任务，其中完全可能含已完成但还没送达的
+     * ——那是<b>本进程</b>刚刚丢掉的结果。只给前一种解释，模型会以为这是上个进程的陈旧 id 而就此放弃，
+     * 而实际上它该做的是重新派一次。
+     */
+    private static String unknownTask(String id) {
+        return "未知任务 " + id + "（可能来自已结束的进程——后台任务不跨进程保存；"
+                + "也可能是本进程后台任务过多，这条已结束的记录被淘汰了。若仍需要结果，请重新派发）。";
+    }
+
     /** 工具入参。 */
     public record Query(
             @ToolParam(description = "The task id returned by Task(run_in_background=true)") String task_id,
@@ -65,13 +78,13 @@ public final class BackgroundTaskTool {
         String id = q.task_id();
         BackgroundTask t = registry.find(id);
         if (t == null) {
-            return "未知任务 " + id + "（可能来自已结束的进程——后台任务不跨进程保存）。";
+            return unknownTask(id);
         }
         if (!t.finished() && q.blocking()) {
             t = awaitFinish(id);
         }
         if (t == null) {
-            return "未知任务 " + id + "（可能来自已结束的进程——后台任务不跨进程保存）。";
+            return unknownTask(id);
         }
         return switch (t.status()) {
             case RUNNING -> "任务 " + id + " 仍在运行（" + t.agentName() + " · " + t.description()

@@ -134,10 +134,19 @@ class AgentToolsBackgroundWiringTest {
         assertEquals(BackgroundTask.Status.KILLED, reg.find(running).status());
     }
 
-    /** killAll 要同时标状态和关线程池——只做前者的话任务状态变了但线程还在跑。 */
+    /**
+     * ★ {@code killAllBackgroundTasks}（{@code /clear} 走这条）要同时标状态和真停线程，
+     * 但<b>绝不能把后台派发能力一并烧掉</b>。
+     *
+     * <p><b>这里原来断言的是反面</b>（「池关了就不该再受理新后台任务」）——那对退出成立，
+     * 对 {@code /clear} 是灾难：{@code ThreadPoolExecutor} 一旦 shutdown 就不可复用，
+     * 而 {@code enableBackground} 全仓只在装配期调一次，于是 {@code /clear} 之后这个进程里
+     * <b>每一次</b>后台派发都永久落进 rejected 分支，模型只会看到「等在跑的任务完成后重试」
+     * 而永远等不到。{@code /clear} 与退出目前共用这一个入口，故它只能重建、不能关池。
+     */
     @Test
-    @DisplayName("killAllBackgroundTasks 同时标记状态并关闭后台线程池")
-    void killAllMarksStatusAndShutsDownPool(@TempDir Path root) {
+    @DisplayName("★ killAllBackgroundTasks 标记状态但保留派发能力（/clear 之后仍可派发）")
+    void killAllMarksStatusButKeepsDispatchUsable(@TempDir Path root) {
         AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
         CodingAgent agent = CodingAgentBackgroundTestSupport.stub(
                 root, rt.backgroundRegistry(), rt.subagentRunner());
@@ -147,11 +156,39 @@ class AgentToolsBackgroundWiringTest {
 
         assertEquals(BackgroundTask.Status.KILLED, rt.backgroundRegistry().find(id).status(),
                 "运行中的任务应被标记 KILLED");
-        // 池已 shutdownNow：再派新任务会被拒（RejectedExecutionException 已被 runInBackground 兜成文本）。
         SubagentSpec spec = new SubagentSpec("explore", "d", "sys", List.of(), List.of(), null, List.of());
         String reply = rt.subagentRunner().runInBackground(spec, "p", "d");
-        assertTrue(reply.contains("未启动"),
-                "池关了就不该再受理新后台任务，否则线程仍在跑。实际=" + reply);
+        assertFalse(reply.contains("未启动"),
+                "kill 全部任务之后后台派发必须仍然可用，否则本进程后台模式永久失效。实际=" + reply);
+        assertTrue(reply.contains("task_"), "应立刻返回新 taskId，实际=" + reply);
+        rt.subagentRunner().shutdownBackground();   // 别把假 provider 的任务留在池里跑
+    }
+
+    /**
+     * {@code shutdownBackground}（关池语义）的拒绝理由必须与「队列已满」<b>分开</b>。
+     *
+     * <p>两者是完全不同的两件事：队列满是「等会儿再来」，池已关是「不再受理了」。
+     * 共用一句话会把「池死了」说成「队列满了」，模型据此选择「等在跑的任务完成后重试」——
+     * 而队列其实是空的、池是死的，它会永远等下去。
+     *
+     * <p>这条与 {@code /clear} 的重建修复<b>互相独立</b>：重建之后池不会再无声死掉，
+     * 但 rejected 分支照样会被真实的队列满触发，那句话得只在真的队列满时才说得通。
+     */
+    @Test
+    @DisplayName("shutdownBackground 关池后的拒绝理由与「队列已满」不同")
+    void shutdownBackgroundClosesPoolWithItsOwnReason(@TempDir Path root) {
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
+        SubagentSpec spec = new SubagentSpec("explore", "d", "sys", List.of(), List.of(), null, List.of());
+
+        rt.subagentRunner().shutdownBackground();
+
+        String reply = rt.subagentRunner().runInBackground(spec, "p", "d");
+        assertTrue(reply.contains("未启动"), "池关了就不该再受理新后台任务，实际=" + reply);
+        assertFalse(reply.contains("队列已满"),
+                "池已关不是队列满——共用这句话会让模型去等一个永远不会来的空位。实际=" + reply);
+        assertTrue(rt.backgroundRegistry().all().isEmpty(),
+                "关闭后的派发应在登记之前就被挡掉，否则又是一条停在 RUNNING 的幽灵。实际="
+                        + rt.backgroundRegistry().all());
     }
 
     // ── env 解析：非法值回落默认而不是崩启动（测纯函数，不改进程环境变量） ──

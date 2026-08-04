@@ -76,10 +76,27 @@ public final class SubagentRunner {
      */
     private final Map<Long, Set<ExecutorService>> poolsByTurn = new ConcurrentHashMap<>();
 
-    /** 后台任务注册表；null 表示未启用后台模式（老测试与回显桩不受影响）。 */
-    private BackgroundTaskRegistry backgroundRegistry;
+    /**
+     * 后台任务注册表；null 表示未启用后台模式（老测试与回显桩不受影响）。
+     *
+     * <p><b>volatile</b>：这两个字段是「后台模式是否可用」的判据，写在装配线程
+     * （{@link #enableBackground}）与 UI 线程（{@link #restartBackground}）、读在任意工具调用线程。
+     * 实践上装配早于一切派发、有 happens-before 兜着，但把「可用性判据」的可见性押在时序巧合上
+     * 没有任何好处，而标上成本为零。
+     */
+    private volatile BackgroundTaskRegistry backgroundRegistry;
     /** 后台常驻线程池；与回合级临时池<b>完全分开</b>——回合取消 shutdownNow 临时池时碰不到它。 */
-    private ThreadPoolExecutor backgroundPool;
+    private volatile ThreadPoolExecutor backgroundPool;
+    /** 建池参数，{@link #restartBackground} 重建时复用（只在 enableBackground 里写一次）。 */
+    private volatile int backgroundConcurrency;
+    private volatile int backgroundQueueCapacity;
+    /**
+     * 后台模式是否已<b>永久</b>关闭（{@code /exit}）。与 {@link #restartBackground}（换一个新池）截然不同：
+     * 关闭之后新派发要被<b>明确</b>拒绝，且连登记都不做——不登记就不会留下停在 RUNNING 的幽灵条目。
+     */
+    private volatile boolean backgroundClosed;
+    /** 线程序号跨重建递增：重建后若从 1 重来，jstack 里会出现两个 subagent-background-1，排查时分不清哪个池。 */
+    private final AtomicLong backgroundThreadSeq = new AtomicLong();
 
     public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                           String projectInstructions) {
@@ -282,15 +299,46 @@ public final class SubagentRunner {
     /** 启用后台模式，显式指定并发与队列容量（测试用）。 */
     public void enableBackground(BackgroundTaskRegistry registry, int concurrency, int queueCapacity) {
         this.backgroundRegistry = registry;
-        int n = Math.min(32, Math.max(1, concurrency));
-        AtomicLong seq = new AtomicLong();
-        this.backgroundPool = new ThreadPoolExecutor(n, n, 0L, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(Math.max(1, queueCapacity)),
+        this.backgroundConcurrency = Math.min(32, Math.max(1, concurrency));
+        this.backgroundQueueCapacity = Math.max(1, queueCapacity);
+        this.backgroundClosed = false;
+        this.backgroundPool = newBackgroundPool();
+    }
+
+    /** 按已记下的并发/队列参数造一个全新的后台池。{@link #enableBackground} 与 {@link #restartBackground} 共用。 */
+    private ThreadPoolExecutor newBackgroundPool() {
+        int n = backgroundConcurrency;
+        return new ThreadPoolExecutor(n, n, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(backgroundQueueCapacity),
                 r -> {
-                    Thread t = new Thread(r, "subagent-background-" + seq.incrementAndGet());
+                    Thread t = new Thread(r, "subagent-background-" + backgroundThreadSeq.incrementAndGet());
                     t.setDaemon(true);   // 守护线程：绝不阻止 JVM 退出（退出清理是有界的，见 shutdownBackground）
                     return t;
                 });
+    }
+
+    /**
+     * 重启后台池：真打断在跑的子 agent 线程，然后<b>立刻换上一个全新的池</b>。{@code /clear} 走这条。
+     *
+     * <p><b>为什么不能只 shutdownNow 完事</b>：{@code ThreadPoolExecutor} 一旦 shutdown 就是终态、
+     * 永不可复用，而 {@link #enableBackground} 全仓只在装配期调一次。只关不建 = 这个进程此后
+     * <b>每一次</b>后台派发都永久落进 rejected 分支，而队列其实是空的、池是死的——模型读到「等在跑的
+     * 任务完成后重试」就会一直等下去。这正是 {@code /clear} 与 {@code /exit} 必须分成两个方法的全部理由。
+     *
+     * <p><b>先换新池、再拆旧池</b>：反过来的话，这两步之间并发进来的派发会打在已死的池上。
+     * 不 awaitTermination：本方法在 UI 线程上跑（{@code /clear} 按键），绝不为清理卡住界面；
+     * 被打断的旧任务的迟到写入由注册表的 KILLED 状态与 ConversationState 的守卫兜底。
+     *
+     * <p>从未启用过后台模式时为静默无操作——凭空造一个池只会让「后台模式不可用」这条判据失真。
+     */
+    public void restartBackground() {
+        ThreadPoolExecutor old = backgroundPool;
+        if (old == null) {
+            return;
+        }
+        backgroundClosed = false;   // 覆盖 /exit 已置位的极端顺序：能重建就说明后台模式又可用了
+        backgroundPool = newBackgroundPool();
+        old.shutdownNow();
     }
 
     /**
@@ -302,21 +350,41 @@ public final class SubagentRunner {
      * <p><b>绝不抛异常</b>：后台任务的失败是它自己的事，不该炸掉主 agent 正在进行的回合。
      */
     public String runInBackground(SubagentSpec spec, String prompt, String description) {
-        if (backgroundRegistry == null || backgroundPool == null) {
+        // 快照池引用：下面判断拒绝理由时必须问的是「刚才 execute 到的那个池」，
+        // 再读一次 volatile 可能已经被 restartBackground 换成新池，理由就说反了。
+        ThreadPoolExecutor pool = backgroundPool;
+        if (backgroundRegistry == null || pool == null) {
             return "后台模式不可用（未装配后台注册表）。请改用 run_in_background=false 的前台 Task。";
+        }
+        if (backgroundClosed) {
+            // 提前返回，连 register 都不做——不登记就不会在 ⏱ 面板上留下一条停在 RUNNING 的幽灵。
+            return "后台模式已关闭，不再受理新的后台任务，本次未启动。"
+                    + "请改用 run_in_background=false 的前台 Task。";
         }
         String taskId = backgroundRegistry.register(spec.name(), description);
         listener.onBackgroundTaskStarted(taskId, spec.name(), description);
         backgroundInFlight.incrementAndGet();
         try {
-            backgroundPool.execute(() -> runBackgroundBody(spec, prompt, taskId));
+            pool.execute(() -> runBackgroundBody(spec, prompt, taskId));
         } catch (RejectedExecutionException rejected) {
             backgroundInFlight.decrementAndGet();
             // 标记 KILLED 而不是 FAILED：KILLED 不可送达，绝不会被自动送给模型。
             // 送一条「它失败了」给模型，读起来像它真的跑过——而它根本没启动。
             backgroundRegistry.kill(taskId);
-            return "后台队列已满（并发上限已占满且等待队列已满），本次未启动。"
-                    + "请改用 run_in_background=false 的前台 Task，或等待在跑的任务完成后重试。";
+            // 「池已关」与「队列满」是两件完全不同的事，绝不能共用一句话：队列满是「等会儿再来」，
+            // 池已关是「这个进程不再受理了」。说反了，模型就会去等一个永远不会来的空位。
+            String reason = pool.isShutdown()
+                    ? "后台线程池已关闭（后台模式已停用，或刚被重启），本次未启动。"
+                            + "请改用 run_in_background=false 的前台 Task。"
+                    : "后台队列已满（并发上限已占满且等待队列已满），本次未启动。"
+                            + "请改用 run_in_background=false 的前台 Task，或等待在跑的任务完成后重试。";
+            // 必须补一次结束事件：上面已经发过 onBackgroundTaskStarted，不补这一下，UI 镜像里那条
+            // BackgroundEntry 就永远停在 RUNNING——⏱ 面板的耗时涨到天荒地老、状态栏永久挂
+            // 「⏱ N 个后台任务」，而用户按 k 想终止它时注册表里那条已是 KILLED，只会回「终止失败」。
+            // ok=false（UI 记 FAILED）与注册表的 KILLED 刻意不一致：前者是给人看的「这条没跑成」，
+            // 后者是给模型的「不可送达」，两个受众要的语义本就不同。
+            listener.onBackgroundTaskFinished(taskId, reason, false);
+            return reason;
         }
         return "已在后台启动：" + taskId + "（" + spec.name() + " · " + description + "）。"
                 + "用 TaskOutput 取结果，或等待完成通知。";
@@ -347,8 +415,18 @@ public final class SubagentRunner {
         }
     }
 
-    /** 退出清理：<b>有界</b>关闭后台池（硬限 2s），照抄 MCP 子进程清理的「不卡退出优先」取舍。 */
+    /**
+     * <b>永久</b>关掉后台模式并<b>有界</b>关闭后台池（硬限 2s），照抄 MCP 子进程清理的「不卡退出优先」取舍。
+     *
+     * <p><b>关了就回不来了</b>——{@code ThreadPoolExecutor} 一旦 shutdown 就是终态。凡是之后还要继续
+     * 派后台任务的场景（{@code /clear} 换新会话就是），一律走 {@link #restartBackground}，
+     * 理由见那里。目前生产路径上 {@code /exit} 与 {@code /clear} 共用
+     * {@code killAllBackgroundTasks} → restart，本方法留给「把退出拆出独立关池语义」那步（后续项）
+     * 与需要确定性收尾的测试。
+     */
     public void shutdownBackground() {
+        // 先置位再关池：此后的新派发被明确拒绝且不再登记，不会在退出途中冒出幽灵任务。
+        backgroundClosed = true;
         if (backgroundPool == null) return;
         backgroundPool.shutdownNow();
         try {
