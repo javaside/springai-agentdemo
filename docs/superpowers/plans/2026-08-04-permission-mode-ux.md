@@ -790,11 +790,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CodeTuiViewBusyNoticeTest {
 
+    /**
+     * <b>刻意不覆写 {@code cyclePermissionMode}</b>：本类一次 Shift+Tab 都不按，
+     * notice 全靠 {@code state.setNotice} 直接设。覆写它就要调 {@code mode.next(…)}，
+     * 于是本文件被绑到那个方法的签名上——而它正在另一条并行赛道上被改
+     * （{@code next(boolean)} → {@code next()}），合并时必炸。桩只提供用得到的东西。
+     */
     private static class Stub implements SubmitHandler {
         PermissionMode mode = PermissionMode.DEFAULT;
         @Override public reactor.core.Disposable submit(String text) { return null; }
         @Override public PermissionMode permissionMode() { return mode; }
-        @Override public PermissionMode cyclePermissionMode() { mode = mode.next(); return mode; }
         @Override public String currentModel() { return "deepseek-chat"; }
     }
 
