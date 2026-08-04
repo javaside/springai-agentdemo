@@ -303,8 +303,12 @@ Background tasks do not survive a process restart.
 含那个 task id 与「不要重复委派」。
 
 **断言落在请求体上而不是屏幕上**：这条要证明的是「模型收到了什么」，
-而提示词是发出去的、不回显在屏幕上。`background_smoke.py` 的桩已经记录
-`StubModel.sent`，直接查那里。
+而 `/continue` 的提示词是发出去的、**不回显在屏幕上**——只看屏幕这条永远测不到。
+
+⚠ `background_smoke.py` 的桩**目前只记 `(role, kind)`**，不留请求体；
+`StubModel.sent`（整串 messages）是 `permission_smoke.py` 那份桩才有的。
+本幕要先把 `sent` 这个记录点补进 `background_smoke.py` 的桩，照抄
+`permission_smoke.py` 的写法（`with StubModel.lock: StubModel.sent.append(messages)`）。
 
 ---
 
