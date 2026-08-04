@@ -2282,6 +2282,32 @@ class ConversationStateBackgroundTest {
                 "后台任务的工具行绝不能插进你与主 agent 的对话里");
     }
 
+    /**
+     * ⚠️ 上面那条<b>单独存在时是假绿</b>：它在回合活跃（acceptingTurnId==1）时跑，
+     * 而后台事件 turnId 是 -1，紧随其后的迟到过滤会顺手把行挡住——删掉 Step 5 那句
+     * {@code return} 它照样绿，验的是迟到过滤而不是前置分流。
+     *
+     * <p>而<b>空闲或回合被取消时 acceptingTurnId 也是 -1</b>，迟到过滤形同虚设，
+     * 此刻唯一拦住后台工具行进 scrollback 的就是那句 return——这恰恰是后台任务最常见的
+     * 运行时机（用户派出去后就去干别的了）。所以必须有这条空闲态的用例，陷阱 2 才真的被保护。
+     *
+     * <p>用<b>失败</b>的 onToolFinished：成功态本来就静默不出行，构不成结构差异，
+     * 杀不掉变异（见「兜底若与成功路径同输出就掩盖 bug」）。
+     */
+    @Test
+    void backgroundToolEventStaysOutOfScrollbackEvenWhenIdle() {
+        ConversationState s = started(1L);
+        s.onBackgroundTaskStarted("task_ab12", "explore", "调查");
+        s.cancelCurrent();                              // acceptingTurnId 归 -1，迟到过滤此后挡不住任何东西
+        s.drainPending();
+
+        s.onToolStarted(-1L, "task_ab12", "Grep", "{}");
+        s.onToolFinished(-1L, "task_ab12", "Grep", "boom", false);   // 失败态才走前台告警行
+
+        assertTrue(s.drainPending().isEmpty(),
+                "空闲时迟到过滤失效，唯一的防线是前置分流的 return");
+    }
+
     @Test
     void foregroundSubagentToolEventStillEntersScrollback() {
         ConversationState s = started(1L);
@@ -3005,7 +3031,14 @@ Expected: **FAIL**（`longResultIsTruncatedAndFullTextWrittenToDisk`、`longResu
 ```bash
 mvn -pl springai-code-tui test -Dtest=ConversationStateBackgroundTest
 ```
-Expected: **FAIL**（`backgroundToolEventUpdatesPanelButNeverEntersScrollback`）。还原。
+Expected: **FAIL**（`backgroundToolEventStaysOutOfScrollbackEvenWhenIdle`）。还原。
+
+> ⚠️ **必须是这条空闲态的用例挂，不能是 `backgroundToolEventUpdatesPanelButNeverEntersScrollback`。**
+> 后者在回合活跃时跑，后台事件的 `turnId=-1` 会被迟到过滤顺手挡住——删掉 `return` 它照样绿。
+> 如果你看到只有它挂、或者两条都不挂，说明分流点被写在了迟到过滤**之后**，实际没有生效。
+>
+> 同样地，再做一次配对变异：去掉 `onToolFinished` 里的 `if (findBackground(taskId) != null) return;`，
+> 也应当由同一条空闲态用例杀掉。
 
 - [ ] **Step 7: 确认全部还原且全绿**
 
