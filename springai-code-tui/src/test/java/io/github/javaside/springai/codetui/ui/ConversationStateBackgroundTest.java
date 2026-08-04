@@ -81,6 +81,38 @@ class ConversationStateBackgroundTest {
                 "空闲时迟到过滤形同虚设，后台工具行只能靠前置分流 return 拦住");
     }
 
+    /**
+     * {@code /clear} 只清 ⏱ 镜像，任务线程还在跑（{@code shutdownNow} 只是 interrupt，卡在 HTTP 上的
+     * 线程照跑）。此后它的工具事件带着 taskId 回来，镜像里已经找不到 → 退回 turnId 迟到过滤，
+     * 而 Esc 取消过的空闲态 acceptingTurnId 恰好也是 -1，过滤放行 → 旧任务的工具行漏进新会话。
+     */
+    @Test
+    void backgroundToolEventAfterClearNeverEntersNewSession() {
+        ConversationState s = started(1L);
+        s.onBackgroundTaskStarted("task_ab12", "explore", "调查");
+        s.cancelCurrent();                              // Esc：acceptingTurnId 复位成 -1
+        s.resetForNewSession();                         // /clear：⏱ 镜像被清空，线程仍在跑
+        s.drainPending();
+
+        s.onToolStarted(-1L, "task_ab12", "Grep", "{}");
+        s.onToolFinished(-1L, "task_ab12", "Grep", "out", false);
+
+        assertTrue(s.drainPending().isEmpty(),
+                "/clear 后仍在跑的旧任务，其工具行绝不能漏进新会话的对话里");
+    }
+
+    /** 两份镜像（⏱ 后台 / ⟐ 前台子 agent）都没有的 taskId：来路不明，不进 scrollback。 */
+    @Test
+    void toolEventWithUnknownTaskIdIsDropped() {
+        ConversationState s = started(1L);
+
+        s.onToolStarted(1L, "task_ghost", "Grep", "{}");
+        s.onToolFinished(1L, "task_ghost", "Grep", "out", false);
+
+        assertTrue(s.drainPending().isEmpty(),
+                "镜像登记一定早于同一任务的工具事件，找不到就只可能是迟到或已清空");
+    }
+
     @Test
     void foregroundSubagentToolEventStillEntersScrollback() {
         ConversationState s = started(1L);

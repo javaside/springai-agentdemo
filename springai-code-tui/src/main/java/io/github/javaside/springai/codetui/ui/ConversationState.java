@@ -488,19 +488,31 @@ public final class ConversationState implements AgentListener {
         // 也绝不做 turnId 迟到过滤（后台任务的 turnId 恒为 -1，过滤会把它全丢掉）。
         BackgroundEntry bg = findBackground(taskId);
         if (bg != null) { bg.currentTool = toolName; return; }
+        Subtask st = findSubtask(taskId);
+        if (st == null) return;      // 见下：两份镜像都没有 ⇒ 丢弃，绝不退回 turnId 迟到过滤
         if (turnId != acceptingTurnId) return;
         String s = summarize(input);
         pending.add(new OutputLine("    ⎿ " + toolName + (s.isEmpty() ? "" : " " + s),
                 OutputLine.Kind.SUBAGENT_TOOL));
-        Subtask st = findSubtask(taskId);
-        if (st != null) st.currentTool = toolName;   // 任务面板：更新该子 agent 的当前工具
+        st.currentTool = toolName;   // 任务面板：更新该子 agent 的当前工具
     }
 
-    /** 子 agent 内部工具结束：taskId 非空时不再单独出行（起始行已够，减少噪音）；taskId 为空走主流。 */
+    /**
+     * 子 agent 内部工具结束：taskId 非空时不再单独出行（起始行已够，减少噪音）；taskId 为空走主流。
+     *
+     * <p><b>与 {@link #onToolStarted(long, String, String, String)} 共用同一条纪律：taskId 非空但两份镜像
+     * （⏱ 后台 / ⟐ 前台子 agent）里都找不到 ⇒ 一律丢弃，不再退回 turnId 迟到过滤。</b>
+     * 因为那道过滤在这里挡不住任何东西：后台任务的 turnId 恒为 -1，而空闲 / 被 Esc 取消后的
+     * acceptingTurnId 也恰好是 -1（真实回合 id 从 1 起）。{@code /clear} 之后旧任务的线程还在跑
+     * （shutdownNow 只是 interrupt），镜像却已清空 —— 于是它的工具行一条条漏进新会话的对话里。
+     * 镜像登记（{@link #onSubagentStarted} / {@link #onBackgroundTaskStarted}）一定早于同一任务的
+     * 工具事件，故"找不到"只可能是迟到或已被清空，两种都不该显示。
+     */
     @Override
     public synchronized void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
         if (taskId == null) { onToolFinished(turnId, toolName, output, ok); return; }
         if (findBackground(taskId) != null) return;   // 后台任务的工具结束不出行
+        if (findSubtask(taskId) == null) return;      // 来路不明的 taskId：见方法注释
         // 子 agent 内部工具：仅在失败时补一行更深缩进的告警，成功时静默（起始行已展示活动）。
         if (turnId != acceptingTurnId || ok) return;
         pending.add(new OutputLine("      ✗ " + toolName, OutputLine.Kind.SUBAGENT_TOOL));

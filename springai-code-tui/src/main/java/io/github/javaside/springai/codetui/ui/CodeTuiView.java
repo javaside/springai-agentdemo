@@ -105,6 +105,9 @@ public final class CodeTuiView extends InlineApp {
 
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
+    // ⏱ 面板（后台任务）最多显示几条。这份列表<b>跨回合累积、只有 /clear 清</b>，已完成的永不移除：
+    // 不封顶的话，一个会话派 20 个后台任务就常驻 21 行，把输入框一路顶下去。全量看 /tasks 面板。
+    static final int BACKGROUND_CAP = 6;
     private static final String INDENT = "  ";  // 对话内容缩进；工具/计划行自带前缀
     // 配色 / 样式集中在 {@link Theme}，本类经 import static Theme.* 引入（DIM/HINT/PICK_SEL/… 写法不变）。
 
@@ -119,6 +122,24 @@ public final class CodeTuiView extends InlineApp {
     private final ContextUsage ctxUsage;                             // 上下文用量追踪/报告（/context 报告 + 状态栏后缀）
     /** 后台任务结果的自动送达判定与失控刹车（纯状态机，见其类注释）。只在渲染线程（drain）读写。 */
     private final BackgroundNotifier notifier = new BackgroundNotifier();
+
+    /**
+     * 刹车期间探明的「确有结果被扣住」。状态栏那句提示读它，<b>不</b>每帧去取列表。
+     *
+     * <p>为什么不能每帧取：取列表会顺手做结果限幅 + 落盘（见
+     * {@code CodingAgent.completedBackgroundTasks}——限幅刻意放在那个唯一入口上）。
+     * 闸门关着时每帧取一次，就是每 33ms 对着一份可能上百 KB 的报告做一次同步文件写，
+     * <b>而且跑在渲染线程上</b>：TUI 会肉眼可见地卡，模型此刻去 Read 那个 artifact
+     * 还可能读到正在被重写的中间态。
+     */
+    private boolean bgPending;
+    /**
+     * 本次刹车期间是否已经探过一次。踩下刹车后只探一次，放行时复位（见 {@link #releaseBrake()}）。
+     *
+     * <p><b>已知的陈旧窗口</b>：探明之后若又有后台任务完成，这句提示不会立刻更新，要等下一次
+     * 用户输入。可以接受——放行刹车靠的正是用户输入，而"每帧重探"恰恰是这里要消除的东西。
+     */
+    private boolean bgProbedWhileBraked;
     private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
@@ -341,7 +362,7 @@ public final class CodeTuiView extends InlineApp {
         if (!busy()) {   // 空闲、非压缩中、且无在飞子 agent 才出队（见 busy()）
             ConversationState.Queued next = state.pollQueued();
             if (next != null) {
-                notifier.onUserInput();      // 用户的真实输入：重置自动回合刹车
+                releaseBrake();              // 用户的真实输入：重置自动回合刹车
                 dispatch(next.text(), next.skill());
                 return;                      // 本帧已提交，后台送达让到下一帧——用户排的队优先
             }
@@ -363,13 +384,30 @@ public final class CodeTuiView extends InlineApp {
      * 网关每 33ms 重投一次，不如停下来告诉用户。
      */
     private void deliverBackgroundResults() {
-        List<SubmitHandler.BackgroundResult> done = onSubmit.completedBackgroundTasks();
-        if (done.isEmpty()) return;
         // ⚠ 输入框的真相在 inputState，不在 state——ConversationState.currentInput() 是输入迁移后留下的
         // 死代码（见 typeChar 那一串），读它永远得到空串，等于「用户正在打字」这道闸门形同虚设。
         String typed = inputState.text();
         boolean inputEmpty = typed == null || typed.isEmpty();   // 连空格都算在打字：抢跑一次比晚送一帧讨厌得多
-        var text = notifier.shouldNotifyResults(done, !busy(), inputEmpty);
+        // ⚠ <b>先判闸门，再取列表</b>。取列表会顺手做结果限幅 + 落盘（那是设计上的「唯一入口」，
+        // 位置没错），但这个方法每 33ms 被调一次——闸门关着还照取，就是每帧一次同步文件写。
+        if (busy() || !inputEmpty) return;
+
+        if (notifier.brakeEngaged()) {
+            // 刹车已踩下：状态栏仍要如实告诉用户「确有结果被扣住」，但探明一次就够——
+            // 之后每帧再取只是白白重写落盘文件，而屏幕上那句话一个字都不会变。
+            if (!bgProbedWhileBraked) {
+                bgProbedWhileBraked = true;
+                bgPending = !onSubmit.completedBackgroundTasks().isEmpty();
+            }
+            return;
+        }
+
+        List<SubmitHandler.BackgroundResult> done = onSubmit.completedBackgroundTasks();
+        bgPending = !done.isEmpty();
+        if (done.isEmpty()) return;
+        // 闸门（空闲 + 输入框为空）上面已判过，这里直接传 true——shouldNotifyResults 只在
+        // 判定为「该送达」时才消耗刹车额度，重复判一次不会多扣，但会让"谁负责判闸门"变成两处。
+        var text = notifier.shouldNotifyResults(done, true, true);
         if (text.isEmpty()) return;
         try {
             dispatch(text.get(), null);
@@ -380,6 +418,18 @@ public final class CodeTuiView extends InlineApp {
         for (SubmitHandler.BackgroundResult r : done) {
             onSubmit.markBackgroundConsumed(r.taskId());
         }
+        bgPending = false;                  // 已全部送达并消费：提示不该再挂着
+    }
+
+    /**
+     * 放行自动回合刹车：用户有真实输入了。
+     *
+     * <p>连同 {@link #bgProbedWhileBraked} 一起复位——下一次踩下刹车要重新探一次，
+     * 否则会拿着上一轮的 {@link #bgPending} 显示一句陈旧的提示。
+     */
+    private void releaseBrake() {
+        notifier.onUserInput();
+        bgProbedWhileBraked = false;
     }
 
     /** 测试专用：跑一次 drain（侦测队首模态并进入作答/审批态）。 */
@@ -1033,7 +1083,14 @@ public final class CodeTuiView extends InlineApp {
     /** 提交：忙时把消息入队（回合结束由 {@link #drain} 自动出队提交），空闲时立即提交。均清空输入框。 */
     private void submitInput() {
         String text = inputState.text();
-        if (text == null || text.isBlank()) return;
+        if (text == null || text.isBlank()) {
+            // ⚠ 空回车也要放行刹车。状态栏在刹车时写的是「⏱ 有结果待处理 · 回车交给模型」——
+            // 用户照做按下回车，若这里直接 return，那句提示就是<b>假的</b>：什么都不会发生，
+            // 被扣住的结果再也送不出去，而屏幕上没有任何地方告诉他"其实得打一条真消息"。
+            // 放在 addHistory 之前：空串不该进 ↑↓ 历史。
+            releaseBrake();
+            return;
+        }
         addHistory(text);                            // 记入历史（含斜杠命令），供 ↑↓ 回溯
         String cmd = text.strip();
         if (cmd.equals("/model")) {                  // 斜杠命令：打开模型选择器（仿 Claude Code）
@@ -1163,7 +1220,7 @@ public final class CodeTuiView extends InlineApp {
         // 用户真实提交了一条消息（入队与立即提交都算）：重置自动回合刹车。刹车防的是「人不在电脑前时
         // 自动回合无限套娃」，人一开口就说明这个前提不成立了。必须挂在提交上而不是每次按键——
         // 挂按键则用户随手一个方向键就把刹车松开，等于没有刹车。
-        notifier.onUserInput();
+        releaseBrake();
         if (busy()) {                              // 忙/压缩中/有在飞子 agent：排队，挂载随消息入队
             // 入队的同样是注入后的文本：出队时直接 dispatch，那时输入框早已换成别的内容，
             // 再想兑现附件已经无从谈起——排队的消息会静默丢图。
@@ -2255,9 +2312,14 @@ public final class CodeTuiView extends InlineApp {
         long finished = tasks.size() - running;
         List<Element> els = new ArrayList<>();
         els.add(text("⏱ 后台任务 (" + running + " 运行 · " + finished + " 完成)").style(TODO_TITLE));
+        List<ConversationState.BackgroundView> vis = visibleBackgroundTasks(tasks);
+        int hidden = tasks.size() - vis.size();
+        if (hidden > 0) {                       // 折叠靠前的（最老的），注记在顶部并指路 /tasks
+            els.add(text("  … 前 " + hidden + " 项已折叠 · /tasks 看全部").style(DIM));
+        }
         long now = System.currentTimeMillis();
         int inner = Math.max(8, terminalWidth() - 2);   // 超宽行截断，避免把输入框顶出屏幕
-        for (ConversationState.BackgroundView t : tasks) {
+        for (ConversationState.BackgroundView t : vis) {
             Style st = switch (t.status()) {
                 case DONE -> OK;
                 case FAILED -> ERROR;
@@ -2271,6 +2333,19 @@ public final class CodeTuiView extends InlineApp {
             els.add(text(row).style(st));
         }
         return els.toArray(new Element[0]);
+    }
+
+    /**
+     * 面板可见的后台任务：末尾 {@link #BACKGROUND_CAP} 条。
+     *
+     * <p>取末尾（同 {@link #visibleSubtasks}）：列表按登记先后排，靠前的是最老的、多半早已完成
+     * ——那是历史，值不了一行常驻面板；而正在跑的通常是最近派出的，必须留在屏幕上。
+     * 万一被折叠掉的里面还有在跑的，标题里的「N 运行」仍如实计全部，用户不会以为它没了。
+     */
+    static List<ConversationState.BackgroundView> visibleBackgroundTasks(
+            List<ConversationState.BackgroundView> tasks) {
+        int from = Math.max(0, tasks.size() - BACKGROUND_CAP);
+        return tasks.subList(from, tasks.size());
     }
 
     /** 一条后台任务的行文本："  <图标> <id> <agent>  <描述>  <耗时>[  <当前工具/已终止>]"。 */
@@ -2366,7 +2441,10 @@ public final class CodeTuiView extends InlineApp {
         int running = state.backgroundRunningCount();
         if (running > 0) sb.append(" · ⏱ ").append(running).append(" 个后台任务 · /tasks");
         // 刹车踩下时结果就停在那儿不动了，不说一句用户会以为任务被吃了。
-        if (notifier.brakeEngaged()) sb.append(" · ⏱ 有结果待处理 · 回车交给模型");
+        // 两个条件缺一不可：刹车踩下了，<b>而且</b>确实有结果被扣住（bgPending 由
+        // deliverBackgroundResults 探明）。只看刹车的话，三次都顺利送完、什么都没剩下时，
+        // 这句话仍会常驻——那是在指使用户去处理一个不存在的东西。
+        if (notifier.brakeEngaged() && bgPending) sb.append(" · ⏱ 有结果待处理 · 回车交给模型");
         return sb.toString();
     }
 
