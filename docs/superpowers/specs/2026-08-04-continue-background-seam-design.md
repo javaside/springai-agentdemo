@@ -248,7 +248,7 @@ Background tasks do not survive a process restart.
 | 单条 FAILED 的错误原文极长 | `full` 里按单条截断（沿用 `TaskResultStore` 的 4000 字符纪律，不另立规矩） | 一条堆栈不该淹掉其余 63 条 |
 | `/continue` 时后台任务正好在状态切换 | 快照取一次，渲染的是那一瞬的状态 | 注册表方法都是 `synchronized`；一帧的滞后对「别重复劳动」这个用途无害 |
 | `ListTasks` 时注册表为空 | 返回一句「当前没有后台任务」，不是空串 | 工具返回空串会让模型以为调用失败 |
-| 子 agent 调 `ListTasks` | 与主 agent 一致 | 不设特例；子 agent 的工具过滤按注册名走，需要时在 allow/deny 里配 |
+| 子 agent 调 `ListTasks` | **调不到——它不进 `decoratedList`，仅主 agent 持有** | 照抄 `TaskOutput` 的既有做法（`AgentTools` 那里的注释：「子 agent 拿不到 `Task`，自然也没有属于自己的后台任务；给了它只会让它去捞别人的结果」）。同一条理由逐字适用于列举：子 agent 列出来的只会是主 agent 的任务 |
 
 ---
 
