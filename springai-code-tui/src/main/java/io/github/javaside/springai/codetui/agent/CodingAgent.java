@@ -81,6 +81,8 @@ public final class CodingAgent implements SubmitHandler {
     private final PermissionEngine permissionEngine;
     /** 可空（测试桩）：按 provider id 索引的视觉兑现装饰器，与 clientsByProvider 一一对应；仅供 /context 读快照。 */
     private final java.util.Map<String, VisionMaterializingChatModel> visionModels;
+    private final io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry;   // 可空（测试桩）：后台任务的唯一并发真相源
+    private final io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults;           // 可空（测试桩）：后台结果进会话前的限幅
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -127,6 +129,8 @@ public final class CodingAgent implements SubmitHandler {
         this.mcpRegistry = null;       // 单-client 桩路径：无 MCP 支持
         this.permissionEngine = null;  // 单-client 桩路径：无权限引擎（门面退回默认值，见 permissionMode）
         this.visionModels = null;      // 单-client 桩路径：无视觉装饰器（/context 的视觉列恒为 0）
+        this.backgroundRegistry = null;  // 单-client 桩路径：无后台子系统（四个后台方法退回"什么都没有"）
+        this.backgroundResults = null;
     }
 
     /**
@@ -198,12 +202,8 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
-     * 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；
-     * {@code permissionEngine} 权限引擎，须是 {@code AgentRuntime.permissionEngine()} 那一个——
-     * 门面（Shift+Tab 切模式 / {@code /permissions} 列规则）改的必须正是工具那一侧读的那个对象（可空，桩路径用）。
-     *
-     * <p>{@code visionModels} 须是 {@code AgentRuntime.visionModels()} 那一份——{@code /context} 要报的是
-     * <b>真正发出去的那条请求</b>兑现了多少图，读别的实例只会得到恒 0 的假账。
+     * 向后兼容重载（无后台子系统：测试桩用）。等价 backgroundRegistry/backgroundResults=null——
+     * 四个后台方法退回"什么都没有"，与接口默认实现同语义。
      */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
@@ -214,6 +214,33 @@ public final class CodingAgent implements SubmitHandler {
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine,
                        java.util.Map<String, VisionMaterializingChatModel> visionModels) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, mcpRegistry, permissionEngine, visionModels, null, null);
+    }
+
+    /**
+     * 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；
+     * {@code permissionEngine} 权限引擎，须是 {@code AgentRuntime.permissionEngine()} 那一个——
+     * 门面（Shift+Tab 切模式 / {@code /permissions} 列规则）改的必须正是工具那一侧读的那个对象（可空，桩路径用）。
+     *
+     * <p>{@code visionModels} 须是 {@code AgentRuntime.visionModels()} 那一份——{@code /context} 要报的是
+     * <b>真正发出去的那条请求</b>兑现了多少图，读别的实例只会得到恒 0 的假账。
+     *
+     * <p>{@code backgroundRegistry} / {@code backgroundResults} 同样须是 {@code AgentRuntime} 那一份——
+     * 注册表是后台任务的<b>唯一</b>并发真相源，另建一个等于 UI 面板和真正在跑的任务各看各的。
+     */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
+                       PermissionEngine permissionEngine,
+                       java.util.Map<String, VisionMaterializingChatModel> visionModels,
+                       io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
+                       io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -232,6 +259,8 @@ public final class CodingAgent implements SubmitHandler {
         this.mcpRegistry = mcpRegistry;
         this.permissionEngine = permissionEngine;
         this.visionModels = visionModels;
+        this.backgroundRegistry = backgroundRegistry;
+        this.backgroundResults = backgroundResults;
     }
 
     @Override
@@ -447,6 +476,61 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public boolean hasInFlightSubagents() {
         return subagentRunner != null && subagentRunner.inFlightCount() > 0;
+    }
+
+    // ── 后台子 agent 门面（注册表是唯一并发真相源，本类只做转发 + 一处限幅） ──
+
+    /**
+     * 已结束、可送达、尚未消费的后台任务结果。
+     *
+     * <p><b>限幅就在这里做</b>：这是后台结果<b>进入会话的唯一入口</b>（自动送达与 /tasks 都经它），
+     * 放在这里就绕不过去。放在调用方任何一处，都可能被另一条路径绕开——而绕开的后果是一个话痨
+     * 子 agent 在没人看着的时候把上下文打满。
+     *
+     * <p>{@code backgroundResults} 为空（桩路径）时退化为不限幅：桩路径本就没有落盘目录可写。
+     */
+    @Override
+    public List<SubmitHandler.BackgroundResult> completedBackgroundTasks() {
+        if (backgroundRegistry == null) {
+            return List.of();
+        }
+        List<SubmitHandler.BackgroundResult> out = new java.util.ArrayList<>();
+        for (var t : backgroundRegistry.completedUnconsumed()) {
+            String result = backgroundResults == null
+                    ? t.result()
+                    : backgroundResults.storeAndTruncate(t.taskId(), t.result());
+            out.add(new SubmitHandler.BackgroundResult(t.taskId(), t.agentName(), t.description(),
+                    result,
+                    t.status() == io.github.javaside.springai.codetui.agent.background.BackgroundTask.Status.DONE));
+        }
+        return out;
+    }
+
+    @Override
+    public boolean markBackgroundConsumed(String taskId) {
+        return backgroundRegistry != null && backgroundRegistry.markConsumed(taskId);
+    }
+
+    @Override
+    public boolean killBackgroundTask(String taskId) {
+        return backgroundRegistry != null && backgroundRegistry.kill(taskId);
+    }
+
+    /**
+     * 终止全部后台任务（/clear 与退出）。
+     *
+     * <p><b>两件事都得做</b>：{@code killAll()} 只改注册表里的状态，线程池里的任务照样在跑；
+     * {@code shutdownBackground()} 才是真正把它们停下来（有界 2s，不卡退出）。只做前者的话
+     * 面板上显示"已终止"而 CPU 上还在烧。
+     */
+    @Override
+    public void killAllBackgroundTasks() {
+        if (backgroundRegistry != null) {
+            backgroundRegistry.killAll();
+        }
+        if (subagentRunner != null) {
+            subagentRunner.shutdownBackground();
+        }
     }
 
     // ── MCP 管理门面（纯委托 McpRegistry；registry 缺失 = 无 MCP 支持） ──
