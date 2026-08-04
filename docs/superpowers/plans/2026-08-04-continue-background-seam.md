@@ -650,9 +650,23 @@ Esc 掐掉前台回合后后台那批照跑，而 todo 上仍是「进行中」�
 **Files:**
 - Create: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/background/BackgroundTaskListTool.java`
 - Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/AgentTools.java`
+- Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/ToolRegistry.java`
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/AgentToolsBackgroundWiringTest.java`（加断言）
 
-> ## ⚠ 本任务最容易出事的一步在装配，不在工具本身
+> ## ⚠ 装配有**两个**独立的登记点，漏掉任一个都不会编译错
+>
+> **① `AgentTools` 的工具数组** —— 决定模型**有没有**这个工具。
+> **② `ToolRegistry` 的权限登记** —— 决定这个工具**要不要弹审批**。
+>
+> 漏掉 ② 的后果：`ListTasks` 落进 `UNKNOWN` 兜底 ⇒ **保守 ASK** ⇒ 模型每次列后台任务
+> 都要弹一次审批面板。`ToolRegistry` 里 `TaskOutput` 那行上方的注释已经把这个坑写明了：
+>
+> > 取自己进程内后台任务的结果，无外部副作用；不登记的话会落进 UNKNOWN→每次取结果都弹审批。
+>
+> 顺带说一件事：**`TaskOutput` 那行登记目前没有任何测试盖住**——现在把它删掉，
+> 全仓不会有一条测试变红。Step 1 的断言把两个一起钉上。
+
+> ## ⚠ `AgentTools` 数组的下标是「相对末尾」的
 >
 > `AgentTools` 的主 agent 工具数组用的是**相对末尾的下标**，且既有注释已经写明：
 >
@@ -690,7 +704,43 @@ Esc 掐掉前台回合后后台那批照跑，而 todo 上仍是「进行中」�
         assertFalse(subNames.contains("ListTasks"),
                 "子 agent 不该能列出主 agent 的后台任务，实际=" + subNames);
     }
+
+    /**
+     * 第二个登记点：{@code ToolRegistry}。它决定这个工具<b>要不要弹审批</b>，
+     * 与 {@code AgentTools} 的数组（决定<b>有没有</b>这个工具）是两回事，漏掉不会编译错。
+     *
+     * <p>漏登记 ⇒ 落进 {@code UNKNOWN} 兜底 ⇒ 保守 ASK ⇒ 模型每次列后台任务都弹一次审批面板。
+     *
+     * <p><b>连 TaskOutput 一起断言</b>：那行登记至今没有任何测试盖住，现在删掉它
+     * 全仓不会有一条测试变红。既然来了就一起钉上。
+     */
+    @Test
+    @DisplayName("ListTasks / TaskOutput 都已在 ToolRegistry 登记——否则每次调用都弹审批")
+    void backgroundQueryToolsAreAllowedWithoutAsking(@TempDir Path root) {
+        PermissionEngine engine = new PermissionEngine(
+                root, PermissionConfig.empty(), PermissionMode.DEFAULT);
+
+        for (String name : java.util.List.of("ListTasks", "TaskOutput")) {
+            assertEquals(PermissionBehavior.ALLOW, engine.decide(name, "{}").behavior(),
+                    name + " 未在 ToolRegistry 登记 ⇒ 落进 UNKNOWN ⇒ 每次调用都弹审批面板");
+        }
+    }
 ```
+
+补上这些 import（该测试类若已有则跳过）：
+
+```java
+import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
+import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
+import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+```
+
+**`PermissionEngine` 的构造器是 3 参**（`root, config, startupMode`）——第 4 个
+`bypassAllowed` 参数在「四档平权」那次改动里已经删掉了。若你看到的是 4 参，
+说明你的基线不对，停下来查。
 
 （`toolMap` / `subagentToolNames` 是该测试类里已有的辅助取法——**照抄它现有用例里的写法**，
 名字以你实际看到的为准；本类已经有 `mainAgentToolSetContainsTaskOutput` 与
@@ -763,7 +813,16 @@ public final class BackgroundTaskListTool {
 「`-c` 恢复后模型干等已死的旧任务」兜底的：即使模型没走 `/continue`，
 只要它调过一次 `ListTasks` 看到空清单，也能明白历史里那些 id 已经没了。
 
-- [ ] **Step 4: 装配（改 5 处）**
+- [ ] **Step 3b: 登记进 `ToolRegistry`（第二个登记点，别漏）**
+
+在 `ToolRegistry` 里 `TaskOutput` 那行**紧下方**加：
+
+```java
+        // 列自己进程内的后台任务，只读、无外部副作用；同 TaskOutput，不登记会落进 UNKNOWN→每次都弹审批。
+        put("ListTasks",           ToolCategory.INTERNAL, null, false);
+```
+
+- [ ] **Step 4: 装配（`AgentTools` 数组，改 5 处）**
 
 在 `AgentTools` 里 `decoratedTaskOutputTool` 的定义**之后**加：
 
@@ -816,14 +875,20 @@ Expected: BUILD SUCCESS。
 cd /Users/zxh/IdeaProjects/springai-agentdemo
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/background/BackgroundTaskListTool.java \
         springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/AgentTools.java \
+        springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/permission/ToolRegistry.java \
         springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/AgentToolsBackgroundWiringTest.java
 git commit -m "feat(background): 新增 ListTasks 工具，仅主 agent
 
 模型能派后台任务却看不见自己派了什么：TaskOutput 的 task_id 必填，
 而 id 只在会话历史里那条 Task 的返回值中——/compact 之后就查不了了。
 
-装配时尾部下标从四个变五个，四个既有下标全部下移；测试断言四个工具
-同时非空，拦「漏改某个下标导致静默覆盖」这类不编译错也不测试错的缺陷。"
+两个登记点都要动，漏掉任一个都不会编译错：
+- AgentTools 的数组决定「有没有」——尾部下标从四个变五个，既有下标全部下移
+- ToolRegistry 的权限登记决定「要不要弹审批」——漏了会落进 UNKNOWN 兜底，
+  模型每次列任务都弹一次面板
+
+测试同时钉住两者，并顺带把 TaskOutput 的权限登记也钉上（它此前没有任何
+测试盖住，删掉那行全仓不会红）。"
 ```
 
 ---
