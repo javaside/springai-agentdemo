@@ -385,7 +385,9 @@ git commit -m "feat(model): ModelPreference——把上次用的模型落到 .co
 下权限位不拦人，测试会静默变绿。"
 ```
 
-**做完后测试总数：1262 + 9 = 1271**
+**做完后测试总数：1262 + 13 = 1275**
+
+> 实施记录：审查发现 `missingFileIsEmpty` 是假绿（删掉守卫仍全绿），补日志断言钉死；又补了 `null`/空串两条用例、`read(null)` 一条，并给 `missingKeyIsEmpty`/`nonStringValueIsEmpty` 加了日志断言。最终 13 条而非 9 条。
 
 ---
 
@@ -598,7 +600,7 @@ mvn test -pl springai-code-tui -Dtest=CodeTuiApplicationModelRestoreTest
 mvn test -pl springai-code-tui
 ```
 
-预期：`Tests run: 1274, Failures: 0, Errors: 0, Skipped: 9`
+预期：`Tests run: 1278, Failures: 0, Errors: 0, Skipped: 9`
 
 - [ ] **Step 9: 提交**
 
@@ -616,7 +618,7 @@ activeModelId 就知道这个模型还在不在。顺手给 ProviderRegistryTest
 那条承重的测试补了注释。"
 ```
 
-**做完后测试总数：1271 + 3 = 1274**
+**做完后测试总数：1275 + 3 = 1278**
 
 ---
 
@@ -856,7 +858,7 @@ mvn test -pl springai-code-tui -Dtest=CodeTuiViewModelMemoryTest
 mvn test -pl springai-code-tui
 ```
 
-预期：`Tests run: 1277, Failures: 0, Errors: 0, Skipped: 9`
+预期：`Tests run: 1281, Failures: 0, Errors: 0, Skipped: 9`
 
 - [ ] **Step 8: 提交**
 
@@ -872,7 +874,7 @@ git commit -m "feat(model): /model 选中即落盘
 失败的话用户只会觉得功能坏了，还不知道该去看什么。"
 ```
 
-**做完后测试总数：1274 + 3 = 1277**
+**做完后测试总数：1278 + 3 = 1281**
 
 ---
 
@@ -1087,7 +1089,7 @@ git commit -m "test(smoke): 两个进程证明模型记忆真的跨重启
 的 '2' 会选到别的模型上，而脚本会静默通过。"
 ```
 
-**测试总数不变（1277）**：冒烟脚本不在 surefire 里跑。
+**测试总数不变（1281）**：冒烟脚本不在 surefire 里跑。
 
 ---
 
@@ -1188,7 +1190,7 @@ git commit -m "docs(model): 记录模型记忆，并说清它为什么与权限�
 mvn test -pl springai-code-tui
 ```
 
-预期：`Tests run: 1277, Failures: 0, Errors: 0, Skipped: 9`
+预期：`Tests run: 1281, Failures: 0, Errors: 0, Skipped: 9`
 
 对不上就停下来查：多了说明写了计划外的测试，少了说明有测试没被 surefire 捡到（类名不以 `Test` 结尾是最常见的原因）。
 
@@ -1261,7 +1263,7 @@ git log --oneline main..HEAD
 
 ## 完成标准
 
-- [ ] `mvn test -pl springai-code-tui` → `Tests run: 1277, Failures: 0, Errors: 0, Skipped: 9`
+- [ ] `mvn test -pl springai-code-tui` → `Tests run: 1281, Failures: 0, Errors: 0, Skipped: 9`
 - [ ] `model_memory_smoke.py` → `SMOKE PASS`
 - [ ] 其余 5 个不依赖 Node 的冒烟脚本 → 全部 `SMOKE PASS`
 - [ ] 4 条变异各自杀掉了对应的测试，且**红的理由正确**（不是编译错、不是超时）
