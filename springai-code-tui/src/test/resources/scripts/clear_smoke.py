@@ -68,10 +68,16 @@ def print_screen(label, lines):
 
 
 class PtySession:
-    def __init__(self, cmd, cwd, env):
+    # rows/cols 可选：默认沿用模块常量（既有脚本零变化）。传值是为了让某个场景在
+    # <b>小窗口</b>下跑——「面板会不会把输入框顶出屏幕」只有在行数紧张时才暴露，
+    # 40 行的默认窗口永远测不出来（见 background_smoke.py）。
+    def __init__(self, cmd, cwd, env, rows=None, cols=None):
+        rows = ROWS if rows is None else rows
+        cols = COLS if cols is None else cols
+        self.rows, self.cols = rows, cols
         self.master_fd, self.slave_fd = os.openpty()
         # Set window size before spawning so the child inherits it.
-        winsize = struct.pack("HHHH", ROWS, COLS, 0, 0)
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(self.slave_fd, termios.TIOCSWINSZ, winsize)
 
         self.proc = subprocess.Popen(
@@ -87,7 +93,7 @@ class PtySession:
         os.close(self.slave_fd)
         self.slave_fd = None
 
-        self.screen = pyte.Screen(COLS, ROWS)
+        self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.ByteStream(self.screen)
 
         # Make master fd non-blocking for select-based reads.
