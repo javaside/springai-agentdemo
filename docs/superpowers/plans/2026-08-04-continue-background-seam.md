@@ -32,6 +32,20 @@ Task 1 有一条测试专门钉这个。
 
 **4. 行号是快照，会漂移。** 靠方法名/原文串定位，别盲信行号。
 
+**5. 编译错不是合格的「红」。** 每个任务至少要有**一次断言失败**的红，光有编译错不够——
+编译错时断言一条都没执行过，跟「拿一个空文件当红」没区别，证不了测试真接上了缺陷。
+
+- **新建类的任务**（Task 1）：首次必然是编译错（类还不存在），无法避免；
+  真正的凭据是那一步**变异验证**（改实现让断言红），所以那一步不能省。
+- **改既有类的任务**（Task 2）：编译错之后要**再红一次**——先只补接口/门面让它编译通过、
+  **故意不改真正的行为点**，此时断言才生效。两条出口若各自独立地红了，
+  才说明它们不是搭彼此的便车。
+- Task 3 / Task 4 的 Step 2 本就是行为红（断言失败），不受此条影响。
+
+这条是被实施过程反复验证出来的：Task 1 与 Task 2 各自独立地踩了一次
+「红的理由是错的」，而它们都是**照计划做的**——计划自己在一处写了警告，
+却在另一处犯了同样的错。
+
 ---
 
 ## 文件结构
@@ -549,8 +563,12 @@ cd /Users/zxh/IdeaProjects/springai-agentdemo
 mvn test -pl springai-code-tui -Dtest='CodeTuiViewContinueDigestTest'
 ```
 
-Expected: **COMPILATION ERROR** —
-`method does not override or implement a method from a supertype`（`backgroundDigestForContinue`）。
+Expected: **COMPILATION ERROR**，**两处**：
+- `方法不会覆盖或实现超类型的方法`（桩里 `@Override backgroundDigestForContinue`）
+- `找不到符号：方法 backgroundDigestForContinue()`（`defaultDigestIsEmpty` 里那句）
+
+⚠ **这只是第一次红，理由是「方法不存在」，不是「行为不对」**——断言一条都没执行过。
+Step 4b 会补第二次红。见全局纪律 #5。
 
 - [ ] **Step 3: 给 `SubmitHandler` 加门面方法**
 
@@ -591,6 +609,27 @@ Expected: **COMPILATION ERROR** —
                 .forContinue(backgroundRegistry.all());
     }
 ```
+
+- [ ] **Step 4b: 第二次跑红——这次断言才真正生效**
+
+Step 3、4 只加了门面（接口默认方法 + `CodingAgent` 实现），**先别改 `CodeTuiView`**，
+此刻编译已通过、四条断言开始真正执行。跑：
+
+```bash
+cd /Users/zxh/IdeaProjects/springai-agentdemo
+mvn test -pl springai-code-tui -Dtest='CodeTuiViewContinueDigestTest'
+```
+
+Expected: `Tests run: 4, Failures: 2` ——
+`digestIsAppendedToPrompt`（「摘要必须拼进去」）与
+`queuedPromptAlsoCarriesDigest`（「入队的提示词也必须带摘要」）**各自独立地红**。
+
+**两条都要红**：只红一条说明另一条搭了便车——比如 `queuedPromptAlsoCarriesDigest`
+若不独立成立，等 Step 5 在 dispatch 那条路上做了拼接，它可能就跟着绿了，
+于是「排队出口也带摘要」这件事实际上没有任何测试守着。
+
+另两条（`emptyDigestLeavesPromptUntouched` / `defaultDigestIsEmpty`）此刻应是**绿的**
+——它们钉的是「别多做」，此时确实还没多做。
 
 - [ ] **Step 5: 改 `/continue` 分支**
 
@@ -1133,8 +1172,13 @@ cd /Users/zxh/IdeaProjects/springai-agentdemo
 git worktree add .worktrees/mut-continue --detach HEAD
 ```
 
-在 `.worktrees/mut-continue` 里把 `CodeTuiView` 的 `/continue` 拼接那三行注释掉
+在 `.worktrees/mut-continue` 里把 `CodeTuiView` 的 `/continue` 拼接**整段**注释掉
 （即退回「不拼 digest」），重新 package 后单跑这一幕。
+
+⚠ **要注释的是 4 行代码**：`String digest = onSubmit.backgroundDigestForContinue();`
+那一行**加上**整个 `if (!digest.isEmpty()) { ... }` 块（共 3 行）。
+光注释掉 `if` 块会留下一个未使用的局部变量——能编译，但变异不完整，
+digest 仍然被求值了一次，只是没用上。
 
 Expected: `SMOKE FAIL: /continue 没把后台任务摘要带上——模型会把正在跑的活再派一遍`。
 
