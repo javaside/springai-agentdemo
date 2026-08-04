@@ -49,7 +49,14 @@ public final class ModelPreference {
 
     private static final String KEY = "lastModel";
 
-    /** 与 {@code PermissionConfigLoader}/{@code Writer} 同一套解析开关：重复键直接判非法。 */
+    /**
+     * 开重复键检测。
+     *
+     * <p><b>这里的理由与 {@code PermissionConfigWriter} 不同</b>：那边开它是因为写侧读-改-写
+     * 时「末键胜出」会不可逆地抹掉用户的 deny 规则；本文件整份覆盖、写前不读旧值，那条理由
+     * 不成立。开它只是因为——这是台<b>纯机器写</b>的文件，里面出现重复键只可能是人手改坏了或
+     * 别的程序写脏了，此时宁可当无记忆处理，也不要在两个值里猜一个。
+     */
     private static final ObjectMapper MAPPER = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .build();
@@ -64,6 +71,22 @@ public final class ModelPreference {
 
     /** 读上次用的模型 id。缺失/坏文件/空值一律 {@link Optional#empty()}，绝不抛。 */
     public static Optional<String> read(Path root) {
+        try {
+            return doRead(root);
+        } catch (Exception e) {
+            // 「绝不抛」是硬契约：这个类跑在启动路径上，漏一个异常就是 code-tui 起不来。
+            // 上面每条已知路径都各自降级了，能到这里的是「将来改这段的人漏判的那个」——
+            // 类注释里的绊线（长出第二个键就要改写侧）正指着这段代码。
+            //
+            // 这里带上整个异常（末尾多传一个 e）而不是像别处那样只取 getMessage()：
+            // 别处兜的是已知路径，消息就够了；这里兜的是「不知道是什么」，
+            // 没有栈就等于只知道出事了、不知道出在哪，这道保险也就白加了。
+            log.warn("读模型偏好时出了意料之外的错（{}），本次按无记忆处理。", e.toString(), e);
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<String> doRead(Path root) {
         if (root == null) {
             return Optional.empty();
         }
