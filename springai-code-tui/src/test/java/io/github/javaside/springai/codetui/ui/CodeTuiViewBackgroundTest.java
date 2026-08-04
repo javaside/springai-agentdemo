@@ -9,6 +9,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import reactor.core.Disposable;
 
+import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
+
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -194,6 +197,123 @@ class CodeTuiViewBackgroundTest {
     }
 
     @Test
+    @DisplayName("刹车踩下后：空输入框按回车必须真的把结果交出去")
+    void enterOnEmptyInputReleasesBrake(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, root);
+        for (int i = 1; i <= 3; i++) {
+            h.pending.add(done("id" + i, "任务" + i, "结论" + i));
+            v.tickForTest();
+        }
+        h.pending.add(done("id4", "任务4", "结论4"));
+        v.tickForTest();
+        assertEquals(3, h.submits.size(), "前提：刹车已把第 4 条扣住");
+        assertTrue(ViewScreen.of(v).contains("回车交给模型"), "前提：状态栏正在让用户按回车");
+
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 输入框为空，正是状态栏教的那一下
+        v.tickForTest();
+
+        // 屏幕上写着「回车交给模型」，而空输入框按回车却是空操作 —— 用户照做后什么都不发生，
+        // 结果再也送不出去，且没有任何地方告诉他"其实得打一条真消息"。
+        assertEquals(4, h.submits.size(), "状态栏写着回车交给模型，那句提示就必须是真的:\n" + h.submits);
+        assertTrue(h.submits.get(3).contains("结论4"), "放行后送的应当是那条被扣住的结果");
+    }
+
+    @Test
+    @DisplayName("刹车踩下但结果已全部送完 → 状态栏不常驻「有结果待处理」")
+    void brakeWithNothingPending_showsNoStaleHint(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, root);
+        for (int i = 1; i <= 3; i++) {
+            h.pending.add(done("id" + i, "任务" + i, "结论" + i));
+            v.tickForTest();
+        }
+        assertEquals(3, h.submits.size(), "前提：三次都送到了，没有任何结果被扣住");
+
+        v.tickForTest();
+
+        // 三条都已送达并消费，这时候提示「有结果待处理」是在指使用户去处理一个不存在的东西。
+        assertFalse(ViewScreen.of(v).contains("有结果待处理"),
+                "结果已全部送完，不该常驻待处理提示:\n" + ViewScreen.of(v));
+    }
+
+    // ── 落盘（限幅在 CodingAgent.completedBackgroundTasks 里做）不得跟着渲染帧跑 ────────────
+
+    /**
+     * 照抄 {@code CodingAgent.completedBackgroundTasks()} 的调用位置：取列表<b>顺手做限幅落盘</b>。
+     * 用它钉住「闸门关着时一帧一帧地重写结果文件」——drain 每 33ms 一次，一份 200KB 的报告
+     * 就是 6MB/s 的同步写、还跑在渲染线程上；模型此刻若去 Read 那个 artifact 还会读到中间态。
+     */
+    private static final class StoringHandler implements SubmitHandler {
+        final List<String> submits = new ArrayList<>();
+        final List<BackgroundResult> pending = new ArrayList<>();
+        private final TaskResultStore store;
+        int fetches;                       // completedBackgroundTasks() 被调了几次（= 限幅落盘跑了几次）
+
+        StoringHandler(Path root) { this.store = new TaskResultStore(root); }
+
+        @Override public Disposable submit(String text) { submits.add(text); return () -> { }; }
+        @Override public List<BackgroundResult> completedBackgroundTasks() {
+            fetches++;
+            List<BackgroundResult> out = new ArrayList<>();
+            for (BackgroundResult r : pending) {
+                out.add(new BackgroundResult(r.taskId(), r.agentName(), r.description(),
+                        store.storeAndTruncate(r.taskId(), r.result()), r.ok()));
+            }
+            return out;
+        }
+        @Override public boolean markBackgroundConsumed(String taskId) {
+            return pending.removeIf(r -> r.taskId().equals(taskId));
+        }
+    }
+
+    /** 超限幅（>4000 字符）的结果：取一次列表就落一次盘。 */
+    private static SubmitHandler.BackgroundResult huge(String id) {
+        return new SubmitHandler.BackgroundResult(id, "explore", "一份大报告", "x".repeat(5000), true);
+    }
+
+    @Test
+    @DisplayName("用户正在打字 → 不取结果列表，也就不会每帧重写落盘文件")
+    void typingGate_doesNotFetchOrWriteArtifact(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        StoringHandler h = new StoringHandler(root);
+        CodeTuiView v = new CodeTuiView(s, h, root);
+        h.pending.add(huge("ab12"));
+
+        type(v, "我正在打字");
+        for (int i = 0; i < 5; i++) v.tickForTest();
+
+        assertEquals(0, h.fetches, "闸门关着就不该取列表——取列表顺手就把结果限幅落盘了");
+        assertFalse(Files.exists(root.resolve(".codetui").resolve("artifacts").resolve("task-ab12.txt")),
+                "这一帧根本不会送达，不该有任何落盘");
+    }
+
+    @Test
+    @DisplayName("刹车踩下 → 结果列表最多再取一次，不随渲染帧反复落盘")
+    void brakeGate_stopsPerFrameFetching(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        StoringHandler h = new StoringHandler(root);
+        CodeTuiView v = new CodeTuiView(s, h, root);
+        for (int i = 1; i <= 3; i++) {
+            h.pending.add(done("id" + i, "任务" + i, "结论" + i));
+            v.tickForTest();
+        }
+        assertEquals(3, h.submits.size(), "前提：刹车已踩下");
+
+        h.pending.add(huge("ab12"));
+        int before = h.fetches;
+        for (int i = 0; i < 10; i++) v.tickForTest();
+
+        // 刹车 + 有大结果被扣住 = 永久闸门。每帧取一次列表就是每 33ms 重写一次文件。
+        assertTrue(h.fetches - before <= 1,
+                "刹车期间只需探明一次「确有结果被扣住」，之后每帧再取只是白白重写落盘文件，实际取了 "
+                        + (h.fetches - before) + " 次");
+        assertTrue(ViewScreen.of(v).contains("有结果待处理"), "探明之后状态栏仍要告诉用户结果被扣住了");
+    }
+
+    @Test
     @DisplayName("排队的用户消息优先于后台送达")
     void queuedUserMessageWinsOverBackgroundDelivery(@TempDir Path root) {
         ConversationState s = new ConversationState();
@@ -233,6 +353,23 @@ class CodeTuiViewBackgroundTest {
         assertTrue(lineWith(screen, "cd34").contains("✓"), "已完成用 ✓:\n" + screen);
         // 耗时列：后台任务跨回合存活，「跑了多久」是判断它是否卡死的唯一线索。
         assertTrue(lineWith(screen, "ab12").matches(".*\\d+m\\d{2}s.*"), "运行行必须带耗时:\n" + screen);
+    }
+
+    @Test
+    @DisplayName("⏱ 面板行数有上限：超出的折叠掉并注明还有几项")
+    void backgroundPanelIsCapped(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, new Handler(), root);
+        // ⏱ 列表跨回合累积、只有 /clear 清，已完成的永不移除：一个会话派九个后台任务，
+        // 面板就常驻十行，把输入框一路顶下去。
+        for (int i = 1; i <= 9; i++) s.onBackgroundTaskStarted("bg0" + i, "explore", "任务" + i);
+
+        String screen = ViewScreen.of(v);
+        long rows = screen.lines().filter(l -> l.contains("bg0")).count();
+        assertTrue(rows <= 6, "面板必须封顶，实际渲染了 " + rows + " 行:\n" + screen);
+        assertTrue(screen.contains("bg09"), "最新的任务必须可见（折叠靠前的已完成条）:\n" + screen);
+        assertFalse(screen.contains("bg01"), "超出上限的靠前任务应被折叠:\n" + screen);
+        assertTrue(screen.contains("前 3 项已折叠"), "折叠掉几项要如实注明:\n" + screen);
     }
 
     @Test
