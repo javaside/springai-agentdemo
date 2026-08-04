@@ -245,7 +245,7 @@ Background tasks do not survive a process restart.
 | 一个 RUNNING 都没有，只有 DONE-未消费 | 照常注入 DONE 那一组 | D2 与 D1 独立成立 |
 | DONE-未消费的结果很长 | 清单里**只列 id 与描述，不含结果正文** | 结果由 `TaskOutput` 取；塞进提示词会把 `/continue` 撑爆，且绕过了 `markConsumed` 互斥 |
 | 注册表里有 64 条（满） | 照常渲染全部 | 上限本就是为此设的；`full` 不再另设截断 |
-| 单条 FAILED 的错误原文极长 | `full` 里按单条截断（沿用 `TaskResultStore` 的 4000 字符纪律，不另立规矩） | 一条堆栈不该淹掉其余 63 条 |
+| 单条 FAILED 的错误原文极长 | **`full` 根本不带结果正文**，因此无需截断 | `ListTasks` 负责**列**、`TaskOutput` 负责**取**，工具描述里已如此分工；带一半正文会把这条界线搅浑，也会让一条堆栈淹掉其余 63 条。要看失败原因就 `TaskOutput(task_id)` |
 | `/continue` 时后台任务正好在状态切换 | 快照取一次，渲染的是那一瞬的状态 | 注册表方法都是 `synchronized`；一帧的滞后对「别重复劳动」这个用途无害 |
 | `ListTasks` 时注册表为空 | 返回一句「当前没有后台任务」，不是空串 | 工具返回空串会让模型以为调用失败 |
 | 子 agent 调 `ListTasks` | **调不到——它不进 `decoratedList`，仅主 agent 持有** | 照抄 `TaskOutput` 的既有做法（`AgentTools` 那里的注释：「子 agent 拿不到 `Task`，自然也没有属于自己的后台任务；给了它只会让它去捞别人的结果」）。同一条理由逐字适用于列举：子 agent 列出来的只会是主 agent 的任务 |
