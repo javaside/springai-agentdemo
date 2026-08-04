@@ -119,7 +119,7 @@ git-checkpoint.ts       dirty-repo-guard.ts    sandbox/  gondolin/
 | 规则 DSL | ✅ `工具名(模式)`，allow/ask/deny 三档 + 前缀/glob 语义 | ❌ |
 | 内置底线 | ✅ allow 盖不住的一层（密钥、shell 启动文件、`rm -rf /`…，穿透 `sudo`/`bash -c` 包装） | ❌ |
 | 计划模式 | ✅ 只读放行、写与命令 DENY、`ExitPlanMode` 交付计划 | ❌（`examples/plan-mode/` 扩展） |
-| 模式切换 | ✅ `Shift+Tab` 三档循环，常驻状态栏 | —（`Shift+Tab` 在 pi 是切思考档位） |
+| 模式切换 | ✅ `Shift+Tab` 四档循环（含「跳过权限检查」），常驻状态栏 | —（`Shift+Tab` 在 pi 是切思考档位） |
 | 分层配置 | ✅ 用户级 + 项目级取并集，**项目层只能收紧不能放宽** | — |
 | 项目信任 | ❌ **无**：项目级 `.codetui/permissions.json`、`skills/`、`mcp.json` **clone 下来即被加载** | ✅ 首次进入含项目资源的目录会询问是否信任，决定记入 `~/.pi/agent/trust.json`；未信任前只加载 context 文件与全局扩展；`defaultProjectTrust: ask/always/never`；`-a`/`-na` 单次覆盖 |
 | 沙箱 | ❌（诚实声明无沙箱） | ❌（同样诚实声明），但给了三套容器化方案文档：Gondolin 微 VM、Docker、OpenShell |

@@ -221,7 +221,8 @@ public class CodeTuiApplication {
         }
         String v = raw.trim();
         if (PermissionMode.BYPASS.name().equalsIgnoreCase(v)) {
-            log.warn("--permission-mode 不接受 bypass：全放行只能由 --dangerously-skip-permissions 进。已忽略。");
+            log.warn("--permission-mode 不接受 bypass：--dangerously-skip-permissions 已经是"
+                    + "「启动即进该档」的写法，不再设第二条等价路径（运行期 Shift+Tab 切进去是允许的）。已忽略。");
             return null;
         }
         for (PermissionMode m : PermissionMode.values()) {

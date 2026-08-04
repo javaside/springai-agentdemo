@@ -227,6 +227,12 @@ class CodeTuiViewPermissionModeTest {
         // 「规则写在哪」这条指引随规则列表一起搬进了面板（零规则时它就是面板的全部内容）
         assertTrue(ViewScreen.of(v).contains("permissions.json"),
                 "零规则时面板要指出规则写在哪，实际屏幕：\n" + ViewScreen.of(v));
+
+        // ⚠ 这行文案曾写着「任何 allow 规则与 BYPASS 都盖不住」——后半句是假的：
+        // doDecide 的 BYPASS 分支排在内置检查之前直接返回，那一档只留痕不拦截。
+        // 用户读着这句话去开 BYPASS，以为底线还在，是最坏的一种文档错误，故钉死它别回来。
+        assertFalse(all.contains("BYPASS 都盖不住"),
+                "不得宣称 BYPASS 盖不住内置底线——那一档根本走不到内置检查这一步，实际：" + all);
     }
 
     @Test

@@ -1902,7 +1902,10 @@ public final class CodeTuiView extends InlineApp {
      */
     private void printPermissions() {
         state.pushInfo("权限模式：" + onSubmit.permissionMode().label() + "（Shift+Tab 循环切换）");
-        state.pushInfo("内置底线（任何 allow 规则与 BYPASS 都盖不住，命中即询问）：");
+        // ⚠ 这行文案曾写着「任何 allow 规则与 BYPASS 都盖不住」——后半句是<b>假的</b>：
+        // doDecide 的 BYPASS 分支排在内置检查之前直接返回，那一档只留痕不拦截。
+        // 用户读着这句话去开 BYPASS，以为底线还在，这是最坏的一种文档错误。
+        state.pushInfo("内置底线（任何 allow 规则都盖不住，命中即询问）：");
         state.pushInfo("  写 .ssh/.aws/.kube/.gnupg/.git/.codetui 配置、写 shell 启动文件、"
                 + "读私钥与凭据、rm -rf / 或 ~ 或变量目标");
     }

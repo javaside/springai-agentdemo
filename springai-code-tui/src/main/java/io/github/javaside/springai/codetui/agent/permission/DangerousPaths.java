@@ -7,7 +7,13 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * 内置不可绕过检查：<b>排在 allow 规则之前，任何 allow 规则盖不住，BYPASS 模式下也照样触发</b>。
+ * 内置不可绕过检查：<b>排在 allow 规则之前，任何 allow 规则盖不住</b>。
+ *
+ * <p><b>唯一的例外是「跳过权限检查」（BYPASS）档</b>：{@code PermissionEngine.doDecide} 的
+ * BYPASS 分支排在本层<b>之前</b>直接返回，本层根本不会被调用，只由
+ * {@code PermissionCallback.onGuardrailBypassed} 事后留一行痕。
+ * 这与本类下方「已知盲区」里那句「一旦有人写下宽松的 allow 规则、或切进 BYPASS，
+ * 这些就没人拦了」是同一件事——此处曾写着「BYPASS 模式下也照样触发」，与那句直接矛盾。
  *
  * <p>命中后引擎强制 <b>ASK 而非 DENY</b>——本层是护栏不是牢笼，人确认了就该能做。
  * 正因为结论是「问一次」而不是「不许」，本层的取舍一律偏严：
