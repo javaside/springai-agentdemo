@@ -30,16 +30,21 @@ public final class BackgroundTaskTool {
     private static final long POLL_INTERVAL_MS = 200;
 
     /**
-     * 查无此 id 的解释——<b>两种可能都要说</b>。
+     * 查无此 id 的解释——<b>三件事都要说</b>。
      *
      * <p>原来只说「可能来自已结束的进程」，但那只是其中一种：注册表满 64 条时
      * {@link BackgroundTaskRegistry} 会淘汰最旧的<b>已结束</b>任务，其中完全可能含已完成但还没送达的
      * ——那是<b>本进程</b>刚刚丢掉的结果。只给前一种解释，模型会以为这是上个进程的陈旧 id 而就此放弃，
      * 而实际上它该做的是重新派一次。
+     *
+     * <p><b>第三件是当前清单</b>：模型手上的 id 不对，而正确的下一步取决于「现在到底有哪些任务」。
+     * 这一刻正是它最需要看清单的时刻，只回一句「未知任务」等于让它去猜。
+     * 措辞走 {@link BackgroundDigest}，与 {@code ListTasks} 和 {@code /continue} 保持一致。
      */
-    private static String unknownTask(String id) {
+    private String unknownTask(String id) {
         return "未知任务 " + id + "（可能来自已结束的进程——后台任务不跨进程保存；"
-                + "也可能是本进程后台任务过多，这条已结束的记录被淘汰了。若仍需要结果，请重新派发）。";
+                + "也可能是本进程后台任务过多，这条已结束的记录被淘汰了。若仍需要结果，请重新派发）。\n"
+                + BackgroundDigest.full(registry.all());
     }
 
     /** 工具入参。 */
