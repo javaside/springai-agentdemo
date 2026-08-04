@@ -142,10 +142,15 @@ public interface AgentListener {
      */
     default void onBackgroundTaskStarted(String taskId, String agentName, String description) { }
 
-    /** 后台任务内部正在跑的工具变了（只更新面板，<b>不进 scrollback</b>——否则会插进你与主 agent 的对话里）。 */
-    default void onBackgroundTaskProgress(String taskId, String toolName) { }
-
-    /** 后台任务结束。ok=false 表示执行抛错（finalText 是摊平后的原因）。 */
+    /**
+     * 后台任务结束。ok=false 表示执行抛错（finalText 是摊平后的原因）。
+     *
+     * <p><b>刻意没有配套的「进度」事件</b>：后台任务「当前在跑哪个工具」不走这条通道，
+     * 而是照常经 {@link ToolEventCallback} 发 {@code onToolStarted(turnId, taskId, ...)}，
+     * 由 UI 层按 taskId 认出后台任务、写进它自己的镜像状态。多摆一个没有发射点的
+     * {@code onBackgroundTaskProgress} 只会立一块「后台进度该从这里报」的假路标，
+     * 照着接线的人会发现事件永远不来。
+     */
     default void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) { }
 
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
