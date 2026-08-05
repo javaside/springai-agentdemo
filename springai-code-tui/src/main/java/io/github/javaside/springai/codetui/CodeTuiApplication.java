@@ -6,6 +6,7 @@ import io.github.javaside.springai.codetui.agent.CodingAgent;
 import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.McpRegistry;
+import io.github.javaside.springai.codetui.agent.ModelPreference;
 import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.QwenProvider;
@@ -56,6 +57,7 @@ public class CodeTuiApplication {
         }
 
         ConversationState state = new ConversationState();       // implements AgentListener
+        restoreLastModel(registry, root, state);                 // 上次用的模型（<root>/.codetui/model.json）
         AtomicLong activeTurnId = new AtomicLong();
 
         // 会话选择（多槽）：默认每次启动 = 新 session（干净上下文、新文件，不读旧历史）；
@@ -155,6 +157,35 @@ public class CodeTuiApplication {
         }
         return "⚠ 当前工作区过宽（" + root + "）：「工作区内」不再作为豁免依据，"
                 + "涉及系统位置的操作会照常询问。建议切到一个具体的项目目录再运行。";
+    }
+
+    /**
+     * 恢复上次用的模型（{@code <root>/.codetui/model.json}）。
+     *
+     * <p><b>为什么是「构造完 registry 之后 select」而不是做成构造入参</b>：
+     * {@link ProviderRegistry} 不该认识磁盘，且改构造签名要牵动全部调用点与测试。
+     * 构造后 select 还白送一个失效检测——{@code select()} 对未知模型是<b>静默忽略</b>的，
+     * 所以 select 完比一下 {@code activeModelId()} 是不是等于要恢复的那个，
+     * 不等就说明「这个模型现在用不了了」。不需要新增任何 API。
+     * （那条静默忽略的行为由 {@code ProviderRegistryTest.selectUnknownModelIsIgnored} 钉着。）
+     *
+     * <p><b>必须在 {@link ConversationState} 建好之后调用</b>：回退提示要走
+     * {@code state.pushInfo} 落进开场 scrollback，和权限模式的开场提示同一条路。
+     *
+     * <p><b>与 {@code -c} 正交</b>：模型记忆独立于会话恢复，不带 {@code -c} 的默认启动
+     * 照样生效——那正是这个功能存在的理由。
+     */
+    static void restoreLastModel(ProviderRegistry registry, Path root, ConversationState state) {
+        Optional<String> remembered = ModelPreference.read(root);
+        if (remembered.isEmpty()) {
+            return;                            // 首次运行：走原有行为，一个字都不多说
+        }
+        String id = remembered.get();
+        registry.select(id);
+        if (!id.equals(registry.activeModelId())) {
+            state.pushInfo("• 上次用的模型 " + id + " 现在不可用，已回退到 "
+                    + registry.activeModelId() + "。");
+        }
     }
 
     /** 是否带续跑启动选项（仿 Claude Code 的 -c / --continue）。 */
