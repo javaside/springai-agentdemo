@@ -1283,5 +1283,75 @@ git log --oneline main..HEAD
 
 ## 实施记录
 
-（实施者在此追加：实际测试数、变异验证结论、踩到的坑。这一节是这套代码「为什么长这样」的第一手材料，不要留空。）
+### 测试数
+
+| 阶段 | 新增 | 累计 | 说明 |
+|---|---|---|---|
+| 基线 | — | 1262 | |
+| Task 1 `ModelPreferenceTest` | 13 | 1275 | 计划原写 9；审查发现 `missingFileIsEmpty` 是假绿，补日志断言，并补 `null`/空串/`read(null)` 三条 |
+| Task 2 `CodeTuiApplicationModelRestoreTest` | 3 | 1278 | |
+| Task 3 `CodeTuiViewModelMemoryTest` | 3 | 1281 | |
+| Task 4 `model_memory_smoke.py` | 0 | 1281 | pty 冒烟，不走 surefire |
+| Task 5 文档 | 0 | 1281 | |
+
+Task 6 全量实测：`Tests run: 1281, Failures: 0, Errors: 0, Skipped: 9`，与预期一致。
+
+### 变异验证（四条）
+
+四条全部按「改坏 → 确认红 → `git checkout -- <单个文件>` 还原 → `git status --short` 无输出 → 重跑确认绿」执行。
+
+**① Task 3「只在生效时写」**
+
+- 改了什么：把 `CodeTuiView` 选中分支里的「select 后核对 `activeModelId()` 是否真变成了这个 id」去掉，改成无条件写盘。
+- 红的是：`ineffectiveSelectionWritesNothing`，失败信息「没生效的选择不该留下记录」。
+- 红的理由：`ProviderRegistry.select()` 对未知模型**静默忽略**，无条件写就会把一个选不中的 id 落到盘上，下次启动再触发一次「用不了，已回退」的提示。这条测试在 Task 3 的 Step 4（红阶段）是**搭便车绿**的——那时压根没有写盘代码，文件当然不存在——所以它的价值只能靠这次隔离变异来证明。
+
+**② Task 4「注释掉 main 里的接线」**
+
+- 改了什么：把 `CodeTuiApplication.main` 里那行 `restoreLastModel(registry, root, state);` 整行注释掉，重新 compile 后跑冒烟。
+- 红的是：`model_memory_smoke.py`（第二个进程读不到上次选的模型）。
+- 红的理由：这正是单测**原理上**盖不住的那类错——`restoreLastModel` 本身可以 100% 正确，却因为在 `main` 里没接上（或插错位置）而彻底不生效，一条单测都不会红。这条冒烟守的是装配点，不是逻辑。
+
+**③ Task 6 变异 A：启动恢复的「失效检测」**
+
+- 改了什么：删掉 `restoreLastModel` 里 `if (!id.equals(registry.activeModelId())) { ... }` 整块（只留 `registry.select(id)`）。
+- 红的是：`CodeTuiApplicationModelRestoreTest.unavailableModelFallsBackAndSaysSo`。
+- 失败信息：`该有且只有一行提示:[] ==> expected: <1> but was: <0>`（`CodeTuiApplicationModelRestoreTest.java:60`）。
+- 红的理由：记住的模型现在不可用时，`select()` 静默忽略、`activeModelId()` 仍是默认模型——功能上没崩，但用户会莫名其妙地发现自己换过的模型没了。那行「已回退到 X」的提示是唯一的可观测差异，删掉比对块它就一句不说了。
+
+**④ Task 6 变异 B：`doRead` 的 JSON 解析降级 —— 这条变异杀不掉**
+
+这是这次回归最值得记下来的一条，因为它的结论**与预期相反**。
+
+- 改了什么：把 `ModelPreference.doRead` 里 `MAPPER.readTree(text)` 的 `catch` 从「打 WARN + 返回 empty」改成 `throw new RuntimeException(e)`（即取消这条降级）。
+- 实测结果：`mvn test -pl springai-code-tui -Dtest=ModelPreferenceTest` → **`Tests run: 13, Failures: 0, Errors: 0`，全绿**。变异**没有被杀掉**。
+- 为什么杀不掉：`read()` 外面那层 catch-all 把异常完整吸收了——打一行 WARN，然后同样返回 `Optional.empty()`。而 `malformedJsonIsEmpty` 只断返回值（`assertEquals(Optional.empty(), read(root))`），**降级路径与兜底路径的返回值一模一样**，断言两边都成立。
+
+这正是 `ModelPreference.read` 的 javadoc 里已经写下的那条纪律（「catch-all 会把会抛的守卫的变异检测力吃掉」），只是当时**只覆盖到「守卫」，没覆盖到「已有的 catch」**——`malformedJsonIsEmpty` 是在那三条日志断言之前就写好的，一直没被回头补上。
+
+- `malformedJsonIsEmpty` 现在还有没有鉴别力？**有，但比字面看起来弱得多。** 它证明的是「喂一个坏 JSON 进去，`read()` 不抛、返回 empty」——即**整体降级契约**成立。这个契约本身是这个类的头等要求（它跑在启动路径上），所以这条测试不是废的。但它对「这条降级由谁完成」**零鉴别力**：那个 `catch` 块整个删掉、或者换成任何最终抛异常的写法，它照样绿。区别只剩日志——正确路径打的是「模型偏好 X 不是合法 JSON」，兜底打的是「读模型偏好时出了意料之外的错」外加一整条栈。
+- 同类问题这个文件里已经解决过三次：`missingFileLogsNothing` / `nullRootIsEmpty` / `missingKeyIsEmpty` / `nonStringValueIsEmpty` 都是**连日志一起断**（`ListAppender` 挂到 `ModelPreference` 的 logger 上）。`malformedJsonIsEmpty` 是唯一漏网的那条。
+- 补法已实测验证有效：变异保持在位，给 `malformedJsonIsEmpty` 加上「恰好一行 WARN，且内容含『不是合法 JSON』」的断言后，它**立刻转红**，失败信息里打出来的正是兜底那条带栈的 WARN。**这次没有把这个补丁留下**（Task 6 的范围是回归验证，且要保住 1281 这个数；测试条数不变，随时可以补）。
+
+**通用教训**（与 `.claude` 记忆里「兜底若与成功路径同输出就掩盖 bug」同源）：一旦一个方法外面包了 catch-all，它内部**每一条**「打日志 + 降级返回」的路径都自动失去返回值层面的可测性——不只是显式守卫，已有的 `catch` 块同样中招。判据很简单：**问「这条路和兜底路的可观测输出有没有区别」**，没有区别就必须把日志纳入断言。
+
+### 冒烟脚本（Step 4）
+
+九条**全部 PASS**，无跳过：
+
+| 脚本 | 结果 |
+|---|---|
+| `clear_smoke.py` | SMOKE PASS |
+| `memory_smoke.py` | SMOKE PASS |
+| `attachment_smoke.py` | SMOKE PASS（5 断言） |
+| `permission_smoke.py` | SMOKE PASS |
+| `background_smoke.py` | SMOKE PASS |
+| `model_memory_smoke.py` | SMOKE PASS |
+| `edit_shortcut_smoke.py` | SMOKE PASS |
+| `mcp_smoke.py` | SMOKE PASS |
+| `mcp_manage_smoke.py` | SMOKE PASS |
+
+后两条需要 `npx`（本机 Node v22.20.0，可用），故一并跑了。
+
+**为什么必须跑齐而不是只跑 `model_memory_smoke.py`**：这次动了 `CodeTuiApplication.main` 的启动序列和 `CodeTuiView` 的按键分支，这两处正是其余八条冒烟都要踩的路——`mcp_smoke` / `permission_smoke` 守的是 `main` 里的装配顺序，`edit_shortcut_smoke` / `clear_smoke` / `attachment_smoke` 守的是 `CodeTuiView` 的按键分发。只跑新加的那条等于放弃了对这两处回归的全部覆盖。
 
