@@ -72,16 +72,24 @@ public final class ModelPreference {
     /**
      * 读上次用的模型 id。缺失/坏文件/空值一律 {@link Optional#empty()}，绝不抛。
      *
-     * <h2>往 {@link #doRead} 加守卫的人请读这段</h2>
-     * <p>下面那个 catch-all 有代价：它会把<b>会抛的</b>显式守卫的变异检测力吃掉。
-     * 守卫删掉后异常被它吸收成 {@code empty}，与正确路径输出<b>一模一样</b>，只断返回值的测试杀不掉——
-     * 那条守卫等于没有保护。故新加<b>会抛的</b>守卫时，必须连带加一条<b>「这条路不打日志」</b>的断言
-     * （照 {@code ModelPreferenceTest} 里那三条的写法）。
+     * <h2>往 {@link #doRead} 加分支的人请读这段</h2>
+     * <p>下面那个 catch-all 有代价：它会把 {@code doRead} 内部<b>任何一条「异常 → 降级返回」</b>
+     * 的变异检测力吃掉。那条路删掉后异常被它吸收成 {@code empty}，与正确路径输出<b>一模一样</b>，
+     * 只断返回值的测试杀不掉——那条分支等于没有保护。
      *
-     * <p><b>只有会抛的守卫受此限。</b>守卫没了只是返回错值的（如 {@code id.isEmpty()} 会返回
+     * <p><b>判据是「这条路和兜底路的可观测输出有没有区别」</b>，没区别就必须把日志纳入断言
+     * （照 {@code ModelPreferenceTest} 的写法：挂 {@code ListAppender}，断「打的是<b>哪一条</b> WARN」）。
+     *
+     * <p><b>这条纪律原来只写了「守卫」，漏了「已有的 catch 块」</b>——于是
+     * {@code malformedJsonIsEmpty} 一直是假绿：把这里 JSON 解析的 catch 改成 throw，13 条测试
+     * 照样全绿，实测过。**受此限的不是某一类语法结构，是所有会走到 catch-all 的路。**
+     *
+     * <p>反过来，<b>不抛</b>、只是返回错值的分支不受此限（如 {@code id.isEmpty()} 没了会返回
      * {@code Optional.of("")}），返回值断言照样杀得掉，不用加。
      *
-     * <p>当前会抛的守卫共三条，均已钉死：{@code root == null}、{@code v == null}、{@code !v.isString()}。
+     * <p>当前会走到 catch-all 的路共四条，均已钉死：三条守卫
+     * （{@code root == null}、{@code v == null}、{@code !v.isString()}）
+     * 加一条 catch（{@code readTree} 的 JSON 非法降级）。
      */
     public static Optional<String> read(Path root) {
         try {
