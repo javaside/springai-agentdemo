@@ -1326,6 +1326,11 @@ public final class CodeTuiView extends InlineApp {
      * <p><b>这是持久化的唯一入口</b>：{@code selectModel} 在生产代码里当前只有本文件
      * 一个调用方（选择器的 Enter 分支）。日后若新增 {@code /model <id>} 这类直接命令、
      * 或任何其它切换模型的入口，<b>必须一并接上这里</b>，否则会出现「切了但没记住」。
+     *
+     * <p><b>生效探测依赖 {@code currentModel()} 讲真话</b>：{@code SubmitHandler.currentModel()}
+     * 的接口默认实现返回空串，所以一个「实现了 {@code selectModel} 却没实现 {@code currentModel()}」
+     * 的 handler 会让写盘<b>静默不发生</b>。生产的 {@code CodingAgent} 两个都实现了，
+     * 今天咬不到人；写在这里是因为它失败时不报错、只是悄悄不记。
      */
     private void rememberModel(String id) {
         if (!id.equals(onSubmit.currentModel())) {

@@ -175,6 +175,11 @@ public class CodeTuiApplication {
      * <p><b>与 {@code -c} 正交</b>：模型记忆独立于会话恢复，不带 {@code -c} 的默认启动
      * 照样生效——那正是这个功能存在的理由。
      *
+     * <p><b>回退时刻意不清掉盘上那条记录</b>，于是只要用户不再选一次模型，
+     * 每次启动都会看到同一句「已回退」。这是<b>有意的</b>：清掉的代价是——你只是临时
+     * 注释掉一个 key 跑一次，回头把 key 加回来，记忆已经没了。让提示重复出现，
+     * 远好过替用户「忘掉」他明确选过的东西。
+     *
      * <p><b>也该留在 {@code AgentTools.build} 之前（潜伏约束，今天还咬不到人）</b>：
      * {@code build} 会把 {@code registry.active().id()} <b>快照</b>进
      * {@code AgentRuntime.activeProviderId}。挪到 build 之后，跨家恢复时那份快照就是恢复<b>前</b>
