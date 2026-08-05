@@ -7,7 +7,7 @@
 ## 模块用途
 
 - 单栏对话式 TUI：对话滚动区（流式 token 内联渲染 + 工具调用活动 + 子 agent 嵌套行）、**📋 计划面板**（主 agent 的 todo）、**⟐ 任务面板**（本回合派出的子 agent 状态 ▶/✓/✗ + 当前工具）、**⏱ 后台任务面板**（跨回合存活的后台子 agent，零任务时不占行）、输入框、底部状态栏。
-- **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `ZhipuProvider` / `QwenProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由）。智谱与千问走 OpenAI 兼容通路（复用 `spring-ai-openai`，`ZHIPU_BASE_URL` 默认 `.../api/paas/v4`、`DASHSCOPE_BASE_URL` 默认 `.../compatible-mode/v1`）。五家统一 read 超时（`CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300s）。
+- **多 provider**：`CodeTuiApplication` 按环境变量装配 `DeepSeekProvider` / `ZhipuProvider` / `QwenProvider` / `AnthropicProvider` / `OpenAiProvider`（key 缺失即 unavailable），首个可用者激活；`/model` 在当前 provider 的模型间切换（子 agent 也可用 `provider:model` 跨 provider 路由），**选中的模型记在 `<项目根>/.codetui/model.json`，下次启动自动恢复**（该模型已不可用时回退到首个可用者并提示一行）。智谱与千问走 OpenAI 兼容通路（复用 `spring-ai-openai`，`ZHIPU_BASE_URL` 默认 `.../api/paas/v4`、`DASHSCOPE_BASE_URL` 默认 `.../compatible-mode/v1`）。五家统一 read 超时（`CODETUI_LLM_READ_TIMEOUT_SECONDS`，默认 300s）。
 - 智能体工具：`FileSystemTools`（read/write/edit）、`ShellTools`（执行 shell 命令）、`GrepTool`、`GlobTool`、`TodoWriteTool`、`SmartWebFetchTool`（联网抓取网页正文）、`BochaWebSearch`（联网搜索·中文内容优先，博查 API，需配 `BOCHA_API_KEY`）、`BraveWebSearch`（联网搜索·英文内容优先，Brave API，需配 `BRAVE_API_KEY`；两家可共存，模型按内容语言自选，都不配则均不注册）、`AskUserQuestionTool`（向用户反问、多选拍板）、`SubagentTool`（`Task` 委派单个子 agent + `ParallelTasks` 并发派多个独立子 agent）、`AutoMemoryTools`（`Memory*` 六件套：跨会话长期记忆的读写/增删/改名，仅主 agent）。
 - **权限管理（审批面板 + 规则）**：有副作用的工具调用**在执行之前**被拦下弹审批面板（↑↓ 选择、1-5 快选、Enter 确认、Esc 中断），你可以「允许一次 / 本会话不再问 / 永久允许（写入 `.codetui/permissions.json`）/ 拒绝（回合继续，模型换做法）/ 拒绝并中断回合」。只读操作直接放行；**网络工具每次都问**（请求内容会离开本机），允许后可按域名永久放行。`Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式 / 跳过权限检查」四档间循环，当前档位**常驻状态栏**；**计划模式**只放行只读调查、写与命令一律**拒绝**，模型改用 `ExitPlanMode` 交一份计划，经你批准（自动接受编辑 / 逐个确认 / 打回继续完善）后才动手；`/permissions` 查看生效模式与规则。另有一层**任何 allow 规则都盖不住**的内置底线（写 `.ssh`/`.aws`/`.kube`/`.gnupg`/`.git`/`.codetui` 配置、写 shell 启动文件、读私钥与凭据、`rm -rf /` 或 `~` 或变量目标…）；**「跳过权限检查」档是唯一的例外——它连内置底线与 `ask` 规则都跳过，只留 deny 规则**。详见下方「权限管理」。
 - **子 agent（Task / ParallelTasks）**：内置 `explore` / `plan` / `bash` / `general-purpose` 四类（`src/main/resources/agents/*.md`）。`Task` 委派单个子 agent 前台阻塞执行；`ParallelTasks` 一次并发派多个独立子 agent（有界线程池，`CODETUI_SUBAGENT_CONCURRENCY` 默认 4、范围 [1,32]；失败隔离、按序汇总）。内部工具活动带 taskId 内联嵌套显示。两个工具都可传 `run_in_background=true` **转后台**：立刻返回 task id，你和主 agent 都能继续干别的，结果经 `TaskOutput` 取回或空闲时自动送达（**⏱ 面板** + `/tasks` 管理，详见下方「后台子 agent」）。
@@ -101,6 +101,8 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 ### 会话持久化与恢复
 
 会话事件持久化在 `<项目根>/.codetui/sessions/<sessionId>.json`（**按项目隔离**，已被 `.gitignore`）。
+
+`/model` 选中的模型记在 `<项目根>/.codetui/model.json`（单键 `lastModel`，**按项目隔离**，已被 `.gitignore`）。与会话恢复**正交**：不带 `-c` 的默认启动照样恢复模型——那正是它存在的理由。选中即写；写盘失败会在对话区提示「仅本次运行生效」。该模型已不可用时回退到首个可用 provider 的默认模型并提示一行，但**盘上那条记录不清**——于是不再选一次的话每次启动都会重复那句提示。这是有意的：清掉的代价是你只临时注释掉一个 key 跑了一次，回头把 key 加回来，记忆已经没了。
 
 - **默认启动**：开一个**全新会话**（干净上下文，不读旧历史），生成一个新 session 文件；旧会话文件原封不动。
 - **`-c` / `--continue` 启动**：恢复**最近一次**会话（按文件最后修改时间选），并把上次对话**直观回放进界面**（仿 Claude Code `--continue`：重现用户消息、助手正文与工具调用/结果标记，而非只提示「已恢复 N 条」），可接着聊，或用 `/continue` 续跑上次未完成的计划（上个进程的后台任务已随它一起结束，`/continue` 会提醒模型重新派发而不是干等，见下方「后台子 agent」）。
@@ -207,7 +209,7 @@ java -jar .../springai-code-tui.jar -c            # 或 --continue
 - **BYPASS 下永远不会停下来等人**：内置底线与 `ask` 规则都不再执行，命中 deny 时直接拒绝、把结果告诉模型（不弹窗），回合继续——这正是它在半无人值守下能用的原因。想保留某些禁令，就把它写成 deny 规则放进 `permissions.json`。
 - **放行会留痕**：踩到内置底线仍被放行时，**即时**打一行 `⚠ BYPASS 放行：<理由>` 进对话区，**回合末**再汇总一次（只列本回合的），方便你回来时看到不在期间发生了什么。
 - 当前档位**常驻状态栏行首**（默认档不占位）。`/permissions` 可随时查看生效模式、全部规则与内置底线摘要。
-- **权限模式不跨进程，也不跨会话恢复**：它只活在内存里，从不落盘。退出重开、或用 `-c` / `--continue` 恢复上一次会话，都一律从**默认档**起步（启动参数与配置文件的 `defaultMode` 仍照常生效）。这是刻意的——上次跑完忘了切回来，不该在你下次打开时无声地继续放行。`/clear` 换的是会话不是权限档，**不**重置模式。
+- **权限模式不跨进程，也不跨会话恢复**：它只活在内存里，从不落盘。退出重开、或用 `-c` / `--continue` 恢复上一次会话，都一律从**默认档**起步（启动参数与配置文件的 `defaultMode` 仍照常生效）。这是刻意的——上次跑完忘了切回来，不该在你下次打开时无声地继续放行。`/clear` 换的是会话不是权限档，**不**重置模式。（**模型偏好是反过来的**：`/model` 选中的模型会跨重启恢复。两者性质不同——权限档记错了会让不该执行的东西执行，模型记错了最坏是多花点钱或慢一点，且状态栏一直显示着当前模型名，一眼看得见、随时改得回来。）
 
 ### `permissions.json`
 
@@ -553,7 +555,7 @@ stdio 字段：`command`（必填，可执行命令）、`args`（可选，参�
 - **技能名 = 子目录名**；合并顺序为**用户 → 项目**，同名以**项目级**为准（项目可覆盖你的个人版）。
 - 目录不存在的层**静默跳过**；某层解析报错只跳过该层，不影响另一层、也不崩启动。
 - **无 classpath 内置层**——只有上面这两个磁盘目录（没有随 jar 打包的内置技能）。
-- 记忆/会话/MCP 用的也是同一个 `.codetui/` 目录约定（`~/.codetui/` 与 `<项目根>/.codetui/`）。
+- 记忆/会话/MCP/模型偏好用的也是同一个 `.codetui/` 目录约定（`~/.codetui/` 与 `<项目根>/.codetui/`；其中会话、记忆与模型偏好只有项目级）。
 
 ### SKILL.md 格式
 
@@ -683,7 +685,7 @@ cd /path/to/some/disposable/project
 
 | 命令 | 行为 |
 | --- | --- |
-| `/model` | 打开模型选择器，在当前 provider 的模型间切换 |
+| `/model` | 打开模型选择器，在当前 provider 的模型间切换（选中即记住，下次启动自动恢复） |
 | `/compact` | 手动压缩会话历史 |
 | `/clear` | 清空当前上下文、开一个全新空会话（旧会话留盘，可 `-c` 恢复）；同时清屏并复位面板、**终止全部后台任务**（新会话不该有旧会话的任务还在烧钱） |
 | `/context` | 查看上下文用量（事件数 / token） |
