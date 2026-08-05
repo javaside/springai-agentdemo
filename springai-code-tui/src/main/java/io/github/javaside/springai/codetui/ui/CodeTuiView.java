@@ -5,6 +5,7 @@ import io.github.javaside.springai.codetui.agent.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModalRequest;
 import io.github.javaside.springai.codetui.agent.ModelOption;
+import io.github.javaside.springai.codetui.agent.ModelPreference;
 import io.github.javaside.springai.codetui.agent.OptionSpec;
 import io.github.javaside.springai.codetui.agent.PermissionOutcome;
 import io.github.javaside.springai.codetui.agent.PermissionRequest;
@@ -1304,10 +1305,35 @@ public final class CodeTuiView extends InlineApp {
             // 不用 sticky notice：notice 会一直占据状态栏、遮蔽常态行（模型名 + 上下文%）直到下次按键，
             // 造成「切换模型后状态栏信息就没了」。改为下沉一行 scrollback 确认，状态栏立刻回到常态。
             state.pushInfo("⚙ 已切换模型 · " + chosen.label());
+            rememberModel(chosen.id());     // 落盘，下次启动恢复
             lastShownModel = chosen.id();   // 避免下个回合 dispatch 再重复打「⚙ 使用模型」
             return EventResult.HANDLED;
         }
         return EventResult.HANDLED;                       // 其余按键一律吞掉，不落进输入框
+    }
+
+    /**
+     * 把选中的模型记到 {@code <root>/.codetui/model.json}，下次启动自动恢复
+     * （见 {@code CodeTuiApplication.restoreLastModel}）。
+     *
+     * <p><b>只在 selectModel 真的生效后才写</b>：{@code ProviderRegistry.select()} 对未知模型
+     * 是静默忽略的，不判这一下就会把一个选不中的 id 落到盘上，下次启动再触发一次
+     * 「上次用的模型现在不可用」——自己给自己制造失效记录。
+     *
+     * <p><b>写失败要说出来</b>：静默失败的话，下次启动还是老模型，用户只会觉得这功能坏了，
+     * 而且不知道该去看什么。措辞与权限规则回写失败时的「仅本次运行生效」对齐。
+     *
+     * <p><b>这是持久化的唯一入口</b>：{@code selectModel} 在生产代码里当前只有本文件
+     * 一个调用方（选择器的 Enter 分支）。日后若新增 {@code /model <id>} 这类直接命令、
+     * 或任何其它切换模型的入口，<b>必须一并接上这里</b>，否则会出现「切了但没记住」。
+     */
+    private void rememberModel(String id) {
+        if (!id.equals(onSubmit.currentModel())) {
+            return;                          // 没生效，不留记录
+        }
+        if (!ModelPreference.write(root, id)) {
+            state.pushInfo("⚠ 没能记住这个选择（仅本次运行生效）");
+        }
     }
 
     /** 选择器面板：标题 + 每个模型一行（❯ 高亮当前、✓ 标记在用、右侧暗色说明）。 */
