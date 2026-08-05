@@ -48,6 +48,14 @@ public interface SubmitHandler {
      */
     default boolean hasInFlightSubagents() { return false; }
 
+    /**
+     * 启动期还在后台连接的 MCP server 数（状态栏后缀用）。
+     *
+     * <p><b>刻意不进 busy 闸门</b>：MCP 连接不该拦住用户发消息——那正是把它挪到后台要换来的东西。
+     * 这个数只用来解释「为什么现在还看不到 MCP 工具」。
+     */
+    default int connectingMcpCount() { return 0; }
+
     // ── 后台子 agent（/tasks 面板与自动送达用；默认空实现，便于回显桩/测试桩省略） ──
 
     /** 已结束、可送达、尚未消费的后台任务结果（供自动送达判定）。 */

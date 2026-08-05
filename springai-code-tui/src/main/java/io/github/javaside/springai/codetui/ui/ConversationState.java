@@ -182,6 +182,17 @@ public final class ConversationState implements AgentListener {
     public synchronized void pushInfo(String text) { pending.add(new OutputLine(text, OutputLine.Kind.INFO)); }
 
     /**
+     * MCP 后台连接全部结束。零工具时<b>一个字都不说</b>——没配 MCP 的用户占多数，
+     * 给他们每次启动看一行「已发现 0 个工具」纯属噪声。连接失败的详情在 {@code /mcp} 面板里。
+     */
+    @Override
+    public synchronized void onMcpReady(int serverCount, int toolCount) {
+        if (toolCount > 0) {
+            pushInfo("（MCP：已发现 " + toolCount + " 个工具。）");
+        }
+    }
+
+    /**
      * -c 恢复启动：把历史消息回放进 scrollback（仿 Claude Code --continue），直观重现上次对话，
      * 而非只提示「已恢复 N 条」。转换出的定稿行走正常 drain 通道下沉，故排在欢迎横幅之后、首条新输入之前。
      * 空历史则什么都不做。

@@ -575,6 +575,11 @@ public final class CodingAgent implements SubmitHandler {
 
     // ── MCP 管理门面（纯委托 McpRegistry；registry 缺失 = 无 MCP 支持） ──
     @Override
+    public int connectingMcpCount() {
+        return mcpRegistry == null ? 0 : mcpRegistry.connectingCount();
+    }
+
+    @Override
     public List<McpRegistry.ServerView> mcpServers() {
         return mcpRegistry == null ? List.of() : mcpRegistry.servers();
     }

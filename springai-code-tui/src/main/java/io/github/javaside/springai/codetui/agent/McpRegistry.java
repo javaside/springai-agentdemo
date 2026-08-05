@@ -40,7 +40,7 @@ public final class McpRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(McpRegistry.class);
 
-    public enum Status { CONNECTED, FAILED, DISABLED }
+    public enum Status { CONNECTED, FAILED, DISABLED, CONNECTING }
 
     /** /mcp 面板一行的数据。toolNames 为去掉 {@code mcp__<server>__} 前缀的短名。 */
     public record ServerView(String name, McpConfigLoader.ConfigSource source, Status status,
@@ -56,6 +56,7 @@ public final class McpRegistry {
         List<ToolCallback> tools = List.of();       // 已装饰
         String error;                               // 最近一次连接失败摘要
         boolean connectedForTest;                   // 测试钩子：无真实 client 也视作已连接（生产恒 false）
+        boolean connecting;                         // 启动期后台连接在飞（决定 /mcp 面板显示「连接中」而非「失败」）
 
         Entry(McpConfigLoader.LoadedServer loaded) {
             this.loaded = loaded;
@@ -71,6 +72,20 @@ public final class McpRegistry {
     private final MediaArtifactStore mediaStore;
     private final ToolResultMediaHandler mediaHandler;
     private final PermissionEngine permissionEngine;
+
+    /**
+     * 已 {@link #close()}。启动期后台连接是<b>唯一</b>能在 close 之后仍拿到一个活 client 的路径——
+     * 那个 client 若照常写回 entry，就成了没人认领的孤儿子进程（{@code mcp_smoke.py} 有一条断言盯它）。
+     * 故写回时在锁内查这个位，为真就当场关掉刚连上的 client、不写回。
+     */
+    private volatile boolean closed;
+
+    /** 启动期后台连接池；{@link #close()} 要 shutdownNow 它，否则退出要等最慢的那个 server。 */
+    private volatile ExecutorService startupPool;
+
+    /** 启动期还在连的条目数（供状态栏「⟳ MCP 连接中 N」）。归零时回调一次 onMcpReady。 */
+    private final java.util.concurrent.atomic.AtomicInteger connecting =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     private McpRegistry(Path root, AgentListener listener, PermissionEngine permissionEngine) {
         this.root = root;
@@ -128,33 +143,75 @@ public final class McpRegistry {
         e.connectedForTest = true;
     }
 
-    /** 启动期并行连接（沿 McpClientManager.connectAll 的池模式；此时无并发访问，不加锁）。 */
+    /**
+     * 启动期并行连接，<b>不等它连完</b>——{@code init} 立即返回，TUI 立刻渲染。
+     *
+     * <p><b>为什么可以不等</b>：{@code CodingAgent.submit} 每回合都重新快照 {@link #activeTools()}，
+     * 工具晚到几秒只影响这几秒内发出的回合，不影响之后任何一回合。而等它连完的代价是实测的：
+     * 一个远程 HTTP server（context7）就要 5~8 秒，那几秒里屏幕是空的。
+     *
+     * <p><b>此处再也不能说「无并发访问，不加锁」了</b>——原来的写法靠 join 保证写回发生在
+     * 任何读之前，现在写回与 {@code servers()}/{@code activeTools()} 真并发。写回走
+     * {@link #publishStartupResult}，在 this 锁内做；连接本身留在锁外（秒级，锁住会挡死读）。
+     */
     private void connectEnabledInParallel() {
         List<Entry> toConnect = entries.values().stream().filter(e -> e.enabled).toList();
         if (toConnect.isEmpty()) {
             return;
         }
+        for (Entry e : toConnect) {
+            e.connecting = true;
+        }
+        connecting.set(toConnect.size());
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(toConnect.size(), 8), r -> {
             Thread t = new Thread(r, "mcp-connect");
             t.setDaemon(true);
             return t;
         });
-        try {
-            List<CompletableFuture<Void>> futures = new ArrayList<>();
-            for (Entry e : toConnect) {
-                futures.add(CompletableFuture.runAsync(() -> connectAndDiscover(e), pool));
-            }
-            futures.forEach(CompletableFuture::join);   // connectDetailed 内已 guard，不抛业务异常
-        } finally {
-            pool.shutdown();
+        startupPool = pool;
+        for (Entry e : toConnect) {
+            CompletableFuture.runAsync(() -> connectAndDiscover(e), pool);   // 刻意不 join
         }
+        pool.shutdown();   // 不再接新任务；已提交的照跑（close 时才 shutdownNow）
+    }
+
+    /** 启动期还在连的 server 数（状态栏用）。全连完/未配置 MCP 时为 0。 */
+    public int connectingCount() {
+        return Math.max(0, connecting.get());
     }
 
     /** 连接三元组：成功时 client 非 null、error 为 null；失败时反之，tools 恒空。 */
-    private record Connected(McpSyncClient client, List<ToolCallback> tools, String error) { }
+    record Connected(McpSyncClient client, List<ToolCallback> tools, String error) { }
+
+    /**
+     * 测试接缝：替换掉「真的去连一个 server」这一步。
+     *
+     * <p>没有它就测不了后台连接的任何一条分支——{@code McpSyncClient} 是个构造函数包私有的实体类，
+     * 造不出假的；而这次改动的风险<b>全在写回时机</b>（close 竞态、in-flight 期间被 disable），
+     * 不在连接本身。接缝让测试能把连接卡在半路，正好对准风险。
+     */
+    private volatile java.util.function.Function<McpConfigLoader.LoadedServer, Connected> connector;
+
+    /** 测试入口：后台连接照常起，但「连接」这一步走给定的 connector。 */
+    static McpRegistry initWithConnector(Path root, AgentListener listener,
+                                         List<McpConfigLoader.LoadedServer> loaded,
+                                         PermissionEngine permissionEngine,
+                                         java.util.function.Function<McpConfigLoader.LoadedServer, Connected> connector) {
+        McpRegistry reg = new McpRegistry(root, listener, permissionEngine);
+        for (McpConfigLoader.LoadedServer l : loaded) {
+            reg.entries.put(l.config().name(), new Entry(l));
+        }
+        reg.connector = connector;
+        reg.connectEnabledInParallel();
+        return reg;
+    }
 
     /** 连接 + 发现 + 装饰单条目（不写回 entry——写回策略由调用方决定）。 */
     private Connected connect(Entry e) {
+        java.util.function.Function<McpConfigLoader.LoadedServer, Connected> stub = connector;
+        if (stub != null) {
+            return stub.apply(e.loaded);
+        }
         McpClientManager.ConnectOutcome out = McpClientManager.connectDetailed(e.loaded.config());
         if (out.client() == null) {
             return new Connected(null, List.of(), out.error());
@@ -166,12 +223,66 @@ public final class McpRegistry {
         return new Connected(out.client(), List.copyOf(decorated), null);
     }
 
-    /** 启动期写回策略：直写 entry（此时无并发访问，不加锁；enabled 已为 true）。 */
+    /** 启动期后台连接的任务体：连接在锁外，写回走 {@link #publishStartupResult}。 */
     private void connectAndDiscover(Entry e) {
-        Connected c = connect(e);
-        e.client = c.client();
-        e.tools = c.tools();
-        e.error = c.error();
+        Connected c;
+        try {
+            c = connect(e);
+        } catch (RuntimeException ex) {
+            // connectDetailed 内已 guard，正常不会到这里；到了也不能让异常吞掉计数递减，
+            // 否则状态栏会永远挂着「⟳ MCP 连接中 N」。
+            log.warn("MCP 连接意外抛出（按失败处理）：{}", ex.toString());
+            c = new Connected(null, List.of(), ex.toString());
+        }
+        publishStartupResult(e, c);
+    }
+
+    /**
+     * 启动期连接结果的发布点。<b>两道丢弃检查都在锁内做</b>：
+     *
+     * <ul>
+     *   <li><b>已 close</b>：进程要退了，这个刚连上的 client 没人会再关它——当场关掉，别写回。
+     *       不查这一下就是漏孤儿子进程。</li>
+     *   <li><b>已被 /mcp 禁用</b>：用户在连接在飞期间把它关了，写回等于把禁用悄悄复活
+     *       （与 {@code enable/disable} 用 toggleLock 防的是同一件事，这里靠「写回时复查意图」达成，
+     *       不必让启动连接去争 toggleLock——那会让 /mcp 面板操作卡上好几秒）。</li>
+     * </ul>
+     *
+     * <p>无论走哪条路，{@code connecting} 计数都要递减：状态栏和 onMcpReady 都靠它。
+     */
+    private void publishStartupResult(Entry e, Connected c) {
+        McpSyncClient orphan = null;
+        synchronized (this) {
+            e.connecting = false;
+            if (closed || !e.enabled) {
+                orphan = c.client();
+            } else {
+                e.client = c.client();
+                e.tools = c.tools();
+                e.error = c.error();
+            }
+        }
+        if (orphan != null) {
+            closeQuietly(orphan);
+        }
+        if (connecting.decrementAndGet() == 0 && !closed) {
+            int tools;
+            int servers;
+            synchronized (this) {
+                tools = entries.values().stream().filter(x -> x.enabled).mapToInt(x -> x.tools.size()).sum();
+                servers = (int) entries.values().stream().filter(x -> x.enabled && x.client != null).count();
+            }
+            listener.onMcpReady(servers, tools);
+        }
+    }
+
+    /** 关一个没人认领的 client。失败只记 WARN——这条路本身就是收尾，再抛没有任何人能处理。 */
+    private static void closeQuietly(McpSyncClient client) {
+        try {
+            client.closeGracefully();
+        } catch (Exception ex) {
+            log.warn("MCP client 关闭异常（忽略）：{}", ex.getMessage());
+        }
     }
 
     /**
@@ -202,8 +313,11 @@ public final class McpRegistry {
         List<ServerView> out = new ArrayList<>();
         for (Entry e : entries.values()) {
             String name = e.loaded.config().name();
+            // 顺序要紧：connecting 必须排在 FAILED 之前判。启动头几秒里 client 还是 null，
+            // 照老写法会一律显示成「连接失败」——那是在报一个还没发生的错。
             Status status = !e.enabled ? Status.DISABLED
-                    : (e.client != null || e.connectedForTest) ? Status.CONNECTED : Status.FAILED;
+                    : (e.client != null || e.connectedForTest) ? Status.CONNECTED
+                    : e.connecting ? Status.CONNECTING : Status.FAILED;
             // 本 entry 的注册名前缀（与 McpClientManager.prefixedName 同款 sanitize），按已知前缀精确剥离。
             String prefix = "mcp__" + org.springframework.ai.mcp.McpToolUtils.format(name) + "__";
             List<String> shortNames = e.tools.stream()
@@ -294,8 +408,22 @@ public final class McpRegistry {
         }
     }
 
-    /** 退出清理：关所有在连 client（复用 2s 预算逻辑）。 */
+    /**
+     * 退出清理：关所有在连 client（复用 2s 预算逻辑）。
+     *
+     * <p><b>{@code closed} 必须先置位、再收集</b>：置位之后，任何还在飞的启动期连接在
+     * {@link #publishStartupResult} 里都会看到它，把自己刚连上的 client 就地关掉。
+     * 反过来（先收集再置位）会留下一个窗口：那一瞬间连上的 client 既不在收集到的名单里、
+     * 又因为 closed 还没置位而被写进了 entry——没人再关它，就是孤儿子进程。
+     *
+     * <p>{@code shutdownNow} 掐掉尚未开跑的连接任务，否则退出要陪最慢的那个 server 等满超时。
+     */
     public void close() {
+        closed = true;
+        ExecutorService pool = startupPool;
+        if (pool != null) {
+            pool.shutdownNow();
+        }
         List<McpSyncClient> toClose;
         synchronized (this) {
             toClose = entries.values().stream()

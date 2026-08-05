@@ -1478,23 +1478,29 @@ public final class CodeTuiView extends InlineApp {
             McpRegistry.ServerView v = list.get(i);
             boolean isSel = i == sel;
             boolean connecting = v.name().equals(mcpConnecting);
+            // connecting（本地变量）是 /mcp 面板里手动 enable 在飞；Status.CONNECTING 是启动期后台连接。
+            // 两者显示一致，来源不同——前者只在本面板内为真，后者由 registry 报。
             String mark = connecting ? "⟳" : switch (v.status()) {
                 case CONNECTED -> "✓";
                 case DISABLED -> "○";
                 case FAILED -> "✗";
+                case CONNECTING -> "⟳";
             };
             String layer = v.source() == McpConfigLoader.ConfigSource.PROJECT ? "[项目级]" : "[用户级]";
             String detail = connecting ? "连接中…" : switch (v.status()) {
                 case CONNECTED -> "已连接 · " + v.toolCount() + " 工具";
                 case DISABLED -> "已禁用";
                 case FAILED -> "连接失败：" + brief(v.error());
+                case CONNECTING -> "连接中…";
             };
             els.add(text("  " + (isSel ? "❯ " : "  ") + mark + " " + (i + 1) + ". " + v.name()
                     + "  " + layer + " " + detail)
                     .style(isSel ? PICK_SEL : PICK_ITEM));
             if (isSel && mcpExpanded) {
                 if (v.toolNames().isEmpty()) {
-                    els.add(text("        （未连接，无工具信息）").style(PICK_DESC));
+                    // 启动期还在连的别说「未连接」——那是在报一个还没发生的失败。
+                    els.add(text(v.status() == McpRegistry.Status.CONNECTING
+                            ? "        （连接中，工具尚未发现）" : "        （未连接，无工具信息）").style(PICK_DESC));
                 } else {
                     for (String tn : v.toolNames()) {
                         els.add(text("        · " + tn).style(PICK_DESC));
@@ -2497,6 +2503,10 @@ public final class CodeTuiView extends InlineApp {
      */
     private String backgroundStatusSuffix() {
         StringBuilder sb = new StringBuilder();
+        // MCP 启动期后台连接：不说的话，头几秒模型看不到 MCP 工具而用户完全无从知晓
+        // ——那正是「把连接挪到后台」换来的速度所欠下的唯一一笔账，用一个后缀还上。
+        int mcp = onSubmit.connectingMcpCount();
+        if (mcp > 0) sb.append(" · ⟳ MCP 连接中 ").append(mcp);
         int running = state.backgroundRunningCount();
         if (running > 0) sb.append(" · ⏱ ").append(running).append(" 个后台任务 · /tasks");
         // 刹车踩下时结果就停在那儿不动了，不说一句用户会以为任务被吃了。

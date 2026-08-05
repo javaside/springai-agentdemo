@@ -153,6 +153,18 @@ public interface AgentListener {
      */
     default void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) { }
 
+    /**
+     * 启动期 MCP 后台连接<b>全部</b>结束（成功与失败都算）。只发一次。
+     *
+     * <p>这条事件的存在是因为 {@code McpRegistry.init} 不再等连接完成——那行
+     * 「（MCP：已发现 N 个工具。）」原来是 {@code CodeTuiApplication} 同步算出来的，
+     * 现在算的时刻已经在 TUI 起来之后了，只能由 registry 回头通知。
+     *
+     * @param serverCount 连上的 server 数（失败的不计）
+     * @param toolCount   发现的工具总数
+     */
+    default void onMcpReady(int serverCount, int toolCount) { }
+
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
     /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
     void onCompactionStarted(String reason);

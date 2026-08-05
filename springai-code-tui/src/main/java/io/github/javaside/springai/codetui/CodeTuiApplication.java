@@ -100,11 +100,10 @@ public class CodeTuiApplication {
 
         // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
         // 运行期 /mcp 可启停（详见 McpRegistry）。连接失败进 error 态、静默降级。
+        // init 立即返回，连接在后台跑：实测一个远程 HTTP server 就要 5~8 秒，等它等的是一块空屏。
+        // 「已发现 N 个工具」那行改由 registry 在全部连完时经 AgentListener.onMcpReady 回调补上
+        // ——在这里同步算只会数到 0。
         McpRegistry mcpRegistry = McpRegistry.init(root, state, permissionEngine);
-        int mcpToolCount = mcpRegistry.activeTools().size();
-        if (mcpToolCount > 0) {
-            state.pushInfo("（MCP：已发现 " + mcpToolCount + " 个工具。）");
-        }
 
         // 从此处起装配 runtime/agent/view 直至 view.run() 全程 try/finally 关 MCP：
         // init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
