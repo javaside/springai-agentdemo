@@ -88,7 +88,20 @@ class ModelPreferenceTest {
         Path f = ModelPreference.fileFor(root);
         Files.createDirectories(f.getParent());
         Files.writeString(f, "{");
-        assertEquals(Optional.empty(), ModelPreference.read(root));
+        Logger logger = (Logger) LoggerFactory.getLogger(ModelPreference.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            assertEquals(Optional.empty(), ModelPreference.read(root));
+            // 只断返回值杀不掉「这条 catch 被删掉」——外层 catch-all 会把异常吸收成同一个 empty。
+            // 实测过：把这个 catch 改成 throw，13 条全绿。必须连「是谁降的级」一起断。
+            assertEquals(1, appender.list.size(), "该有且只有一行 WARN:" + appender.list);
+            assertTrue(appender.list.get(0).getFormattedMessage().contains("不是合法 JSON"),
+                    "必须由 doRead 里那条显式降级打出，不该惊动兜底 catch:" + appender.list);
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     /**
