@@ -167,6 +167,12 @@ class McpRegistryBackgroundConnectTest {
 
         assertTrue(reg.activeTools().isEmpty(), "被禁用的 server 不该因为迟到的写回而复活");
         assertEquals(McpRegistry.Status.DISABLED, reg.servers().get(0).status());
+        // 上面两条<b>都杀不掉「守卫被拿掉」这个变异</b>——实测过：disable 已经把 enabled 置成
+        // false，而迟到写回不碰 enabled，于是工具虽然被塞回 e.tools，activeTools() 仍因
+        // enabled==false 全部过滤掉，status 也照样是 DISABLED。真正露出来的是面板上的工具数：
+        // 一个「已禁用」的 server 显示着 1 个工具。断这个才有鉴别力。
+        assertEquals(0, reg.servers().get(0).toolCount(),
+                "迟到的写回把工具塞回去了：面板会显示「已禁用」却带着工具数");
     }
 
     /** 等后台连接全部结束。轮询而不是 sleep 固定时长：后者在慢机器上会假红。 */
