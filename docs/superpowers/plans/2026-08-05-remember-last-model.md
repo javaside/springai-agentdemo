@@ -30,6 +30,8 @@
 
 5. **不要 `git stash`、不要 `git commit --amend`**：这个仓库可能有并行 agent 共用工作树，两者都会波及别人的改动。只能追加新提交。
 
+6. **变异验证必须排在提交之后**。变异前若这个任务的代码尚未提交，`git checkout -- <文件>` 会把整份实现一起冲回 HEAD——那不是「还原变异」，是「删掉整个任务」。顺序永远是：绿 → 提交 → 变异 → `git checkout --` 还原 → `git status --short` 确认无输出。若因故必须在提交前变异，**只能用 Edit 把改动手工贴回去**，并用 `git diff --stat` 验证还原到位。
+
 ---
 
 ## 文件结构
@@ -832,7 +834,29 @@ mvn test -pl springai-code-tui -Dtest=CodeTuiViewModelMemoryTest
 
 预期：`Tests run: 3, Failures: 0, Errors: 0`
 
-- [ ] **Step 6: 变异验证——证明「只在生效时写」那条测试真的有用**
+- [ ] **Step 6: 跑全量**
+
+```bash
+mvn test -pl springai-code-tui
+```
+
+预期：`Tests run: 1281, Failures: 0, Errors: 0, Skipped: 9`
+
+- [ ] **Step 7: 提交（变异验证之前先提交，见全局纪律 6）**
+
+```bash
+git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java \
+        springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/CodeTuiViewModelMemoryTest.java
+git commit -m "feat(model): /model 选中即落盘
+
+只在 selectModel 真的生效后才写：select() 对未知模型静默忽略，不判这
+一下就会把选不中的 id 落到盘上，下次启动再触发一次「用不了，已回退」。
+
+写失败多打一行「仅本次运行生效」，措辞与权限规则回写失败对齐——静默
+失败的话用户只会觉得功能坏了，还不知道该去看什么。"
+```
+
+- [ ] **Step 8: 变异验证——证明「只在生效时写」那条测试真的有用**
 
 把 `rememberModel` 开头那三行守卫**临时删掉**：
 
@@ -850,29 +874,17 @@ mvn test -pl springai-code-tui -Dtest=CodeTuiViewModelMemoryTest
 mvn test -pl springai-code-tui -Dtest=CodeTuiViewModelMemoryTest
 ```
 
-预期：`ineffectiveSelectionWritesNothing` **必须红**，且失败信息是「没生效的选择不该留下记录」，**不是编译错**。确认之后把守卫改回去，再跑一遍确认恢复全绿。
+预期：`ineffectiveSelectionWritesNothing` **必须红**，且失败信息是「没生效的选择不该留下记录」，**不是编译错**。
 
-- [ ] **Step 7: 跑全量**
-
-```bash
-mvn test -pl springai-code-tui
-```
-
-预期：`Tests run: 1281, Failures: 0, Errors: 0, Skipped: 9`
-
-- [ ] **Step 8: 提交**
+还原：
 
 ```bash
-git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java \
-        springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/CodeTuiViewModelMemoryTest.java
-git commit -m "feat(model): /model 选中即落盘
-
-只在 selectModel 真的生效后才写：select() 对未知模型静默忽略，不判这
-一下就会把选不中的 id 落到盘上，下次启动再触发一次「用不了，已回退」。
-
-写失败多打一行「仅本次运行生效」，措辞与权限规则回写失败对齐——静默
-失败的话用户只会觉得功能坏了，还不知道该去看什么。"
+git checkout -- springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java
+git status --short          # 必须无输出
+mvn test -pl springai-code-tui -Dtest=CodeTuiViewModelMemoryTest   # 确认恢复全绿
 ```
+
+**这一步之所以排在提交之后**：变异前若尚未提交，`git checkout --` 会把整个任务的实现一起冲回 HEAD，那不是「还原变异」，是「删掉这个任务」。
 
 **做完后测试总数：1278 + 3 = 1281**
 

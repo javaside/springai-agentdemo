@@ -174,6 +174,15 @@ public class CodeTuiApplication {
      *
      * <p><b>与 {@code -c} 正交</b>：模型记忆独立于会话恢复，不带 {@code -c} 的默认启动
      * 照样生效——那正是这个功能存在的理由。
+     *
+     * <p><b>也该留在 {@code AgentTools.build} 之前（潜伏约束，今天还咬不到人）</b>：
+     * {@code build} 会把 {@code registry.active().id()} <b>快照</b>进
+     * {@code AgentRuntime.activeProviderId}。挪到 build 之后，跨家恢复时那份快照就是恢复<b>前</b>
+     * 那一家。今天没有实际后果——读这个快照的只有 {@code AgentRuntime.client()}，
+     * 而它<b>只在测试里</b>被调用；生产路径每回合现取
+     * （{@code CodingAgent.submit} 走 {@code clientsByProvider.get(active.id())}）。
+     * 写在这里是因为「哪天有人让生产代码用上 {@code client()}」和「哪天有人挪动这行」
+     * 是两件独立的事，凑到一起才出事，而那时谁都不会想到看这个方法。
      */
     static void restoreLastModel(ProviderRegistry registry, Path root, ConversationState state) {
         Optional<String> remembered = ModelPreference.read(root);
