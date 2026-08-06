@@ -269,6 +269,36 @@ UI 的出队钩子靠 `!busy()` 放行，而 `state` 回 IDLE 是 `handleComplet
 
 **静态读代码定不了，先写探针实测。在它出结果之前，后面的测试都不用写。**
 
+### 实测结论（2026-08-07）
+
+一次性探针 `PersistOrderProbeTest`：装一个真实 `CodingAgent`（假 `ChatModel` 先回一个
+tool_call、再回纯文本收尾；真实 `SessionMemoryAdvisor` + `DefaultSessionService` +
+`InMemorySessionRepository`），在 `AgentListener.onTurnComplete(turnId)` 回调里**立刻**
+读 `sessionService.getMessages(sid)`。
+
+`onTurnComplete` 那一刻会话存储里的消息序：
+
+```
+user | 原始提问
+assistant tool_calls=1 |
+tool |
+assistant | 收工
+```
+
+回合彻底结束再等 500ms 复读，序列一字不变（4 条 → 4 条），说明 `onComplete` 之后
+advisor 没有补写。
+
+**结论：advisor 先。** `doOnComplete` 触发时，本回合的 assistant 收尾消息**已经**在
+会话里了。
+
+**挂载点：`handleComplete` 开头**（补历史 → 再 `listener.onTurnComplete`）。不需要改挂
+`doFinally`。这也正好让「顺序②」那条测试成立：listener 桩在 `onComplete` 里读到的历史
+必须已含插话。
+
+注意探针的边界：它只覆盖 `registry == null` 的单-client 路径，且流是 `Flux.just(...)`
+单元素同步流。多 provider 路径与真实网络流的 advisor 时序未直接观测——但 advisor 的
+写入发生在 `doOnComplete` 的**上游**，这个拓扑关系与流的来源无关。
+
 ## 测试
 
 ### anchor 定位：让成功路径和兜底路径结构上可区分
