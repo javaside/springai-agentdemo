@@ -299,6 +299,20 @@ advisor 没有补写。
 单元素同步流。多 provider 路径与真实网络流的 advisor 时序未直接观测——但 advisor 的
 写入发生在 `doOnComplete` 的**上游**，这个拓扑关系与流的来源无关。
 
+**独立复核（同日，另一条路径）**：上面那个探针走的是 `.call()`，而生产代码
+`CodingAgent.submit` 走的是 `.stream().chatClientResponse()`，advisor 的 `adviseStream`
+与 `adviseCall` 是两段不同的代码。故用流式路径另写了一个一次性复核，同样在
+`doOnComplete` 回调里读会话：
+
+```
+USER|原始提问
+ASSISTANT|            ← tool_calls
+TOOL|
+ASSISTANT|收工        ← doOnComplete 触发时已经在了
+```
+
+两条路径结论一致，挂载点定死在 `handleComplete`。复核测试已删（同为一次性工具）。
+
 ## 测试
 
 ### anchor 定位：让成功路径和兜底路径结构上可区分
