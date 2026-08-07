@@ -2,7 +2,17 @@
 
 **日期**：2026-08-07
 **模块**：`springai-code-tui`
-**状态**：待实现（核心两个类已在工作树里、未提交、未接线）
+**状态**：已实现（`2443411`..`1e12c07`，14 个提交，分支 `feat/mid-turn-interjection`）
+
+> **验收压在一条断言上**：`AgentTools.build` 里 `InterjectingChatModel.wrap()` 那行**没有任何单测覆盖**。
+> 实测把它摘掉后，1322 个单测**一个都不红**，只有 pty 冒烟的 `check_delivered_to_model` 会红——
+> 它断的不是屏幕，是桩模型**实际收到的请求体**（角色序列 `[system, user, assistant, tool, user]`，
+> 末尾那条 user 就是插话，且紧跟 tool 结果）。
+>
+> 更要命的是：接线断掉时**插话回显和状态栏「插话 N 条」照样正常显示**——它们读的是 UI 自己的队列，
+> 队列只是躺着不动。所以肉眼看界面完全正常，功能却已经死了。
+>
+> **删掉 `check_delivered_to_model` 等于删掉整个功能的验收。**
 
 ## 问题
 
