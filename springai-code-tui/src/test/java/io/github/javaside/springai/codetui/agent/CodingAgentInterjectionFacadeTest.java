@@ -80,6 +80,31 @@ class CodingAgentInterjectionFacadeTest {
      *
      * <p>这里用全参构造装一个「只带插话队列」的最小 agent：其余协作者一律 null，本类不触发 submit。
      */
+    /**
+     * {@code /clear} 换了新会话：delivered/anchor 指向的旧会话已经不存在，留着会让下个回合的
+     * 补历史插到一个对不上的位置。未送达的也一并丢——用户主动清空了上下文。
+     */
+    @Test
+    @DisplayName("/clear 后插话队列清空（未送达与已送达都丢）")
+    void clearContextDropsInterjections() {
+        Interjections q = new Interjections();
+        q.offer("旧会话里说的");
+        q.drainForInjection("call-1");   // 送达，进 delivered
+        q.offer("旧会话里还没送出去的");   // 未送达
+
+        facadeOver(q).clearContext();
+
+        assertEquals(0, q.pendingCount(), "未送达的也该丢——用户主动清空了上下文");
+        assertTrue(q.takeForHistory().isEmpty(), "delivered/anchor 指向的旧会话已不存在");
+    }
+
+    /** 无队列的桩路径调 /clear 不能 NPE：既有测试大量走短构造。 */
+    @Test
+    @DisplayName("无队列时 /clear 不抛")
+    void clearContextWithoutQueueDoesNotThrow() {
+        facadeOver(null).clearContext();
+    }
+
     private static SubmitHandler facadeOver(Interjections q) {
         return new CodingAgent(null, java.util.Map.of(),
                 new io.github.javaside.springai.codetui.ui.ConversationState(), "sid",

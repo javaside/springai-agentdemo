@@ -669,12 +669,19 @@ public final class CodingAgent implements SubmitHandler {
      *
      * <p><b>顺带清掉会话级权限规则</b>：「允许，本会话不再问」的作用域就是这一次会话，
      * 跨到新会话继续生效等于用户以为清干净了、其实上一轮的授权还在。落盘规则（永久允许）不动。
+     *
+     * <p><b>以及插话队列</b>：同理，那些话是冲着旧会话说的。
      */
     @Override
     public void clearContext() {
         this.sessionId = SessionIds.newId();
         if (permissionEngine != null) {
             permissionEngine.clearSessionRules();
+        }
+        if (interjections != null) {
+            // /clear 换了新会话：delivered/anchor 指向的旧会话已经不存在，留着会让下个回合
+            // 的补历史插到一个对不上的位置。整体丢弃（未送达的也一并丢——用户主动清空了上下文）。
+            interjections.drainForRefill();
         }
     }
 
