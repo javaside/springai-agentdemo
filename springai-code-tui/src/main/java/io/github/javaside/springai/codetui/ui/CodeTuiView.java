@@ -462,6 +462,9 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：预置输入文本（光标落到文末），免逐字符敲入。 */
     void setInputForTest(String text) { inputState.setText(text); inputState.moveCursorToEnd(); }
 
+    /** 测试专用：直接挂载技能，绕开 /skill 选择器（那条路径要一份真实技能清单才走得通）。 */
+    void mountSkillForTest(String skill) { this.pendingSkill = skill; }
+
     /** 终端列数；拿不到时退化为 80。 */
     private int terminalWidth() {
         try {
@@ -1238,7 +1241,19 @@ public final class CodeTuiView extends InlineApp {
         // 自动回合无限套娃」，人一开口就说明这个前提不成立了。必须挂在提交上而不是每次按键——
         // 挂按键则用户随手一个方向键就把刹车松开，等于没有刹车。
         releaseBrake();
-        if (busy()) {                              // 忙/压缩中/有在飞子 agent：排队，挂载随消息入队
+        if (busy()) {                              // 忙/压缩中/有在飞子 agent
+            // 插话 vs 排队：只有「回合在飞」才会再有模型调用，插话才送得出去。压缩中、以及回合已被
+            // Esc 取消只剩子 agent 收尾（两者 state 都已回 IDLE，但 busy() 仍 true）都不会再调模型——
+            // 插话进去会一直躺在队列里，直到用户下次发消息才被捎走。故判据必须是 !isIdle() 而非 busy()。
+            // 带技能挂载的也不能走插话：插话是纯 UserMessage，带不了 submit 的第二参数，会静默丢技能。
+            if (!state.isIdle() && skill == null) {
+                onSubmit.interject(effective);
+                // 回显<b>原话</b>（不是 effective：附件已被渲染成一大段 FileReference 文本）。
+                // ⚠ 不写「待送达」之类的状态：内联 TUI 打进 scrollback 的行改不了，送达之后那行会
+                // 永远停在错的状态上。送达与否交给状态栏的实时计数（见 statusLine 的「插话 N 条」）。
+                state.pushInfo("› " + text);
+                return;
+            }
             // 入队的同样是注入后的文本：出队时直接 dispatch，那时输入框早已换成别的内容，
             // 再想兑现附件已经无从谈起——排队的消息会静默丢图。
             state.enqueue(effective, skill);         // 反馈靠状态行的实时「已排队 N 条」，不用 sticky notice
