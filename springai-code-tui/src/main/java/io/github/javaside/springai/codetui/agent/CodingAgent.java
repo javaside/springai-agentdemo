@@ -293,6 +293,12 @@ public final class CodingAgent implements SubmitHandler {
         this.backgroundRegistry = backgroundRegistry;
         this.backgroundResults = backgroundResults;
         this.interjections = interjections;
+        // 送达 → 信息流。刻意复用 onUserMessage 而不是新开一路回调：插话本来就是一条用户消息，
+        // 走这条路它渲出来与排队消息出队时一模一样（› 原话 + Kind.USER），还白送 turnId 迟到过滤
+        // （Esc 之后迟到的送达自动被挡）。另起一路就得把这两件事各自重写一遍。
+        if (interjections != null) {
+            interjections.onDelivered(text -> listener.onUserMessage(activeTurnId.get(), text));
+        }
     }
 
     @Override
@@ -714,6 +720,18 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public List<String> takeBackInterjections() {
         return interjections == null ? List.of() : interjections.drainForRefill();
+    }
+
+    /**
+     * 未送达插话的快照，供输入框上方的面板每帧读取。
+     *
+     * <p><b>非破坏性</b>——委托到 {@link Interjections#pendingSnapshot()} 而不是
+     * {@code takePendingOnly()}。接错的话每渲染一帧就把队列清空一次，插话再也送不出去，
+     * 而面板看上去还很正常（它读的就是刚被自己清掉的那份）。
+     */
+    @Override
+    public List<String> pendingInterjectionTexts() {
+        return interjections == null ? List.of() : interjections.pendingSnapshot();
     }
 
     // ── 权限门面（Shift+Tab 与 /permissions；引擎是唯一事实来源，这里只转发） ──

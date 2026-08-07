@@ -159,4 +159,12 @@ public interface SubmitHandler {
      * {@code handleComplete} 根本不跑，不还给用户那句话就凭空消失。
      */
     default List<String> takeBackInterjections() { return List.of(); }
+
+    /**
+     * 未送达插话的<b>非破坏性</b>快照，供输入框上方的面板每帧读取（形状同排队面板）。
+     *
+     * <p>与 {@link #takePendingInterjections()} 只差一个字：那个<b>取走</b>，这个只<b>看</b>。
+     * 面板接错到取走那个上，每渲染一帧就把队列清空一次。
+     */
+    default List<String> pendingInterjectionTexts() { return List.of(); }
 }
