@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.ui;
 
+import dev.tamboui.buffer.Buffer;
+import dev.tamboui.buffer.Cell;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -11,6 +13,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -99,6 +102,50 @@ class CodeTuiViewInterjectionPanelTest {
         String screen = ViewScreen.of(v);
         assertTrue(screen.contains("⤷ 这条马上送"), "插话应带自己的行首符号:\n" + screen);
         assertTrue(screen.contains("› 这条等下回合"), "排队消息应保持原样:\n" + screen);
+    }
+
+    /**
+     * 区分不能只靠行首符号，前景色也得真的不一样——而<b>底色必须与排队面板一致</b>。
+     *
+     * <p>上面那条只断言了文本，样式改没改它读不出来。这个 TUI 里样式不是装饰：
+     * {@code InlineDisplay} 下底色会串到下一行（见 {@code Theme.PICK_SEL} 的说明），
+     * 所以「换个底色来区分」是错的做法，必须钉住它没被这么改。
+     */
+    @Test
+    @DisplayName("插话行前景与排队行不同、底色相同")
+    void interjectionDiffersInForegroundNotBackground() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = viewWith(s, h);
+        s.onTurnStarted(1);
+        h.interject("这条马上送");
+        s.enqueue("这条等下回合", null);
+
+        Buffer buf = ViewScreen.bufferOf(v);
+        Cell ij = firstCellOf(buf, "⤷ 这条马上送");
+        Cell queued = firstCellOf(buf, "› 这条等下回合");
+        assertNotEquals(ij.style().fg(), queued.style().fg(),
+                "两个面板前景色一样——只靠一个行首符号区分太弱");
+        assertEquals(queued.style().bg(), ij.style().bg(),
+                "底色被改成不一样的了——本 TUI 下底色会串到下一行，区分不能靠它");
+    }
+
+    /** 该行第一个非空格单元（行首缩进是空格，样式取不准）。 */
+    private static Cell firstCellOf(Buffer buf, String rowText) {
+        for (int y = 0; y < buf.height(); y++) {
+            StringBuilder line = new StringBuilder();
+            for (int x = 0; x < buf.width(); x++) {
+                Cell c = buf.get(x, y);
+                if (!c.isContinuation()) line.append(c.symbol().isEmpty() ? " " : c.symbol());
+            }
+            if (line.toString().contains(rowText)) {
+                for (int x = 0; x < buf.width(); x++) {
+                    Cell c = buf.get(x, y);
+                    if (!c.isContinuation() && !c.symbol().isBlank()) return c;
+                }
+            }
+        }
+        throw new AssertionError("屏幕上找不到 " + rowText);
     }
 
     /** 面板顺序要反映送达顺序：插话先走（drain 排在 pollQueued 之前），就该排在上面。 */
