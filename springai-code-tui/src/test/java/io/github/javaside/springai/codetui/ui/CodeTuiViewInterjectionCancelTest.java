@@ -84,4 +84,56 @@ class CodeTuiViewInterjectionCancelTest {
         assertEquals("已取消当前回合", s.notice());
         assertEquals("", v.inputTextForTest(), "没插话就不该往输入框里塞东西");
     }
+
+    /** 收尾流期间插的话没赶上 inject()，回合结束后必须自动起一个新回合把它发出去。 */
+    @Test
+    @DisplayName("回合结束时未送达的插话转成新回合")
+    void leftoverInterjectionBecomesNewTurn() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+
+        h.pending.add("没赶上的那句");   // 未送达
+        s.cancelCurrent();               // 回合结束，回 IDLE
+
+        v.tickForTest();                 // drain：!busy() ⇒ 先出插话残余
+
+        assertEquals(List.of("没赶上的那句"), h.submitted);
+        assertEquals(0, h.pendingInterjections());
+    }
+
+    /** 兜底只取未送达的：已送达那条归补历史，抢走会让同一句话发两遍。 */
+    @Test
+    @DisplayName("兜底出队不碰已送达的插话")
+    void drainDoesNotStealDeliveredInterjection() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+
+        h.delivered = "已送达的";        // 只有已送达的，没有未送达的
+        s.cancelCurrent();
+
+        v.tickForTest();
+
+        assertEquals(List.of(), h.submitted, "已送达的插话不该被当成新回合重发");
+        assertEquals("已送达的", h.delivered, "delivered 应原封不动留给补历史");
+    }
+
+    /** 插话在时序上早于排队消息，必须先发。 */
+    @Test
+    @DisplayName("插话残余先于排队消息出队")
+    void leftoverInterjectionGoesBeforeQueued() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+
+        h.pending.add("先插的话");
+        s.enqueue("后排的队", null);
+        s.cancelCurrent();
+
+        v.tickForTest();
+
+        assertEquals(List.of("先插的话"), h.submitted, "插话应先出队");
+        assertEquals(1, s.queuedCount(), "排队消息留到下一帧");
+    }
 }

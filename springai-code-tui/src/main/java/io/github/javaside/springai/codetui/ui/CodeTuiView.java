@@ -362,6 +362,16 @@ public final class CodeTuiView extends InlineApp {
         }
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!busy()) {   // 空闲、非压缩中、且无在飞子 agent 才出队（见 busy()）
+            // 兜底：用户在<b>收尾流</b>期间插的话没赶上 inject()（最后一次模型调用早已发出），
+            // 不接住的话它会一直躺在队列里，直到下次发消息才被捎走、且那时 anchor 语义已不对。
+            // ⚠ 只取未送达的：已送达那条归 handleComplete 补历史，抢走会让同一句话发两遍。
+            // ⚠ 排在 pollQueued 之前——插话在时序上更早。
+            List<String> leftover = onSubmit.takePendingInterjections();
+            if (!leftover.isEmpty()) {
+                releaseBrake();
+                dispatch(String.join("\n", leftover), null);
+                return;
+            }
             ConversationState.Queued next = state.pollQueued();
             if (next != null) {
                 releaseBrake();              // 用户的真实输入：重置自动回合刹车
