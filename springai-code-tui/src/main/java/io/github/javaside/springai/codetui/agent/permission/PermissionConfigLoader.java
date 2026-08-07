@@ -43,10 +43,18 @@ import java.util.Set;
  * 一律照常生效。用户层不受通配限制：那是用户自己的机器。
  *
  * <h2>为什么配置文件不能声明 BYPASS</h2>
- * <p>{@link PermissionMode#BYPASS} 的契约是「仅 {@code --dangerously-skip-permissions} 启动可进」，
- * 而本文件是 <b>agent 自己写得到</b>的——它有 Write 工具，项目层文件又跟着仓库走。
- * 若认这个取值，「全放行」就有了两条不经人手的入口：一次被劫持的回合写一行 JSON，
+ * <p>能进 {@link PermissionMode#BYPASS} 的路只有两条，且<b>都要经人手</b>：
+ * 启动时敲 {@code --dangerously-skip-permissions}，或运行期按 {@code Shift+Tab} 切进去
+ * （四档平权，见 {@link PermissionMode#next()}）。
+ *
+ * <p>而本文件是 <b>agent 自己写得到</b>的——它有 Write 工具，项目层文件又跟着仓库走。
+ * 若认这个取值，「全放行」就多出两条<b>不经人手</b>的入口：一次被劫持的回合写一行 JSON，
  * 或者 clone 一个仓库。故 {@code defaultMode:"BYPASS"} 一律记 WARN 后当非法值丢弃。
+ *
+ * <p><b>判据是「经不经人手」，不是「是不是启动参数」。</b>这里曾写成「仅
+ * {@code --dangerously-skip-permissions} 启动可进」——那是 BYPASS 上 {@code Shift+Tab} 环
+ * <b>之前</b>的说法，环加上之后就成了假前提。结论没变，但前提烂了的注释会把后人引到错处：
+ * 真正该守的是「不让 agent 写得到的东西成为入口」。
  *
  * <p>顺带一提，这不是本层唯一的防线：{@code DangerousPaths.checkWrite} 会把写
  * {@code <root>/.codetui/} 判成危险动作。但那条防线只覆盖项目层、且只在路径能被解析出来时生效
