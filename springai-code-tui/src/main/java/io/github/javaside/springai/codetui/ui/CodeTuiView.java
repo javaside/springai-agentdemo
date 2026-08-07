@@ -2514,6 +2514,11 @@ public final class CodeTuiView extends InlineApp {
         // 已挂载技能不再占状态栏——改由输入框正上方的技能标签（skillTag）常驻显示，见 render()。
         int q = state.queuedCount();
         String qs = q > 0 ? " · 已排队 " + q + " 条" : "";
+        // 尚未送达模型的插话条数。这是插话唯一的实时反馈——回显那行刻意不写送达状态（scrollback
+        // 里的行改不了，会永远停在错的状态上），送没送出去全看这里。
+        // ⚠ 空串必须判：不判会渲染出一段悬空的 " · "（同 qs 的既有纪律）。
+        int ij = onSubmit.pendingInterjections();
+        String ijs = ij > 0 ? " · 插话 " + ij + " 条" : "";
         String notice = state.notice();
         // 空闲但仍有已取消子 agent 在收尾：给提示，避免「消息静默入队、无转轮」被误判为卡死（见 busy()/drainingSubagentsHint）。
         // ⚠ 必须算在 notice 判定之前：它也是一条动态信息，不能被 notice 盖掉。
@@ -2528,7 +2533,7 @@ public final class CodeTuiView extends InlineApp {
         // 忙时的 notice 后缀。<b>空串必须判</b>：不判会渲染出一段悬空的 " · "。
         String ns = notice.isEmpty() ? "" : " · " + notice;
         Span mode = modeTag(onSubmit.permissionMode());
-        if (draining != null) return richText(statusBar.shimmer(draining, qs + ns + " · Ctrl+C 退出", THINK, animTick, mode));
+        if (draining != null) return richText(statusBar.shimmer(draining, qs + ijs + ns + " · Ctrl+C 退出", THINK, animTick, mode));
         return switch (state.status()) {
             case IDLE -> {
                 String hint = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · "
@@ -2536,11 +2541,11 @@ public final class CodeTuiView extends InlineApp {
                 yield mode == null ? text(hint).style(HINT)
                         : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
             }
-            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + ns + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
+            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + ijs + ns + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
             case RUNNING_TOOL -> {
                 String s = state.activeToolSummary();
                 yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
-                        qs + ns + " · Esc 取消", RUNNING, animTick, mode));
+                        qs + ijs + ns + " · Esc 取消", RUNNING, animTick, mode));
             }
         };
     }
