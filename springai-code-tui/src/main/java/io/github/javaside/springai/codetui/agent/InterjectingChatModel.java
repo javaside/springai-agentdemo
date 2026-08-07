@@ -43,28 +43,17 @@ final class InterjectingChatModel implements ChatModel {
 
     private static final Logger log = LoggerFactory.getLogger(InterjectingChatModel.class);
 
-    static final String OPEN = "[interjection]";
-    static final String CLOSE = "[/interjection]";
+    static final String OPEN = InterjectionText.OPEN;
+    static final String CLOSE = InterjectionText.CLOSE;
 
     /**
-     * 给模型的行为指引。没有它，模型看到 tool 结果之后突然冒出一条 user 消息，很可能判定
-     * 「上一轮结束了，这是新任务」——丢下没做完的工具循环去做新事，或者提前收尾。
-     */
-    private static final String GUIDE = """
-            用户在任务执行中插话，未完成的工作仍在进行中。
-            若与当前方向冲突就调整，否则先把手头的做完。""";
-
-    /**
-     * 包裹插话文本。沿用 {@code FileReference} 的方括号成对标签约定。
+     * 包裹插话文本。注入（本类）与回合末补历史（{@code CodingAgent}）都调它。
      *
-     * <p><b>唯一出处</b>：注入（本类）与回合末补历史（{@code CodingAgent}）都调这个方法。
-     * 两处若各写各的，落库文本与模型实际看到的就会有出入，而这种不一致<b>不会报错</b>——
-     * 只会在 {@code -c} 恢复后表现为「历史里的话和模型当时的反应对不上」。
-     *
-     * <p>指引与原话之间用 {@code ---} 分隔，避免模型把指引当成用户说的。
+     * <p>格式本身连同<b>拆包裹</b>一起住在 {@link InterjectionText}——包裹与拆包裹错开时不会报错，
+     * 只会在 {@code -c} 回放里把给模型的指引显示成用户原话（已经发生过一次）。
      */
     static String wrapText(String raw) {
-        return OPEN + "\n" + GUIDE + "\n---\n" + raw + "\n" + CLOSE;
+        return InterjectionText.wrap(raw);
     }
 
     private final ChatModel delegate;

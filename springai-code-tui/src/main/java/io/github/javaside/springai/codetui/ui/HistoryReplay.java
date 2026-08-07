@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
+import io.github.javaside.springai.codetui.agent.InterjectionText;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;
@@ -38,9 +39,11 @@ final class HistoryReplay {
                     // effectiveText），回放须一致，故剥掉 CodingAgent.injectSkill 注入的 <skill_instruction> 前缀。
                     // 贴图注入的引用块同理：存的是八行机器格式，回放须渲成一行 📎。
                     // 先剥技能前缀再剥引用块——两者互不重叠，固定顺序便于推理。
+                    // 插话的 [interjection] 包裹同理，且更要紧：里面那段是<b>给模型的行为指引</b>，
+                    // 不剥就成了「用户说过这句话」（拆包裹与包裹同住 InterjectionText）。
                     // 单行 OutputLine 即可——userBlock 自身按 \n 拆行、软折（与实时同路径）。
                     out.add(new OutputLine("› " + stripFileReferences(
-                            stripSkillInstruction(safe(m.getText()))), Kind.USER));
+                            stripSkillInstruction(InterjectionText.unwrap(safe(m.getText())))), Kind.USER));
                 }
                 case ASSISTANT -> {
                     String text = m.getText();
@@ -72,12 +75,20 @@ final class HistoryReplay {
         return out;
     }
 
-    /** 历史里的用户轮数（供头部提示，比原始事件数直观）。 */
+    /**
+     * 历史里的用户轮数（供头部提示，比原始事件数直观）。
+     *
+     * <p><b>插话不算一轮</b>：它是回合<b>进行中</b>补的一条 user 消息，属于当时那一轮，
+     * 不是新起的一轮。算进去的话「已恢复 N 轮对话」会比用户记得的多出几轮。
+     */
     static long userTurns(List<Message> messages) {
         if (messages == null) {
             return 0;
         }
-        return messages.stream().filter(m -> m.getMessageType() == org.springframework.ai.chat.messages.MessageType.USER).count();
+        return messages.stream()
+                .filter(m -> m.getMessageType() == org.springframework.ai.chat.messages.MessageType.USER)
+                .filter(m -> !safe(m.getText()).startsWith(InterjectionText.OPEN))
+                .count();
     }
 
     private static String safe(String s) {

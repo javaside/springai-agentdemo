@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
+import io.github.javaside.springai.codetui.agent.InterjectionText;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;
 import org.junit.jupiter.api.Test;
@@ -183,6 +184,78 @@ class HistoryReplayTest {
                 + "path: a.png\n[/file reference]";
         List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
         assertEquals("› 看图\n📎 a.png (10×10)", out.get(1).text());
+    }
+
+    // ── 插话包裹 ──
+
+    /**
+     * 落库的插话是 {@code InterjectingChatModel.wrapText} 包裹后的文本，里面那段
+     * <b>给模型的行为指引</b>不是用户说的话。不剥的话 {@code -c} 之后它会被当成用户原话回放出来。
+     *
+     * <p>与 {@code <skill_instruction>} / 引用块同一条不变量：会话持久化的是「注入后」的有效文本，
+     * 实时 UI 只显示用户原文，回放须一致。前两者都装了护栏，插话这次漏了。
+     */
+    @Test
+    void interjectionWrapperIsStripped() {
+        String stored = "[interjection]\n用户在任务执行中插话，未完成的工作仍在进行中。\n"
+                + "若与当前方向冲突就调整，否则先把手头的做完。\n---\n先别改那个文件\n[/interjection]";
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals("› 先别改那个文件", out.get(1).text());
+    }
+
+    /** 同回合两次插话会被合并成一条落库（中间是换行），剥完须两句都在。 */
+    @Test
+    void mergedInterjectionsKeepAllLines() {
+        String stored = "[interjection]\n用户在任务执行中插话，未完成的工作仍在进行中。\n"
+                + "若与当前方向冲突就调整，否则先把手头的做完。\n---\n先别改那个文件\n再看一眼配置\n[/interjection]";
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals("› 先别改那个文件\n再看一眼配置", out.get(1).text());
+    }
+
+    /**
+     * 往返一致：{@code unwrap(wrap(x)) == x}。这是防「包裹改了、拆包裹没跟着改」漂移的那道闸——
+     * 上面那几条用的是<b>硬编码</b>的落库样本（回放要认得住旧会话），单靠它们，
+     * 有人改了 {@code wrap} 的格式时不会有任何测试变红。
+     */
+    @Test
+    void wrapAndUnwrapRoundTrip() {
+        for (String raw : List.of("先别改那个文件", "多行\n第二行", "带 --- 分隔符的原话", "[interjection] 假标签")) {
+            assertEquals(raw, InterjectionText.unwrap(InterjectionText.wrap(raw)), "往返丢字：" + raw);
+        }
+    }
+
+    /** 插话是回合<b>进行中</b>补的一条 user 消息，属于当时那一轮，不该让「已恢复 N 轮」多算。 */
+    @Test
+    void interjectionDoesNotCountAsAUserTurn() {
+        List<Message> history = List.of(
+                new UserMessage("问题一"),
+                new AssistantMessage("答一"),
+                new UserMessage(InterjectionText.wrap("等一下，换个方向")),
+                new AssistantMessage("好"));
+        assertEquals(1, HistoryReplay.userTurns(history), "插话被算成了一轮新对话");
+    }
+
+    /** 普通用户消息里恰好出现这个词，不能被误当成包裹剥掉正文。 */
+    @Test
+    void plainTextMentioningTheTagIsUntouched() {
+        assertEquals("聊聊 [interjection] 这个标签",
+                InterjectionText.unwrap("聊聊 [interjection] 这个标签"));
+        assertEquals("普通消息", InterjectionText.unwrap("普通消息"));
+        assertEquals("", InterjectionText.unwrap(""));
+    }
+
+    /** 残缺块（有开无闭）保底原样，不误删后面的正文——与另两个 strip 同纪律。 */
+    @Test
+    void truncatedInterjectionBlockIsLeftAsIs() {
+        String broken = "[interjection]\n指引\n---\n话说了一半";
+        assertEquals(broken, InterjectionText.unwrap(broken));
+    }
+
+    /** 没有 --- 分隔（格式变过 / 手改过历史）时同样保底原样，绝不猜哪一段是用户原话。 */
+    @Test
+    void interjectionWithoutSeparatorIsLeftAsIs() {
+        String odd = "[interjection]\n只有一段话\n[/interjection]";
+        assertEquals(odd, InterjectionText.unwrap(odd));
     }
 
     @Test
