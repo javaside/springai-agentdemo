@@ -2,17 +2,59 @@
 
 **日期**：2026-08-07
 **模块**：`springai-code-tui`
-**状态**：已实现（`2443411`..`1e12c07`，14 个提交，分支 `feat/mid-turn-interjection`）
+**状态**：已实现（`2443411`..`1e12c07`，14 个提交，分支 `feat/mid-turn-interjection`）；
+反馈设计于 `bcee22e`..`5118dfd` 返工，见下节。
 
 > **验收压在一条断言上**：`AgentTools.build` 里 `InterjectingChatModel.wrap()` 那行**没有任何单测覆盖**。
 > 实测把它摘掉后，1322 个单测**一个都不红**，只有 pty 冒烟的 `check_delivered_to_model` 会红——
 > 它断的不是屏幕，是桩模型**实际收到的请求体**（角色序列 `[system, user, assistant, tool, user]`，
 > 末尾那条 user 就是插话，且紧跟 tool 结果）。
 >
-> 更要命的是：接线断掉时**插话回显和状态栏「插话 N 条」照样正常显示**——它们读的是 UI 自己的队列，
+> 更要命的是：接线断掉时**插话面板和状态栏「插话 N 条」照样正常显示**——它们读的是 UI 自己的队列，
 > 队列只是躺着不动。所以肉眼看界面完全正常，功能却已经死了。
 >
 > **删掉 `check_delivered_to_model` 等于删掉整个功能的验收。**
+
+## 返工：反馈设计（2026-08-07 当日）
+
+初版的界面反馈是**错的**，用起来才发现。原设计：输入那一刻往 scrollback 打一行
+`› 原话`（`Kind.INFO`），送达时**什么都不做**，靠状态栏一个计数从 1 变 0。四个问题：
+
+| # | 问题 |
+|---|---|
+| A1 | 送达时界面无任何信号——`InterjectingChatModel` 注入成功只打 `log.debug` |
+| A2 | 状态栏计数在子 agent 场景**被挤出屏幕**（`Task` 的长入参吃满 80 列，实测 80 列终端上「插话 N 条 · Esc 取消」整段消失） |
+| A3 | 回显位置≠真实位置——输入时就打，而它的真实位置在后面那条工具结果之后 |
+| A4 | 回显是 `Kind.INFO` 不是 `Kind.USER`，样式上不像用户消息 |
+
+叠加之后：注入指引明写「否则先把手头的做完」，即**模型正确消化了插话却不显式回应是常态**。
+于是「送达并被采纳」「送达但被无视」「接线断了压根没送出去」三者在界面上无法区分。
+
+**根因是我把「不能写会过期的状态」多推了一步成「不能写状态」。**「待送达」会过期，
+「已送达」不会——所以正确做法是**在送达那一刻补打一行**，而不是什么都不打。
+
+**修法是照抄仓库里已有的排队消息那套**（`queuedChildren`）：没走的钉在输入框上方的活面板里
+（活面板可以消失，scrollback 不行），走了才以 `Kind.USER` 打进信息流。初版两头都没做。
+
+改动：
+
+1. `Interjections.pendingSnapshot()`（非破坏性）+ `onDelivered/fireDelivered` 送达回调
+2. `CodingAgent` 构造时把回调接到 `listener.onUserMessage` 上——复用它而不是新开一路，
+   插话本就是一条用户消息，还白送 turnId 迟到过滤
+3. `CodeTuiView.interjectionChildren` 面板（`⤷` 前缀 + 暖橙，排在排队面板之上＝先走的在上），
+   撤掉输入时的 `pushInfo`
+4. `InterjectionText`（新）——把包裹与**拆包裹**放在一起
+5. 状态行工具摘要按终端宽度让位给尾部
+
+顺带修掉一个独立缺陷：`-c` 回放**没剥 `[interjection]` 包裹**，把给模型的行为指引当成用户原话
+显示了出来。`<skill_instruction>` 和图片引用块都装了同类护栏，唯独这条漏了——所以把 `wrap`
+和 `unwrap` 挪进同一个类，它们错开时不会报错，只会在回放里默默显示错东西。
+
+结果：**屏幕顺序 = 发给模型的消息表顺序 = `-c` 回放顺序**，三者第一次一致。
+pty 实机复核，插话那行落在 `⎿ Glob ✓` 与模型回复之间。
+
+⚠ 这次也暴露了测试盲区：状态栏测试用 `"{}"`（两字符入参）+ `ViewScreen` 硬编码 120 列，
+**两个条件各绕开一半**，故 A2 一直是绿的。`ViewScreen` 已开放宽度参数。
 
 ## 问题
 
@@ -153,11 +195,17 @@ state.isBusy()  = !isIdle() || compacting || hasModal()
 一个物理行），写了「待送达」就永远是「待送达」，scrollback 会变成错的。送达与否全交给
 状态栏的实时计数。
 
+> **⚠ 本小节已被返工推翻**（见文首「返工：反馈设计」）。上面那句推理只对了一半：
+> 「待送达」会过期没错，但由此推出「输入时打一行、送达时什么都不打」是多推了一步——
+> **「已送达」不会过期**。现行做法是：输入时**不打**（改钉在输入框上方的活面板里），
+> 送达时才以 `Kind.USER` 打进信息流。状态栏计数保留为第二条反馈。
+
 ## 数据流
 
 ```
 UI 线程    输入 → !state.isIdle() → onSubmit.interject(text)
-                 → Interjections.offer()  → 回显原话 + 状态栏「插话 1 条」
+                 → Interjections.offer()  → 面板出现 ⤷ 原话 + 状态栏「插话 1 条」
+                                            （不写 scrollback：位置还不对）
 
 模型线程  工具执行完 → ChatClient 组装下一次 Prompt（tool 结果此刻才配平）
                  → InterjectingChatModel.inject()
@@ -165,7 +213,11 @@ UI 线程    输入 → !state.isIdle() → onSubmit.interject(text)
                     ├ 多条合并成一条 → 包裹 [interjection] → 追加为 UserMessage
                     ├ delivered = 包裹后文本
                     └ anchorToolCallId = 末尾 tool 消息 id
-                 → delegate.stream(prompt)        状态栏计数归零
+                 → fireDelivered(原话)（锁外）
+                    → listener.onUserMessage(turnId, 原话)
+                    → scrollback 打出 › 原话，位置正在 tool 结果之后
+                                            面板清空、状态栏计数归零
+                 → delegate.stream(prompt)
 
 回合末    handleComplete(turnId) → takeForHistory()
                  → 读 events，定位 anchor 那条 tool 事件
@@ -363,9 +415,12 @@ anchor tool 消息**就在末尾**，两条路径产出完全相同的历史—�
 
 ### pty 实机
 
-状态栏计数、输入即回显、`/queue` 补全。设 `TIOCSWINSZ` + `TERM=xterm-256color`，
+状态栏计数、插话面板、送达进信息流、`/queue` 补全。设 `TIOCSWINSZ` + `TERM=xterm-256color`，
 否则渲染全空白；`wait_for` 断言「当前状态」不能只靠子串匹配，会命中陈旧 scrollback；
 改完记得重新 package。
+
+> **窄终端也要测**：状态行的内容按 `terminalWidth()` 拼，宽终端下什么都放得下，
+> 「重要的那段被不重要的挤出屏幕」永远测不出来。`ViewScreen.of(view, 80)` 是为此开的。
 
 ### 现有探针测试的去留
 
