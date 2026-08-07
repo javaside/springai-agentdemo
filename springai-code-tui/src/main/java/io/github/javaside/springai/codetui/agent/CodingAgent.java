@@ -678,8 +678,38 @@ public final class CodingAgent implements SubmitHandler {
         }
     }
 
-    // ── 权限门面（Shift+Tab 与 /permissions；引擎是唯一事实来源，这里只转发） ──
+    // ── 插话门面（队列是唯一事实来源，这里只转发；interjections==null 的桩路径全退化为无操作） ──
 
+    @Override
+    public void interject(String text) {
+        if (interjections != null) {
+            interjections.offer(text);
+        }
+    }
+
+    @Override
+    public int pendingInterjections() {
+        return interjections == null ? 0 : interjections.pendingCount();
+    }
+
+    /**
+     * 兜底出队用，<b>只取未送达的</b>。
+     *
+     * <p>与 {@link #takeBackInterjections} 委托到不同的队列方法，这一点不能合并：已送达那条归
+     * {@link #persistInterjection} 补历史，被兜底出队抢走就会当成新回合再发一遍，模型看到同一句话两次。
+     */
+    @Override
+    public List<String> takePendingInterjections() {
+        return interjections == null ? List.of() : interjections.takePendingOnly();
+    }
+
+    /** Esc 取消时通吃（含已送达那条）：取消路径不跑补历史，不交还就凭空消失。 */
+    @Override
+    public List<String> takeBackInterjections() {
+        return interjections == null ? List.of() : interjections.drainForRefill();
+    }
+
+    // ── 权限门面（Shift+Tab 与 /permissions；引擎是唯一事实来源，这里只转发） ──
     /**
      * 当前权限模式。
      *

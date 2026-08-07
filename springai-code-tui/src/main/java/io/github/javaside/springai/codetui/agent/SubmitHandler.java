@@ -135,4 +135,28 @@ public interface SubmitHandler {
      * <p>落地端须<b>同时</b>更新落盘文件与内存规则表——只改一处会让面板与实际判定分家。
      */
     default boolean removePermissionRule(PermissionRule rule) { return false; }
+
+    // ── 插话（回合进行中输入的消息，不打断回合、随下一次模型调用送达） ──
+
+    /** 忙时提交一条插话：不打断回合，随下一次模型调用送达。默认无操作（桩）。 */
+    default void interject(String text) { }
+
+    /** 尚未送达模型的插话条数（状态栏用）。 */
+    default int pendingInterjections() { return 0; }
+
+    /**
+     * 取走<b>尚未送达</b>的插话，供回合末兜底出队。
+     *
+     * <p>刻意不取已送达的那条——它归回合末补历史。两者若共用一个方法，回合末谁先跑到谁拿走，
+     * UI 先拿走的话那句话会被当成新回合再发一遍，模型看到两次。
+     */
+    default List<String> takePendingInterjections() { return List.of(); }
+
+    /**
+     * Esc 取消回合时取走<b>全部</b>插话（含已送达的），调用方回填输入框而非丢弃。
+     *
+     * <p>已送达那条在取消路径上必须交还：取消走 {@code doOnCancel}，补历史的
+     * {@code handleComplete} 根本不跑，不还给用户那句话就凭空消失。
+     */
+    default List<String> takeBackInterjections() { return List.of(); }
 }
