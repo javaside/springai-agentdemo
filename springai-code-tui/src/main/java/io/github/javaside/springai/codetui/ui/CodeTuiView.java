@@ -831,11 +831,20 @@ public final class CodeTuiView extends InlineApp {
         if (k.isCancel()) {
             boolean running = !state.isIdle();
             int dropped = state.queuedCount();
+            // 未送达 + 已送达的插话一起要回来，<b>回填输入框而不是丢弃</b>：按 Esc 通常正是
+            // 「别跑了，听我的」，那句话不该跟着一起没。已送达的那条尤其不能丢——取消走 doOnCancel，
+            // handleComplete 不跑、没人补它进历史，不还给用户就是模型看过、历史没有、用户也拿不回来。
+            List<String> refill = onSubmit.takeBackInterjections();
             if (current != null) { current.dispose(); current = null; }
             state.cancelCurrent();
             state.clearQueued();                         // 取消时一并清空排队消息
+            if (!refill.isEmpty()) {
+                inputState.setText(String.join("\n", refill));
+                inputState.moveCursorToEnd();            // 光标落在文末：用户多半要接着改一改重发
+            }
             state.setNotice(running || dropped > 0
                     ? "已取消当前回合" + (dropped > 0 ? "，丢弃 " + dropped + " 条排队" : "")
+                            + (refill.isEmpty() ? "" : "，插话已放回输入框")
                     : "");
             return EventResult.HANDLED;
         }
