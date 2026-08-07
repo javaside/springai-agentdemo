@@ -54,13 +54,38 @@ public final class Interjections {
     }
 
     /**
-     * Esc 取消回合时把未送达的插话取走——调用方<b>回填输入框</b>，不是丢弃。
+     * 只取未送达的（回合<b>正常结束</b>时 UI 兜底出队用）。
+     *
+     * <p><b>刻意不动 {@code delivered}</b>：那一条归 {@link #takeForHistory} 补历史。两者若共用一个
+     * 方法，回合末谁先跑到谁拿走——UI 先拿走的话，已送达的插话既没进历史，又被当成新回合再发一遍，
+     * 模型会看到同一句话两次。
+     */
+    public synchronized List<String> takePendingOnly() {
+        List<String> out = new ArrayList<>(pending);
+        pending.clear();
+        return out;
+    }
+
+    /**
+     * Esc 取消回合时把插话取走——调用方<b>回填输入框</b>，不是丢弃。
      *
      * <p>按 Esc 通常正是「别跑了，听我的」，那句话不该跟着一起没。旧的排队队列在 Esc 时
      * 直接 {@code clearQueued()}，用户得重打一遍。
+     *
+     * <p><b>为什么连 {@code delivered} 一起交还</b>（这里跟 {@link #takePendingOnly} 反着来）：
+     * 取消走 {@code doOnCancel}，{@code handleComplete} 根本不跑，没人拿 {@code delivered} 去补历史。
+     * 不交还的话，那句话模型看过了、会话历史里没有、用户手上也没有——凭空消失。这条路径上不存在
+     * 抢夺：补历史的那个消费者压根没被触发。
+     *
+     * <p>已送达的排在前面，因为它时序上更早（先说的先送达）。交还的是<b>原文</b>，不是
+     * {@link InterjectingChatModel} 包裹后的文本——用户要拿回的是自己那句话，好改一改重发。
      */
     public synchronized List<String> drainForRefill() {
-        List<String> out = new ArrayList<>(pending);
+        List<String> out = new ArrayList<>();
+        if (delivered != null) {
+            out.add(delivered);
+        }
+        out.addAll(pending);
         pending.clear();
         delivered = null;
         anchorToolCallId = null;
