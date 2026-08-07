@@ -15,8 +15,8 @@
 （READ_ONLY，权限引擎自动放行，不会弹审批面板），于是工具跑完还会有<b>第二次模型调用</b>——
 插话正是在那一次被送出去的。<b>不需要真实 key、不需要网络。</b>
 
-<b>本脚本最有价值的一条断言</b>（场景一里的 `check_delivered_to_model`）：屏幕上看到回显
-<b>证明不了插话送到了模型</b>——回显那行是 UI 自己打的，队列里躺着不动也照样有。真凭据是
+<b>本脚本最有价值的一条断言</b>（场景一里的 `check_delivered_to_model`）：屏幕上看到面板
+<b>证明不了插话送到了模型</b>——面板画的是 UI 自己的队列，躺着不动也照样有。真凭据是
 桩<b>实际收到的请求体</b>（`StubModel.sent`）：第二次调用的消息表末尾必须真的多出一条
 带 `[interjection]` 包裹的 user，且它<b>紧跟在 tool 结果后面</b>。落在
 `assistant(tool_calls)` 与 `tool` 之间就是悬空 tool_calls，真实网关直接 400。
@@ -29,10 +29,13 @@
   * 全模块 <b>1322 个单测一个都没红</b>，证实了「这条接线没有任何单测覆盖」；
   * 本脚本的 `check_delivered_to_model` <b>红了</b>，且是为正确的理由红的
     （角色序列里根本没有那条插话）；
-  * 但 <b>`check_interject_echo_and_counter` 照样绿</b>——回显和「插话 1 条」在接线断掉时
-    完全正常，因为它们读的是 UI 自己的队列，队列只是躺着不动。
+  * 但 <b>`check_interject_echo_and_counter` 的前半段照样绿</b>——面板和「插话 1 条」在接线
+    断掉时完全正常，因为它们读的是 UI 自己的队列，队列只是躺着不动。
+    （该函数<b>后半段</b>——「送达后从面板消失、出现在信息流里」——是 2026-08-07 后补的，
+    接线断掉时它也会红：送达回调根本不会触发。但它证明的是「UI 认为送达了」，
+    仍<b>不是</b>「消息表里真有那条」的证据。）
 
-所以：<b>别拿回显/计数当送达的证据</b>，这个功能的唯一一道网是 `check_delivered_to_model`。
+所以：<b>别拿面板/计数当送达的证据</b>，这个功能的唯一一道网是 `check_delivered_to_model`。
 删它等于删掉整个功能的验收。
 
 覆盖的四个场景：
@@ -40,8 +43,8 @@
   | 场景         | 操作                                   | 期望                                     |
   |--------------|----------------------------------------|------------------------------------------|
   | `/queue` 补全 | 输入 `/qu` → Tab                       | 补全成 `/queue`                          |
-  | 插话回显      | 回合进行中输入一句 + Enter             | scrollback 出现 `› …`，且**不含**「待送达」 |
-  | 状态栏计数    | 同上，插话后立刻读状态行               | 含「插话 1 条」；送达后该段消失            |
+  | 插话面板      | 回合进行中输入一句 + Enter             | 屏上出现 `⤷ …`，且**不得**出现 `› …`（还没送达）|
+  | 送达进信息流  | 等第二次模型调用                       | `› …` 出现、`⤷ …` 消失、计数段消失         |
   | Esc 回填      | 回合中插话 → Esc                       | 输入框里出现刚才那句话                    |
 
 ⚠ <b>读状态行必须取当前屏幕的那一行</b>，不能拿子串去撞整个 scrollback——旧帧还在屏上，
@@ -104,8 +107,13 @@ CLOSE_TAG = "[/interjection]"
 # 状态栏里的插话计数段（CodeTuiView#statusLine 的 ijs）。
 IJ_COUNT_1 = "插话 1 条"
 QUEUED_MARK = "已排队"               # 走错路由（排队而非插话）时状态栏会显示这个
-DELIVERY_STATE_WORD = "待送达"       # 回显那行刻意<b>不</b>写送达状态，见 CodeTuiView 注释
 ESC_REFILL_NOTICE = "插话已放回输入框"
+
+# 未送达插话面板的行首符号（CodeTuiView#interjectionChildren）；排队面板用的是 "› "。
+# 两者必须不同：都钉在输入框上方、都是「还没走的话」，但插话随本回合下一次模型调用送达，
+# 排队要等整个回合跑完。
+IJ_PANEL_MARK = "⤷ "
+STREAM_MARK = "› "                   # 送达后打进信息流的用户消息行（与排队出队时同形状）
 
 
 # ── 桩模型 ────────────────────────────────────────────────────────────────
@@ -283,29 +291,29 @@ def check_queue_completion(session):
 
 # ── 场景二 + 三：回显、状态栏计数、以及「真的送到了模型」 ──────────────────
 def check_interject_echo_and_counter(session):
-    """回合进行中插话：scrollback 回显原话、状态栏出现「插话 1 条」。
+    """回合进行中插话：面板钉住原话、状态栏出现「插话 1 条」。
 
-    两条断言各自钉住一个刻意的设计：
+    钉住的设计是「插话照排队消息那套走」——<b>没走的钉在面板里，走了才随信息流滚动</b>：
 
-      * 回显那行<b>不写送达状态</b>。内联 TUI 打进 scrollback 的行事后改不了，写「待送达」
-        的话，插话送出去之后那行会永远停在错的状态上。
-      * 送没送出去<b>只由状态栏实时反映</b>，所以状态栏那一段是插话唯一的实时反馈，
-        它必须真的出现。
+      * 输入那一刻<b>绝不往 scrollback 打行</b>。那时它还没送达，而 scrollback 里的行改不了，
+        打下去就永远停在「输入时」这个位置上，而它的真实位置在后面那条工具结果之后。
+      * 未送达期间它在屏上的唯一存在是输入框上方那个面板（`⤷ …`）。没有它，
+        用户按完回车会看到什么都没发生。
+      * 状态栏计数是第二条实时反馈，也必须真的出现。
 
-    还顺带钉住<b>路由</b>：忙时 Enter 必须走插话而不是排队。两条路都会在屏上留下
-    `› 换个思路`（排队面板用的是同一个前缀），只有状态栏能区分——插话是「插话 N 条」，
-    排队是「已排队 N 条」。所以这里既断言前者在、也断言后者不在。
+    还顺带钉住<b>路由</b>：忙时 Enter 必须走插话而不是排队。两个面板行首符号不同
+    （插话 `⤷`、排队 `›`），状态栏也能区分——插话是「插话 N 条」，排队是「已排队 N 条」。
     """
     session.write(("帮我看看 " + SLOW_MARKER).encode() + ENTER)
     wait_thinking(session, "第一个回合进入思考态（桩正在睡）")
 
     session.write(INTERJECT_TEXT.encode() + ENTER)
-    session.wait_for("› " + INTERJECT_TEXT, timeout=10)
-    print("插话回显 OK: scrollback 出现 %r." % ("› " + INTERJECT_TEXT))
+    session.wait_for(IJ_PANEL_MARK + INTERJECT_TEXT, timeout=10)
+    print("插话面板 OK: 屏上出现 %r." % (IJ_PANEL_MARK + INTERJECT_TEXT))
 
-    if DELIVERY_STATE_WORD in session.screen_text():
-        die("回显行写了 %r —— scrollback 里的行改不了，送达后会永远停在错的状态上"
-            % DELIVERY_STATE_WORD, session.screen.display)
+    if STREAM_MARK + INTERJECT_TEXT in session.screen_text():
+        die("输入那一刻就往信息流打了 %r —— 此刻它还没送达，而 scrollback 里的行改不了，"
+            "这一行会永远停在错的位置上" % (STREAM_MARK + INTERJECT_TEXT), session.screen.display)
 
     row = status_row(session)
     if IJ_COUNT_1 not in row:
@@ -316,6 +324,20 @@ def check_interject_echo_and_counter(session):
             % (QUEUED_MARK, row.strip()), session.screen.display)
     print("状态栏计数 OK: 当前状态行 = %r." % row.strip())
     print_screen("插话已投递、尚未送达（人眼复核）", session.screen.display)
+
+    # 送达之后：那句话该<b>从面板消失、出现在信息流里</b>。这一步是整套反馈设计的收口——
+    # 少了它，「送达」在屏幕上就没有任何痕迹，而注入指引明写「否则先把手头的做完」，
+    # 即模型消化了插话却不显式回应本就是常态：三种情况（采纳 / 无视 / 压根没送出去）
+    # 会长得一模一样。
+    session.wait_for(STREAM_MARK + INTERJECT_TEXT, timeout=20)
+    print("送达进信息流 OK: 出现 %r." % (STREAM_MARK + INTERJECT_TEXT))
+    wait_until(session, lambda: IJ_COUNT_1 not in status_row(session),
+               15, "送达后状态行仍显示 %r（实际：%r）" % (IJ_COUNT_1, status_row(session)))
+    if IJ_PANEL_MARK + INTERJECT_TEXT in session.screen_text():
+        die("送达后面板还留着 %r —— 同一句话会在屏幕上同时出现两次"
+            % (IJ_PANEL_MARK + INTERJECT_TEXT), session.screen.display)
+    print("送达后面板已清空 OK.")
+    print_screen("插话已送达（人眼复核）", session.screen.display)
 
 
 def check_delivered_to_model(session):
@@ -390,8 +412,8 @@ def check_esc_refill(session):
     取消走 `doOnCancel`，`handleComplete` 不跑、没人补它进历史，不还给用户就是
     「模型看过、历史没有、用户也拿不回来」。
 
-    <b>怎么证明它在输入框里而不只是在 scrollback 里</b>：插话的回显行 `› 改用方案 B`
-    本来就留在 scrollback 上，光找这个子串是不会失败的测试。Esc 之后补打一个哨兵字符，
+    <b>怎么证明它在输入框里而不只是在别处</b>：这句话在屏上本来就有痕迹（未送达时在面板里、
+    送达后在信息流里），光找子串是不会失败的测试。Esc 之后补打一个哨兵字符，
     只有当文本真的在<b>输入缓冲区</b>里、且光标落在文末时，屏上才会读到拼起来的整串
     （`moveCursorToEnd` 正是为了这个）。
     """
@@ -399,7 +421,7 @@ def check_esc_refill(session):
     wait_thinking(session, "第二个回合进入思考态（Esc 场景）")
 
     session.write(REFILL_TEXT.encode() + ENTER)
-    session.wait_for("› " + REFILL_TEXT, timeout=10)
+    session.wait_for(IJ_PANEL_MARK + REFILL_TEXT, timeout=10)
 
     session.write(ESC)
     wait_until(session, lambda: ESC_REFILL_NOTICE in status_row(session),
