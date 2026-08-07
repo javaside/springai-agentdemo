@@ -203,6 +203,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/permissions", "查看权限模式与生效规则"),
             new SlashCommand("/tasks",   "查看后台任务（可展开结果 / 终止）"),
             new SlashCommand("/continue", "继续执行上一批未完成的计划"),
+            new SlashCommand("/queue",   "排到下一回合再发（默认 Enter 是立即插话）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
             new SlashCommand("/exit",    "退出"));
 
@@ -1208,6 +1209,24 @@ public final class CodeTuiView extends InlineApp {
             }
             if (busy()) state.enqueue(prompt, null);   // 忙/压缩中/有在飞子 agent：排队，清空后自动出队（同普通消息）
             else dispatch(prompt, null);
+            return;
+        }
+        // 显式排到下一回合。<b>刻意不用 Alt+Enter</b>：那个键已是输入框换行，且在区分不了修饰键的
+        // 终端（Apple Terminal 等）上到达时就是裸 Enter——用户以为排了队实际走了插话，静默错路由。
+        // 斜杠命令是纯文本判定，与终端无关。（`/queue 内容` 含空格，不会误开补全菜单，见 slashMenuActive）
+        if (cmd.equals("/queue") || cmd.startsWith("/queue ")) {
+            String body = cmd.substring("/queue".length()).strip();
+            if (body.isEmpty()) {
+                // 不 clearInput()：用户多半是想接着把内容打完。
+                state.setNotice("用法：/queue <消息> — 排到下一回合再发");
+                return;
+            }
+            clearInput();
+            releaseBrake();
+            String queuedSkill = pendingSkill;       // 一次性：同普通提交，取走挂载
+            pendingSkill = null;
+            if (busy()) state.enqueue(body, queuedSkill);
+            else dispatch(body, queuedSkill);        // 空闲时「排队」等价于直接发，不必让用户再按一次
             return;
         }
         if (cmd.equals("/help")) {

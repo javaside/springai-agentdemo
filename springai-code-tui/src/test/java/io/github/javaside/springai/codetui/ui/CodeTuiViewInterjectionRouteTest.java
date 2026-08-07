@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * 忙时 Enter 的路由：默认走插话，三条回落走老排队队列。
@@ -139,5 +140,72 @@ class CodeTuiViewInterjectionRouteTest {
 
         assertEquals(List.of("新任务"), h.submitted);
         assertEquals(List.of(), h.interjected);
+    }
+
+    /** /queue 明确要求排到下回合，即使回合在飞也不插话。 */
+    @Test
+    @DisplayName("/queue 强制排队，不插话")
+    void queueCommandForcesEnqueue() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+        s.onTurnStarted(1);                       // 回合在飞，默认本会走插话
+
+        type(v, "/queue 等你忙完再看这个");
+
+        assertEquals(List.of(), h.interjected, "/queue 不该走插话");
+        assertEquals(1, s.queuedCount());
+        assertEquals(List.of("等你忙完再看这个"), s.queuedSnapshot(), "命令前缀不该进消息正文");
+    }
+
+    /** 空闲时「排队」等价于直接发，不必让用户再按一次回车。 */
+    @Test
+    @DisplayName("/queue 空闲时直接发")
+    void queueCommandWhenIdleDispatches() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+
+        type(v, "/queue 直接发这条");
+
+        assertEquals(List.of("直接发这条"), h.submitted);
+        assertEquals(0, s.queuedCount());
+    }
+
+    /** 技能挂载是一次性的：/queue 也得取走，否则下一条消息会莫名其妙带上它。 */
+    @Test
+    @DisplayName("/queue 带走技能挂载")
+    void queueCommandCarriesMountedSkill() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+        s.onTurnStarted(1);
+        v.mountSkillForTest("brainstorming");
+
+        type(v, "/queue 帮我想想");
+
+        assertEquals("brainstorming", s.pollQueued().skill(), "技能应随排队消息带走");
+
+        s.cancelCurrent();
+        type(v, "下一条");
+        assertEquals(List.of("下一条"), h.submitted);
+        assertNull(h.submittedSkills.get(0), "技能是一次性的，不该粘在下一条消息上");
+    }
+
+    /** 空参数没有意义，给提示而不是排一条空消息。 */
+    @Test
+    @DisplayName("/queue 不带内容时给提示")
+    void bareQueueCommandShowsNotice() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+        s.onTurnStarted(1);
+
+        type(v, "/queue");
+
+        assertEquals(0, s.queuedCount());
+        assertEquals(List.of(), h.interjected, "空 /queue 更不该走插话");
+        assertEquals("用法：/queue <消息> — 排到下一回合再发", s.notice());
+        assertEquals("/queue", v.inputTextForTest(), "输入保留：用户多半是想接着把内容打完");
     }
 }
