@@ -54,6 +54,45 @@ public final class Interjections {
     }
 
     /**
+     * 未送达插话的<b>非破坏性</b>快照，供输入框上方的面板每帧读取（形状同排队面板）。
+     *
+     * <p><b>只列未送达的</b>：已送达的那条此刻正躺在 scrollback 的信息流里（送达回调打的那一行），
+     * 面板再列一遍就是同一句话在屏幕上出现两次。面板的语义是「还没走的」，走了就该从面板消失。
+     */
+    public synchronized List<String> pendingSnapshot() {
+        return List.copyOf(pending);
+    }
+
+    /**
+     * 送达通知。{@link InterjectingChatModel} 把话塞进 prompt 之后调用，UI 据此把它打进信息流。
+     *
+     * <p><b>为什么非要有这个信号</b>：注入指引明写「若与当前方向冲突就调整，否则先把手头的做完」，
+     * 即<b>模型正确消化了插话却不显式回应，是常态</b>。没有这个信号，屏幕上
+     * 「送达并被采纳」「送达但被无视」「接线断了压根没送出去」三者完全无法区分。
+     *
+     * <p>{@code volatile} 而非 synchronized：回调要在<b>锁外</b>触发（见 {@link #fireDelivered}）。
+     */
+    private volatile java.util.function.Consumer<String> onDelivered;
+
+    /** 接上送达回调（{@code CodingAgent} 构造时接，转成 {@code listener.onUserMessage}）。传 null 即摘掉。 */
+    public void onDelivered(java.util.function.Consumer<String> listener) {
+        this.onDelivered = listener;
+    }
+
+    /**
+     * 触发送达回调。<b>刻意不 synchronized</b>：回调会一路走进 {@code ConversationState}，
+     * 而那边的方法全是 synchronized——在本对象的锁里回调进去就形成了两把锁的交叉持有，
+     * 而 UI 线程渲染时正好按相反顺序摸这两把锁（先 {@code queuedSnapshot} 后
+     * {@link #pendingSnapshot}）。故调用方须在 {@code drainForInjection} 返回<b>之后</b>再调本方法。
+     */
+    void fireDelivered(String rawText) {
+        java.util.function.Consumer<String> l = onDelivered;
+        if (l != null) {
+            l.accept(rawText);
+        }
+    }
+
+    /**
      * 只取未送达的（回合<b>正常结束</b>时 UI 兜底出队用）。
      *
      * <p><b>刻意不动 {@code delivered}</b>：那一条归 {@link #takeForHistory} 补历史。两者若共用一个

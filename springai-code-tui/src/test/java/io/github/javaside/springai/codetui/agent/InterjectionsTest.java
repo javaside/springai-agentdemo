@@ -53,4 +53,59 @@ class InterjectionsTest {
 
         assertEquals(List.of("改用方案 B"), q.drainForRefill());
     }
+
+    // ── 面板快照 ──
+
+    /** 面板每帧都要读它，读完队列还得在——这是它与 takePendingOnly 的全部区别。 */
+    @Test
+    @DisplayName("pendingSnapshot 不消费队列，可反复读")
+    void snapshotIsNonDestructive() {
+        Interjections q = new Interjections();
+        q.offer("第一句");
+        q.offer("第二句");
+
+        assertEquals(List.of("第一句", "第二句"), q.pendingSnapshot());
+        assertEquals(List.of("第一句", "第二句"), q.pendingSnapshot(), "读一次就没了说明它在消费队列");
+        assertEquals(2, q.pendingCount());
+    }
+
+    /**
+     * 快照只列<b>未送达</b>的。已送达的那条此刻正躺在 scrollback 的信息流里
+     * （送达回调打的那一行），面板再列一遍就是同一句话在屏幕上出现两次。
+     */
+    @Test
+    @DisplayName("pendingSnapshot 不含已送达的")
+    void snapshotExcludesDelivered() {
+        Interjections q = new Interjections();
+        q.offer("已送达的");
+        q.drainForInjection("call-1");
+        q.offer("还没送的");
+
+        assertEquals(List.of("还没送的"), q.pendingSnapshot());
+    }
+
+    // ── 送达回调 ──
+
+    /** 送达是 UI 唯一能知道「这句话进模型了」的时刻——不通知，界面就只能靠一个数字变化去猜。 */
+    @Test
+    @DisplayName("fireDelivered 把原文交给回调")
+    void deliveryCallbackGetsRawText() {
+        Interjections q = new Interjections();
+        List<String> seen = new java.util.ArrayList<>();
+        q.onDelivered(seen::add);
+
+        q.fireDelivered("改用方案 B");
+
+        assertEquals(List.of("改用方案 B"), seen);
+    }
+
+    /** 没接回调的落地端（测试桩、子 agent 那套）不能因此 NPE。 */
+    @Test
+    @DisplayName("未设回调 / 设 null 时 fireDelivered 不炸")
+    void deliveryCallbackTolerAtesAbsence() {
+        Interjections q = new Interjections();
+        q.fireDelivered("没人听");
+        q.onDelivered(null);
+        q.fireDelivered("还是没人听");
+    }
 }

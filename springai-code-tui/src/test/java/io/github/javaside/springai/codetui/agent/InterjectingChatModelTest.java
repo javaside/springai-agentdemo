@@ -100,4 +100,51 @@ class InterjectingChatModelTest {
         Spy spy = new Spy();
         assertSame(spy.options, InterjectingChatModel.wrap(spy, new Interjections()).getOptions());
     }
+
+    // ── 送达通知 ──
+
+    /**
+     * 送达那一刻必须通知 UI。这是插话唯一能进信息流的时机——不发这个信号，
+     * 屏幕上「模型采纳了插话」与「插话压根没送出去」长得一模一样。
+     */
+    @Test
+    @DisplayName("注入成功时通知送达，交出原文")
+    void notifiesOnDelivery() {
+        Interjections q = new Interjections();
+        List<String> delivered = new java.util.ArrayList<>();
+        q.onDelivered(delivered::add);
+        q.offer("改用方案 B");
+
+        InterjectingChatModel.wrap(new Spy(), q).call(promptEndingWithToolResult());
+
+        assertEquals(List.of("改用方案 B"), delivered,
+                "交给 UI 的必须是原文——包裹后的文本含给模型的行为指引，那不是用户说的话");
+    }
+
+    /** 队列空时通知也不能发：否则每一次模型调用都会往信息流里打一条空的用户消息。 */
+    @Test
+    @DisplayName("无插话时不发送达通知")
+    void noNotificationWhenNothingDelivered() {
+        Interjections q = new Interjections();
+        List<String> delivered = new java.util.ArrayList<>();
+        q.onDelivered(delivered::add);
+
+        InterjectingChatModel.wrap(new Spy(), q).call(promptEndingWithToolResult());
+
+        assertTrue(delivered.isEmpty());
+    }
+
+    /** 流式是生产路径（主 agent 走 stream）。只在 call 上接通知等于没接。 */
+    @Test
+    @DisplayName("stream 路径同样通知送达")
+    void notifiesOnStreamDelivery() {
+        Interjections q = new Interjections();
+        List<String> delivered = new java.util.ArrayList<>();
+        q.onDelivered(delivered::add);
+        q.offer("改用方案 B");
+
+        InterjectingChatModel.wrap(new Spy(), q).stream(promptEndingWithToolResult()).blockLast();
+
+        assertEquals(List.of("改用方案 B"), delivered);
+    }
 }

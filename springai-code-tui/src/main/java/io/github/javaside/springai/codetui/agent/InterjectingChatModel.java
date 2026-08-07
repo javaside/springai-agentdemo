@@ -110,6 +110,9 @@ final class InterjectingChatModel implements ChatModel {
         List<Message> merged = new ArrayList<>(messages);
         merged.add(new UserMessage(wrapText(text.get())));
         log.debug("插话随本次调用送达（{} 字）", text.get().length());
+        // 通知 UI 把它打进信息流。⚠ 必须在 drainForInjection <b>返回之后</b>调（锁外），
+        // 且交出的是<b>原文</b>——包裹后的文本含给模型的行为指引，那不是用户说的话。
+        interjections.fireDelivered(text.get());
         return new Prompt(merged, prompt.getOptions());
     }
 
