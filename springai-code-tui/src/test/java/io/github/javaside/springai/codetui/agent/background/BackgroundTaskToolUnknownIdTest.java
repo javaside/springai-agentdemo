@@ -18,7 +18,7 @@ class BackgroundTaskToolUnknownIdTest {
     void unknownIdCarriesTheCurrentList() {
         BackgroundTaskRegistry registry = new BackgroundTaskRegistry(64);
         String alive = registry.register("explore", "扫描鉴权相关代码");
-        BackgroundTaskTool tool = new BackgroundTaskTool(registry, null, 1);
+        BackgroundTaskTool tool = new BackgroundTaskTool(registry, null, 1, () -> false);
 
         String out = tool.fetch(new BackgroundTaskTool.Query("task_不存在", false));
 
@@ -32,7 +32,7 @@ class BackgroundTaskToolUnknownIdTest {
     @DisplayName("未知 id 且注册表为空：清单说「当前没有后台任务」，而不是留白让模型猜")
     void unknownIdOnEmptyRegistrySaysSo() {
         BackgroundTaskRegistry registry = new BackgroundTaskRegistry(64);
-        BackgroundTaskTool tool = new BackgroundTaskTool(registry, null, 1);
+        BackgroundTaskTool tool = new BackgroundTaskTool(registry, null, 1, () -> false);
 
         String out = tool.fetch(new BackgroundTaskTool.Query("task_不存在", false));
 

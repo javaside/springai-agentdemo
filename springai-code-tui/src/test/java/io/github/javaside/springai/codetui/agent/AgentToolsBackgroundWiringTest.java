@@ -9,7 +9,9 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.nio.file.Path;
@@ -241,6 +243,47 @@ class AgentToolsBackgroundWiringTest {
         assertTrue(rt.backgroundRegistry().all().isEmpty(),
                 "关闭后的派发应在登记之前就被挡掉，否则又是一条停在 RUNNING 的幽灵。实际="
                         + rt.backgroundRegistry().all());
+    }
+
+    /**
+     * ★ 装配期真的把「有没有人在插话」这根线接给了 {@code TaskOutput}。
+     *
+     * <p>{@link io.github.javaside.springai.codetui.agent.background.BackgroundTaskTool} 自己的单测
+     * （{@code BackgroundTaskToolInterjectionTest}）只证明「给它一个会返回 true 的 supplier，它会让路」。
+     * 生产若把那个参数填成 {@code () -> false}，那些单测<b>一条都不会红</b>，而真人这边
+     * {@code block=true} 依旧是一堵 300 秒的墙——正是本条要钉住的那类装配漏线。
+     *
+     * <p>故这里必须与 {@code interjections()} 取自<b>同一次</b> build（见 {@code RuntimeToolSet.toolsOf}），
+     * 各建一次的话两个对象互不相干，断言恒绿。
+     *
+     * <p><b>变异实测：把那个 supplier 改回 {@code () -> false}，本条确实红</b>——但杀死它的是
+     * {@code @Timeout}（30 秒），不是下面那句 {@code ms < 5_000}：生产默认超时 300 秒，
+     * 断言根本等不到执行。故看到 {@code TimeoutException} 就是「这根线断了」，别当成机器慢。
+     * 留着 {@code ms < 5_000} 是为了另一半情形——有人把
+     * {@code CODETUI_TASK_OUTPUT_TIMEOUT_SECONDS} 调小时，它给出的是能读的那句话。
+     */
+    @Test
+    @Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    @DisplayName("★ TaskOutput(block=true) 拿到的是真实插话队列——装配漏线则等满 300 秒")
+    void taskOutputYieldsToPendingInterjectionInRealWiring(@TempDir Path root) {
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
+        ToolCallback taskOutput = RuntimeToolSet.toolsOf(rt).get("TaskOutput");
+        assertNotNull(taskOutput, "前置：主 agent 工具集里得有 TaskOutput，否则本用例是空转的");
+
+        String id = rt.backgroundRegistry().register("explore", "永不完成的调查");
+        rt.interjections().offer("先别等了，我有话说");
+
+        long t0 = System.nanoTime();
+        String out = taskOutput.call("{\"task_id\":\"" + id + "\",\"block\":true}",
+                new ToolContext(Map.of("turnId", 1L)));
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+
+        assertTrue(ms < 5_000,
+                "等了 " + ms + "ms——装配没把真实插话队列接给 TaskOutput（填成了恒 false 的 supplier？），"
+                        + "用户那句话得等这段阻塞跑完才送得出去");
+        assertTrue(out.contains("仍在运行"), "让位不等于任务出事了：" + out);
+        assertEquals(1, rt.interjections().pendingCount(),
+                "让路而已，不该顺手把插话消费掉——取走它是 InterjectingChatModel 的活");
     }
 
     // ── env 解析：非法值回落默认而不是崩启动（测纯函数，不改进程环境变量） ──

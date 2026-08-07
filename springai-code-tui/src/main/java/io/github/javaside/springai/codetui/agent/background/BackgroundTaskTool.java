@@ -4,6 +4,8 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
+import java.util.function.BooleanSupplier;
+
 /**
  * {@code TaskOutput} 工具：取回后台任务的结果。
  *
@@ -61,17 +63,26 @@ public final class BackgroundTaskTool {
     private final BackgroundTaskRegistry registry;
     private final TaskResultStore results;
     private final int timeoutSeconds;
+    private final BooleanSupplier interjectionPending;
 
-    public BackgroundTaskTool(BackgroundTaskRegistry registry, TaskResultStore results, int timeoutSeconds) {
+    /**
+     * @param interjectionPending 「此刻有没有未送达的用户插话」。<b>必填、不给默认值</b>：
+     *                            漏接的后果是阻塞等待重新变回一堵墙，而这是个纯时序问题——
+     *                            功能测试全绿、界面看着也正常，只有真人在等的时候才发作。
+     *                            强制每个调用点显式表态，比留一个 {@code () -> false} 的重载安全。
+     */
+    public BackgroundTaskTool(BackgroundTaskRegistry registry, TaskResultStore results, int timeoutSeconds,
+                              BooleanSupplier interjectionPending) {
         this.registry = registry;
         this.results = results;
         this.timeoutSeconds = Math.min(3600, Math.max(1, timeoutSeconds));
+        this.interjectionPending = interjectionPending;
     }
 
     /** 构建名为 "TaskOutput" 的 ToolCallback。 */
     public static ToolCallback create(BackgroundTaskRegistry registry, TaskResultStore results,
-                                      int timeoutSeconds) {
-        BackgroundTaskTool tool = new BackgroundTaskTool(registry, results, timeoutSeconds);
+                                      int timeoutSeconds, BooleanSupplier interjectionPending) {
+        BackgroundTaskTool tool = new BackgroundTaskTool(registry, results, timeoutSeconds, interjectionPending);
         return FunctionToolCallback.builder("TaskOutput", (Query q) -> tool.fetch(q))
                 .description(DESCRIPTION)
                 .inputType(Query.class)
@@ -116,12 +127,25 @@ public final class BackgroundTaskTool {
      *
      * <p><b>被中断时立刻返回当前状态并<u>重新置位中断标志</u></b>：吞掉中断会让“回合已取消”
      * 这个信号在这里消失，上层再也看不到。
+     *
+     * <p><b>有未送达插话就提前收工</b>。这一等最长 300 秒，而它跑在<b>主 agent 的工具线程</b>上：
+     * 期间主回合不结束（用户打字走插话分支），主 agent 也不发模型调用——而插话的唯一送达点
+     * 就是模型调用。不让路的话，「后台」这两个字被 {@code block=true} 抵消得干干净净，
+     * 用户要等的时长和前台 Task 一模一样。反正每 200ms 醒一次，顺路问一句几乎不要钱。
+     *
+     * <p><b>返回值刻意不加特殊措辞</b>（还是那句「仍在运行…稍后再取」）：用户那句话会出现在
+     * <b>紧接着的同一次</b>模型调用里，模型自己看得见发生了什么；再编一句「因为有人插话所以我提前
+     * 返回了」是在描述模型无从据此改变行为的管道细节，还多一处要跟着改的字符串。
+     *
+     * <p>不会来回空转：让路之后那次模型调用会把插话取走，队列即空，模型若再 {@code block=true}
+     * 就正常等下去。
      */
     private BackgroundTask awaitFinish(String id) {
         long deadline = System.nanoTime() + timeoutSeconds * 1_000_000_000L;
         while (System.nanoTime() < deadline) {
             BackgroundTask t = registry.find(id);
             if (t == null || t.finished()) return t;
+            if (interjectionPending.getAsBoolean()) return t;
             try {
                 Thread.sleep(POLL_INTERVAL_MS);
             } catch (InterruptedException e) {

@@ -91,8 +91,25 @@ public final class RuntimeToolSet {
      */
     private static List<ToolCallback> assembledTools(Path root) {
         ProviderRegistry registry = new ProviderRegistry(List.of(new DeepSeekProvider("fake-key")));
-        ChatClient client = AgentTools.build(registry, root, new StubListener()).client();
+        return toolsOf(AgentTools.build(registry, root, new StubListener()).client());
+    }
 
+    /**
+     * 从<b>已经建好</b>的 runtime 上取回同一份工具列表。
+     *
+     * <p>与 {@link #byRegisteredName} 的区别只在于「谁来 build」：需要把工具与该次装配的<b>其他</b>
+     * 产物（如 {@code interjections()} / {@code backgroundRegistry()}）对上号时，必须是同一次 build——
+     * 各建一次的话拿到的是两个互不相干的对象，测试会永远绿，而它想验的正是「这两个是同一个」。
+     */
+    public static Map<String, ToolCallback> toolsOf(AgentTools.AgentRuntime runtime) {
+        Map<String, ToolCallback> byName = new LinkedHashMap<>();
+        for (ToolCallback c : toolsOf(runtime.client())) {
+            byName.putIfAbsent(c.getToolDefinition().name(), c);
+        }
+        return byName;
+    }
+
+    private static List<ToolCallback> toolsOf(ChatClient client) {
         // prompt() 复制一份 default request spec，defaultTools 原样带过来；这是取回装配期工具列表的唯一公开入口。
         ChatClient.ChatClientRequestSpec spec = client.prompt();
         if (!(spec instanceof DefaultChatClient.DefaultChatClientRequestSpec defaultSpec)) {

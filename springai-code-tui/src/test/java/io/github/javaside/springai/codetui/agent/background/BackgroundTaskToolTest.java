@@ -14,13 +14,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BackgroundTaskToolTest {
 
     private static BackgroundTaskTool tool(BackgroundTaskRegistry reg, Path root) {
-        return new BackgroundTaskTool(reg, new TaskResultStore(root), 1);   // 阻塞上限 1s，测试跑得快
+        return new BackgroundTaskTool(reg, new TaskResultStore(root), 1, () -> false);   // 阻塞上限 1s，测试跑得快
     }
 
     @Test
     void toolIsNamedTaskOutputAndSchemaHasTaskIdAndBlock(@TempDir Path root) {
         ToolCallback tc = BackgroundTaskTool.create(
-                new BackgroundTaskRegistry(64), new TaskResultStore(root), 300);
+                new BackgroundTaskRegistry(64), new TaskResultStore(root), 300, () -> false);
         assertEquals("TaskOutput", tc.getToolDefinition().name());
         String schema = tc.getToolDefinition().inputSchema();
         assertTrue(schema.contains("task_id"));

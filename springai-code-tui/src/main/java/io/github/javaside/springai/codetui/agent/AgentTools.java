@@ -413,13 +413,21 @@ public final class AgentTools {
         ToolCallback decoratedParallelTool = new PermissionCallback(
                 new ToolEventCallback(parallelTool, listener), permissionEngine, listener);
 
+        // 插话队列：UI 忙时投递，ChatModel 装饰层在下一次调用时取走随 prompt 送达。
+        // 所有 provider 共用一个实例——插话与用哪家模型无关，切模型不该把没送出去的话弄丢。
+        //
+        // <b>建在这里而不是挨着 ChatClient 那段</b>：下面的 TaskOutput 也要它。那个工具的
+        // block=true 分支会在主 agent 工具线程上一直等（最长 300 秒），期间主 agent 不发模型调用，
+        // 而模型调用是插话的唯一送达点——它必须问得到「此刻有没有人在等着说话」才能让路。
+        Interjections interjections = new Interjections();
+
         // TaskOutput：<b>仅主 agent</b>——不进 decoratedList（照记忆工具/ExitPlanMode 的既有做法）。
         // 子 agent 拿不到 Task，自然也没有属于自己的后台任务；给了它只会让它去捞别人的结果。
         // 装饰层数与 Task / ParallelTasks 一致（不包 MediaExternalizingCallback：返回值是纯文本）。
         ToolCallback decoratedTaskOutputTool = new PermissionCallback(
                 new ToolEventCallback(
                         BackgroundTaskTool.create(backgroundRegistry, backgroundResults,
-                                resolveTaskOutputTimeout()),
+                                resolveTaskOutputTimeout(), () -> interjections.pendingCount() > 0),
                         listener),
                 permissionEngine, listener);
 
@@ -506,9 +514,6 @@ public final class AgentTools {
         // 每个 provider 的视觉装饰器实例单独留一份引用：/context 要按<b>激活</b> provider 读
         // lastSnapshot()，而快照是每个装饰器自己的状态（预算也按实例计），拿错一个就报错数字。
         java.util.Map<String, VisionMaterializingChatModel> visionModels = new java.util.LinkedHashMap<>();
-        // 插话队列：UI 忙时投递，ChatModel 装饰层在下一次调用时取走随 prompt 送达。
-        // 所有 provider 共用一个实例——插话与用哪家模型无关，切模型不该把没送出去的话弄丢。
-        Interjections interjections = new Interjections();
         for (LlmProvider provider : registry.allProviders()) {
             if (!provider.available()) {
                 continue;
