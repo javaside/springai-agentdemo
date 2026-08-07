@@ -83,6 +83,8 @@ public final class CodingAgent implements SubmitHandler {
     private final java.util.Map<String, VisionMaterializingChatModel> visionModels;
     private final io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry;   // 可空（测试桩）：后台任务的唯一并发真相源
     private final io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults;           // 可空（测试桩）：后台结果进会话前的限幅
+    /** 可空（测试桩）：插话队列，与 ChatClient 装饰链共用同一实例；null 时插话相关方法全 no-op。 */
+    private final Interjections interjections;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -131,6 +133,7 @@ public final class CodingAgent implements SubmitHandler {
         this.visionModels = null;      // 单-client 桩路径：无视觉装饰器（/context 的视觉列恒为 0）
         this.backgroundRegistry = null;  // 单-client 桩路径：无后台子系统（四个后台方法退回"什么都没有"）
         this.backgroundResults = null;
+        this.interjections = null;       // 单-client 桩路径：无插话队列（插话门面全 no-op、回合末不补历史）
     }
 
     /**
@@ -220,15 +223,8 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
-     * 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；
-     * {@code permissionEngine} 权限引擎，须是 {@code AgentRuntime.permissionEngine()} 那一个——
-     * 门面（Shift+Tab 切模式 / {@code /permissions} 列规则）改的必须正是工具那一侧读的那个对象（可空，桩路径用）。
-     *
-     * <p>{@code visionModels} 须是 {@code AgentRuntime.visionModels()} 那一份——{@code /context} 要报的是
-     * <b>真正发出去的那条请求</b>兑现了多少图，读别的实例只会得到恒 0 的假账。
-     *
-     * <p>{@code backgroundRegistry} / {@code backgroundResults} 同样须是 {@code AgentRuntime} 那一份——
-     * 注册表是后台任务的<b>唯一</b>并发真相源，另建一个等于 UI 面板和真正在跑的任务各看各的。
+     * 向后兼容重载（无插话队列：测试桩用）。等价 {@code interjections=null}——
+     * 插话门面全 no-op、回合末不补历史，与 {@link SubmitHandler} 的默认实现同语义。
      */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
@@ -241,6 +237,38 @@ public final class CodingAgent implements SubmitHandler {
                        java.util.Map<String, VisionMaterializingChatModel> visionModels,
                        io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
                        io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, mcpRegistry, permissionEngine, visionModels,
+                backgroundRegistry, backgroundResults, null);
+    }
+
+    /**
+     * 多 provider 生产构造（全参）：{@code mcpRegistry} 运行期 MCP 中枢，submit 每回合快照注入其 activeTools（可空）；
+     * {@code permissionEngine} 权限引擎，须是 {@code AgentRuntime.permissionEngine()} 那一个——
+     * 门面（Shift+Tab 切模式 / {@code /permissions} 列规则）改的必须正是工具那一侧读的那个对象（可空，桩路径用）。
+     *
+     * <p>{@code visionModels} 须是 {@code AgentRuntime.visionModels()} 那一份——{@code /context} 要报的是
+     * <b>真正发出去的那条请求</b>兑现了多少图，读别的实例只会得到恒 0 的假账。
+     *
+     * <p>{@code backgroundRegistry} / {@code backgroundResults} 同样须是 {@code AgentRuntime} 那一份——
+     * 注册表是后台任务的<b>唯一</b>并发真相源，另建一个等于 UI 面板和真正在跑的任务各看各的。
+     *
+     * <p>{@code interjections} 也须是 {@code AgentRuntime.interjections()} 那一份——它是 UI 与
+     * {@code InterjectingChatModel} 之间的唯一交汇点。另建一个不会报错，只会让插话投进去永远没人取。
+     */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
+                       PermissionEngine permissionEngine,
+                       java.util.Map<String, VisionMaterializingChatModel> visionModels,
+                       io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
+                       io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults,
+                       Interjections interjections) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -261,6 +289,7 @@ public final class CodingAgent implements SubmitHandler {
         this.visionModels = visionModels;
         this.backgroundRegistry = backgroundRegistry;
         this.backgroundResults = backgroundResults;
+        this.interjections = interjections;
     }
 
     @Override

@@ -506,6 +506,9 @@ public final class AgentTools {
         // 每个 provider 的视觉装饰器实例单独留一份引用：/context 要按<b>激活</b> provider 读
         // lastSnapshot()，而快照是每个装饰器自己的状态（预算也按实例计），拿错一个就报错数字。
         java.util.Map<String, VisionMaterializingChatModel> visionModels = new java.util.LinkedHashMap<>();
+        // 插话队列：UI 忙时投递，ChatModel 装饰层在下一次调用时取走随 prompt 送达。
+        // 所有 provider 共用一个实例——插话与用哪家模型无关，切模型不该把没送出去的话弄丢。
+        Interjections interjections = new Interjections();
         for (LlmProvider provider : registry.allProviders()) {
             if (!provider.available()) {
                 continue;
@@ -515,7 +518,11 @@ public final class AgentTools {
             VisionMaterializingChatModel visionModel =
                     VisionMaterializingChatModel.wrap(provider.chatModel(), root);
             visionModels.put(provider.id(), visionModel);
-            ChatClient c = ChatClient.builder(visionModel)
+            // 插话注入包在<b>最外层</b>：位置必须在整条 advisor 链下游，才拿得到已配平的完整消息表
+            // （工具结果落库与「构建下一次 prompt」是同一步，会话存储层看不到这个位置）。
+            // 若将来主 agent 也用上 RetryingChatModel，本层必须仍在它<b>外面</b>——反了的话重试时
+            // 队列已被第一次尝试排空，插话会在一次网络抖动后静默消失。
+            ChatClient c = ChatClient.builder(InterjectingChatModel.wrap(visionModel, interjections))
                     .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                             .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, environmentInfo)
                             .param(AgentEnvironment.GIT_STATUS_KEY, gitStatus)
@@ -540,7 +547,7 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
-                backgroundRegistry, backgroundResults);
+                backgroundRegistry, backgroundResults, interjections);
     }
 
     /**
@@ -734,6 +741,8 @@ public final class AgentTools {
      * @param fileExternalizer    路径②：回合间（{@code CodingAgent.submit} 开头）把过往大文本 tool 结果外置为引用，与路径①共用 store/root
      * @param permissionEngine    权限引擎（UI 经它读/切模式、列生效规则；三处装配点共用同一实例）
      * @param visionModels        每个 provider 的视觉兑现装饰器，键同 {@code clients}；供 {@code /context} 按激活 provider 读 {@code lastSnapshot()}
+     * @param interjections       插话队列，全 provider 共用一个实例；与 {@code clients} 的 {@link InterjectingChatModel} 装饰层是同一个对象，
+     *                            {@code CodingAgent} 拿它做门面与回合末补历史。另建一个等于 UI 投的话永远没人取
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -749,7 +758,8 @@ public final class AgentTools {
                                PermissionEngine permissionEngine,
                                java.util.Map<String, VisionMaterializingChatModel> visionModels,
                                BackgroundTaskRegistry backgroundRegistry,
-                               TaskResultStore backgroundResults) {
+                               TaskResultStore backgroundResults,
+                               Interjections interjections) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
