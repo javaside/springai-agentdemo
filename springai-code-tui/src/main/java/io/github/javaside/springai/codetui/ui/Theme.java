@@ -29,6 +29,12 @@ final class Theme {
     static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
     static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
     static final Style QUEUED      = Style.create().fg(Color.GRAY).bg(Color.indexed(236)); // 排队消息：暗灰底，待发
+    // 未送达插话：与排队消息<b>同底不同色相</b>（暖橙，同主题强调色）。两者都钉在输入框上方、都是
+    // 「还没走的话」，但去处不同——插话随本回合下一次模型调用送达，排队要等整个回合跑完。
+    // 长得一样的话，用户分不清自己刚才那句话什么时候会被听见。
+    // <b>不靠底色区分</b>：本 TUI 的 InlineDisplay 下底色会串行（见 PICK_SEL 的说明），
+    // 底色只沿用排队那份已经验证过的，区分交给前景色相 + 行首符号。
+    static final Style INTERJECT   = Style.create().fg(Color.indexed(215)).bg(Color.indexed(236));
     static final Style PICK_TITLE  = Style.create().fg(Color.indexed(215)).bold();        // 选择器标题=暖橙
     // 高亮项：<b>纯前景</b>高亮，<b>不用灰底</b>。行内菜单里带底色的高亮条在本 TUI 的 InlineDisplay 下会
     // 「后半段串到下一项」——它发 ANSI 时裁掉行尾空白，补白/清除都失效，底色无法对齐/清净（已用 pty + pyte

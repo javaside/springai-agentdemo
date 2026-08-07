@@ -244,6 +244,9 @@ public final class CodeTuiView extends InlineApp {
         List<ConversationState.SubtaskView> subs = state.subtaskSnapshot();
         List<ConversationState.BackgroundView> bgTasks = state.backgroundTasks();
         List<String> queued = state.queuedSnapshot();
+        // ⚠ 必须是非破坏性快照。接到 takePendingInterjections() 上的话，渲染一帧就把队列清空，
+        // 而面板看上去还很正常（它读的就是刚被自己清掉的那份）——插话再也送不到模型手里。
+        List<String> interjections = onSubmit.pendingInterjectionTexts();
         String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
         return column(
                 scope(!tail.isEmpty(), richText(printer.preview(tail)).ellipsisStart()),
@@ -252,6 +255,9 @@ public final class CodeTuiView extends InlineApp {
                 // ⏱ 后台任务面板（零任务时不占行）。/tasks 打开时收起：那个面板列的是同一批任务，
                 // 两份并排只会把输入框往上顶，且用户分不清该按哪一份。
                 scope(!bgTasks.isEmpty() && !pickingTasks, backgroundChildren(bgTasks)),
+                // 未送达插话面板：排在排队面板<b>上方</b>，因为它先走（drain 排在 pollQueued 之前）。
+                // 两个面板的上下顺序即送达先后，看一眼就知道自己那句话什么时候会被听见。
+                scope(!interjections.isEmpty(), interjectionChildren(interjections)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
                 scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
@@ -1286,10 +1292,12 @@ public final class CodeTuiView extends InlineApp {
             // 带技能挂载的也不能走插话：插话是纯 UserMessage，带不了 submit 的第二参数，会静默丢技能。
             if (!state.isIdle() && skill == null) {
                 onSubmit.interject(effective);
-                // 回显<b>原话</b>（不是 effective：附件已被渲染成一大段 FileReference 文本）。
-                // ⚠ 不写「待送达」之类的状态：内联 TUI 打进 scrollback 的行改不了，送达之后那行会
-                // 永远停在错的状态上。送达与否交给状态栏的实时计数（见 statusLine 的「插话 N 条」）。
-                state.pushInfo("› " + text);
+                // ⚠ 这里<b>刻意什么都不往 scrollback 打</b>。此刻它还没送达，而 scrollback 里的行
+                // 改不了——打下去就永远停在「输入时」这个位置上，而它的真实位置在后面那条工具结果
+                // 之后。未送达期间的可见性交给输入框上方的插话面板（interjectionChildren），
+                // 送达时才由 CodingAgent 接的送达回调经 onUserMessage 打进信息流。
+                // 这一段曾经是 pushInfo("› " + text)：位置错、样式也不是用户消息，且送达与否全靠
+                // 状态栏一个数字去猜——而模型「消化了插话但不显式回应」恰恰是常态。
                 return;
             }
             // 入队的同样是注入后的文本：出队时直接 dispatch，那时输入框早已换成别的内容，
@@ -2485,12 +2493,32 @@ public final class CodeTuiView extends InlineApp {
 
     /** 排队消息面板：固定在输入框上方，每条一行（暗灰底、› 前缀、超宽截断），仿 Claude Code。 */
     private Element[] queuedChildren(List<String> queued) {
+        return pinnedMessages(queued, "› ", QUEUED);
+    }
+
+    /**
+     * 未送达插话面板：形状同排队消息，换 {@code ⤷} 前缀与暖橙前景。
+     *
+     * <p><b>这是插话在未送达期间屏幕上的唯一存在</b>——输入那一刻不再往 scrollback 打行
+     * （位置会是错的，且 scrollback 改不了），送达时才由 {@code onUserMessage} 打进信息流。
+     * 少了这个面板，用户按完回车会看到什么都没发生。
+     *
+     * <p>与排队消息<b>必须看得出区别</b>：两者都钉在这儿、都是「还没走的话」，但插话随本回合
+     * 下一次模型调用送达，排队要等整个回合跑完。区分靠行首符号 + 前景色相，<b>不靠底色</b>
+     * （本 TUI 的 InlineDisplay 下底色会串行，见 {@code Theme.PICK_SEL}）。
+     */
+    private Element[] interjectionChildren(List<String> interjections) {
+        return pinnedMessages(interjections, "⤷ ", INTERJECT);
+    }
+
+    /** 钉在输入框上方的「待发消息」行：折成单行、超宽按显示宽度截断。 */
+    private Element[] pinnedMessages(List<String> messages, String prefix, Style style) {
         List<Element> els = new ArrayList<>();
-        int inner = Math.max(8, terminalWidth() - displayWidth(INDENT) - 2);   // 减缩进与 "› "
-        for (String q : queued) {
+        int inner = Math.max(8, terminalWidth() - displayWidth(INDENT) - displayWidth(prefix));
+        for (String q : messages) {
             String oneLine = q.replaceAll("\\s+", " ").trim();
             if (displayWidth(oneLine) > inner) oneLine = dev.tamboui.text.CharWidth.substringByWidth(oneLine, inner - 1) + "…";
-            els.add(text(INDENT + "› " + oneLine).style(QUEUED));
+            els.add(text(INDENT + prefix + oneLine).style(style));
         }
         return els.toArray(new Element[0]);
     }

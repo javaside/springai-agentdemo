@@ -61,10 +61,15 @@ class CodeTuiViewInterjectionRouteTest {
         assertEquals(List.of(), h.submitted, "插话不该起新回合");
     }
 
-    /** 回显打的是用户原话，且绝不带「待送达」之类的状态——scrollback 里的行改不了，送达后会永远停在错的状态上。 */
+    /**
+     * 输入那一刻<b>不</b>往 scrollback 打行——那时它还没送达，而 scrollback 里的行改不了，
+     * 打下去就永远停在「输入时」这个错位置上（真实位置在后面那条工具结果之后）。
+     * 未送达期间的可见性交给输入框上方的面板（见 {@code CodeTuiViewInterjectionPanelTest}），
+     * 送达时才由 {@code onUserMessage} 打进信息流。
+     */
     @Test
-    @DisplayName("插话回显用户原话，不写送达状态")
-    void interjectionEchoesRawText() {
+    @DisplayName("输入插话时不写 scrollback")
+    void interjectionDoesNotWriteScrollbackOnInput() {
         ConversationState s = new ConversationState();
         Handler h = new Handler();
         CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
@@ -76,7 +81,9 @@ class CodeTuiViewInterjectionRouteTest {
                 .map(ConversationState.OutputLine::text)
                 .filter(t -> t.contains("改用方案 B"))
                 .toList();
-        assertEquals(List.of("› 改用方案 B"), echoed, "只回显原话，不附加送达状态");
+        assertEquals(List.of(), echoed,
+                "输入时就打进 scrollback 的话，位置是错的且再也改不了：" + echoed);
+        assertEquals(List.of("改用方案 B"), h.interjected, "但话必须已经进队列");
     }
 
     /** 压缩中没有在跑的模型循环，插话进去石沉大海——必须回落老队列。 */
