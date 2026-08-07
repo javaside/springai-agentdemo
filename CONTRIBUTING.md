@@ -64,6 +64,26 @@ mvn -pl springai-code-tui test -Dtest='CodingAgentSpikeTest#todoTurnIdBinding'
 
 翻翻已有的 spec 就知道期望的详细程度。核心要求是：**凡是「实测得到的事实」都要写下证据**（`javap` 输出、`curl` 结果、字节码片段），别写没验证过的推测——仓库里已经有好几处「当初想当然、后来被实测推翻」的更正记录。
 
+## 发布
+
+发版说明写在 `docs/release-notes/vX.Y.Z.md`，`CHANGELOG.md` 只加一行索引。
+
+**说明里的链接一律写相对路径**（`(v1.7.0.md)`、`(../../LICENSE)`）。这是唯一在四个环境里
+都成立的写法：仓库文件视图、本地编辑器、以及仓库将来搬到任何别的托管站。
+
+**但 GitHub Release 页面解析不了相对路径**——它不在 `docs/release-notes/` 这个目录下，
+`(v1.7.0.md)` 在那里一律 404。所以别为了 Release 页面把源文件改成绝对 URL（那等于为一个
+渲染环境赔掉另外三个，而且把 `github.com/<owner>/<repo>` 焊死在文档里）。转换交给发布脚本，
+它在发布那一刻做替换，仓库里的文件一个字都不动，仓库地址从 `git remote get-url origin` 推导：
+
+```bash
+python3 scripts/publish-release-notes.py --print v1.8.0   # 先看一眼转换结果
+python3 scripts/publish-release-notes.py v1.8.0           # 发布这一个
+python3 scripts/publish-release-notes.py --all            # 全部重刷
+```
+
+`gh release create` 建新 Release 时同理——用 `--print` 的输出，别直接 `--notes-file` 源文件。
+
 ## 测试要求
 
 - **先写测试，且必须真的看到它红**。看不到红就说明这条测试没测到目标行为。
