@@ -58,6 +58,9 @@ public final class CodingAgent implements SubmitHandler {
             new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
             new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"));
 
+    /** 只用于「失败了也不该带崩回合」的那几处降级路径（如插话补历史）；不做常规日志。 */
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CodingAgent.class);
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final ChatClient chatClient;
@@ -835,6 +838,83 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     private void handleComplete(long turnId) {
+        persistInterjection();          // ⚠ 必须在 onTurnComplete 之前，见该方法注释
         listener.onTurnComplete(turnId);
+    }
+
+    /**
+     * 把插话插进事件表：anchor 那条 tool 事件之后；anchor 为 null 或找不到 → 追加末尾。
+     *
+     * <p>追加末尾会让历史以 {@link UserMessage} 结尾，看着危险，但下个回合
+     * {@link #foldTrailingUserIntoOutbound} 正好接住这个形状、把它折进出站文本，
+     * 不会变成两条连续 user 被 DeepSeek 400 拒收。<b>不需要为此新写保护。</b>
+     *
+     * <p>纯函数，不碰仓库——便于单测直接断言位置（见 {@code InterjectionHistoryTest}）。
+     */
+    static List<SessionEvent> insertInterjectionForTest(List<SessionEvent> events, String sid,
+                                                        String anchorToolCallId, String rawText) {
+        List<SessionEvent> out = new java.util.ArrayList<>(events);
+        out.add(insertIndex(events, anchorToolCallId),
+                SessionEvent.builder().sessionId(sid)
+                        .message(new UserMessage(InterjectingChatModel.wrapText(rawText)))
+                        .build());
+        return out;
+    }
+
+    /**
+     * anchor 那条 tool 事件的下一个位置；anchor 为 null 或找不到 → 末尾。
+     *
+     * <p>从后往前找：同一个 tool call id 在历史里只会出现一次，但倒着找能在多轮工具的长历史上
+     * 更快命中（插话的 anchor 总是最近那轮）。找不到通常是它已被 {@code sanitize} 裁掉。
+     */
+    private static int insertIndex(List<SessionEvent> events, String anchorToolCallId) {
+        if (anchorToolCallId == null) {
+            return events.size();
+        }
+        for (int i = events.size() - 1; i >= 0; i--) {
+            if (events.get(i).getMessage() instanceof org.springframework.ai.chat.messages.ToolResponseMessage trm
+                    && trm.getResponses().stream().anyMatch(r -> anchorToolCallId.equals(r.id()))) {
+                return i + 1;
+            }
+        }
+        return events.size();
+    }
+
+    /**
+     * 回合末把「已送达模型、但尚未落库」的插话补进会话历史。
+     *
+     * <p>不补的话插话只活在那一次 {@code Prompt} 里：落盘后 {@code -c} 恢复、以及压缩之后，
+     * 历史上就会出现一次「无来由的转向」——模型照着一句不存在的话改了方向。
+     *
+     * <p><b>必须在通知 listener 之前调用。</b>UI 的出队钩子靠 {@code !busy()} 放行，而 state 回 IDLE
+     * 由 listener 事件驱动。放到通知之后，新回合的 {@code SessionMemoryAdvisor.before()} 会先写入
+     * 新 user，本方法随后按 anchor 插入就会错位。<b>重排这两行不会报任何错</b>，只会在
+     * {@code -c} 恢复后表现为消息顺序离奇。
+     *
+     * <p>本方法跑在 reactive 线程时 assistant 收尾消息<b>已经落库</b>（实测：{@code SessionMemoryAdvisor}
+     * 先于 {@code doOnComplete}，{@code .call()} 与 {@code .stream()} 两条路径一致），
+     * 故这里看到的历史形状就是 {@code … → tool → assistant(收尾)}，anchor 定位有意义。
+     *
+     * <p>{@code sid} 必须快照：本方法跑在 reactive 线程，{@code /clear} 会在 UI 线程换掉
+     * volatile {@link #sessionId}（纪律同 {@link #trimDanglingToolCalls}）。
+     *
+     * <p>失败静默跳过：回合已经成功完成，不该因为一句插话没归档就变成错误。
+     */
+    private void persistInterjection() {
+        if (interjections == null || sessionService == null || sessionRepository == null) {
+            return;
+        }
+        Interjections.Delivered d = interjections.takeForHistory().orElse(null);
+        if (d == null) {
+            return;
+        }
+        String sid = sessionId;
+        try {
+            List<SessionEvent> out = insertInterjectionForTest(
+                    sessionService.getEvents(sid), sid, d.anchorToolCallId(), d.text());
+            sessionRepository.replaceEvents(sid, List.copyOf(out));
+        } catch (RuntimeException ex) {
+            log.debug("插话补历史失败，跳过（回合已成功完成）", ex);
+        }
     }
 }
