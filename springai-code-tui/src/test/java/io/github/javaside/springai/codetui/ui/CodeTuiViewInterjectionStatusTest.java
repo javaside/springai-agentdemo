@@ -58,6 +58,32 @@ class CodeTuiViewInterjectionStatusTest {
         assertTrue(screen.contains("插话 1 条"), "状态栏应显示未送达条数:\n" + screen);
     }
 
+    /**
+     * 窄终端 + 长工具入参：这才是插话最典型的场景（派个子 agent 跑着，我想改方向）。
+     *
+     * <p><b>上面那两条测不到它</b>：入参用的是 {@code "{}"}（两字符，永不溢出），
+     * 回读宽度默认 120（什么都放得下）。两个条件各绕开一半，而这个 bug 只在两者同时成立时发作——
+     * 实测 80 列下一条真实 {@code Task} 调用会把「插话 1 条 · Esc 取消」<b>整段</b>挤出屏幕，
+     * 于是插话唯一的实时反馈消失，用户看不出自己那句话到底送没送出去。
+     */
+    @Test
+    @DisplayName("窄终端下长工具入参不得把插话条数挤掉")
+    void longToolInputMustNotSqueezeOutInterjectionCount() {
+        ConversationState s = new ConversationState();
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(s, h, Path.of("."));
+        s.onTurnStarted(1);
+        s.onToolStarted(1, "Task", "{\"description\":\"review permission loader\",\"prompt\":\""
+                + "Read the PermissionConfigLoader class and verify every downgrade path logs a WARN "
+                + "and never throws.\",\"subagent_type\":\"general-purpose\"}");
+        h.pending = 1;
+
+        String screen = ViewScreen.of(v, 80);
+        assertTrue(screen.contains("插话 1 条"), "80 列下插话条数被工具入参挤没了:\n" + screen);
+        assertTrue(screen.contains("Esc 取消"), "「按什么键能取消」比工具入参更不该被截:\n" + screen);
+        assertTrue(screen.contains("运行 Task"), "工具名要留着——被截的该是入参，不是「在跑什么」:\n" + screen);
+    }
+
     /** 空串必须判：不判会渲染出一段悬空的 " · "，或者更糟的「插话 0 条」。 */
     @Test
     @DisplayName("没有插话时不渲染该段（避免悬空分隔符）")

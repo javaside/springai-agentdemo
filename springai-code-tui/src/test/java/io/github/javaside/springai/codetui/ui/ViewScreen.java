@@ -32,7 +32,22 @@ final class ViewScreen {
      * 否则回读文本里多出空格，子串匹配全部落空。
      */
     static String of(CodeTuiView view) {
-        Buffer buf = bufferOf(view);
+        return of(view, 120);
+    }
+
+    /**
+     * 指定宽度回读。
+     *
+     * <p><b>默认 120 会漏掉一整类缺陷</b>：状态行的内容是按 {@code terminalWidth()} 拼的，
+     * 宽终端下什么都放得下，「重要的那段被不重要的挤出屏幕」永远测不出来。
+     * 实测 {@code Task} 长入参在 80 列下会把「插话 N 条 · Esc 取消」整段挤没，
+     * 而当时的状态栏测试用的是 {@code "{}"} 两字符入参 + 120 列——两个条件各绕开一半。
+     *
+     * <p>⚠ 这里只改<b>回读缓冲区</b>的宽度；视图内部 {@code terminalWidth()} 在测试里
+     * 取不到真终端、恒为 80。故断言「窄终端下放不放得下」时传 80 才与内部一致。
+     */
+    static String of(CodeTuiView view, int width) {
+        Buffer buf = bufferOf(view, width);
         StringBuilder sb = new StringBuilder();
         for (int y = 0; y < buf.height(); y++) {
             for (int x = 0; x < buf.width(); x++) {
@@ -50,7 +65,11 @@ final class ViewScreen {
      * （如「选中高亮不得带底色」：底色在本 TUI 的 InlineDisplay 下会串到下一项，只看文本永远绿）。
      */
     static Buffer bufferOf(CodeTuiView view) {
-        Buffer buf = Buffer.empty(new Rect(0, 0, 120, 20));
+        return bufferOf(view, 120);
+    }
+
+    static Buffer bufferOf(CodeTuiView view, int width) {
+        Buffer buf = Buffer.empty(new Rect(0, 0, width, 20));
         Frame f = Frame.forTesting(buf);
         onRenderThread(() -> view.renderForTest().render(f, f.area(), RenderContext.empty()));
         return buf;

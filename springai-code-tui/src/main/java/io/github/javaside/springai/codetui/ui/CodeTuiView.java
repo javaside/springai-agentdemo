@@ -2571,11 +2571,43 @@ public final class CodeTuiView extends InlineApp {
             }
             case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + ijs + ns + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
             case RUNNING_TOOL -> {
-                String s = state.activeToolSummary();
+                String suffix = qs + ijs + ns + " · Esc 取消";
+                String s = fitToolSummary(state.activeToolSummary(), state.activeTool(), suffix);
                 yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
-                        qs + ijs + ns + " · Esc 取消", RUNNING, animTick, mode));
+                        suffix, RUNNING, animTick, mode));
             }
         };
+    }
+
+    /**
+     * 按终端宽度收窄工具入参摘要，给状态行尾部留出后缀的位置。
+     *
+     * <p><b>为什么必须收</b>：{@code ConversationState.summarize} 给的摘要最宽 80 列，而
+     * {@code Task} 的入参是含完整 prompt 的 JSON，<b>必然</b>吃满。加上 {@code ⏺ 运行 Task: }
+     * 前缀就是约 92 列——80 列终端上，尾部的「插话 N 条 · Esc 取消」<b>整段被截没</b>
+     * （离屏渲染实测：80 列全无、100 列剩半个字、120 列才完整）。
+     *
+     * <p>而尾部那几段恰恰是「你现在能做什么」：还有几条话没送出去、按什么键能取消。
+     * 工具入参是锦上添花，被截掉只是少看几个字符。同 {@link #backgroundStatusSuffix} 那条
+     * 「先截不重要的」纪律，只是方向相反——那里靠<b>排在后面</b>被动挨截，这里主动让位。
+     *
+     * <p>留 {@code ≥12} 列给摘要：再窄就只剩省略号，不如不显示；此时尾部照旧会被终端截，
+     * 但那是终端真的放不下，不是被我们自己挤掉的。
+     */
+    private String fitToolSummary(String summary, String toolName, String suffix) {
+        if (summary == null || summary.isEmpty()) {
+            return "";
+        }
+        // 固定开销：「⏺ 运行 」+ 工具名 + 「: 」+ 结尾「…」+ 后缀；modeTag 另占几列，宽松留 6
+        int overhead = displayWidth("⏺ 运行 : …") + displayWidth(toolName) + displayWidth(suffix) + 6;
+        int room = terminalWidth() - overhead;
+        if (room >= displayWidth(summary)) {
+            return summary;
+        }
+        if (room < 12) {
+            return "";
+        }
+        return dev.tamboui.text.CharWidth.substringByWidth(summary, room - 1) + "…";
     }
 
     /**
