@@ -68,6 +68,19 @@ final class ViewScreen {
         return bufferOf(view, 120);
     }
 
+    /**
+     * 渲染并回读<b>硬件光标</b>落点（{@code frame.setCursorPosition} 的最终值）；未设置返回 null。
+     *
+     * <p>硬件光标不是可见光标（那是反显块，落在 Buffer 样式里），但它是 IME 预编辑串的锚点
+     * ——Terminal.app 把拼音画在硬件光标处，停错行拼字就「错位」。这类断言只能落在 Frame 上。
+     */
+    static dev.tamboui.layout.Position cursorOf(CodeTuiView view, int width) {
+        Buffer buf = Buffer.empty(new Rect(0, 0, width, 20));
+        Frame f = Frame.forTesting(buf);
+        onRenderThread(() -> view.renderForTest().render(f, f.area(), RenderContext.empty()));
+        return f.cursorPosition().orElse(null);
+    }
+
     static Buffer bufferOf(CodeTuiView view, int width) {
         Buffer buf = Buffer.empty(new Rect(0, 0, width, 20));
         Frame f = Frame.forTesting(buf);

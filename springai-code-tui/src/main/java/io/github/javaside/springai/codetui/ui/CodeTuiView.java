@@ -47,6 +47,7 @@ import dev.tamboui.tui.bindings.KeyTrigger;
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
 import dev.tamboui.tui.event.PasteEvent;
+import dev.tamboui.tui.event.ResizeEvent;
 import dev.tamboui.widgets.block.Block;
 import dev.tamboui.widgets.block.BorderType;
 import dev.tamboui.widgets.block.Borders;
@@ -62,6 +63,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
@@ -123,6 +125,33 @@ public final class CodeTuiView extends InlineApp {
     private final ContextUsage ctxUsage;                             // 上下文用量追踪/报告（/context 报告 + 状态栏后缀）
     /** 后台任务结果的自动送达判定与失控刹车（纯状态机，见其类注释）。只在渲染线程（drain）读写。 */
     private final BackgroundNotifier notifier = new BackgroundNotifier();
+    /**
+     * 上一次见到的终端列宽，用来从 ResizeEvent 里滤出「宽度真的变了」（拖高度不重排，见
+     * {@link ResizeSweeper} 类注释）。只在渲染线程读写（onStart 种基线、全局 handler 更新）。
+     */
+    private int lastSeenWidth;
+    /** resize 停稳判定（两级修复的第二级扳机，见 {@link ResizeSettle}）。只在渲染线程读写。 */
+    private final ResizeSettle resizeSettle = new ResizeSettle(9);
+    /**
+     * resize 进行中（首个宽度变化事件 → 停稳重放完成）临时把硬件光标钉到显示区第 0 行。
+     *
+     * <p>硬件光标是 IME 预编辑串的锚点：Terminal.app 把拼音画在硬件光标处，<b>永久</b>钉第 0 行
+     * （上一版做法）= 中文用户每次拼字，拼音浮在框顶边框上（用户实报「打字错位」）。平时停回
+     * 文本行，只在 resize 窗口内钉 0 行保 {@link ResizeSweeper} 的「位移恒 0」不变量——拖拽中
+     * 没人打字。代价：每轮拖拽<b>第一步</b>的清扫起点错位（光标还在文本行、上方边框行被拆几行
+     * 就低几行），留 ≤1-2 行残迹，停稳重放收尾。
+     *
+     * <p>包私有：单测（同包）直接置位断言两种停放。生产只在渲染线程读写。
+     */
+    boolean parkCursorAtTop;
+    /**
+     * scrollback 输出留底（{@link Text} 或纯 {@link String}，与 Sink 两个重载一一对应）：
+     * resize 停稳后清可见屏、从这里按新宽度重放最近一屏，救回被终端重排顶走的信息流。
+     * 上限见 {@link #SCROLL_TAIL_CAP}（重放最多用到一屏行数，400 是宽裕量，防长会话无界增长）。
+     * 只在渲染线程读写（sink 打印与重放都在 drain/渲染线程）。
+     */
+    private final ArrayDeque<Object> scrollTail = new ArrayDeque<>();
+    private static final int SCROLL_TAIL_CAP = 400;
 
     /**
      * 刹车期间探明的「确有结果被扣住」。状态栏那句提示读它，<b>不</b>每帧去取列表。
@@ -227,7 +256,23 @@ public final class CodeTuiView extends InlineApp {
             @Override public void println(Text t)   { var r = runner(); if (r != null) r.println(t); }
             @Override public void println(String s) { var r = runner(); if (r != null) r.println(s); }
         };
-        this.printer = new ScrollbackPrinter(sink, root, this::terminalWidth, CodeTuiView::wrapSegments);
+        // 包一层留底 + 折行安全网：每行进 scrollback 的同时进 scrollTail 环形缓冲（resize 停稳
+        // 重放的素材，见字段注释）；出口处按终端宽兜底折行——InlineDisplay 的 println 定宽截断，
+        // 任何一条超宽行（错误、工具摘要等没自己折行的路径）都会「文字没显示全」。留底存的是
+        // <b>折行前</b>的原始行：重放按当时宽度重新折，拖窄不丢内容。包在最外层，测试注入的
+        // sink 也被记录且经过折行——两段逻辑因此可测。
+        ScrollbackPrinter.Sink inner = sink;
+        ScrollbackPrinter.Sink recording = new ScrollbackPrinter.Sink() {
+            @Override public void println(Text t) {
+                record(t);
+                for (Text piece : TextWrap.wrap(t, sinkWidth())) inner.println(piece);
+            }
+            @Override public void println(String s) {
+                record(s);
+                for (String seg : wrapSegments(s, sinkWidth())) inner.println(seg);
+            }
+        };
+        this.printer = new ScrollbackPrinter(recording, root, this::terminalWidth, CodeTuiView::wrapSegments);
         this.ctxUsage = new ContextUsage(onSubmit::contextStats, state::pushInfo);
     }
 
@@ -306,6 +351,19 @@ public final class CodeTuiView extends InlineApp {
 
     @Override
     protected void onStart() {
+        // 终端改宽度 → 重排撕裂内联显示区。全局 handler 在库按新宽度重画【之前】收到 ResizeEvent
+        // （InlineTuiRunner 对 ResizeEvent 是先派发后重画），此刻清掉重排残迹，重画原地盖回去。
+        // 挂钩点选在这而不是 drain 轮询：轮询看到宽度变化时库已经画过一帧脏的了（上一版翻车根因）。
+        lastSeenWidth = terminalWidth();
+        runner().eventRouter().addGlobalHandler(event -> {
+            if (event instanceof ResizeEvent re && re.width() > 0 && re.width() != lastSeenWidth) {
+                lastSeenWidth = re.width();
+                ResizeSweeper.sweep(runner());   // 第一级：拖拽中逐事件原地清扫，保住当前屏
+                resizeSettle.changed();          // 第二级：停稳后清屏重放，救回被顶走的信息流
+                parkCursorAtTop = true;          // 本次事件周期的重画即生效，直到停稳重放收尾
+            }
+            return EventResult.UNHANDLED;   // 只旁观，别拦事件：库还要靠它触发重画
+        });
         runner().runOnRenderThread(() -> printer.welcome(onSubmit.currentModel(),
                 io.github.javaside.springai.codetui.AppInfo.versionLabel()));   // 启动欢迎横幅（一次性下沉 scrollback）
         // 在渲染线程、两帧之间安全推进 scrollback（println 会移动光标/插行，绝不能在绘制中途调用）。
@@ -316,6 +374,19 @@ public final class CodeTuiView extends InlineApp {
     private void drain() {
         animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
         if (animTick % 30 == 0) ctxUsage.refresh();            // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
+        // ResizeEvent 的兜底：内核对 SIGWINCH 只留一个 pending，快拖时中间档位的信号会被合并掉，
+        // 事件没来但 size 已经变了。每帧比对一次列宽，抓到就补一次清扫（代价：下一 tick 才重画，
+        // 输入框闪一帧——只在真丢信号时发生）。事件路径仍是主力，见 onStart。
+        int polledWidth = terminalWidth();
+        if (polledWidth > 0 && polledWidth != lastSeenWidth) {
+            lastSeenWidth = polledWidth;
+            ResizeSweeper.sweep(runner());
+            resizeSettle.changed();
+            parkCursorAtTop = true;
+        } else if (resizeSettle.onTick()) {
+            replayAfterResize();               // 宽度停稳 ≈300ms：抹整屏含回滚缓冲、全量重放留底
+            parkCursorAtTop = false;           // 光标停放回文本行（IME 锚点），即使重放降级也要收
+        }
         for (OutputLine ol : state.drainPending()) {
             switch (ol.kind()) {
                 case USER       -> printer.userBlock(ol.text());   // 灰底白字块，仿 Claude Code
@@ -482,6 +553,63 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：直接挂载技能，绕开 /skill 选择器（那条路径要一份真实技能清单才走得通）。 */
     void mountSkillForTest(String skill) { this.pendingSkill = skill; }
 
+    /** scrollback 留底（见 {@link #scrollTail} 字段注释）。只在渲染线程调用。 */
+    private void record(Object line) {
+        scrollTail.addLast(line);
+        if (scrollTail.size() > SCROLL_TAIL_CAP) {
+            scrollTail.removeFirst();
+        }
+    }
+
+    /**
+     * resize 停稳后的全量重建：整屏<b>连回滚缓冲一起</b>抹掉（与 /clear 同一条 {@link ScreenCleaner#clear}
+     * 路径），再把 {@link #scrollTail} 留底全量按新宽度重放，输入框随下一帧落回对话正下方——
+     * 可见屏是对话尾部，「往上翻」是干净重排的最近 {@value #SCROLL_TAIL_CAP} 行。
+     *
+     * <p><b>为什么需要它</b>（{@link ResizeSweeper} 管不到的两类伤害，tmux 实测）：
+     * ①变窄时旧帧整宽行被终端折行撑高，把真实对话一截截顶进回滚缓冲——可见屏上信息流越来越少，
+     * 拖一次窗口后只剩输入框和空白；②多路复用器合并连发 resize 的盲窗里按旧宽度画的帧走位成鬼影，
+     * 事后清扫够不着。重放不跟终端的重排行为搏斗：应用自己就是内容的主人，照着留底重印一遍就是了。
+     *
+     * <p><b>为什么回滚缓冲必须抹、不能留</b>（Terminal.app AppleScript 拖拽实测，2026-08）：
+     * 真 reflow 终端每次拖窄都把旧帧折行撑出的行推进 scrollback——ESC[J] 清扫只够得着可见屏，
+     * 每拖一次 scrollback 就永久存档一份界面尸体（横幅+输入框+状态栏+整屏空白，快拖时还有撕裂的
+     * 半截框），用户「往前翻」全是残骸。上一版有意保留 scrollback（想让旧历史翻得到）恰恰错在这：
+     * 保留下来的就是垃圾。抹掉换全量重放后，翻页上限从「无限但不可读」变成「{@value #SCROLL_TAIL_CAP}
+     * 行且干净」；代价是更早的历史与应用启动前的 shell 残行消失——/clear 早已是同样语义。
+     *
+     * <p><b>宽度安全</b>：内联 println 一行折成两行会把显示区记账推歪（「一个 OutputLine =
+     * 一个物理行」同一条纪律），所以 {@link Text} 过 {@link TextWrap}、纯字符串过
+     * {@link #wrapSegments} 先按<b>当前</b>宽度拆好——重放的每一次 println 都恰好一物理行。
+     * 留底存的是折行前的原始行（见构造器的 recording sink），拖窄重放是重新折行而不是截断，
+     * 内容不丢（截断版用户实报过「回复文字没显示全」）。
+     *
+     * <p>清屏失败（反射降级）就什么都不做：维持第一级清扫后的现状，不会更糟。
+     */
+    private void replayAfterResize() {
+        var r = runner();
+        if (r == null || !ScreenCleaner.clear(r)) {
+            return;
+        }
+        int width = sinkWidth();
+        for (Object line : scrollTail) {
+            if (line instanceof Text t) {
+                for (Text piece : TextWrap.wrap(t, width)) {
+                    r.println(piece);                  // 按当前宽度重新折行，恰一物理行、不丢内容
+                }
+            } else {
+                for (String seg : wrapSegments((String) line, width)) {
+                    r.println(seg);                    // 纯字符串同理
+                }
+            }
+        }
+    }
+
+    /** 出口折行用的终端宽；拿不到时 {@code terminalWidth()} 已退化为 80，再兜个下限防极端值。 */
+    private int sinkWidth() {
+        return Math.max(8, terminalWidth());
+    }
+
     /** 终端列数；拿不到时退化为 80。 */
     private int terminalWidth() {
         try {
@@ -560,7 +688,7 @@ public final class CodeTuiView extends InlineApp {
                 // 显得「打字时占位符还在」。输入引导已在下方状态行常驻，框内保持干净只留可见光标即可。
                 // 只 setCursorPosition 时硬件光标常被行内 runner 隐藏 → 给人「没光标/没聚焦」错觉，故画反显块。
                 buf.set(ix, iy, buf.get(ix, iy).patchStyle(Style.EMPTY.reversed()));
-                frame.setCursorPosition(ix, iy);
+                frame.setCursorPosition(ix, parkCursorAtTop ? 0 : iy);   // 停放策略见非空分支注释
                 return;
             }
 
@@ -592,7 +720,21 @@ public final class CodeTuiView extends InlineApp {
             int cy = iy + Math.min(curRow, Math.max(0, ih - 1));
             Cell cell = buf.get(cx, cy);
             buf.set(cx, cy, cell.patchStyle(Style.EMPTY.reversed()));
-            frame.setCursorPosition(cx, cy);
+            // 硬件光标（隐藏的，记账 + IME 锚点）：平时停在文本行 (cx, cy)，resize 窗口内钉第 0 行。
+            //
+            // 为什么平时必须在文本行：Terminal.app 把 IME 预编辑串（拼音）画在硬件光标处，
+            // 钉死第 0 行 = 拼字浮在框顶边框上，用户实报「打字错位」。可见的反显块是画在
+            // Buffer 里的另一回事，救不了 IME。
+            //
+            // 为什么 resize 中要钉第 0 行：内联显示区的位置全靠「光标在显示区第几行」这条相对
+            // 记账。终端变窄时把屏上内容重新折行，光标跟着**自己那行字符**走——它上方每一行
+            // （整宽的框顶边框）被拆成几行，物理落点就比记账低几行；此后每帧重画从偏低处开始，
+            // 帧往下爬、旧帧顶部留残迹，拖一次窗口累积一片（tmux 实测连拖 10 档留 20+ 行）。
+            // 钉在第 0 行上方无行可拆、位移恒 0（同一实测归零）。两头都要：状态相关停放，
+            // parkCursorAtTop 的生命周期见字段注释。已知代价：每轮拖拽第一步光标还在文本行，
+            // 清扫起点错位留 ≤1-2 行残迹，停稳重放收尾；输入列超过新终端宽度时光标自己那行
+            // 也会拆（残留 1 行、不累积）。
+            frame.setCursorPosition(cx, parkCursorAtTop ? 0 : cy);
         }
     }
 
@@ -1168,6 +1310,7 @@ public final class CodeTuiView extends InlineApp {
                 r.runOnRenderThread(() -> {
                     boolean ok = ScreenCleaner.clear(r);
                     if (ok) {
+                        scrollTail.clear();   // 留底同步清空：resize 重放不该复活上一个会话的画面
                         printer.welcome(onSubmit.currentModel(),
                                 io.github.javaside.springai.codetui.AppInfo.versionLabel());
                     } else {
