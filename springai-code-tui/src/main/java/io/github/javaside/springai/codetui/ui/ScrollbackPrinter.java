@@ -180,14 +180,28 @@ final class ScrollbackPrinter {
         }
     }
 
-    /** AI 正文：markdown/语法高亮 + 缩进，下沉 scrollback。 */
+    /** AI 正文：markdown/语法高亮 + 缩进 + 按终端宽折行，下沉 scrollback。 */
     void assistant(String text) {
-        sink.println(indented(md.renderFinalized(text)));
+        printWrapped(md.renderFinalized(text));
     }
 
     /** 流式完整行：同 assistant。 */
     void streamingLine(String row) {
-        sink.println(indented(md.renderFinalized(row)));
+        printWrapped(md.renderFinalized(row));
+    }
+
+    /**
+     * 渲染出的一行 spans 按「终端宽 − 缩进」折行、逐段带缩进下沉（悬挂缩进）。
+     *
+     * <p>必须在 println 前折好：{@code InlineDisplay.println(Text)} 定宽渲染、超宽<b>截断</b>
+     * ——不折行，超过终端宽度的正文右边直接消失（用户实报「回复文字没显示全」）；
+     * 又不能任由终端自己折（「一个 println = 一个物理行」纪律，折了推歪显示区记账）。
+     */
+    private void printWrapped(List<Span> spans) {
+        int inner = Math.max(1, terminalWidth.getAsInt() - displayWidth(INDENT));
+        for (Text piece : TextWrap.wrap(Text.from(Line.from(spans)), inner)) {
+            sink.println(indented(piece.lines().get(0).spans()));
+        }
     }
 
     /** 工具开始：edit/write 展开成 diff 块（真实行号、语法高亮 + 增删底色）；其余工具单行摘要。 */

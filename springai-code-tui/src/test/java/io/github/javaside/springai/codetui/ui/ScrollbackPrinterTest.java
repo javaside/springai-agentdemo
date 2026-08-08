@@ -43,6 +43,35 @@ class ScrollbackPrinterTest {
     }
 
     @Test
+    void assistant_wrapsLongLineToWidth_losesNothing() {
+        RecordingSink sink = new RecordingSink();
+        // 80 列终端，正文一行 120 个字符：InlineDisplay 的 println 是定宽截断，printer 必须先折行
+        // ——否则右边 40+ 个字符直接消失（用户实报「模型回复文字没显示全」）。
+        String body = "字".repeat(30) + "y".repeat(60);   // 30×2 + 60 = 120 列
+        printerOver(sink).assistant(body);
+
+        assertTrue(sink.lines.size() >= 2, "超宽正文应折成多行，实际只有 " + sink.lines.size() + " 行");
+        for (String l : sink.lines) {
+            assertTrue(dev.tamboui.text.CharWidth.of(l) <= 80,
+                    "折行后每行显示宽度必须 ≤ 终端宽 80，实际 %d：%s".formatted(dev.tamboui.text.CharWidth.of(l), l));
+            assertTrue(l.startsWith("  "), "续行也应带缩进（悬挂缩进），实际：" + l);
+        }
+        String joined = String.join("", sink.lines).replace(" ", "");
+        assertTrue(joined.contains("字".repeat(30)) && joined.contains("y".repeat(60)),
+                "拼回去必须一个字不丢，实际：" + joined);
+    }
+
+    @Test
+    void streamingLine_wrapsSameAsAssistant() {
+        RecordingSink sink = new RecordingSink();
+        printerOver(sink).streamingLine("z".repeat(100));
+        assertTrue(sink.lines.size() >= 2, "流式整行同样要折行");
+        for (String l : sink.lines) {
+            assertTrue(dev.tamboui.text.CharWidth.of(l) <= 80);
+        }
+    }
+
+    @Test
     void userBlock_emitsOneLinePerLogicalLineWithIndentPrefix() {
         RecordingSink sink = new RecordingSink();
         printerOver(sink).userBlock("第一行\n第二行");
