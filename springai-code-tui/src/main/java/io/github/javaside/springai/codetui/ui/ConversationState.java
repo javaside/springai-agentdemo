@@ -231,6 +231,19 @@ public final class ConversationState implements AgentListener {
     // ── 单飞 / 状态 ─────────────────────────────────────────────────────
     public boolean isIdle() { return status == Status.IDLE; }
     public Status status() { return status; }
+
+    /**
+     * 一次 Enter 路由所需的原子状态快照。
+     *
+     * <p>不能在 UI 里先调 {@link #isBusy()}、再调 {@link #isIdle()}：Reactor 线程可能恰好在两次读取之间
+     * 结束回合，导致同一次提交先看到「忙」、随后又看到「空闲」，最终把本应插话的消息误塞进普通队列。
+     */
+    public record SubmissionSnapshot(boolean busy, boolean activeTurn) {}
+
+    public synchronized SubmissionSnapshot submissionSnapshot() {
+        boolean activeTurn = status != Status.IDLE;
+        return new SubmissionSnapshot(activeTurn || compacting || !modals.isEmpty(), activeTurn);
+    }
     public void setNotice(String n) { this.notice = n; }
     public String notice() { return notice; }
     public String activeTool() { return activeTool; }
@@ -620,8 +633,7 @@ public final class ConversationState implements AgentListener {
     public synchronized void onError(long turnId, Throwable error) {
         if (turnId != acceptingTurnId) return;
         flushStreaming();
-        pending.add(new OutputLine("⚠ 出错：" + (error == null ? "unknown" : String.valueOf(error.getMessage())),
-                OutputLine.Kind.ERROR));
+        pending.add(new OutputLine("⚠ 出错：" + formatError(error), OutputLine.Kind.ERROR));
         activeTool = "";
         activeToolSummary = "";
         status = Status.IDLE;
@@ -752,5 +764,18 @@ public final class ConversationState implements AgentListener {
         String one = s.lines().findFirst().orElse("").strip();
         if (CharWidth.of(one) <= 80) return one;
         return CharWidth.substringByWidth(one, 79) + "…";
+    }
+
+    /**
+     * 从异常链中提取可读错误描述，优先用 {@code getMessage()}，为空时沿 cause 链向下找，
+     * 最终回退到类名（避免界面只显示"null"或一串内部类路径）。
+     */
+    static String formatError(Throwable error) {
+        if (error == null) return "unknown";
+        for (Throwable t = error; t != null; t = t.getCause()) {
+            String msg = t.getMessage();
+            if (msg != null && !msg.isBlank()) return msg;
+        }
+        return error.getClass().getSimpleName();
     }
 }

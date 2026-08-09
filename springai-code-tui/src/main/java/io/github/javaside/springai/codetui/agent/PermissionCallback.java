@@ -274,7 +274,7 @@ public final class PermissionCallback implements ToolCallback {
     private void remember(PermissionRule suggested, RuleScope scope, String toolName) {
         PermissionRule rule = rescope(suggested, scope);
         if (rule == null) {
-            log.debug("{} 的这次审批没有可用的建议规则，只放行本次（内置危险检查 / ask 规则引发的 ASK）", toolName);
+            log.info("{} 的这次审批没有可用的建议规则，只放行本次（内置危险检查 / ask 规则引发的 ASK）", toolName);
             return;
         }
         long turnId = ToolEventCallback.currentTurnId();

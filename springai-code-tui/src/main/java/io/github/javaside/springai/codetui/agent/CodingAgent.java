@@ -368,7 +368,9 @@ public final class CodingAgent implements SubmitHandler {
                     .doOnComplete(() -> handleComplete(turnId))
                     // 仅在「被取消」时触发（正常 complete/error 不触发）：裁掉悬空 tool_calls 尾巴，保留干净前缀。
                     .doOnCancel(this::trimDanglingToolCalls)
-                    .subscribe();
+                    // 错误已由 doOnError 处理；此处加空 errorConsumer 防止 Reactor 把未消费错误
+                    // 再次打印到日志（onErrorDropped / ErrorCallbackNotImplemented 噪音）。
+                    .subscribe(null, err -> {});
             // 组合取消（层②）：dispose() 既取消 reactive 链，也对本回合在飞的并行子 agent shutdownNow。
             // Reactor 取消不 interrupt 阻塞在网络 IO 的子 agent 工具线程，若不显式拆池，取消后子 agent 仍会跑完、
             // 其迟到写入会污染会话并与随后的 /continue 竞态。cancelTurn 立即返回、不 await，不拖慢回 IDLE。
@@ -379,6 +381,7 @@ public final class CodingAgent implements SubmitHandler {
         } catch (RuntimeException ex) {
             // 同步组装/订阅异常不走 doOnError：手动复位状态（onError → IDLE），
             // 否则 UI 会永远卡在 THINKING（无终态事件），且异常会逃逸出 View.handle。
+            log.error("回合 {} 同步组装出错", turnId, ex);
             listener.onError(turnId, ex);
             return Disposables.disposed();
         }
@@ -887,6 +890,7 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     private void handleError(Throwable err, long turnId) {
+        log.error("回合 {} 出错", turnId, err);
         listener.onError(turnId, err);
         // 报错也裁掉悬空 tool_calls 尾巴：既避免坏历史下轮 400，又保留已完成任务与计划以便 /continue 续跑。
         trimDanglingToolCalls();
@@ -969,7 +973,7 @@ public final class CodingAgent implements SubmitHandler {
                     sessionService.getEvents(sid), sid, d.anchorToolCallId(), d.text());
             sessionRepository.replaceEvents(sid, List.copyOf(out));
         } catch (RuntimeException ex) {
-            log.debug("插话补历史失败，跳过（回合已成功完成）", ex);
+            log.info("插话补历史失败，跳过（回合已成功完成）", ex);
         }
     }
 }

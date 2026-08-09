@@ -1,9 +1,14 @@
 package io.github.javaside.springai.codetui.agent;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTask;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -99,6 +104,45 @@ class SubagentRunnerBackgroundTest {
         awaitDone(reg, id);
         assertEquals(BackgroundTask.Status.DONE, reg.find(id).status());
         assertEquals("调查结论", reg.find(id).result());
+    }
+
+    @Test
+    void successfulLifecycleIsLoggedAtInfoWithoutPollutingReturnedResult() throws Exception {
+        BackgroundTaskRegistry reg = new BackgroundTaskRegistry(64);
+        SubagentRunner r = runner(chatModel("只返回最终结论", null), reg, new StubListener());
+        Logger logger = (Logger) LoggerFactory.getLogger(SubagentRunner.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            String dispatchResult = r.runInBackground(spec(), "hi", "调查日志策略");
+            String id = reg.all().get(0).taskId();
+            awaitDone(reg, id);
+
+            List<ILoggingEvent> lifecycle = appender.list.stream()
+                    .filter(e -> e.getFormattedMessage().contains(id))
+                    .toList();
+            assertTrue(lifecycle.stream().anyMatch(e -> e.getLevel() == Level.INFO
+                            && e.getFormattedMessage().contains("已提交")),
+                    "后台任务提交应写 INFO 生命周期日志：" + lifecycle);
+            assertTrue(lifecycle.stream().anyMatch(e -> e.getLevel() == Level.INFO
+                            && e.getFormattedMessage().contains("开始执行")),
+                    "后台任务开始应写 INFO 生命周期日志：" + lifecycle);
+            assertTrue(lifecycle.stream().anyMatch(e -> e.getLevel() == Level.INFO
+                            && e.getFormattedMessage().contains("执行完成")),
+                    "后台任务完成应写 INFO 生命周期日志：" + lifecycle);
+            assertTrue(lifecycle.stream().noneMatch(e -> e.getLevel() == Level.DEBUG),
+                    "后台任务生命周期不得使用 DEBUG：" + lifecycle);
+            assertEquals("只返回最终结论", reg.find(id).result(),
+                    "主会话可取回的任务结果只能是 subagent 最终结论，不能夹带生命周期日志");
+            assertTrue(!dispatchResult.contains("已提交") && !dispatchResult.contains("开始执行")
+                            && !dispatchResult.contains("执行完成"),
+                    "Task 调用的立即返回文本不得夹带生产日志：" + dispatchResult);
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+            r.shutdownBackground();
+        }
     }
 
     @Test

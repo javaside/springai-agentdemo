@@ -366,6 +366,8 @@ public final class SubagentRunner {
         backgroundInFlight.incrementAndGet();
         try {
             pool.execute(() -> runBackgroundBody(spec, prompt, taskId));
+            log.info("后台子 agent 已提交：spec={} taskId={} description={}",
+                    spec.name(), taskId, description);
         } catch (RejectedExecutionException rejected) {
             backgroundInFlight.decrementAndGet();
             // 标记 KILLED 而不是 FAILED：KILLED 不可送达，绝不会被自动送给模型。
@@ -392,6 +394,8 @@ public final class SubagentRunner {
 
     /** 后台任务体：跑完把结果写回注册表并发事件。<b>任何异常都不得逃出本方法</b>（池线程死掉没人知道）。 */
     private void runBackgroundBody(SubagentSpec spec, String prompt, String taskId) {
+        long startedAt = System.nanoTime();
+        log.info("后台子 agent 开始执行：spec={} taskId={}", spec.name(), taskId);
         try {
             // turnId 传 -1：后台任务没有归属回合，塞一个真 turnId 只会让它的工具事件被迟到过滤丢弃。
             String finalText = execute(spec, prompt,
@@ -400,6 +404,8 @@ public final class SubagentRunner {
                            ToolEventCallback.BACKGROUND_TASK_ID_KEY, taskId));
             backgroundRegistry.complete(taskId, finalText, true);
             listener.onBackgroundTaskFinished(taskId, finalText, true);
+            log.info("后台子 agent 执行完成：spec={} taskId={} elapsedMs={}",
+                    spec.name(), taskId, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
         } catch (RuntimeException ex) {
             log.error("后台子 agent 执行失败：spec={} taskId={}", spec.name(), taskId, ex);
             String detail = describe(ex);

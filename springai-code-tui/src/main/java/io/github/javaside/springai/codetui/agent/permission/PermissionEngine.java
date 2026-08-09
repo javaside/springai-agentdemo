@@ -1069,7 +1069,7 @@ public final class PermissionEngine {
         }
         PermissionRule back = PermissionRule.parse(rule.toDsl(), rule.behavior(), rule.scope());
         if (!rule.equals(back)) {
-            log.debug("放弃建议规则 '{}'：重新解析后不是同一条，写盘会被 writer 拒绝。", rule.toDsl());
+            log.info("放弃建议规则 '{}'：重新解析后不是同一条，写盘会被 writer 拒绝。", rule.toDsl());
             return null;
         }
         return rule;

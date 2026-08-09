@@ -9,7 +9,9 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * AGENTS.md 内容含花括号时，build() 装配（构建期，不含请求期 ST 渲染）不得抛异常——
@@ -49,5 +51,16 @@ class AgentToolsProjectInstructionsTest {
                 .build()
                 .render();
         assertEquals(braceHeavy, out, "ST 应原样代入 param 值，不把值内花括号当占位符再解析");
+    }
+
+    @Test
+    void systemTemplate_treatsProjectRootAsDefaultDirectory_notAccessBoundary() throws Exception {
+        var field = AgentTools.class.getDeclaredField("SYSTEM_TEMPLATE");
+        field.setAccessible(true);
+        String template = (String) field.get(null);
+
+        assertTrue(template.contains("当前项目根目录是默认工作目录，不是强制访问边界"));
+        assertTrue(template.contains("统一服从权限引擎、内置安全底线及用户审批结果"));
+        assertFalse(template.contains("所有操作都应发生在当前项目根目录之内"));
     }
 }

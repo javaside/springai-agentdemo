@@ -161,7 +161,7 @@ public final class PermissionConfigWriter {
             if (!Files.isRegularFile(file)) {
                 // 没有文件就没有可删的规则。这里刻意不复用 readRoot 的「不存在当空树」，
                 // 那会让删除顺手创建出一个空配置文件来。
-                log.debug("权限配置删除：{} 不存在，无事可做。", file);
+                log.info("权限配置删除：{} 不存在，无事可做。", file);
                 return false;
             }
             ObjectNode root = readRoot(file);
@@ -297,7 +297,7 @@ public final class PermissionConfigWriter {
             }
             Files.setPosixFilePermissions(to, view.readAttributes().permissions());
         } catch (Exception e) {
-            log.debug("权限配置回写：沿用原文件权限位失败（{}），改由 umask 决定。", e.getMessage());
+            log.info("权限配置回写：沿用原文件权限位失败（{}），改由 umask 决定。", e.getMessage());
         }
     }
 

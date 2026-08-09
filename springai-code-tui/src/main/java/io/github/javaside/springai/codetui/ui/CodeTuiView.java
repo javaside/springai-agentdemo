@@ -1428,12 +1428,16 @@ public final class CodeTuiView extends InlineApp {
         // 自动回合无限套娃」，人一开口就说明这个前提不成立了。必须挂在提交上而不是每次按键——
         // 挂按键则用户随手一个方向键就把刹车松开，等于没有刹车。
         releaseBrake();
-        if (busy()) {                              // 忙/压缩中/有在飞子 agent
+        ConversationState.SubmissionSnapshot snapshot = state.submissionSnapshot();
+        boolean subagentsInFlight = onSubmit.hasInFlightSubagents();
+        SubmissionRoute route = submissionRoute(snapshot, subagentsInFlight, skill);
+        if (route != SubmissionRoute.DISPATCH) {
             // 插话 vs 排队：只有「回合在飞」才会再有模型调用，插话才送得出去。压缩中、以及回合已被
-            // Esc 取消只剩子 agent 收尾（两者 state 都已回 IDLE，但 busy() 仍 true）都不会再调模型——
-            // 插话进去会一直躺在队列里，直到用户下次发消息才被捎走。故判据必须是 !isIdle() 而非 busy()。
+            // Esc 取消只剩子 agent 收尾（两者 state 都已回 IDLE，但 busy 仍 true）都不会再调模型——
+            // 插话进去会一直躺在队列里，直到用户下次发消息才被捎走。状态必须一次快照，不能先读 busy
+            // 再读 isIdle：回合恰在两次读取之间结束时，会把同一次 Enter 错误路由成排队。
             // 带技能挂载的也不能走插话：插话是纯 UserMessage，带不了 submit 的第二参数，会静默丢技能。
-            if (!state.isIdle() && skill == null) {
+            if (route == SubmissionRoute.INTERJECT) {
                 onSubmit.interject(effective);
                 // ⚠ 这里<b>刻意什么都不往 scrollback 打</b>。此刻它还没送达，而 scrollback 里的行
                 // 改不了——打下去就永远停在「输入时」这个位置上，而它的真实位置在后面那条工具结果
@@ -1449,6 +1453,15 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         dispatch(effective, skill);
+    }
+
+    enum SubmissionRoute { DISPATCH, INTERJECT, QUEUE }
+
+    static SubmissionRoute submissionRoute(ConversationState.SubmissionSnapshot snapshot,
+                                           boolean subagentsInFlight, String skill) {
+        if (!snapshot.busy() && !subagentsInFlight) return SubmissionRoute.DISPATCH;
+        if (snapshot.activeTurn() && skill == null) return SubmissionRoute.INTERJECT;
+        return SubmissionRoute.QUEUE;
     }
 
     /**

@@ -61,7 +61,7 @@ public final class MediaArtifactStore {
      * ext 取实际嗅探结果而非写死 png——否则遇到 jpeg/webp 就名不副实。
      *
      * <p><b>任何失败都必须静默降级</b>：Windows 建符号链接要特权，某些文件系统压根不支持。
-     * 这只是便利功能，不能让它把「artifact 已经落盘成功」这件事拖成失败——所以吞掉异常只记 debug，
+     * 这只是便利功能，不能让它把「artifact 已经落盘成功」这件事拖成失败——所以吞掉异常只记 info，
      * 绝不向上抛。
      */
     private void linkLatest(Path target, String ext) {
@@ -74,7 +74,7 @@ public final class MediaArtifactStore {
             // 存相对目标（只有文件名，同目录）：整个 artifacts 目录被搬走后链依然有效。
             Files.createSymbolicLink(link, target.getFileName());
         } catch (IOException | UnsupportedOperationException | SecurityException e) {
-            log.debug("latest 软链建立失败（不影响 artifact 落盘）：{}", e.toString());
+            log.info("latest 软链建立失败（不影响 artifact 落盘）：{}", e.toString());
         }
     }
 

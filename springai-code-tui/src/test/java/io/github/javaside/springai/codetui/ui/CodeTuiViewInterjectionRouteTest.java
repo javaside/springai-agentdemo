@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 忙时 Enter 的路由：默认走插话，三条回落走老排队队列。
@@ -59,6 +60,21 @@ class CodeTuiViewInterjectionRouteTest {
         assertEquals(List.of("改用方案 B"), h.interjected);
         assertEquals(0, s.queuedCount(), "回合在飞时不应进老队列");
         assertEquals(List.of(), h.submitted, "插话不该起新回合");
+    }
+
+    @Test
+    @DisplayName("一次提交只读取一次路由状态，避免回合结束竞态把插话误排队")
+    void submissionUsesOneRoutingSnapshot() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+
+        ConversationState.SubmissionSnapshot snapshot = s.submissionSnapshot();
+        s.onTurnComplete(1);                      // Reactor 在快照后、路由前恰好结束回合
+        CodeTuiView.SubmissionRoute route = CodeTuiView.submissionRoute(snapshot, false, null);
+
+        assertEquals(CodeTuiView.SubmissionRoute.INTERJECT, route,
+                "同一次 Enter 的路由必须基于一个快照，不能因随后状态变 IDLE 而改走排队");
+        assertTrue(s.isIdle(), "前提：竞态钩子确实结束了回合");
     }
 
     /**
