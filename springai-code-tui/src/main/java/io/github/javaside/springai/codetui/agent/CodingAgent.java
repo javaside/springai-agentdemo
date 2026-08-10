@@ -835,9 +835,21 @@ public final class CodingAgent implements SubmitHandler {
         }
         StringBuilder sb = new StringBuilder();
         for (Message m : sessionService.getMessages(sid)) {
-            String text = m.getText();
-            if (text != null && !text.isEmpty()) {
-                sb.append(text).append('\n');
+            // ToolResponseMessage.getText() 在 Spring AI 2.0 里始终返回空串（父类构造传的是 ""），
+            // 工具结果实际内容存在 getResponses()[i].responseData()——必须显式拼，否则工具输出
+            // 全部漏算，会话里有大型 BashOutput 时估算值与实际相差数十倍。
+            if (m instanceof org.springframework.ai.chat.messages.ToolResponseMessage trm) {
+                for (var r : trm.getResponses()) {
+                    String data = r.responseData();
+                    if (data != null && !data.isEmpty()) {
+                        sb.append(data).append('\n');
+                    }
+                }
+            } else {
+                String text = m.getText();
+                if (text != null && !text.isEmpty()) {
+                    sb.append(text).append('\n');
+                }
             }
         }
         long tokens = sb.length() == 0 ? 0L : tokenCountEstimator.estimate(sb.toString());
