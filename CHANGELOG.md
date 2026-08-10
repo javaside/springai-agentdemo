@@ -8,6 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
+| [v1.9.0](docs/release-notes/v1.9.0.md) | 功能版 | **后台任务不再像卡死**：`/tasks` 面板 RUNNING 行加波光动画，一眼看出还在跑；后台完成通知明确要求模型继续 Todo 计划（而非仅确认结果）；`run_in_background` 使用条件写进工具描述，默认前台、减少误用后台 |
 | [v1.8.3](docs/release-notes/v1.8.3.md) | 修订版 | **context 低估修复 + Terminal.app 崩溃缓解**：`/context` token 估算正确纳入工具输出（`ToolResponseMessage.getText()` 空串 bug）；每帧 pty 写入限速 300 行，降低 Terminal.app GCD kevent 崩溃频率；README 拆分为 docs/guide/ 专题文档 |
 | [v1.8.2](docs/release-notes/v1.8.2.md) | 修订版 | **竞态修复 + 日志统一**：忙时提交在回合边界不再被误路由为排队（原子快照消竞态窗口）；全部有意义 debug 日志升 info，错误路径补 error；系统提示工具访问边界措辞放宽为「服从权限引擎」 |
 | [v1.8.1](docs/release-notes/v1.8.1.md) | 修订版 | **缩放窗口三连修**：拖动终端宽度不再打烂界面（拖拽中原地清扫 + 停稳后整屏重放，回滚缓冲不再堆残骸）；中文输入法拼音不再「错位」到输入框边框上；模型回复超宽行折行续排、不再被截断（缩放后按新宽度重新折行，内容不丢） |
