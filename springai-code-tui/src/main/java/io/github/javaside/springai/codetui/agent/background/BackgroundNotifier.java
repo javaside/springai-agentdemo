@@ -112,7 +112,9 @@ public final class BackgroundNotifier {
               .append(t.result())
               .append('\n');
         }
-        sb.append("\n以上是你先前派出的后台任务的结果，请据此继续。");
+        sb.append("\n以上是你先前派出的后台任务的结果。")
+          .append("请检查你的 Todo 计划列表，找出下一项 pending 的任务并立即执行；")
+          .append("如果所有任务已完成，向用户汇报最终结果。");
         return sb.toString();
     }
 }
