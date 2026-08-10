@@ -58,6 +58,14 @@
                 <include>README.md</include>
             </includes>
         </fileSet>
+        <!-- 使用指南（docs/guide/ 专题文档，README.md 里有链接指向这里） -->
+        <fileSet>
+            <directory>${project.basedir}/docs/guide</directory>
+            <outputDirectory>docs/guide</outputDirectory>
+            <includes>
+                <include>*.md</include>
+            </includes>
+        </fileSet>
         <!-- 配置示例：置于 bin/，解压后在 bin/ 里复制为 config.env 填 key，启动脚本自动加载（见 bin/code-tui[.cmd]） -->
         <fileSet>
             <directory>${project.basedir}/src/package/bin</directory>
