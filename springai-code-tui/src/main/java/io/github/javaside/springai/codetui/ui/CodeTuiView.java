@@ -2615,7 +2615,13 @@ public final class CodeTuiView extends InlineApp {
             if (displayWidth(row) > inner) {
                 row = dev.tamboui.text.CharWidth.substringByWidth(row, inner - 1) + "…";
             }
-            els.add(text(row).style(st));
+            // RUNNING 行加波光，表示任务仍在活跃执行（1s 才跳一次的耗时计数器太静，看起来像卡死）。
+            // 其他状态（DONE/FAILED/KILLED）是终态，静态样式即可。
+            if (t.status() == ConversationState.BackgroundStatus.RUNNING) {
+                els.add(richText(statusBar.shimmer(row, "", TODO_RUN, animTick)));
+            } else {
+                els.add(text(row).style(st));
+            }
         }
         return els.toArray(new Element[0]);
     }
