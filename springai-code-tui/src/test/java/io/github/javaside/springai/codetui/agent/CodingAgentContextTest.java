@@ -3,6 +3,8 @@ package io.github.javaside.springai.codetui.agent;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.content.MediaContent;
 import org.springframework.ai.session.CreateSessionRequest;
@@ -62,6 +64,32 @@ class CodingAgentContextTest {
     private static CodingAgent agentOver(SessionService svc, TokenCountEstimator est) {
         // contextStats 只依赖 sessionService + estimator；chatClient/listener/manualStrategy 用不到。
         return new CodingAgent(null, null, "s", new AtomicLong(), svc, null, est);
+    }
+
+    @Test
+    void contextStats_toolResponseMessage_responseDataIsIncludedInTokenEstimate() {
+        // ToolResponseMessage.getText() 在 Spring AI 2.0 里始终返回 ""（父类构造传空串），
+        // 工具输出的实际内容只在 getResponses()[i].responseData() 里。
+        // 未修复时这1MB 的工具输出完全漏算，/context 面板显示几乎为 0。
+        String bigOutput = "x".repeat(100_000);   // 模拟大型 BashOutput
+        ToolResponseMessage toolMsg = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponse("call-1", "Bash", bigOutput)))
+                .build();
+        List<SessionEvent> events = List.of(
+                event(new UserMessage("run it")),
+                event(toolMsg));
+        List<Message> messages = List.of(new UserMessage("run it"), toolMsg);
+
+        CodingAgent agent = agentOver(new StubSessionService(events, messages), LEN_ESTIMATOR);
+        ContextStats s = agent.contextStats();
+
+        assertEquals(2, s.events());
+        assertEquals(1, s.userEvents());
+        assertEquals(1, s.toolEvents());
+        // LEN_ESTIMATOR 直接返回字符数；"run it\n" + bigOutput + "\n"
+        long expected = "run it\n".length() + bigOutput.length() + 1L;
+        assertEquals(expected, s.estimatedTokens(),
+                "ToolResponseMessage.responseData 必须计入 token 估算，不能因 getText()==\"\" 漏算");
     }
 
     @Test
