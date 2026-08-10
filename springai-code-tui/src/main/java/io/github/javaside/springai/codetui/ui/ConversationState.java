@@ -324,6 +324,28 @@ public final class ConversationState implements AgentListener {
     }
 
     /**
+     * 渲染线程调用：最多取走 {@code maxLines} 条定稿行，剩余保留到下一帧。
+     *
+     * <p>用于限制每帧 pty 写入量（burst 限速），避免向终端短时间写入大量数据引发
+     * Terminal.app 内部 GCD kevent 的 use-after-free 崩溃（工具结果如 BashOutput
+     * 可一次产生几千行，全部在同一帧打出会形成 MB 级 pty 突发流量）。
+     * 剩余行下一帧继续打，内容不丢，只是渐进显示。
+     */
+    public synchronized List<OutputLine> drainPending(int maxLines) {
+        if (pending.isEmpty()) return List.of();
+        if (pending.size() <= maxLines) {
+            List<OutputLine> out = new ArrayList<>(pending);
+            pending.clear();
+            return out;
+        }
+        List<OutputLine> out = new ArrayList<>(maxLines);
+        for (int i = 0; i < maxLines; i++) {
+            out.add(pending.pollFirst());
+        }
+        return out;
+    }
+
+    /**
      * 渲染线程调用：把在建助手行里<b>已换行（遇到真实 \n）</b>的完整逻辑行取出去下沉 scrollback，
      * 只保留最后一段未换行的残行继续预览。按真实 {@code \n} 切分（不是按显示宽度——终端自己会折长行），
      * 从根上避免多行内容 + 预览叠加造成的重复。锁内完成，避免与 {@link #onAssistantToken} 竞争。

@@ -106,6 +106,18 @@ public final class CodeTuiView extends InlineApp {
 
     private static final Logger log = LoggerFactory.getLogger(CodeTuiView.class);
 
+    /**
+     * 每帧 drain 最多向 pty 写入的行数上限（burst 限速）。
+     *
+     * <p>Terminal.app 的 GCD kevent 处理路径存在 use-after-free bug，在短时间内向 pty
+     * 写入大量数据时触发（表现为 EXC_BAD_ACCESS / SIGSEGV，整个 Terminal 崩溃关闭）。
+     * 工具结果（尤其是 BashOutput）可一次产生数千行，全部在同一个 33ms 帧内打出会形成
+     * MB 级突发流量，是已知最常见的触发场景。
+     *
+     * <p>限速到每帧 300 行（~10KB/帧，~9000 行/秒），超出的行留到下一帧继续打：内容不丢、
+     * 只是渐进显示，用户体验与流式回复相似。对正常大小的输出（≤300 行）无任何影响。
+     */
+    private static final int MAX_LINES_PER_DRAIN = 300;
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     // ⏱ 面板（后台任务）最多显示几条。这份列表<b>跨回合累积、只有 /clear 清</b>，已完成的永不移除：
@@ -387,7 +399,7 @@ public final class CodeTuiView extends InlineApp {
             replayAfterResize();               // 宽度停稳 ≈300ms：抹整屏含回滚缓冲、全量重放留底
             parkCursorAtTop = false;           // 光标停放回文本行（IME 锚点），即使重放降级也要收
         }
-        for (OutputLine ol : state.drainPending()) {
+        for (OutputLine ol : state.drainPending(MAX_LINES_PER_DRAIN)) {
             switch (ol.kind()) {
                 case USER       -> printer.userBlock(ol.text());   // 灰底白字块，仿 Claude Code
                 case ASSISTANT  -> printer.assistant(ol.text());   // AI 正文：markdown/语法高亮 + 缩进
