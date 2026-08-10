@@ -32,6 +32,18 @@ public final class SubagentTool {
             - Give a detailed, self-contained prompt: the subagent does not see the main conversation.
             - Tell the subagent whether you want it to just research/read or to actually make changes.
             - Choose subagent_type from the list above.
+
+            Foreground vs background:
+            - DEFAULT to foreground (omit run_in_background or set false). Most coding workflows are
+              sequential: explore → plan → implement → test. Each step needs the previous result.
+            - Use run_in_background=true ONLY when ALL of these hold:
+                1. The task is truly independent — its output does not determine your next action.
+                2. You will retrieve the result later via TaskOutput once you need it.
+                3. The task is read-only or uses only pre-approved tools (background tasks cannot
+                   prompt for permission; calls needing approval are silently denied).
+            - Do NOT use background merely because a task takes a long time. A slow foreground task
+              that you need is always better than a background task whose result you have to wait for
+              anyway.
             """;
 
     private static final String PARALLEL_DESCRIPTION_TEMPLATE = """
@@ -58,12 +70,13 @@ public final class SubagentTool {
             @ToolParam(description = "Detailed, self-contained task prompt for the subagent") String prompt,
             @ToolParam(description = "Which subagent type to use") String subagent_type,
             @ToolParam(required = false, description =
-                    "Run in background: return a task id immediately instead of blocking. "
-                    + "Use for long investigations you want to continue working alongside. "
-                    + "Retrieve the result with TaskOutput, or wait for the completion notice. "
-                    + "Background tasks CANNOT prompt for permission: calls that would need approval "
-                    + "are denied. Use foreground (false) when the task must write files or run commands "
-                    + "that are not already allowed.") Boolean run_in_background) {
+                    "Background mode (default false/omitted = foreground). "
+                    + "Set true ONLY when: the task is independent (you do not need its result to "
+                    + "decide your next action), AND the task is read-only or uses only pre-approved "
+                    + "tools (background tasks cannot prompt for permission — approval-gated calls are "
+                    + "silently denied). Returns a task id immediately; retrieve the result later with "
+                    + "TaskOutput. Do NOT set true just because the task is slow — if you need the "
+                    + "result eventually in the same turn, foreground is always cleaner.") Boolean run_in_background) {
 
         /** null-safe：模型省略该字段时 Jackson 给 null，默认前台。 */
         public boolean background() {
@@ -75,7 +88,10 @@ public final class SubagentTool {
     public record ParallelCall(
             @ToolParam(description = "List of independent subtasks to run concurrently") List<SubagentCall> tasks,
             @ToolParam(required = false, description =
-                    "Run the whole batch in background: return task ids immediately instead of blocking.")
+                    "Background mode for the whole batch (default false/omitted = foreground). "
+                    + "Set true only when none of the results are needed to decide your next action. "
+                    + "Returns task ids immediately; retrieve results later with TaskOutput. "
+                    + "Same constraint as Task background: permission-gated calls are silently denied.")
             Boolean run_in_background) {
 
         public boolean background() {
