@@ -384,6 +384,14 @@ public final class CodeTuiView extends InlineApp {
 
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
     private void drain() {
+        try (AutoCloseable ignored = InlineRenderBatch.open(runner())) {
+            drainInsideBatch();
+        } catch (Exception impossible) {
+            log.debug("关闭行内打印批次失败，已降级", impossible);
+        }
+    }
+
+    private void drainInsideBatch() {
         animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
         if (animTick % 30 == 0) ctxUsage.refresh();            // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
         // ResizeEvent 的兜底：内核对 SIGWINCH 只留一个 pending，快拖时中间档位的信号会被合并掉，

@@ -128,6 +128,27 @@ class InlineDisplayDiffTest {
     }
 
     @Test
+    void printBatchDoesNotRedrawLiveAreaPerLine() {
+        InlineDisplay display = display(1);
+        render(display, "LIVE", null, 0, 0);
+        backend.resetCounts();
+
+        display.beginPrintBatch();
+        display.println("one");
+        display.println("two");
+        display.println("three");
+        display.endPrintBatch();
+
+        String raw = backend.outputUtf8();
+        assertEquals(1, occurrences(raw, "one"));
+        assertEquals(1, occurrences(raw, "two"));
+        assertEquals(1, occurrences(raw, "three"));
+        assertEquals(0, occurrences(raw, "LIVE"));
+        assertEquals(1, backend.writeCalls());
+        assertEquals(1, backend.flushCalls());
+    }
+
+    @Test
     void oneHundredIdenticalFramesStaySilent() {
         InlineDisplay display = display(1);
         render(display, "steady", null, 2, 0);
@@ -151,6 +172,12 @@ class InlineDisplayDiffTest {
         assertTrue(raw.contains("文"), raw);
         assertFalse(raw.contains("\u001b[K"), raw);
         assertEquals(1, backend.writeCalls());
+    }
+
+    private static int occurrences(String haystack, String needle) {
+        int count = 0;
+        for (int index = 0; (index = haystack.indexOf(needle, index)) >= 0; index += needle.length()) count++;
+        return count;
     }
 
     private InlineDisplay display(int height) {

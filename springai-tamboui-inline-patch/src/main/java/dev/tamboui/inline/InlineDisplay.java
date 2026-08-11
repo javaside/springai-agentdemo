@@ -43,6 +43,8 @@ public final class InlineDisplay implements AutoCloseable {
     private int lastCursorX;
     private int lastCursorY;
     private int currentHeight;
+    private int printBatchDepth;
+    private StringBuilder printBatch;
 
     InlineDisplay(int height, int width, Backend backend, PrintWriter out) {
         this(height, width, false, backend, out);
@@ -160,19 +162,38 @@ public final class InlineDisplay implements AutoCloseable {
         }, height, -1, -1);
     }
 
+    /** Starts a nestable scrollback print batch. */
+    public void beginPrintBatch() {
+        ensureInitialized();
+        if (printBatchDepth++ == 0) printBatch = new StringBuilder();
+    }
+
+    /** Ends a print batch and submits all accumulated lines once. */
+    public void endPrintBatch() {
+        if (printBatchDepth <= 0) return;
+        if (--printBatchDepth == 0) {
+            submit(printBatch);
+            printBatch = null;
+        }
+    }
+
     public void println(String message) {
         ensureInitialized();
         syncWidth();
-        if (currentHeight == 0) {
-            out.println(message);
-            return;
+        boolean ownBatch = printBatchDepth == 0;
+        if (ownBatch) beginPrintBatch();
+        try {
+            if (currentHeight == 0) {
+                printBatch.append(message).append("\r\n");
+                return;
+            }
+            appendHome(printBatch);
+            printBatch.append("\u001b[1L").append(message).append("\u001b[K\n\r");
+            lastCursorX = 0;
+            lastCursorY = 0;
+        } finally {
+            if (ownBatch) endPrintBatch();
         }
-        StringBuilder batch = new StringBuilder();
-        appendHome(batch);
-        batch.append("\u001b[1L").append(message).append("\u001b[K\n\r");
-        submit(batch);
-        lastCursorX = 0;
-        lastCursorY = 0;
     }
 
     public void println(Text text) {
