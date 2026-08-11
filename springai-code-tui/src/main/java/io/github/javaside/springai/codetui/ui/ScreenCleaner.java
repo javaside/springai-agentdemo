@@ -5,6 +5,7 @@ import dev.tamboui.toolkit.app.InlineToolkitRunner;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 
 /**
  * 真清屏：TamboUI 0.4.0 未公开清屏 API，故反射进内联运行器的私有 {@code Backend} 调 {@code clear()} 并写
@@ -35,6 +36,7 @@ final class ScreenCleaner {
             Object display = get(viewport, "display");           // dev.tamboui.inline.InlineDisplay
             Field lastCursorY = declaredField(display, "lastCursorY");
             Field currentHeight = declaredField(display, "currentHeight");
+            Method invalidateFrame = display.getClass().getMethod("invalidateFrame");
 
             // 反射全部成功后，才执行有副作用的清屏 + 记账归零。
             backend.clear();                                     // 清可见区
@@ -42,6 +44,7 @@ final class ScreenCleaner {
             backend.flush();
             lastCursorY.setInt(display, 0);
             currentHeight.setInt(display, 0);
+            invalidateFrame.invoke(display);                       // 真实屏已空：下一帧必须完整重建 live 区一次
             return true;
         } catch (ReflectiveOperationException | RuntimeException | IOException e) {
             return false;   // 降级：调用方改打印分割线

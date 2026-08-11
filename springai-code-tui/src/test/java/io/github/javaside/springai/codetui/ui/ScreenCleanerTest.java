@@ -25,6 +25,7 @@ class ScreenCleanerTest {
         assertNotNull(viewport.getDeclaredField("display"));
         assertNotNull(display.getDeclaredField("lastCursorY"));
         assertNotNull(display.getDeclaredField("currentHeight"));
+        assertNotNull(display.getMethod("invalidateFrame"));
         org.junit.jupiter.api.Assertions.assertEquals(int.class,
                 display.getDeclaredField("lastCursorY").getType(), "lastCursorY 必须是 int（setInt 依赖）");
         org.junit.jupiter.api.Assertions.assertEquals(int.class,
