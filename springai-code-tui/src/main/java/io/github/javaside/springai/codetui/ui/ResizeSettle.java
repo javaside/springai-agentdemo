@@ -1,14 +1,12 @@
 package io.github.javaside.springai.codetui.ui;
 
 /**
- * 「宽度折腾完、已经停稳」的判定器——纯状态机，resize 两级修复里第二级的扳机。
+ * 「宽度折腾完、已经停稳」的判定器——纯状态机，把连续 resize 合并为一次重放。
  *
- * <p><b>两级修复的分工</b>：拖拽过程中 {@link ResizeSweeper} 逐事件原地清扫，保证屏幕大体不烂；
- * 但有三类伤害它够不着——①旧帧折行撑高时终端把真实对话顶进回滚缓冲（可见屏上信息流越来越少）、
- * ②多路复用器（tmux）合并连发 resize 造成的盲窗鬼影、③reflow 终端（Terminal.app 实测）每次
- * 拖窄都把旧帧残骸永久推进 scrollback（「往上翻」全是界面尸体）。停稳之后由
- * {@code CodeTuiView.replayAfterResize} 把整屏连回滚缓冲一起抹掉、按新宽度全量重放输出留底，
- * 一次性把三类伤害全部归零——重放是从应用自己的输出留底重建，不依赖终端重排行为。
+ * <p>拖拽过程中不再逐事件清屏：那会把清除与重画的中间态直接暴露给 Windows Terminal。
+ * 每次宽度变化只重置静默计数；停稳之后由 {@code CodeTuiView.replayAfterResize} 把整屏连回滚
+ * 缓冲一起抹掉、按新宽度全量重放输出留底。重放从应用自己的输出留底重建，不依赖终端
+ * reflow 的中间行为。
  *
  * <p><b>为什么敢用「停稳才干重活」的防抖</b>（上一版防抖翻过车，这里不一样）：翻车的那版每次
  * 触发都留下永久残留，防抖参数怎么调都错；重放是<b>幂等的全量重建</b>，多触发一次只是多重建
@@ -23,8 +21,8 @@ final class ResizeSettle {
     private int quiet;           // 宽度连续未变的帧数
 
     /**
-     * @param quietTicks 宽度不再变化后等几帧才算停稳。生产按 drain 的 33ms/帧传 9（≈300ms）：
-     *                   短于人拖窗口的换气停顿会导致拖拽中途反复全量重建（闪），长了则松手后迟迟不整理。
+     * @param quietTicks 宽度不再变化后等几帧才算停稳。生产按 drain 的 33ms/帧传 4（≈132ms）：
+     *                   合并快速连发事件，同时让松手后的恢复足够及时。
      */
     ResizeSettle(int quietTicks) {
         this.quietTicks = Math.max(1, quietTicks);
