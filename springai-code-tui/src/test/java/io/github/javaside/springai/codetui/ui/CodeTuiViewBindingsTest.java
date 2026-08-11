@@ -1,6 +1,8 @@
 package io.github.javaside.springai.codetui.ui;
 
+import io.github.javaside.springai.codetui.agent.SkillInfo;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import dev.tamboui.toolkit.element.Element;
 import dev.tamboui.tui.InlineTuiConfig;
 import dev.tamboui.tui.bindings.Actions;
 import dev.tamboui.tui.bindings.Bindings;
@@ -10,7 +12,10 @@ import dev.tamboui.tui.event.KeyCode;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.util.List;
+import java.util.stream.IntStream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,5 +48,44 @@ class CodeTuiViewBindingsTest {
         Bindings b = resolvedBindings();
         KeyEvent ctrlC = new KeyEvent(KeyCode.CHAR, KeyModifiers.CTRL, 'c');
         assertTrue(b.matches(ctrlC, Actions.QUIT), "Ctrl+C 仍应触发 quit");
+    }
+
+    @Test
+    void skillPickerCapsVisibleRowsWhenCatalogIsLarge() {
+        List<SkillInfo> skills = IntStream.range(0, 40)
+                .mapToObj(i -> new SkillInfo("skill-" + i, "description " + i, "用户"))
+                .toList();
+        SubmitHandler stub = new SubmitHandler() {
+            @Override public reactor.core.Disposable submit(String text) { return null; }
+            @Override public List<SkillInfo> skills() { return skills; }
+        };
+        CodeTuiView view = new CodeTuiView(new ConversationState(), stub, Path.of("."));
+
+        for (char c : "/skill".toCharArray()) view.feedKeyForTest(KeyEvent.ofChar(c));
+        view.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
+
+        Element[] rows = view.skillPickerChildrenForTest();
+        assertEquals(12, rows.length, "标题 + 10 个技能 + 1 个范围提示，面板高度必须有界");
+    }
+
+    @Test
+    void skillPickerCanSelectItemBeyondFirstWindow() {
+        List<SkillInfo> skills = IntStream.range(0, 40)
+                .mapToObj(i -> new SkillInfo("skill-" + i, "description " + i, "用户"))
+                .toList();
+        SubmitHandler stub = new SubmitHandler() {
+            @Override public reactor.core.Disposable submit(String text) { return null; }
+            @Override public List<SkillInfo> skills() { return skills; }
+        };
+        CodeTuiView view = new CodeTuiView(new ConversationState(), stub, Path.of("."));
+        for (char c : "/skill".toCharArray()) view.feedKeyForTest(KeyEvent.ofChar(c));
+        view.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
+
+        for (int i = 0; i < 15; i++) view.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        String screen = ViewScreen.of(view);
+        assertTrue(screen.contains("❯ 16. skill-15"), "窗口应跟随高亮项滚动");
+        view.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
+
+        assertEquals("skill-15", view.pendingSkillForTest(), "窗口外技能仍应能确认挂载");
     }
 }

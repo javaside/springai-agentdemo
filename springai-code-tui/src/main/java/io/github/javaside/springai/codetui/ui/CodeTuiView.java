@@ -120,6 +120,7 @@ public final class CodeTuiView extends InlineApp {
     private static final int MAX_LINES_PER_DRAIN = 300;
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
+    private static final int SKILL_PICKER_CAP = 10; // 技能选择器可见行上限；避免大量技能撑高 InlineDisplay、触发终端反复重排
     // ⏱ 面板（后台任务）最多显示几条。这份列表<b>跨回合累积、只有 /clear 清</b>，已完成的永不移除：
     // 不封顶的话，一个会话派 20 个后台任务就常驻 21 行，把输入框一路顶下去。全量看 /tasks 面板。
     static final int BACKGROUND_CAP = 6;
@@ -564,6 +565,7 @@ public final class CodeTuiView extends InlineApp {
 
     /** 测试专用：直接挂载技能，绕开 /skill 选择器（那条路径要一份真实技能清单才走得通）。 */
     void mountSkillForTest(String skill) { this.pendingSkill = skill; }
+    String pendingSkillForTest() { return pendingSkill; }
 
     /** scrollback 留底（见 {@link #scrollTail} 字段注释）。只在渲染线程调用。 */
     private void record(Object line) {
@@ -1615,20 +1617,37 @@ public final class CodeTuiView extends InlineApp {
         return EventResult.HANDLED;
     }
 
-    /** 技能选择器面板：标题 + 每个技能一行（❯ 高亮、名字 + 来源层 + 暗色描述）。 */
+    /**
+     * 技能选择器面板：标题 + 以高亮项为中心的固定窗口。
+     *
+     * <p>不能把全部技能都塞进 InlineDisplay：面板高度超过终端后，运行器每帧按 preferredSize
+     * 扩缩显示区，终端又会滚动/重排，二者互相追赶就表现为整屏不停闪动、上下晃动。固定可见行数后，
+     * 面板高度稳定；高亮移出窗口时才平移内容，仍可遍历并选择全部技能。
+     */
     private Element[] skillPickerChildren() {
         List<SkillInfo> list = onSubmit.skills();
+        if (list.isEmpty()) return new Element[0];
+        int sel = clampIndex(pickIndex, list.size());
+        int visible = Math.min(SKILL_PICKER_CAP, list.size());
+        int from = Math.max(0, Math.min(sel - visible / 2, list.size() - visible));
+        int to = from + visible;
         List<Element> els = new ArrayList<>();
         els.add(text("  选择技能（↑↓ 选择 · Enter 挂载 · Esc 取消）").style(PICK_TITLE));
-        for (int i = 0; i < list.size(); i++) {
+        for (int i = from; i < to; i++) {
             SkillInfo s = list.get(i);
-            boolean sel = i == pickIndex;
-            String marker = sel ? "❯ " : "  ";
+            boolean selected = i == sel;
+            String marker = selected ? "❯ " : "  ";
             els.add(text("  " + marker + (i + 1) + ". " + s.name() + "  [" + s.source() + "]   " + s.description())
-                    .style(sel ? PICK_SEL : PICK_DESC));
+                    .style(selected ? PICK_SEL : PICK_DESC));
+        }
+        if (list.size() > visible) {
+            els.add(text("  显示 " + (from + 1) + "-" + to + " / 共 " + list.size() + " 个技能").style(DIM));
         }
         return els.toArray(new Element[0]);
     }
+
+    /** 测试专用：读取技能选择器当前窗口。 */
+    Element[] skillPickerChildrenForTest() { return skillPickerChildren(); }
 
     /** 已挂载技能标签：固定在输入框正上方。发送时随本条消息带走并自动清除；Esc 也可移除。 */
     private Element skillTag() {
