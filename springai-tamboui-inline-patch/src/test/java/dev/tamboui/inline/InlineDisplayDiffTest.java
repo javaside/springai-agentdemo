@@ -71,6 +71,48 @@ class InlineDisplayDiffTest {
     }
 
     @Test
+    void growingOnlyDrawsNewAndActuallyChangedRows() {
+        InlineDisplay display = display(2);
+        render(display, "stable", null, 0, 0);
+        backend.resetCounts();
+
+        render(display, "stable", "new", 0, 0);
+
+        String raw = backend.outputUtf8();
+        assertFalse(raw.contains("stable"), raw);
+        assertTrue(raw.contains("new"), raw);
+        assertFalse(raw.contains("\u001b[K"), raw);
+    }
+
+    @Test
+    void shrinkingDoesNotRewriteSurvivingRows() {
+        InlineDisplay display = display(2);
+        render(display, "surviving", "removed", 0, 0);
+        backend.resetCounts();
+
+        render(display, "surviving", null, 0, 0);
+
+        String raw = backend.outputUtf8();
+        assertFalse(raw.contains("surviving"), raw);
+        assertFalse(raw.contains("removed"), raw);
+        assertTrue(raw.contains("\u001b[1M"), raw);
+    }
+
+    @Test
+    void invalidatedFrameRebuildsLiveAreaOnce() {
+        InlineDisplay display = display(1);
+        render(display, "stable", null, 0, 0);
+        display.invalidateFrame();
+        backend.resetCounts();
+
+        render(display, "stable", null, 0, 0);
+        assertTrue(backend.outputUtf8().contains("stable"));
+        backend.resetCounts();
+        render(display, "stable", null, 0, 0);
+        assertEquals(0, backend.writeCalls());
+    }
+
+    @Test
     void cursorOnlyChangeDoesNotRewriteCells() {
         InlineDisplay display = display(1);
         render(display, "abc", null, 0, 0);
