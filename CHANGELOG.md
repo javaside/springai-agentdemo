@@ -8,6 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
+| [v1.9.1](docs/release-notes/v1.9.1.md) | 修订版 | **`/skill` 大量技能不再闪动**：技能选择器改为固定高度的跟随窗口，避免终端反复滚动重排；仍可遍历并挂载全部技能；同步理顺发布包下载运行入口与 JDK 17+ 说明 |
 | [v1.9.0](docs/release-notes/v1.9.0.md) | 功能版 | **后台任务不再像卡死**：`/tasks` 面板 RUNNING 行加波光动画，一眼看出还在跑；后台完成通知明确要求模型继续 Todo 计划（而非仅确认结果）；`run_in_background` 使用条件写进工具描述，默认前台、减少误用后台 |
 | [v1.8.3](docs/release-notes/v1.8.3.md) | 修订版 | **context 低估修复 + Terminal.app 崩溃缓解**：`/context` token 估算正确纳入工具输出（`ToolResponseMessage.getText()` 空串 bug）；每帧 pty 写入限速 300 行，降低 Terminal.app GCD kevent 崩溃频率；README 拆分为 docs/guide/ 专题文档 |
 | [v1.8.2](docs/release-notes/v1.8.2.md) | 修订版 | **竞态修复 + 日志统一**：忙时提交在回合边界不再被误路由为排队（原子快照消竞态窗口）；全部有意义 debug 日志升 info，错误路径补 error；系统提示工具访问边界措辞放宽为「服从权限引擎」 |
