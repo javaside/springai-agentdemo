@@ -36,6 +36,7 @@ public final class InlineDisplay implements AutoCloseable {
     private Buffer previousBuffer;
     private final PrintWriter out;
     private final Backend backend;
+    private final SynchronizedOutput synchronizedOutput;
     private boolean initialized;
     private boolean released;
     private boolean shouldClearOnClose;
@@ -47,15 +48,25 @@ public final class InlineDisplay implements AutoCloseable {
     private StringBuilder printBatch;
 
     InlineDisplay(int height, int width, Backend backend, PrintWriter out) {
-        this(height, width, false, backend, out);
+        this(height, width, false, backend, out, SynchronizedOutput.systemDefault());
+    }
+
+    InlineDisplay(int height, int width, Backend backend, PrintWriter out, SynchronizedOutput synchronizedOutput) {
+        this(height, width, false, backend, out, synchronizedOutput);
     }
 
     InlineDisplay(int height, int width, boolean autoWidth, Backend backend, PrintWriter out) {
+        this(height, width, autoWidth, backend, out, SynchronizedOutput.systemDefault());
+    }
+
+    private InlineDisplay(int height, int width, boolean autoWidth, Backend backend, PrintWriter out,
+                          SynchronizedOutput synchronizedOutput) {
         this.height = height;
         this.width = width;
         this.autoWidth = autoWidth;
         this.backend = backend;
         this.out = out;
+        this.synchronizedOutput = synchronizedOutput;
         this.currentBuffer = Buffer.empty(Rect.of(width, height));
         this.previousBuffer = Buffer.empty(Rect.of(width, height));
     }
@@ -334,7 +345,7 @@ public final class InlineDisplay implements AutoCloseable {
     private void submit(StringBuilder batch) {
         if (batch.isEmpty()) return;
         try {
-            backend.writeRaw(batch.toString());
+            backend.writeRaw(synchronizedOutput.wrap(batch.toString()));
             backend.flush();
         } catch (IOException ignored) {
             previousFrameValid = false;

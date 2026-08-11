@@ -161,6 +161,16 @@ class InlineDisplayDiffTest {
     }
 
     @Test
+    void enabledSynchronizedOutputWrapsOneNonEmptyFrameOnce() {
+        InlineDisplay display = new InlineDisplay(1, 40, backend, backend.writer(),
+                SynchronizedOutput.from(java.util.Map.of(), "always"));
+        render(display, "first", null, 0, 0);
+        String raw = backend.outputUtf8();
+        assertEquals(1, occurrences(raw, "\u001b[?2026h"));
+        assertEquals(1, occurrences(raw, "\u001b[?2026l"));
+    }
+
+    @Test
     void cjkReplacementWritesWholeGlyphWithoutLineErase() {
         InlineDisplay display = display(1);
         render(display, "中", null, 2, 0);
@@ -181,7 +191,8 @@ class InlineDisplayDiffTest {
     }
 
     private InlineDisplay display(int height) {
-        return new InlineDisplay(height, 40, backend, backend.writer());
+        return new InlineDisplay(height, 40, backend, backend.writer(),
+                SynchronizedOutput.from(java.util.Map.of(), "never"));
     }
 
     private static void render(InlineDisplay display, String first, String second, int cx, int cy) {
