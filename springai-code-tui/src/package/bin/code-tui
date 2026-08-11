@@ -1,6 +1,6 @@
 #!/bin/sh
 # springai-code-tui 启动脚本。解压发布包后直接执行本脚本即可运行。
-# 需求：JDK 21+。
+# 需求：JDK 17+。
 # 配置：把 bin/config.env.example 复制为 bin/config.env 并填 API key（至少一家）；或直接用环境变量。
 #   可配项：DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY（及各自 *_BASE_URL、*_MODELS）、
 #   CODETUI_LLM_READ_TIMEOUT_SECONDS、CODETUI_SUBAGENT_CONCURRENCY、CODETUI_BACKGROUND_CONCURRENCY、
@@ -42,7 +42,7 @@ if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
 elif command -v java >/dev/null 2>&1; then
     JAVA=java
 else
-    echo "错误：未找到 java。请安装 JDK 21+（或设置 JAVA_HOME）后重试。" >&2
+    echo "错误：未找到 java。请安装 JDK 17+（或设置 JAVA_HOME）后重试。" >&2
     exit 1
 fi
 

@@ -1,6 +1,6 @@
 @echo off
 rem springai-code-tui 启动脚本（Windows）。解压后直接运行本脚本。
-rem 需求：JDK 21+。
+rem 需求：JDK 17+。
 rem 配置：把 bin\config.env.example 复制为 bin\config.env 并填 API key（至少一家）；或直接用环境变量。
 rem   可配项：DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY（及各自 *_BASE_URL、*_MODELS）、
 rem   CODETUI_LLM_READ_TIMEOUT_SECONDS、CODETUI_SUBAGENT_CONCURRENCY、CODETUI_BACKGROUND_CONCURRENCY、
@@ -26,7 +26,7 @@ if defined JAVA_HOME (
 
 where "%JAVA%" >nul 2>nul
 if errorlevel 1 (
-    echo 错误: 未找到 java。请安装 JDK 21+ 或设置 JAVA_HOME 后重试。 1>&2
+    echo 错误: 未找到 java。请安装 JDK 17+ 或设置 JAVA_HOME 后重试。 1>&2
     exit /b 1
 )
 
