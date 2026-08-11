@@ -18,18 +18,44 @@
 
 一个**真正能用的命令行编码智能体**：在终端里读写代码、跑测试、查资料、派子 agent 干活。仓库里的其他模块是通往它的教学阶梯，**它才是主角**。
 
-### 下载即用（无需构建）
+### 下载并运行（无需构建）
 
-到 **[Releases](https://github.com/javaside/springai-agentdemo/releases/latest)** 拿自包含运行包，解压后配一个 API Key 就能跑：
+**前置条件：JDK 17+，以及至少一家模型服务的 API Key。**
+
+从 **[Releases](https://github.com/javaside/springai-agentdemo/releases/latest)** 下载对应平台的自包含运行包。解压后先在安装目录创建配置：
+
+**macOS / Linux**
 
 ```bash
-# macOS / Linux
-tar xzf springai-code-tui-*-dist.tar.gz && cd springai-code-tui-*/
-export DEEPSEEK_API_KEY=你的key
-bin/code-tui                      # Windows 用 bin\code-tui.cmd
+tar xzf springai-code-tui-*-dist.tar.gz
+cd springai-code-tui-*
+cp bin/config.env.example bin/config.env
+# 编辑 bin/config.env，取消一家 *_API_KEY 的注释并填写真实值
 ```
 
-包内含启动脚本 + 主 jar + 全部依赖 + `LICENSE`/`NOTICE`/`README`，只需 **JDK 17+**。每版的 SHA-256 校验和见对应[发版说明](CHANGELOG.md)。
+然后进入智能体要处理的 Git 项目，通过安装目录中的脚本启动：
+
+```bash
+cd /path/to/disposable-git-project
+/path/to/springai-code-tui-<version>/bin/code-tui
+```
+
+**Windows**
+
+解压 `.zip` 后，在安装目录创建并编辑配置：
+
+```bat
+copy bin\config.env.example bin\config.env
+```
+
+再从待处理的 Git 项目目录启动：
+
+```bat
+cd C:\path\to\disposable-git-project
+C:\path\to\springai-code-tui-<version>\bin\code-tui.cmd
+```
+
+安装目录只存放程序；**启动时所在的目录才是智能体要读写的工作目录**。包内已包含启动脚本、主 JAR、全部依赖、配置示例、使用指南、`LICENSE` 和 `NOTICE`。详细配置、恢复会话和其他 provider 用法见 [code-tui 详细文档](springai-code-tui/README.md)，SHA-256 校验和见对应[发版说明](CHANGELOG.md)。
 
 > ⚠️ **先读安全声明**：它给智能体开放了本机文件系统与 shell 的实质访问。有副作用的调用会在**执行前**弹审批面板请你确认，但**这不是安全沙箱**——权限层管的是「要不要做这一步」，不是「能做到多远」；你一旦批准，那次调用就以你的用户权限执行、不受目录约束。请只在可随意丢弃、且已被版本控制干净纳管的目录中运行。详见 [模块 README 的安全声明](springai-code-tui/README.md) 与 [SECURITY.md](SECURITY.md)。
 
@@ -134,7 +160,9 @@ class MyDemo {
 ```
 配置（api-key、模型名、温度）写在 `application.properties` 的 `spring.ai.deepseek.*`，starter 读取后自动装配。
 
-## 快速开始
+## 从源码运行教学模块
+
+以下步骤面向要构建源码、学习仓库中各个示例的开发者。只想使用 code-tui 的用户无需执行 Maven，请直接按前面的[下载并运行](#下载并运行无需构建)操作。
 
 ### 1. 准备 DeepSeek API Key
 
@@ -164,8 +192,9 @@ java -jar springai-boot-demo/target/springai-boot-demo-1.6.0.jar
 # 终端基础示例（JLine 3）
 java -jar springai-jline-demo/target/springai-jline-demo.jar
 
-# 综合应用：命令行编码智能体（先 cd 到一个可随意丢弃的目录再运行，详见其 README 安全声明）
-java -jar springai-code-tui/target/springai-code-tui.jar
+# 综合应用：从源码构建的命令行编码智能体
+# 请先 cd 到可随意丢弃、由 Git 干净纳管的工作目录，再使用构建产物的绝对路径启动：
+java -jar /path/to/springai-agentdemo/springai-code-tui/target/springai-code-tui.jar
 ```
 
 core / agent / boot 启动后按菜单输入序号，`0` 退出；jline / code-tui 为交互式终端程序。
