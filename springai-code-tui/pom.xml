@@ -60,6 +60,12 @@
             <artifactId>spring-ai-mcp</artifactId>
         </dependency>
 
+        <!-- 行内显示差分渲染兼容层必须排在官方 TamboUI jar 前，优先提供同 FQN InlineDisplay。 -->
+        <dependency>
+            <groupId>io.github.javaside</groupId>
+            <artifactId>springai-tamboui-inline-patch</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-tui</artifactId>
