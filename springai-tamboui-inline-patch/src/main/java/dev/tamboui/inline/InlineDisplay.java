@@ -18,7 +18,11 @@ import dev.tamboui.text.Text;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.Writer;
+import java.util.BitSet;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiConsumer;
 
 /**
@@ -37,6 +41,7 @@ public final class InlineDisplay implements AutoCloseable {
     private final PrintWriter out;
     private final Backend backend;
     private final SynchronizedOutput synchronizedOutput;
+    private final boolean hardwareCursorVisible;
     private boolean initialized;
     private boolean released;
     private boolean shouldClearOnClose;
@@ -46,6 +51,10 @@ public final class InlineDisplay implements AutoCloseable {
     private int currentHeight;
     private int printBatchDepth;
     private StringBuilder printBatch;
+    /** 行号 → 剩余的重申行尾单元帧数。宽字符上屏后，其行尾右边框可能被 macOS IME 预编辑串清理擦掉； */
+    private final Map<Integer, Integer> pendingWideRepair = new HashMap<>();
+    /** 宽字符上屏后，连续重申行尾单元的帧数（约 3 × 40ms），覆盖异步、延迟的 IME 预编辑清理。 */
+    private static final int WIDE_REPAIR_FRAMES = 3;
 
     InlineDisplay(int height, int width, Backend backend, PrintWriter out) {
         this(height, width, false, backend, out, SynchronizedOutput.systemDefault());
@@ -67,6 +76,7 @@ public final class InlineDisplay implements AutoCloseable {
         this.backend = backend;
         this.out = out;
         this.synchronizedOutput = synchronizedOutput;
+        this.hardwareCursorVisible = hardwareCursorVisible();
         this.currentBuffer = Buffer.empty(Rect.of(width, height));
         this.previousBuffer = Buffer.empty(Rect.of(width, height));
     }
@@ -141,8 +151,9 @@ public final class InlineDisplay implements AutoCloseable {
 
         if (previousFrameValid) {
             List<InlinePatch.PatchRun> runs = InlinePatch.runs(previousBuffer, currentBuffer);
-            if (!runs.isEmpty() || lastCursorX != targetX || lastCursorY != targetY) {
-                appendFramePatch(batch, runs, targetX, targetY);
+            BitSet repairs = tickPendingWideRepairs();
+            if (!runs.isEmpty() || !repairs.isEmpty() || lastCursorX != targetX || lastCursorY != targetY) {
+                appendFramePatch(batch, runs, repairs, targetX, targetY);
             }
         } else {
             // 首帧、宽度变化或快照失效后无法可靠差分：完整重画 live 区一次（每行先 EL）。
@@ -266,7 +277,8 @@ public final class InlineDisplay implements AutoCloseable {
     private void ensureInitialized() {
         if (initialized) return;
         try {
-            backend.hideCursor();
+            if (hardwareCursorVisible) backend.showCursor();
+            else backend.hideCursor();
             backend.flush();
         } catch (IOException ignored) {
         }
@@ -315,7 +327,7 @@ public final class InlineDisplay implements AutoCloseable {
         lastCursorY = 0;
     }
 
-    private void appendFramePatch(StringBuilder batch, List<InlinePatch.PatchRun> runs,
+    private void appendFramePatch(StringBuilder batch, List<InlinePatch.PatchRun> runs, BitSet repairs,
                                   int targetX, int targetY) {
         appendHome(batch);
         int row = 0;
@@ -329,6 +341,7 @@ public final class InlineDisplay implements AutoCloseable {
                 // 若 run 内 CJK 后跟 continuation 链，后续字符（光标反显、右竖线）会被写到
                 // 错误列。每写一个非 continuation 字符前，若其列大于当前游标视觉列，先 right()。
                 int cursor = run.startCol();
+                boolean wroteWideCell = false;
                 for (int col = run.startCol(); col < run.endColExclusive(); col++) {
                     Cell cell = currentBuffer.get(col, run.row());
                     if (cell.isContinuation()) continue;
@@ -337,9 +350,28 @@ public final class InlineDisplay implements AutoCloseable {
                         cursor = col;
                     }
                     cells.writeCell(cell);
-                    cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
+                    int cellWidth = dev.tamboui.text.CharWidth.of(cell.symbol());
+                    wroteWideCell |= cellWidth > 1;
+                    cursor += cellWidth;
                 }
+                if (wroteWideCell) pendingWideRepair.put(run.row(), WIDE_REPAIR_FRAMES);
                 row = run.row();
+            }
+            // macOS IME 会在字符事件的立即绘制帧之后清理预编辑串；同帧重画边框仍会被它擦掉，
+            // 且清理时机异步、可能晚于下一 Tick。故宽字符行登记后连续重申行尾单元若干帧，
+            // 而非只重申一帧，避免「先重申、后清理」把边框再度擦掉后无人补回。
+            // 新登记的行从下一帧起倒计时；倒计时到 0 才移除，恢复静止零输出。
+            for (int repairRow = repairs.nextSetBit(0); repairRow >= 0;
+                 repairRow = repairs.nextSetBit(repairRow + 1)) {
+                if (repairRow >= currentHeight) continue;
+                int rowEndCol = findLastContentCellColumn(currentBuffer, repairRow);
+                if (rowEndCol < 0) continue;
+                if (repairRow > row) down(batch, repairRow - row);
+                else if (repairRow < row) up(batch, row - repairRow);
+                batch.append('\r');
+                right(batch, rowEndCol);
+                cells.writeCell(currentBuffer.get(rowEndCol, repairRow));
+                row = repairRow;
             }
         }
         batch.append('\r');
@@ -416,12 +448,43 @@ public final class InlineDisplay implements AutoCloseable {
     }
 
     private int findLastContentPosition(Buffer buffer, int line) {
+        int column = findLastContentCellColumn(buffer, line);
+        if (column < 0) return 0;
+        return Math.min(width, column + dev.tamboui.text.CharWidth.of(buffer.get(column, line).symbol()));
+    }
+
+    private int findLastContentCellColumn(Buffer buffer, int line) {
         for (int x = width - 1; x >= 0; x--) {
             Cell cell = buffer.get(x, line);
-            if (cell.isContinuation()) continue;
-            if (!cell.isEmpty()) return Math.min(width, x + dev.tamboui.text.CharWidth.of(cell.symbol()));
+            if (!cell.isContinuation() && !cell.isEmpty()) return x;
         }
-        return 0;
+        return -1;
+    }
+
+    /**
+     * 收集本帧需要重申行尾单元的宽字符行，并把每行的剩余重申帧数减一（到 0 移除）。
+     * 每帧调用一次，保证宽字符上屏后的一小段窗口内，其行尾右边框会被反复补画，
+     * 覆盖 macOS IME 异步清理预编辑串的时间差；窗口结束后恢复静止零输出。
+     */
+    private BitSet tickPendingWideRepairs() {
+        BitSet repairs = new BitSet();
+        if (pendingWideRepair.isEmpty()) return repairs;
+        Iterator<Map.Entry<Integer, Integer>> it = pendingWideRepair.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<Integer, Integer> e = it.next();
+            repairs.set(e.getKey());
+            int remaining = e.getValue() - 1;
+            if (remaining <= 0) it.remove();
+            else e.setValue(remaining);
+        }
+        return repairs;
+    }
+
+    private static boolean hardwareCursorVisible() {
+        String mode = System.getProperty("codetui.hardwareCursor", "auto").strip();
+        if (mode.equalsIgnoreCase("always")) return true;
+        if (mode.equalsIgnoreCase("never")) return false;
+        return "Apple_Terminal".equalsIgnoreCase(System.getenv("TERM_PROGRAM"));
     }
 
     private static void copy(Buffer source, Buffer target) {

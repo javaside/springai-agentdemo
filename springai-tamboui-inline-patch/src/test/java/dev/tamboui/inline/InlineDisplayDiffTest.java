@@ -8,6 +8,7 @@ import dev.tamboui.layout.Size;
 import dev.tamboui.style.Color;
 import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Backend;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -23,10 +24,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class InlineDisplayDiffTest {
 
     private RecordingBackend backend;
+    private String previousHardwareCursorMode;
 
     @BeforeEach
     void setUp() {
+        previousHardwareCursorMode = System.getProperty("codetui.hardwareCursor");
+        System.setProperty("codetui.hardwareCursor", "never");
         backend = new RecordingBackend(40, 24);
+    }
+
+    @AfterEach
+    void restoreTerminalModes() {
+        restoreProperty("codetui.hardwareCursor", previousHardwareCursorMode);
+    }
+
+    private static void restoreProperty(String name, String value) {
+        if (value == null) System.clearProperty(name);
+        else System.setProperty(name, value);
+    }
+
+    @Test
+    void visibleHardwareCursorModeShowsCursorForIme() {
+        System.setProperty("codetui.hardwareCursor", "always");
+        InlineDisplay display = display(1);
+
+        render(display, "input", null, 5, 0);
+
+        assertEquals(1, backend.showCursorCalls());
+        assertEquals(0, backend.hideCursorCalls());
     }
 
     @Test
@@ -217,7 +242,7 @@ class InlineDisplayDiffTest {
     }
 
     @Test
-    void wideContinuationRunRepositionsBeforeLaterCells() {
+    void wideContinuationRunRepositionsAndReassertsRowEndOnNextFrame() {
         InlineDisplay display = display(1);
         // before: col0='│', col1='a', col3=CONTINUATION, col4='A', col39='│'
         renderCells(display, "a", "A");
@@ -225,9 +250,22 @@ class InlineDisplayDiffTest {
         // after: 输入「中」后 col1='中'(col2=cont)，col3 仍是 continuation（光标区链），col4='B'
         renderCells(display, "中", "B");
         String raw = backend.outputUtf8();
-        // 中（col1，宽2）后 continuation 链停在 col3，B 在 col4：必须显式 right(1) 再写 B，
-        // 否则 B（以及更后面的右竖线）会被写到错误列——「右竖线时有时无」的根因。
+        // 中（col1，宽2）后 continuation 链停在 col3，B 在 col4：必须显式 right(1) 再写 B。
         assertTrue(raw.contains("\u001b[1CB"), raw);
+
+        // macOS IME 在字符事件的立即绘制帧之后才异步清理预编辑串，可能把行尾边框擦掉。
+        // 清理时机不定，故宽字符行登记后要连续重申行尾单元若干帧（这里 3 帧），
+        // 避免「先重申、后清理」把边框再度擦掉后无人补回；窗口结束才恢复静止零输出。
+        for (int frame = 1; frame <= 3; frame++) {
+            backend.resetCounts();
+            renderCells(display, "中", "B");
+            raw = backend.outputUtf8();
+            assertTrue(raw.contains("│"), "第 " + frame + " 帧重申窗口内必须补画行尾竖线：" + raw);
+        }
+
+        backend.resetCounts();
+        renderCells(display, "中", "B");
+        assertEquals(0, backend.writeCalls(), "重申窗口结束后，相同帧必须恢复静默");
     }
 
     private void renderCells(InlineDisplay display, String cell1, String cell4) {
@@ -273,6 +311,8 @@ class InlineDisplayDiffTest {
         private final ByteArrayOutputStream output = new ByteArrayOutputStream();
         private int writeCalls;
         private int flushCalls;
+        private int showCursorCalls;
+        private int hideCursorCalls;
 
         private RecordingBackend(int width, int height) {
             this.width = width;
@@ -299,6 +339,14 @@ class InlineDisplayDiffTest {
             return flushCalls;
         }
 
+        int showCursorCalls() {
+            return showCursorCalls;
+        }
+
+        int hideCursorCalls() {
+            return hideCursorCalls;
+        }
+
         void resetCounts() {
             output.reset();
             writeCalls = 0;
@@ -309,8 +357,8 @@ class InlineDisplayDiffTest {
         @Override public void flush() { flushCalls++; }
         @Override public void clear() { }
         @Override public Size size() { return new Size(width, height); }
-        @Override public void showCursor() { }
-        @Override public void hideCursor() { }
+        @Override public void showCursor() { showCursorCalls++; }
+        @Override public void hideCursor() { hideCursorCalls++; }
         @Override public Position getCursorPosition() { return new Position(0, 0); }
         @Override public void setCursorPosition(Position position) { }
         @Override public void enterAlternateScreen() { }
