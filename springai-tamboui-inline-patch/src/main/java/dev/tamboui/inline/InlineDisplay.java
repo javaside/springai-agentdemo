@@ -18,11 +18,7 @@ import dev.tamboui.text.Text;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.Writer;
-import java.util.BitSet;
-import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.function.BiConsumer;
 
 /**
@@ -51,10 +47,18 @@ public final class InlineDisplay implements AutoCloseable {
     private int currentHeight;
     private int printBatchDepth;
     private StringBuilder printBatch;
-    /** 行号 → 剩余的重申行尾单元帧数。宽字符上屏后，其行尾右边框可能被 macOS IME 预编辑串清理擦掉； */
-    private final Map<Integer, Integer> pendingWideRepair = new HashMap<>();
-    /** 宽字符上屏后，连续重申行尾单元的帧数（约 3 × 40ms），覆盖异步、延迟的 IME 预编辑清理。 */
-    private static final int WIDE_REPAIR_FRAMES = 3;
+    /**
+     * 光标带修复的剩余帧数。macOS 终端把 IME 预编辑串画在硬件光标处，其清理是<b>异步</b>的，
+     * 且实测会越界擦坏<b>相邻行的右缘</b>（右竖线、顶边框尾段与圆角）；应用对预编辑全程收不到
+     * 任何事件（取消时更是全无痕迹），差分渲染又认为这些格子未变化不会重画，损坏就此永驻。
+     * 对策：任何触及光标行 ±1 的变更（编辑、删除、上屏、光标块移动）都武装本窗口，
+     * 窗口内每帧把光标行 ±1 整行无擦除重写——覆写相同字形不可见，带外行仍严格差分。
+     */
+    private int cursorBandRepairFramesLeft;
+    /** 编辑活动后连续重申光标带的帧数（约 8 × 40ms），覆盖 IME 预编辑异步、可能滞后的清理。 */
+    private static final int CURSOR_BAND_REPAIR_FRAMES = 8;
+    /** 光标带半径：光标行上下各一行（顶边框/底边框正好落在此带内）。 */
+    private static final int CURSOR_BAND_RADIUS = 1;
 
     InlineDisplay(int height, int width, Backend backend, PrintWriter out) {
         this(height, width, false, backend, out, SynchronizedOutput.systemDefault());
@@ -151,9 +155,10 @@ public final class InlineDisplay implements AutoCloseable {
 
         if (previousFrameValid) {
             List<InlinePatch.PatchRun> runs = InlinePatch.runs(previousBuffer, currentBuffer);
-            BitSet repairs = tickPendingWideRepairs();
-            if (!runs.isEmpty() || !repairs.isEmpty() || lastCursorX != targetX || lastCursorY != targetY) {
-                appendFramePatch(batch, runs, repairs, targetX, targetY);
+            boolean bandTail = cursorBandRepairFramesLeft > 0;
+            if (bandTail) cursorBandRepairFramesLeft--;
+            if (!runs.isEmpty() || bandTail || lastCursorX != targetX || lastCursorY != targetY) {
+                appendFramePatch(batch, runs, bandTail, targetX, targetY);
             }
         } else {
             // 首帧、宽度变化或快照失效后无法可靠差分：完整重画 live 区一次（每行先 EL）。
@@ -327,10 +332,11 @@ public final class InlineDisplay implements AutoCloseable {
         lastCursorY = 0;
     }
 
-    private void appendFramePatch(StringBuilder batch, List<InlinePatch.PatchRun> runs, BitSet repairs,
+    private void appendFramePatch(StringBuilder batch, List<InlinePatch.PatchRun> runs, boolean bandTail,
                                   int targetX, int targetY) {
         appendHome(batch);
         int row = 0;
+        boolean bandTouched = false;
         try (AnsiCellWriter cells = new AnsiCellWriter(batch::append)) {
             for (InlinePatch.PatchRun run : runs) {
                 if (run.row() > row) down(batch, run.row() - row);
@@ -341,7 +347,6 @@ public final class InlineDisplay implements AutoCloseable {
                 // 若 run 内 CJK 后跟 continuation 链，后续字符（光标反显、右竖线）会被写到
                 // 错误列。每写一个非 continuation 字符前，若其列大于当前游标视觉列，先 right()。
                 int cursor = run.startCol();
-                boolean wroteWideCell = false;
                 for (int col = run.startCol(); col < run.endColExclusive(); col++) {
                     Cell cell = currentBuffer.get(col, run.row());
                     if (cell.isContinuation()) continue;
@@ -350,34 +355,50 @@ public final class InlineDisplay implements AutoCloseable {
                         cursor = col;
                     }
                     cells.writeCell(cell);
-                    int cellWidth = dev.tamboui.text.CharWidth.of(cell.symbol());
-                    wroteWideCell |= cellWidth > 1;
-                    cursor += cellWidth;
+                    cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
                 }
-                if (wroteWideCell) pendingWideRepair.put(run.row(), WIDE_REPAIR_FRAMES);
+                bandTouched |= Math.abs(run.row() - targetY) <= CURSOR_BAND_RADIUS;
                 row = run.row();
             }
-            // macOS IME 会在字符事件的立即绘制帧之后清理预编辑串；同帧重画边框仍会被它擦掉，
-            // 且清理时机异步、可能晚于下一 Tick。故宽字符行登记后连续重申行尾单元若干帧，
-            // 而非只重申一帧，避免「先重申、后清理」把边框再度擦掉后无人补回。
-            // 新登记的行从下一帧起倒计时；倒计时到 0 才移除，恢复静止零输出。
-            for (int repairRow = repairs.nextSetBit(0); repairRow >= 0;
-                 repairRow = repairs.nextSetBit(repairRow + 1)) {
-                if (repairRow >= currentHeight) continue;
-                int rowEndCol = findLastContentCellColumn(currentBuffer, repairRow);
-                if (rowEndCol < 0) continue;
-                if (repairRow > row) down(batch, repairRow - row);
-                else if (repairRow < row) up(batch, row - repairRow);
-                batch.append('\r');
-                right(batch, rowEndCol);
-                cells.writeCell(currentBuffer.get(rowEndCol, repairRow));
-                row = repairRow;
+            // 光标带修复（见 cursorBandRepairFramesLeft 注释）：本帧有触及光标带的变更 → 立即重申
+            // 并武装后续窗口；处于已武装窗口内 → 继续重申。整行覆写相同字形在终端上不可见，
+            // 不用 EL（先擦后写才会闪）；窗口耗尽且无新触发时恢复静止零输出。
+            if (bandTouched) cursorBandRepairFramesLeft = CURSOR_BAND_REPAIR_FRAMES;
+            if (bandTouched || bandTail) {
+                int from = Math.max(0, targetY - CURSOR_BAND_RADIUS);
+                int to = Math.min(currentHeight - 1, targetY + CURSOR_BAND_RADIUS);
+                for (int bandRow = from; bandRow <= to; bandRow++) {
+                    if (bandRow > row) down(batch, bandRow - row);
+                    else if (bandRow < row) up(batch, row - bandRow);
+                    batch.append('\r');
+                    appendRowOverwrite(batch, cells, currentBuffer, bandRow);
+                    row = bandRow;
+                }
             }
         }
         batch.append('\r');
         up(batch, row);
         down(batch, targetY);
         right(batch, targetX);
+    }
+
+    /**
+     * 把 {@code source} 的一整行（0..最后内容格）覆写到终端当前行，不带 EL。
+     * 调用前游标须已在该行行首；与 {@link #appendFramePatch} 相同地跳过 continuation 并显式定位。
+     */
+    private void appendRowOverwrite(StringBuilder batch, AnsiCellWriter cells, Buffer source, int row) {
+        int lineEnd = findLastContentPosition(source, row);
+        int cursor = 0;
+        for (int col = 0; col < lineEnd; col++) {
+            Cell cell = source.get(col, row);
+            if (cell.isContinuation()) continue;
+            if (col > cursor) {
+                right(batch, col - cursor);
+                cursor = col;
+            }
+            cells.writeCell(cell);
+            cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
+        }
     }
 
     /**
@@ -396,20 +417,7 @@ public final class InlineDisplay implements AutoCloseable {
             for (int row = 0; row < currentHeight; row++) {
                 if (row > 0) batch.append("\r\n");
                 batch.append('\r').append("\u001b[K");
-                int lineEnd = findLastContentPosition(source, row);
-                // 与 appendFramePatch 相同：AnsiCellWriter 跳过 continuation 且游标不推进，
-                // 遇 continuation 链时必须显式定位，否则后续字符（右竖线）会写到错误列。
-                int cursor = 0;
-                for (int col = 0; col < lineEnd; col++) {
-                    Cell cell = source.get(col, row);
-                    if (cell.isContinuation()) continue;
-                    if (col > cursor) {
-                        right(batch, col - cursor);
-                        cursor = col;
-                    }
-                    cells.writeCell(cell);
-                    cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
-                }
+                appendRowOverwrite(batch, cells, source, row);
             }
         }
         batch.append('\r');
@@ -459,25 +467,6 @@ public final class InlineDisplay implements AutoCloseable {
             if (!cell.isContinuation() && !cell.isEmpty()) return x;
         }
         return -1;
-    }
-
-    /**
-     * 收集本帧需要重申行尾单元的宽字符行，并把每行的剩余重申帧数减一（到 0 移除）。
-     * 每帧调用一次，保证宽字符上屏后的一小段窗口内，其行尾右边框会被反复补画，
-     * 覆盖 macOS IME 异步清理预编辑串的时间差；窗口结束后恢复静止零输出。
-     */
-    private BitSet tickPendingWideRepairs() {
-        BitSet repairs = new BitSet();
-        if (pendingWideRepair.isEmpty()) return repairs;
-        Iterator<Map.Entry<Integer, Integer>> it = pendingWideRepair.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<Integer, Integer> e = it.next();
-            repairs.set(e.getKey());
-            int remaining = e.getValue() - 1;
-            if (remaining <= 0) it.remove();
-            else e.setValue(remaining);
-        }
-        return repairs;
     }
 
     private static boolean hardwareCursorVisible() {

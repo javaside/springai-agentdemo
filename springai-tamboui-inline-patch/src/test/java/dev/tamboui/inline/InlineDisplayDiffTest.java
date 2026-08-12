@@ -68,12 +68,14 @@ class InlineDisplayDiffTest {
     }
 
     @Test
-    void oneCellChangeDoesNotEraseOrRewriteOtherRows() {
-        InlineDisplay display = display(2);
-        render(display, "input", "thinking", 5, 0);
+    void oneCellChangeDoesNotEraseOrRewriteRowsOutsideCursorBand() {
+        // 光标带（光标行 ±1）内的行会因 IME 修复被整行重申，「不重写无关行」的
+        // 最小差分契约只对带外行成立：把 thinking 放到光标行 +3 处验证。
+        InlineDisplay display = display(4);
+        renderRows(display, new String[]{"input", null, null, "thinking"}, 5, 0);
         backend.resetCounts();
 
-        render(display, "input!", "thinking", 6, 0);
+        renderRows(display, new String[]{"input!", null, null, "thinking"}, 6, 0);
 
         String raw = backend.outputUtf8();
         assertFalse(raw.contains("\u001b[K"), raw);
@@ -83,8 +85,8 @@ class InlineDisplayDiffTest {
     }
 
     @Test
-    void shimmerStyleChangeDoesNotRewriteInputRow() {
-        InlineDisplay display = display(2);
+    void shimmerStyleChangeOutsideCursorBandDoesNotRewriteInputRow() {
+        InlineDisplay display = display(4);
         renderStyled(display, false);
         backend.resetCounts();
 
@@ -97,12 +99,12 @@ class InlineDisplayDiffTest {
     }
 
     @Test
-    void growingOnlyDrawsNewAndActuallyChangedRows() {
-        InlineDisplay display = display(2);
-        render(display, "stable", null, 0, 0);
+    void growingOnlyDrawsNewAndActuallyChangedRowsOutsideCursorBand() {
+        InlineDisplay display = display(4);
+        renderRows(display, new String[]{"stable", null, null}, 0, 0);
         backend.resetCounts();
 
-        render(display, "stable", "new", 0, 0);
+        renderRows(display, new String[]{"stable", null, null, "new"}, 0, 0);
 
         String raw = backend.outputUtf8();
         assertFalse(raw.contains("stable"), raw);
@@ -242,7 +244,7 @@ class InlineDisplayDiffTest {
     }
 
     @Test
-    void wideContinuationRunRepositionsAndReassertsRowEndOnNextFrame() {
+    void wideContinuationRunRepositionsAndArmsCursorBandRepair() {
         InlineDisplay display = display(1);
         // before: col0='│', col1='a', col3=CONTINUATION, col4='A', col39='│'
         renderCells(display, "a", "A");
@@ -252,11 +254,12 @@ class InlineDisplayDiffTest {
         String raw = backend.outputUtf8();
         // 中（col1，宽2）后 continuation 链停在 col3，B 在 col4：必须显式 right(1) 再写 B。
         assertTrue(raw.contains("\u001b[1CB"), raw);
+        // 同帧即须整行重申（行尾右竖线在内），抵御 IME 预编辑清理同步擦除。
+        assertTrue(raw.contains("│"), raw);
 
-        // macOS IME 在字符事件的立即绘制帧之后才异步清理预编辑串，可能把行尾边框擦掉。
-        // 清理时机不定，故宽字符行登记后要连续重申行尾单元若干帧（这里 3 帧），
-        // 避免「先重申、后清理」把边框再度擦掉后无人补回；窗口结束才恢复静止零输出。
-        for (int frame = 1; frame <= 3; frame++) {
+        // macOS IME 清理预编辑串是异步的，可能晚于编辑帧若干 Tick 并越界擦坏相邻行右缘。
+        // 触及光标带的变更须武装连续 8 帧的整行重申窗口；窗口结束才恢复静止零输出。
+        for (int frame = 1; frame <= 8; frame++) {
             backend.resetCounts();
             renderCells(display, "中", "B");
             raw = backend.outputUtf8();
@@ -266,6 +269,65 @@ class InlineDisplayDiffTest {
         backend.resetCounts();
         renderCells(display, "中", "B");
         assertEquals(0, backend.writeCalls(), "重申窗口结束后，相同帧必须恢复静默");
+    }
+
+    @Test
+    void asciiEditOnCursorRowAlsoArmsCursorBandRepair() {
+        // 拼音被取消时应用收不到任何事件、也没有宽字符上屏；损坏只能靠下一次任意
+        // 编辑活动修复。故普通 ASCII 编辑同样要武装光标带窗口。
+        InlineDisplay display = display(1);
+        renderCells(display, "a", "A");
+        backend.resetCounts();
+
+        renderCells(display, "b", "A");
+        assertTrue(backend.outputUtf8().contains("│"), backend.outputUtf8());
+
+        backend.resetCounts();
+        renderCells(display, "b", "A");
+        assertTrue(backend.outputUtf8().contains("│"), "窗口首帧必须重申光标行");
+    }
+
+    @Test
+    void cursorBandRepairCoversRowsAboveAndBelowCursor() {
+        // 实测 IME 清理会擦坏光标行**上方**顶边框的尾段与圆角（对话框右侧缺角），
+        // 修复带必须覆盖光标行 ±1（输入框场景正好是顶边框与底边框）。
+        InlineDisplay display = display(3);
+        renderBox(display, "a");
+        backend.resetCounts();
+
+        renderBox(display, "中");
+
+        String raw = backend.outputUtf8();
+        assertTrue(raw.contains("╮"), "必须重申光标行上方（顶边框圆角）：" + raw);
+        assertTrue(raw.contains("╯"), "必须重申光标行下方（底边框圆角）：" + raw);
+    }
+
+    @Test
+    void runOutsideCursorBandDoesNotArmRepair() {
+        InlineDisplay display = display(4);
+        renderRows(display, new String[]{"input", null, null, "status"}, 0, 0);
+        backend.resetCounts();
+
+        renderRows(display, new String[]{"input", null, null, "status!"}, 0, 0);
+        backend.resetCounts();
+
+        renderRows(display, new String[]{"input", null, null, "status!"}, 0, 0);
+        assertEquals(0, backend.writeCalls(), "带外变更不得武装修复窗口");
+    }
+
+    /** 3 行圆角框：row0 顶边框（含 ╮），row1 = │ + 文本 + │（光标行），row2 底边框（含 ╯）。 */
+    private void renderBox(InlineDisplay display, String text) {
+        display.render((area, buffer) -> {
+            buffer.set(0, 0, Cell.EMPTY.symbol("╭"));
+            for (int x = 1; x < 39; x++) buffer.set(x, 0, Cell.EMPTY.symbol("─"));
+            buffer.set(39, 0, Cell.EMPTY.symbol("╮"));
+            buffer.set(0, 1, Cell.EMPTY.symbol("│"));
+            buffer.setString(1, 1, text, Style.EMPTY);
+            buffer.set(39, 1, Cell.EMPTY.symbol("│"));
+            buffer.set(0, 2, Cell.EMPTY.symbol("╰"));
+            for (int x = 1; x < 39; x++) buffer.set(x, 2, Cell.EMPTY.symbol("─"));
+            buffer.set(39, 2, Cell.EMPTY.symbol("╯"));
+        }, 3, 1, 1);
     }
 
     private void renderCells(InlineDisplay display, String cell1, String cell4) {
@@ -301,8 +363,17 @@ class InlineDisplayDiffTest {
         display.render((area, buffer) -> {
             buffer.setString(0, 0, "input-border", Style.EMPTY);
             Style style = highlighted ? Style.EMPTY.fg(Color.YELLOW) : Style.EMPTY.fg(Color.BLUE);
-            buffer.setString(0, 1, "thinking", style);
-        }, 2, 0, 0);
+            buffer.setString(0, 3, "thinking", style);
+        }, 4, 0, 0);
+    }
+
+    /** 按行数组渲染（null 行留空），光标 (cx, cy)；行数 = 数组长度。 */
+    private static void renderRows(InlineDisplay display, String[] rows, int cx, int cy) {
+        display.render((area, buffer) -> {
+            for (int i = 0; i < rows.length; i++) {
+                if (rows[i] != null) buffer.setString(0, i, rows[i], Style.EMPTY);
+            }
+        }, rows.length, cx, cy);
     }
 
     private static final class RecordingBackend implements Backend {
