@@ -62,11 +62,11 @@ final class ContextUsage {
                     s.visionImages(), s.visionTokens(), VisionBudget.MAX_TURN_DELIVERIES));
         }
         if (s.tokenThreshold() > 0) {
-            sink.accept(String.format("  自动压缩：达 %,d token 触发（当前 %s）· 保留最近 %,d 条",
-                    s.tokenThreshold(), pct(s.estimatedTokens(), s.tokenThreshold()), s.autoKeepEvents()));
+            sink.accept(String.format("  自动压缩：达 %,d token 触发（当前 %s）· 按 token 保留近期完整回合",
+                    s.tokenThreshold(), pct(s.estimatedTokens(), s.tokenThreshold())));
         }
         if (s.manualKeepEvents() > 0) {
-            sink.accept(String.format("  手动 /compact：立即压缩，保留最近 %,d 条（更激进）", s.manualKeepEvents()));
+            sink.accept("  手动 /compact：立即按 token 更激进压缩");
         }
     }
 

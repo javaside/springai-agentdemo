@@ -31,8 +31,6 @@ import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.session.compaction.CompactionStrategy;
-import org.springframework.ai.session.compaction.RecursiveSummarizationCompactionStrategy;
-import org.springframework.ai.session.compaction.TokenCountTrigger;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tokenizer.JTokkitTokenCountEstimator;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
@@ -105,17 +103,32 @@ public final class AgentTools {
      */
     static final int COMPACTION_TOKEN_THRESHOLD = 400_000;
 
-    /** 当前模型（v4-flash）上下文窗口 token 数；仅用于 {@code /context} 展示「已用 / 窗口」占比，非硬约束。 */
+    /** 旧单-client 测试路径的展示回退；生产路径按当前 provider/model 动态解析。 */
     static final long CONTEXT_WINDOW_TOKENS = 1_000_000L;
+
+    private static final ModelContextWindows MODEL_CONTEXT_WINDOWS = ModelContextWindows.fromEnvironment();
+    private static final double AUTO_COMPACTION_RATIO = 0.70d;
+    private static final double COMPACTION_TARGET_RATIO = 0.55d;
+    private static final long MAX_SUMMARY_CHUNK_TOKENS = 64_000L;
+    /** MediaReferencePreserving 在 base 预算完成后最多插入 20 条有界清单；提前留足 token，保证完整装饰链仍低于触发线。 */
+    static final long MEDIA_MANIFEST_TOKEN_RESERVE = 16_000L;
+    /** 摘要请求还含固定 system prompt、角色封装和输出空间；user chunk 只使用安全输入预算的一部分。 */
+    private static final long SUMMARY_PROMPT_TOKEN_RESERVE = 4_000L;
+
+    static long contextWindow(ProviderRegistry registry) {
+        return registry == null ? CONTEXT_WINDOW_TOKENS
+                : MODEL_CONTEXT_WINDOWS.resolve(registry.active().id(), registry.activeModelId());
+    }
+
+    static long autoCompactionThreshold(ProviderRegistry registry) {
+        return Math.max(32_000L, (long) (contextWindow(registry) * AUTO_COMPACTION_RATIO));
+    }
 
     /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收（压缩为销毁式，见类注释）。须 > overlapSize 且其 token 量远低于阈值。可调。 */
     static final int MAX_EVENTS_TO_KEEP = 120;
 
     /** 手动 /compact 的保留窗口：比自动的 120 激进得多，让「按需缩小上下文」真正生效。可调。 */
     static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
-
-    /** 手动策略的重叠窗口：须 >=0 且 < MANUAL_MAX_EVENTS_TO_KEEP，给摘要与保留段留一点上下文衔接。 */
-    private static final int MANUAL_OVERLAP_SIZE = 3;
 
     /**
      * <b>自动</b>压缩路径的装配：{@code Notifying( Preserving( base ) )}。
@@ -474,27 +487,37 @@ public final class AgentTools {
         // token 估算器（JTokkit，spring-ai-commons 提供）：trigger 与摘要策略都需显式提供，无默认值。
         TokenCountEstimator tokenCountEstimator = new JTokkitTokenCountEstimator();
 
-        // 自动压缩策略（保留 120）：装配见 #autoCompaction。
+        java.util.function.LongSupplier contextWindow = () -> contextWindow(registry);
+        java.util.function.LongSupplier autoThreshold = () -> autoCompactionThreshold(registry);
+        java.util.function.LongSupplier targetBudget = () ->
+                Math.max(8_000L, (long) (contextWindow.getAsLong() * COMPACTION_TARGET_RATIO)
+                        - MEDIA_MANIFEST_TOKEN_RESERVE);
+        java.util.function.LongSupplier chunkBudget = () ->
+                Math.max(4_000L, Math.min(MAX_SUMMARY_CHUNK_TOKENS,
+                        contextWindow.getAsLong() / 8L) - SUMMARY_PROMPT_TOKEN_RESERVE);
+
         CompactionStrategy autoStrategy = autoCompaction(
-                RecursiveSummarizationCompactionStrategy.builder(auxClient)
-                        .maxEventsToKeep(MAX_EVENTS_TO_KEEP)
-                        .tokenCountEstimator(tokenCountEstimator).build(),
+                new BoundedSummarizationCompactionStrategy(targetBudget, chunkBudget,
+                        tokenCountEstimator::estimate,
+                        chunk -> auxClient.prompt()
+                                .system("Summarize this conversation chunk for continuation. Preserve decisions, constraints, completed work, pending tasks, errors, commands, and file paths. Be concise.")
+                                .user(chunk).call().content()),
                 listener);
 
-        // 手动压缩策略（保留 20，更激进）：装配见 #manualCompaction。
+        java.util.function.LongSupplier manualTargetBudget = () ->
+                Math.max(8_000L, contextWindow.getAsLong() / 4L - MEDIA_MANIFEST_TOKEN_RESERVE);
         CompactionStrategy manualStrategy = manualCompaction(
-                RecursiveSummarizationCompactionStrategy.builder(auxClient)
-                        .maxEventsToKeep(MANUAL_MAX_EVENTS_TO_KEEP)
-                        .overlapSize(MANUAL_OVERLAP_SIZE)
-                        .tokenCountEstimator(tokenCountEstimator).build());
+                new BoundedSummarizationCompactionStrategy(manualTargetBudget, chunkBudget,
+                        tokenCountEstimator::estimate,
+                        chunk -> auxClient.prompt()
+                                .system("Summarize this conversation chunk for continuation. Preserve decisions, constraints, completed work, pending tasks, errors, commands, and file paths. Be concise.")
+                                .user(chunk).call().content()));
 
         SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
                 .defaultUserId(DEFAULT_USER_ID)
-                .compactionTrigger(TokenCountTrigger.builder()
-                        .threshold(COMPACTION_TOKEN_THRESHOLD)
-                        .tokenCountEstimator(tokenCountEstimator).build())
-                .compactionStrategy(autoStrategy)
                 .build();
+        PreflightCompactionAdvisor preflightCompaction = new PreflightCompactionAdvisor(
+                sessionService, autoThreshold, tokenCountEstimator, autoStrategy);
 
         // 环境信息 / git 状态只取一次，供所有 provider 共用：既省掉每 provider 一次 git 子进程，
         // 也把 gitStatus 的调用收敛到一处 —— 便于用 quietGitStatus 屏蔽它对 System.out 的杂散打印。
@@ -544,7 +567,7 @@ public final class AgentTools {
                     // memoryAdvisor（会话记忆）+ 空流守卫（order +1001，紧邻 memoryAdvisor 内侧）：修复切 gpt 时
                     // SessionMemoryAdvisor.after() 因模型空流拿不到 session id 而抛 No session ID（见 SessionIdStreamGuardAdvisor）。
                     // 排列顺序不决定执行序（由 getOrder 决定）；守卫在 DeepSeek 上流非空即永不触发、零回归。
-                    .defaultAdvisors(memoryAdvisor, new SessionIdStreamGuardAdvisor())
+                    .defaultAdvisors(preflightCompaction, memoryAdvisor, new SessionIdStreamGuardAdvisor())
                     .build();
             clients.put(provider.id(), c);
         }

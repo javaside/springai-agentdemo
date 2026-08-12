@@ -64,8 +64,8 @@ class ContextUsageTest {
         assertTrue(bucket.contains("其他 2"), "otherEvents>0 才带其他");
         assertTrue(sink.lines.get(2).contains("占窗口 30%"), "30000/100000 = 30%");
         assertTrue(sink.lines.get(3).contains("当前 50%"), "自动压缩当前 30000/60000 = 50%");
-        assertTrue(sink.lines.get(3).contains("保留最近 20 条"));
-        assertTrue(sink.lines.get(4).contains("保留最近 10 条"), "手动行");
+        assertTrue(sink.lines.get(3).contains("按 token 保留近期完整回合"));
+        assertTrue(sink.lines.get(4).contains("按 token 更激进压缩"), "手动行");
     }
 
     /**

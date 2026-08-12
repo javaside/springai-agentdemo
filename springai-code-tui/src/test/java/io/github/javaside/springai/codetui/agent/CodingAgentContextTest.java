@@ -111,7 +111,7 @@ class CodingAgentContextTest {
         assertEquals(0, s.otherEvents(), "其他事件数");
         assertEquals(("hello\n" + "world!!\n").length(), s.estimatedTokens(), "估算 token = 拼接文本长度");
         // 策略数直接映射自 AgentTools 常量（同包可见），保证 /context 展示与实际装配一致。
-        assertEquals(AgentTools.COMPACTION_TOKEN_THRESHOLD, s.tokenThreshold());
+        assertEquals(AgentTools.autoCompactionThreshold(null), s.tokenThreshold());
         assertEquals(AgentTools.CONTEXT_WINDOW_TOKENS, s.contextWindow());
         assertEquals(AgentTools.MAX_EVENTS_TO_KEEP, s.autoKeepEvents());
         assertEquals(AgentTools.MANUAL_MAX_EVENTS_TO_KEEP, s.manualKeepEvents());
