@@ -128,7 +128,7 @@ class InlineDisplayDiffTest {
     }
 
     @Test
-    void printBatchDoesNotRedrawLiveAreaPerLine() {
+    void printBatchRedrawsLiveAreaOnceAtTheEnd() {
         InlineDisplay display = display(1);
         render(display, "LIVE", null, 0, 0);
         backend.resetCounts();
@@ -143,9 +143,40 @@ class InlineDisplayDiffTest {
         assertEquals(1, occurrences(raw, "one"));
         assertEquals(1, occurrences(raw, "two"));
         assertEquals(1, occurrences(raw, "three"));
-        assertEquals(0, occurrences(raw, "LIVE"));
+        // 批末必须把 live 区完整重画一次（内容出现恰一次）：插行把 live 区推离屏幕底部后，
+        // 靠这次重画把它拉回。若被跳过（0 次），live 区被挤出后永不恢复。
+        assertEquals(1, occurrences(raw, "LIVE"));
         assertEquals(1, backend.writeCalls());
         assertEquals(1, backend.flushCalls());
+    }
+
+    @Test
+    void growingFromZeroMovesCursorUpByFullHeight() {
+        InlineDisplay display = display(4);
+        display.render((area, buffer) -> buffer.setString(0, 0, "a", Style.EMPTY), 4, 0, 0);
+
+        String raw = backend.outputUtf8();
+        // 首帧生长序列（第一个 EL 之前）：4 个换行把光标下移 4 行后必须退回 4 行，
+        // 退回 3 行会让整个 live 区比预期低 1 行（启动画面整体下移的根源）。
+        String growth = raw.substring(0, raw.indexOf("\u001b[K"));
+        assertTrue(growth.contains("\u001b[4A"), growth);
+        assertFalse(growth.contains("\u001b[3A"), growth);
+    }
+
+    @Test
+    void firstFrameAndInvalidatedFrameEraseEachRowTail() {
+        InlineDisplay display = display(2);
+        render(display, "one", "two", 0, 0);
+        // 首帧：每行先 EL 再写，清掉终端上可能残留的旧行尾。
+        assertEquals(2, occurrences(backend.outputUtf8(), "\u001b[K"));
+
+        display.invalidateFrame();
+        backend.resetCounts();
+        render(display, "one", "two", 0, 0);
+        assertEquals(2, occurrences(backend.outputUtf8(), "\u001b[K"));
+        backend.resetCounts();
+        render(display, "one", "two", 0, 0);
+        assertEquals(0, backend.writeCalls());
     }
 
     @Test

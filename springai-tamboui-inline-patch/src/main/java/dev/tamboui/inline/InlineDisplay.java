@@ -139,12 +139,14 @@ public final class InlineDisplay implements AutoCloseable {
         targetX = Math.max(0, Math.min(targetX, Math.max(0, width - 1)));
         targetY = Math.max(0, Math.min(targetY, currentHeight - 1));
 
-        Buffer comparison = previousFrameValid
-                ? previousBuffer
-                : Buffer.empty(currentBuffer.area());
-        List<InlinePatch.PatchRun> runs = InlinePatch.runs(comparison, currentBuffer);
-        if (!runs.isEmpty() || lastCursorX != targetX || lastCursorY != targetY) {
-            appendFramePatch(batch, runs, targetX, targetY);
+        if (previousFrameValid) {
+            List<InlinePatch.PatchRun> runs = InlinePatch.runs(previousBuffer, currentBuffer);
+            if (!runs.isEmpty() || lastCursorX != targetX || lastCursorY != targetY) {
+                appendFramePatch(batch, runs, targetX, targetY);
+            }
+        } else {
+            // 首帧、宽度变化或快照失效后无法可靠差分：完整重画 live 区一次（每行先 EL）。
+            appendFullRedraw(batch, currentBuffer, targetX, targetY);
         }
         submit(batch);
 
@@ -179,10 +181,17 @@ public final class InlineDisplay implements AutoCloseable {
         if (printBatchDepth++ == 0) printBatch = new StringBuilder();
     }
 
-    /** Ends a print batch and submits all accumulated lines once. */
+    /** Ends a print batch, submits all accumulated lines once, then redraws the live area once. */
     public void endPrintBatch() {
         if (printBatchDepth <= 0) return;
         if (--printBatchDepth == 0) {
+            // 批处理只插行、不逐行重画 live 区；当 live 区已被推到屏幕底部时，插行会把它的
+            // 底行挤出屏幕。此处必须完整重画一次把 live 区拉回屏幕底部——官方版是每行 println
+            // 后立即重画，这里合并为每批一次（仍满足「一批至多一次 live 提交」）。
+            // 注意：render() 结束时会交换 current/previous，已显示内容此刻在 previousBuffer。
+            if (printBatch != null && !printBatch.isEmpty() && currentHeight > 0 && previousFrameValid) {
+                appendFullRedraw(printBatch, previousBuffer, -1, -1);
+            }
             submit(printBatch);
             printBatch = null;
         }
@@ -287,7 +296,9 @@ public final class InlineDisplay implements AutoCloseable {
         if (delta > 0) {
             if (oldHeight > 0) down(batch, oldHeight - 1);
             for (int i = 0; i < delta; i++) batch.append("\r\n");
-            up(batch, newHeight - 1);
+            // 从 0 高度生长时已向下走了 newHeight 行，必须退回 newHeight 行（而不是 newHeight-1），
+            // 否则整个 live 区比预期低 1 行——「启动画面整体下移一行」的根源。
+            up(batch, newHeight - (oldHeight > 0 ? 1 : 0));
             batch.append('\r');
         } else {
             down(batch, newHeight);
@@ -327,6 +338,39 @@ public final class InlineDisplay implements AutoCloseable {
         right(batch, targetX);
     }
 
+    /**
+     * Full rewrite of the live area: move to its top, erase each row tail, write the row content,
+     * then park the cursor. Used for the first frame, after snapshot invalidation, and at the end
+     * of a scrollback print batch (where inserted lines may have pushed the bottom of the live
+     * area off the screen).
+     *
+     * @param source the buffer whose content should be drawn (current frame inside render(), the
+     *               already-displayed frame at the end of a print batch)
+     */
+    private void appendFullRedraw(StringBuilder batch, Buffer source, int cursorX, int cursorY) {
+        if (currentHeight <= 0) return;
+        appendHome(batch);
+        try (AnsiCellWriter cells = new AnsiCellWriter(batch::append)) {
+            for (int row = 0; row < currentHeight; row++) {
+                if (row > 0) batch.append("\r\n");
+                batch.append('\r').append("\u001b[K");
+                int lineEnd = findLastContentPosition(source, row);
+                for (int col = 0; col < lineEnd; col++) {
+                    Cell cell = source.get(col, row);
+                    if (!cell.isContinuation()) cells.writeCell(cell);
+                }
+            }
+        }
+        batch.append('\r');
+        up(batch, currentHeight - 1);
+        int tx = cursorX >= 0 ? cursorX : findLastContentPosition(source, 0);
+        int ty = cursorY >= 0 ? cursorY : 0;
+        down(batch, ty);
+        right(batch, tx);
+        lastCursorX = tx;
+        lastCursorY = ty;
+    }
+
     private void appendHome(StringBuilder batch) {
         batch.append('\r');
         up(batch, lastCursorY);
@@ -356,7 +400,7 @@ public final class InlineDisplay implements AutoCloseable {
         for (int x = width - 1; x >= 0; x--) {
             Cell cell = buffer.get(x, line);
             if (cell.isContinuation()) continue;
-            if (!cell.isEmpty()) return Math.min(width - 1, x + dev.tamboui.text.CharWidth.of(cell.symbol()));
+            if (!cell.isEmpty()) return Math.min(width, x + dev.tamboui.text.CharWidth.of(cell.symbol()));
         }
         return 0;
     }
