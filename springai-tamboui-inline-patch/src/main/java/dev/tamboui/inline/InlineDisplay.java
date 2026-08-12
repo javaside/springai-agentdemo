@@ -325,9 +325,19 @@ public final class InlineDisplay implements AutoCloseable {
                 else if (run.row() < row) up(batch, row - run.row());
                 batch.append('\r');
                 right(batch, run.startCol());
+                // 显式追踪视觉列：AnsiCellWriter 对 continuation 直接跳过且游标不推进，
+                // 若 run 内 CJK 后跟 continuation 链，后续字符（光标反显、右竖线）会被写到
+                // 错误列。每写一个非 continuation 字符前，若其列大于当前游标视觉列，先 right()。
+                int cursor = run.startCol();
                 for (int col = run.startCol(); col < run.endColExclusive(); col++) {
                     Cell cell = currentBuffer.get(col, run.row());
-                    if (!cell.isContinuation()) cells.writeCell(cell);
+                    if (cell.isContinuation()) continue;
+                    if (col > cursor) {
+                        right(batch, col - cursor);
+                        cursor = col;
+                    }
+                    cells.writeCell(cell);
+                    cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
                 }
                 row = run.row();
             }
@@ -355,9 +365,18 @@ public final class InlineDisplay implements AutoCloseable {
                 if (row > 0) batch.append("\r\n");
                 batch.append('\r').append("\u001b[K");
                 int lineEnd = findLastContentPosition(source, row);
+                // 与 appendFramePatch 相同：AnsiCellWriter 跳过 continuation 且游标不推进，
+                // 遇 continuation 链时必须显式定位，否则后续字符（右竖线）会写到错误列。
+                int cursor = 0;
                 for (int col = 0; col < lineEnd; col++) {
                     Cell cell = source.get(col, row);
-                    if (!cell.isContinuation()) cells.writeCell(cell);
+                    if (cell.isContinuation()) continue;
+                    if (col > cursor) {
+                        right(batch, col - cursor);
+                        cursor = col;
+                    }
+                    cells.writeCell(cell);
+                    cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
                 }
             }
         }

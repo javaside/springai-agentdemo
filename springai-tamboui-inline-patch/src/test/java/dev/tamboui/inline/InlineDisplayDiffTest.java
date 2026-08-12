@@ -1,6 +1,7 @@
 package dev.tamboui.inline;
 
 import dev.tamboui.buffer.Buffer;
+import dev.tamboui.buffer.Cell;
 import dev.tamboui.buffer.DiffResult;
 import dev.tamboui.layout.Position;
 import dev.tamboui.layout.Size;
@@ -213,6 +214,30 @@ class InlineDisplayDiffTest {
         assertTrue(raw.contains("文"), raw);
         assertFalse(raw.contains("\u001b[K"), raw);
         assertEquals(1, backend.writeCalls());
+    }
+
+    @Test
+    void wideContinuationRunRepositionsBeforeLaterCells() {
+        InlineDisplay display = display(1);
+        // before: col0='│', col1='a', col3=CONTINUATION, col4='A', col39='│'
+        renderCells(display, "a", "A");
+        backend.resetCounts();
+        // after: 输入「中」后 col1='中'(col2=cont)，col3 仍是 continuation（光标区链），col4='B'
+        renderCells(display, "中", "B");
+        String raw = backend.outputUtf8();
+        // 中（col1，宽2）后 continuation 链停在 col3，B 在 col4：必须显式 right(1) 再写 B，
+        // 否则 B（以及更后面的右竖线）会被写到错误列——「右竖线时有时无」的根因。
+        assertTrue(raw.contains("\u001b[1CB"), raw);
+    }
+
+    private void renderCells(InlineDisplay display, String cell1, String cell4) {
+        display.render((area, buffer) -> {
+            buffer.set(0, 0, Cell.EMPTY.symbol("\u2502"));
+            buffer.setString(1, 0, cell1, Style.EMPTY);
+            buffer.set(3, 0, Cell.CONTINUATION);
+            buffer.set(4, 0, Cell.EMPTY.symbol(cell4));
+            buffer.set(39, 0, Cell.EMPTY.symbol("\u2502"));
+        }, 1, 0, 0);
     }
 
     private static int occurrences(String haystack, String needle) {
