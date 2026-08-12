@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PTY smoke test for terminal-resize sweeping (ResizeSweeper).
+"""PTY smoke test for coalesced terminal-resize replay.
 
 Drives the code-tui app on a real pseudo-terminal, resizes the window with a
 real TIOCSWINSZ (the kernel delivers SIGWINCH to the child), and asserts that
@@ -17,18 +17,9 @@ reflowing terminal.
 
 WHAT THIS SCRIPT ACTUALLY PROTECTS (each one mutation-verified)
 ---------------------------------------------------------------
-PROTECTED -- sweep over-reach. ResizeSweeper erases from the display area's
-top row to the end of the screen (ESC[J) right before the library repaints.
-Erasure needs no reflow, so pyte sees it: an extra 3-row up-move before ESC[J
-wipes real history and the line-by-line history comparison goes red. (A weaker
-"sentinel string still on screen" assertion stayed GREEN under the same
-mutation -- the sentinels happened to sit above the over-reach; that is why
-the comparison is line-by-line over everything above the input box.)
-
-PROTECTED -- sweep presence. Disabling the sweep leaves stale frame rows on
-screen and displaces the repainted box downward even in pyte (a tick can
-repaint at the old width between TIOCSWINSZ and the resize event; those
-too-wide rows wrap and walk the cursor down). Same history assertion goes red.
+PROTECTED -- no per-event clearing. Width changes are coalesced; the first
+100ms after the final resize must not contain ESC[J or ESC[3J. A single
+settled replay then emits ESC[3J and rebuilds scrollback plus the live area.
 
 PROTECTED -- startup regression. The app must NOT scroll a screenful at launch
 (an earlier design did, leaving the top half of the screen blank); asserted by
@@ -373,6 +364,10 @@ def main():
 
         mark = len(session.raw)
         session.resize(ROWS, WIDE_COLS)
+        session.pump(0.10)
+        early = session.raw[mark:]
+        if b"\x1b[J" in early or b"\x1b[3J" in early:
+            die("resize 前 100ms 不应逐事件清屏", list(session.screen.display))
         session.wait_stable()
         assert_screen(session, "WIDEN(%d cols)" % WIDE_COLS, WIDE_COLS, expected_above=above)
         # 停稳重放必须连回滚缓冲一起抹（ESC[3J）：真 reflow 终端（Terminal.app 实测）每次拖拽
@@ -384,6 +379,10 @@ def main():
 
         mark = len(session.raw)
         session.resize(ROWS, FINAL_COLS)
+        session.pump(0.10)
+        early = session.raw[mark:]
+        if b"\x1b[J" in early or b"\x1b[3J" in early:
+            die("resize 前 100ms 不应逐事件清屏", list(session.screen.display))
         session.wait_stable()
         assert_screen(session, "NARROW(%d cols)" % FINAL_COLS, FINAL_COLS, expected_above=above)
         if not session.wait_for_raw(b"\x1b[3J", mark):

@@ -5,6 +5,8 @@
 | 脚本 | 用途 |
 |---|---|
 | `clear_smoke.py` | 在真实伪终端 (PTY) 中启动应用，驱动 `/help` + `/clear`，验证清屏行为。 |
+| `render_diff_smoke.py` | 行内差分渲染字节契约：静止帧零输出、ASCII/CJK 输入不触发整行擦除或重写边框/状态栏。 |
+| `resize_smoke.py` | resize 合并契约：前 100ms 不逐事件清屏，停稳后单次清理回滚缓冲并按新宽度重放。 |
 | `memory_smoke.py` | 在真实伪终端中启动应用，验证长时记忆工具在启动时正确装配、存储目录自动创建。 |
 | `mcp_smoke.py` | 在真实伪终端中启动应用（配置真实 stdio MCP server），验证 MCP 装配不崩、工具被发现、`/exit` 及时退出、无孤儿子进程。**需 `npx`（Node.js）。** |
 | `mcp_manage_smoke.py` | 在真实伪终端中驱动 `/mcp` 面板：禁用→断言行翻转 + `mcp.json` 回写 `enabled:false`，再启用→断言真实重连 + 回写翻回，Esc 关面板、退出无孤儿进程。用 `-Duser.home` 隔离用户层配置。**需 `npx`（Node.js）。** |
@@ -23,6 +25,8 @@ mvn -q compile
 
 ```bash
 python3 src/test/resources/scripts/clear_smoke.py
+python3 src/test/resources/scripts/render_diff_smoke.py
+python3 src/test/resources/scripts/resize_smoke.py
 python3 src/test/resources/scripts/memory_smoke.py
 python3 src/test/resources/scripts/mcp_smoke.py
 python3 src/test/resources/scripts/mcp_manage_smoke.py

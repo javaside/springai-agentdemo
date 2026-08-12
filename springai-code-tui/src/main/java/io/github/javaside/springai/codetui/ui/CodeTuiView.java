@@ -139,20 +139,19 @@ public final class CodeTuiView extends InlineApp {
     /** 后台任务结果的自动送达判定与失控刹车（纯状态机，见其类注释）。只在渲染线程（drain）读写。 */
     private final BackgroundNotifier notifier = new BackgroundNotifier();
     /**
-     * 上一次见到的终端列宽，用来从 ResizeEvent 里滤出「宽度真的变了」（拖高度不重排，见
-     * {@link ResizeSweeper} 类注释）。只在渲染线程读写（onStart 种基线、全局 handler 更新）。
+     * 上一次见到的终端列宽，用来从 ResizeEvent 里滤出「宽度真的变了」（拖高度不重排）。
+     * 只在渲染线程读写（onStart 种基线、全局 handler 更新）。
      */
     private int lastSeenWidth;
-    /** resize 停稳判定（两级修复的第二级扳机，见 {@link ResizeSettle}）。只在渲染线程读写。 */
-    private final ResizeSettle resizeSettle = new ResizeSettle(9);
+    /** resize 停稳判定：33ms × 4 帧 ≈132ms 静默后只重放一次。只在渲染线程读写。 */
+    private final ResizeSettle resizeSettle = new ResizeSettle(4);
     /**
      * resize 进行中（首个宽度变化事件 → 停稳重放完成）临时把硬件光标钉到显示区第 0 行。
      *
      * <p>硬件光标是 IME 预编辑串的锚点：Terminal.app 把拼音画在硬件光标处，<b>永久</b>钉第 0 行
      * （上一版做法）= 中文用户每次拼字，拼音浮在框顶边框上（用户实报「打字错位」）。平时停回
-     * 文本行，只在 resize 窗口内钉 0 行保 {@link ResizeSweeper} 的「位移恒 0」不变量——拖拽中
-     * 没人打字。代价：每轮拖拽<b>第一步</b>的清扫起点错位（光标还在文本行、上方边框行被拆几行
-     * 就低几行），留 ≤1-2 行残迹，停稳重放收尾。
+     * 文本行，只在 resize 窗口内钉 0 行，让终端 reflow 时相对光标记账不被上方折行推低——
+     * 拖拽中通常也不会输入。停稳重放后立即恢复文本行锚点。
      *
      * <p>包私有：单测（同包）直接置位断言两种停放。生产只在渲染线程读写。
      */
@@ -364,16 +363,15 @@ public final class CodeTuiView extends InlineApp {
 
     @Override
     protected void onStart() {
-        // 终端改宽度 → 重排撕裂内联显示区。全局 handler 在库按新宽度重画【之前】收到 ResizeEvent
-        // （InlineTuiRunner 对 ResizeEvent 是先派发后重画），此刻清掉重排残迹，重画原地盖回去。
-        // 挂钩点选在这而不是 drain 轮询：轮询看到宽度变化时库已经画过一帧脏的了（上一版翻车根因）。
+        // 终端改宽度时只登记最新宽度并重置停稳计时；不在每个事件里清屏，避免 Windows Terminal
+        // 显示「清空后尚未重画」的中间帧。InlineTuiRunner 仍处理事件并按新宽度构造当前 live 帧，
+        // 约 132ms 无新事件后再统一清屏、按新宽度重放 scrollback。
         lastSeenWidth = terminalWidth();
         runner().eventRouter().addGlobalHandler(event -> {
             if (event instanceof ResizeEvent re && re.width() > 0 && re.width() != lastSeenWidth) {
                 lastSeenWidth = re.width();
-                ResizeSweeper.sweep(runner());   // 第一级：拖拽中逐事件原地清扫，保住当前屏
-                resizeSettle.changed();          // 第二级：停稳后清屏重放，救回被顶走的信息流
-                parkCursorAtTop = true;          // 本次事件周期的重画即生效，直到停稳重放收尾
+                resizeSettle.changed();          // 合并连续事件，停稳后只清屏重放一次
+                parkCursorAtTop = true;          // resize 窗口内保持相对光标记账稳定
             }
             return EventResult.UNHANDLED;   // 只旁观，别拦事件：库还要靠它触发重画
         });
@@ -385,20 +383,29 @@ public final class CodeTuiView extends InlineApp {
 
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
     private void drain() {
+        try (AutoCloseable ignored = InlineRenderBatch.open(runner())) {
+            drainInsideBatch();
+        } catch (Exception impossible) {
+            log.debug("关闭行内打印批次失败，已降级", impossible);
+        }
+    }
+
+    private void drainInsideBatch() {
         animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
         if (animTick % 30 == 0) ctxUsage.refresh();            // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
         // ResizeEvent 的兜底：内核对 SIGWINCH 只留一个 pending，快拖时中间档位的信号会被合并掉，
-        // 事件没来但 size 已经变了。每帧比对一次列宽，抓到就补一次清扫（代价：下一 tick 才重画，
-        // 输入框闪一帧——只在真丢信号时发生）。事件路径仍是主力，见 onStart。
+        // 事件没来但 size 已经变了。每帧比对一次列宽，抓到后同样只重置停稳计时，不清屏。
         int polledWidth = terminalWidth();
         if (polledWidth > 0 && polledWidth != lastSeenWidth) {
             lastSeenWidth = polledWidth;
-            ResizeSweeper.sweep(runner());
             resizeSettle.changed();
             parkCursorAtTop = true;
         } else if (resizeSettle.onTick()) {
-            replayAfterResize();               // 宽度停稳 ≈300ms：抹整屏含回滚缓冲、全量重放留底
-            parkCursorAtTop = false;           // 光标停放回文本行（IME 锚点），即使重放降级也要收
+            try {
+                replayAfterResize();           // 宽度停稳 ≈132ms：抹整屏含回滚缓冲、全量重放留底
+            } finally {
+                parkCursorAtTop = false;       // 即使重放降级或异常，也必须把 IME 锚点放回文本行
+            }
         }
         for (OutputLine ol : state.drainPending(MAX_LINES_PER_DRAIN)) {
             switch (ol.kind()) {
@@ -580,7 +587,7 @@ public final class CodeTuiView extends InlineApp {
      * 路径），再把 {@link #scrollTail} 留底全量按新宽度重放，输入框随下一帧落回对话正下方——
      * 可见屏是对话尾部，「往上翻」是干净重排的最近 {@value #SCROLL_TAIL_CAP} 行。
      *
-     * <p><b>为什么需要它</b>（{@link ResizeSweeper} 管不到的两类伤害，tmux 实测）：
+     * <p><b>为什么需要它</b>（单靠 live 区差分管不到的两类伤害，tmux 实测）：
      * ①变窄时旧帧整宽行被终端折行撑高，把真实对话一截截顶进回滚缓冲——可见屏上信息流越来越少，
      * 拖一次窗口后只剩输入框和空白；②多路复用器合并连发 resize 的盲窗里按旧宽度画的帧走位成鬼影，
      * 事后清扫够不着。重放不跟终端的重排行为搏斗：应用自己就是内容的主人，照着留底重印一遍就是了。

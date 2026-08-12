@@ -14,9 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 /**
  * 硬件光标的停放策略：<b>平时停在输入文本行、resize 进行中才临时钉到显示区第 0 行</b>。
  *
- * <p>硬件光标是 IME 预编辑串的锚点（Terminal.app 把拼音画在硬件光标处）。上一版为保
- * {@link ResizeSweeper} 的「位移恒 0」不变量把它<b>永久</b>钉在第 0 行（框顶边框），
- * 代价被低估了：中文用户每次拼字，拼音都浮在边框上——用户实报「打字时错位」。
+ * <p>硬件光标是 IME 预编辑串的锚点（Terminal.app 把拼音画在硬件光标处）。旧 resize
+ * 方案曾把它<b>永久</b>钉在第 0 行（框顶边框），代价被低估了：中文用户每次拼字，拼音
+ * 都浮在边框上——用户实报「打字时错位」。
  * 现在钉 0 行只发生在「宽度变化 → 停稳重放完成」窗口内（拖拽中没人打字，IME 无所谓）。
  *
  * <p>可见的反显块光标不在此列（那是 Buffer 样式），这里只断言 {@code frame.setCursorPosition}。
@@ -75,7 +75,7 @@ class CodeTuiViewCursorParkTest {
         v.parkCursorAtTop = true;                    // 宽度变化事件置位（同包直写，见字段注释）
         Position cur = ViewScreen.cursorOf(v, 120);
         assertNotNull(cur);
-        assertEquals(0, cur.y(), "resize 窗口内应钉到显示区第 0 行——保 ResizeSweeper 位移恒 0");
+        assertEquals(0, cur.y(), "resize 窗口内应钉到显示区第 0 行，避免终端 reflow 改变相对光标记账");
         assertEquals(1 + 3, cur.x(), "列仍跟随输入（宽度变化时反推清扫起点用不到列，但 IME 半途切回时列对得上）");
     }
 

@@ -59,6 +59,7 @@
         <module>springai-agent-demo</module>
         <module>springai-boot-demo</module>
         <module>springai-jline-demo</module>
+        <module>springai-tamboui-inline-patch</module>
         <module>springai-code-tui</module>
     </modules>
 

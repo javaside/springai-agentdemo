@@ -22,6 +22,17 @@ class ResizeSettleTest {
     }
 
     @Test
+    @DisplayName("生产窗口 4 tick：前三帧不触发，第四帧触发")
+    void productionWindowFiresOnFourthTick() {
+        ResizeSettle settle = new ResizeSettle(4);
+        settle.changed();
+        assertFalse(settle.onTick());
+        assertFalse(settle.onTick());
+        assertFalse(settle.onTick());
+        assertTrue(settle.onTick());
+    }
+
+    @Test
     @DisplayName("changed 后静默满窗口触发一次，之后归于安静")
     void firesOnceAfterQuietWindow() {
         ResizeSettle settle = new ResizeSettle(3);
