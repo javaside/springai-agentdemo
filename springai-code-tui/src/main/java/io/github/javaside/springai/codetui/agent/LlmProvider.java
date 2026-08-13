@@ -5,6 +5,8 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 
 import java.util.List;
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 
 /**
  * 一家大模型 provider 的抽象。主 agent 与子 agent 共用。
@@ -29,6 +31,17 @@ public interface LlmProvider {
 
     /** 每请求覆盖模型用的该家 native {@link ChatOptions}（只设 model，Anthropic 另附必填 maxTokens）。 */
     ChatOptions options(String modelId);
+
+    /** 该模型支持的思考配置；默认不支持，保持旧 provider 的零行为变化。 */
+    default ThinkingCapabilities thinkingCapabilities(String modelId) {
+        return ThinkingCapabilities.unsupported();
+    }
+
+    /** 带思考配置的每请求 options；默认只接受 DEFAULT。 */
+    default ChatOptions options(String modelId, ThinkingConfig config) {
+        thinkingCapabilities(modelId).validate(config);
+        return options(modelId);
+    }
 
     /** 该家可选模型（供 /model 展示与选择）。 */
     List<ModelOption> models();
