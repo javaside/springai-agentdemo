@@ -27,6 +27,11 @@ import io.github.javaside.springai.codetui.agent.media.MediaArtifact;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.PathContainment;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
+import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingStrengthKind;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
@@ -185,6 +190,12 @@ public final class CodeTuiView extends InlineApp {
     private final Path root;                                         // 工作区根目录（欢迎页展示）
     private Disposable current;
     private boolean pickingModel;                                    // /model 选择器是否激活
+    private boolean configuringThinking;                             // /model 的二级思考设置是否激活
+    private String thinkingTarget;                                   // 正在设置的模型 id
+    private ThinkingConfig thinkingDraft;                            // 未保存的草稿
+    private int thinkingRow;                                         // 二级面板当前行（0=模式，1=强度）
+    private boolean editingBudget;                                   // 预算数值输入子模式
+    private final TextAreaState budgetInput = new TextAreaState();   // 预算数值缓冲
     private boolean pickingSkill;                                    // /skill 选择器是否激活
     private boolean pickingMcp;                                      // /mcp 管理面板是否激活
     private boolean mcpExpanded;                                     // Tab 展开选中项工具清单
@@ -316,7 +327,8 @@ public final class CodeTuiView extends InlineApp {
                 // 两个面板的上下顺序即送达先后，看一眼就知道自己那句话什么时候会被听见。
                 scope(!interjections.isEmpty(), interjectionChildren(interjections)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
-                scope(pickingModel, modelPickerChildren()),         // /model 选择器面板
+                scope(pickingModel && !configuringThinking, modelPickerChildren()),   // /model 选择器面板
+                scope(configuringThinking, thinkingSettingsChildren()),   // /model 二级思考设置面板
                 scope(pickingSkill, skillPickerChildren()),         // /skill 选择器面板
                 scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
                 scope(pickingPerms, permsPanelChildren()),          // /permissions 规则面板（可删）
@@ -573,6 +585,11 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：直接挂载技能，绕开 /skill 选择器（那条路径要一份真实技能清单才走得通）。 */
     void mountSkillForTest(String skill) { this.pendingSkill = skill; }
     String pendingSkillForTest() { return pendingSkill; }
+
+    /** 测试专用：二级思考设置面板是否激活。 */
+    boolean configuringThinkingForTest() { return configuringThinking; }
+    /** 测试专用：当前正在设置的模型 id。 */
+    String thinkingTargetForTest() { return thinkingTarget; }
 
     /** scrollback 留底（见 {@link #scrollTail} 字段注释）。只在渲染线程调用。 */
     private void record(Object line) {
@@ -971,6 +988,7 @@ public final class CodeTuiView extends InlineApp {
         if (activePermission != null) return onPermissionKey(k);   // 审批模态优先于一切文本编辑（背后 park 着工具线程）
         if (activePlan != null) return onPlanKey(k);    // 计划审批模态同理（同一时刻只会有一个模态在前台）
         if (activeAsk != null) return onAskKey(k);      // 作答模态：全部按键交给它，屏蔽文本编辑
+        if (configuringThinking) return onThinkingSettingsKey(k);   // 二级设置优先于模型列表
         if (pickingModel) return onModelPickerKey(k);   // 选择器激活：按键全部交给它，屏蔽文本编辑
         if (pickingSkill) return onSkillPickerKey(k);   // 技能选择器同理
         if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
@@ -1526,13 +1544,23 @@ public final class CodeTuiView extends InlineApp {
         pickingModel = true;
     }
 
-    /** 选择器按键：↑↓/kj 移动、数字快选、Enter 确认、Esc 取消。始终 HANDLED（屏蔽文本编辑）。 */
+    /** 选择器按键：↑↓/kj 移动、数字快选、→ 思考设置、Enter 确认、Esc 取消。始终 HANDLED（屏蔽文本编辑）。 */
     private EventResult onModelPickerKey(KeyEvent k) {
         List<ModelOption> models = onSubmit.models();
         int n = models.size();
         if (k.isCancel()) { pickingModel = false; return EventResult.HANDLED; }
         if (k.code() == KeyCode.UP || k.isChar('k'))   { pickIndex = (pickIndex - 1 + n) % n; return EventResult.HANDLED; }
         if (k.code() == KeyCode.DOWN || k.isChar('j')) { pickIndex = (pickIndex + 1) % n;     return EventResult.HANDLED; }
+        if (k.code() == KeyCode.RIGHT || k.isChar('l')) {
+            String modelId = models.get(pickIndex).id();
+            ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+            if (settings == null || !settings.capabilities().configurable()) {
+                state.setNotice("该模型不可配置思考模式");
+                return EventResult.HANDLED;
+            }
+            openThinkingSettings(modelId);
+            return EventResult.HANDLED;
+        }
         for (int i = 0; i < n && i < 9; i++) {           // 数字 1..n 快选
             if (k.isChar((char) ('1' + i))) { pickIndex = i; return EventResult.HANDLED; }
         }
@@ -1584,16 +1612,201 @@ public final class CodeTuiView extends InlineApp {
         List<ModelOption> models = onSubmit.models();
         String cur = onSubmit.currentModel();
         List<Element> els = new ArrayList<>();
-        els.add(text("  选择模型（↑↓ 选择 · Enter 确认 · Esc 取消）").style(PICK_TITLE));
+        els.add(text("  选择模型（↑↓ 选择 · Enter 切换 · → 思考设置 · Esc 取消）").style(PICK_TITLE));
         for (int i = 0; i < models.size(); i++) {
             ModelOption m = models.get(i);
             boolean sel = i == pickIndex;
             boolean active = m.id().equals(cur);
             String marker = (sel ? "❯ " : "  ") + (active ? "✓ " : "  ");
-            els.add(text("  " + marker + (i + 1) + ". " + m.label() + "   " + m.desc())
+            String summary = thinkingSummary(m.id());
+            els.add(text("  " + marker + (i + 1) + ". " + m.label() + "   " + m.desc()
+                    + "   " + summary)
                     .style(sel ? PICK_SEL : (active ? PICK_ITEM : PICK_DESC)));
         }
         return els.toArray(new Element[0]);
+    }
+
+    /** 模型行的思考摘要；不可配置/桩 handler 返回「—」。 */
+    private String thinkingSummary(String modelId) {
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+        if (settings == null) return "—";
+        return settings.summary();
+    }
+
+    private void openThinkingSettings(String modelId) {
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+        if (settings == null) return;
+        thinkingTarget = modelId;
+        thinkingDraft = settings.config();
+        thinkingRow = 0;
+        editingBudget = false;
+        configuringThinking = true;
+    }
+
+    /** 二级设置按键：↑↓ 选行、←→ 调整、Enter 保存、Esc 放弃。 */
+    private EventResult onThinkingSettingsKey(KeyEvent k) {
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(thinkingTarget);
+        if (settings == null) { configuringThinking = false; return EventResult.HANDLED; }
+        ThinkingCapabilities caps = settings.capabilities();
+
+        if (editingBudget) {
+            if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+                commitBudgetEdit(caps);
+                return EventResult.HANDLED;
+            }
+            if (k.isCancel()) {
+                editingBudget = false;
+                budgetInput.setText("");
+                return EventResult.HANDLED;
+            }
+            if (k.code() == KeyCode.BACKSPACE) {
+                String t = budgetInput.text();
+                if (!t.isEmpty()) budgetInput.setText(t.substring(0, t.length() - 1));
+                return EventResult.HANDLED;
+            }
+            if (k.code() == KeyCode.CHAR && Character.isDigit(k.string().charAt(0))) {
+                budgetInput.setText(budgetInput.text() + k.string());
+                return EventResult.HANDLED;
+            }
+            return EventResult.HANDLED;
+        }
+
+        if (k.isCancel()) {
+            configuringThinking = false;
+            editingBudget = false;
+            budgetInput.setText("");
+            return EventResult.HANDLED;
+        }
+        if (k.code() == KeyCode.UP || k.isChar('k')) {
+            thinkingRow = strengthRowVisible(caps) ? 0 : 0;
+            return EventResult.HANDLED;
+        }
+        if (k.code() == KeyCode.DOWN || k.isChar('j')) {
+            if (strengthRowVisible(caps)) thinkingRow = 1;
+            return EventResult.HANDLED;
+        }
+        if (k.code() == KeyCode.LEFT || k.isChar('h')) {
+            cycleValue(caps, -1);
+            return EventResult.HANDLED;
+        }
+        if (k.code() == KeyCode.RIGHT || k.isChar('l')) {
+            cycleValue(caps, 1);
+            return EventResult.HANDLED;
+        }
+        if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            // budget 行 Enter 进入数值编辑；否则保存
+            if (thinkingRow == 1 && caps.strengthKind() == ThinkingStrengthKind.TOKEN_BUDGET) {
+                editingBudget = true;
+                budgetInput.setText(thinkingDraft.thinkingBudget() == null
+                        ? "" : String.valueOf(thinkingDraft.thinkingBudget()));
+                return EventResult.HANDLED;
+            }
+            saveThinking();
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;
+    }
+
+    private void saveThinking() {
+        boolean saved = onSubmit.saveThinkingSettings(thinkingTarget, thinkingDraft);
+        configuringThinking = false;
+        editingBudget = false;
+        budgetInput.setText("");
+        if (!saved) {
+            state.pushInfo("⚠ 没能记住这个思考设置（仅本次运行生效）");
+        }
+    }
+
+    private void commitBudgetEdit(ThinkingCapabilities caps) {
+        String text = budgetInput.text().trim();
+        if (text.isEmpty()) {
+            editingBudget = false;
+            budgetInput.setText("");
+            return;
+        }
+        try {
+            int value = Integer.parseInt(text);
+            ThinkingConfig candidate = ThinkingConfig.enabledBudget(value);
+            caps.validate(candidate);
+            thinkingDraft = candidate;
+        } catch (RuntimeException e) {
+            state.setNotice("预算必须是正整数，且不超过模型上限");
+        }
+        editingBudget = false;
+        budgetInput.setText("");
+    }
+
+    private boolean strengthRowVisible(ThinkingCapabilities caps) {
+        return caps.strengthKind() != ThinkingStrengthKind.NONE;
+    }
+
+    private void cycleValue(ThinkingCapabilities caps, int direction) {
+        if (thinkingRow == 0) {
+            thinkingDraft = cycleMode(caps, direction);
+            return;
+        }
+        if (thinkingRow == 1) {
+            if (thinkingDraft.mode() != ThinkingMode.ENABLED) {
+                return;   // 默认/关闭时强度不可编辑
+            }
+            if (caps.strengthKind() == ThinkingStrengthKind.EFFORT) {
+                List<String> values = caps.effortValues();
+                if (values.isEmpty()) return;
+                String current = thinkingDraft.effort();
+                int idx = current == null ? -1 : values.indexOf(current);
+                int next = (idx + direction + values.size()) % values.size();
+                thinkingDraft = ThinkingConfig.enabledEffort(values.get(next));
+            }
+        }
+    }
+
+    private ThinkingConfig cycleMode(ThinkingCapabilities caps, int direction) {
+        List<ThinkingMode> modes = new ArrayList<>();
+        modes.add(ThinkingMode.DEFAULT);
+        modes.add(ThinkingMode.ENABLED);
+        if (caps.supportsDisable()) modes.add(ThinkingMode.DISABLED);
+        int idx = modes.indexOf(thinkingDraft.mode());
+        int next = (idx + direction + modes.size()) % modes.size();
+        ThinkingMode mode = modes.get(next);
+        if (mode == ThinkingMode.DEFAULT) return ThinkingConfig.defaults();
+        if (mode == ThinkingMode.DISABLED) return ThinkingConfig.disabled();
+        if (caps.strengthKind() == ThinkingStrengthKind.EFFORT && !caps.effortValues().isEmpty()) {
+            return ThinkingConfig.enabledEffort(caps.effortValues().get(0));
+        }
+        return ThinkingConfig.enabledWithoutStrength();
+    }
+
+    private Element[] thinkingSettingsChildren() {
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(thinkingTarget);
+        if (settings == null) return new Element[0];
+        ThinkingCapabilities caps = settings.capabilities();
+        List<Element> els = new ArrayList<>();
+        els.add(text("  " + settings.label() + " · 思考设置").style(PICK_TITLE));
+        String mode = switch (thinkingDraft.mode()) {
+            case DEFAULT -> "默认";
+            case ENABLED -> "开启";
+            case DISABLED -> "关闭";
+        };
+        els.add(text("  " + rowMarker(0) + "模式       " + mode).style(thinkingRow == 0 ? PICK_SEL : PICK_DESC));
+        if (strengthRowVisible(caps)) {
+            String strength = switch (thinkingDraft.mode()) {
+                case DEFAULT -> "官方默认";
+                case DISABLED -> "—";
+                case ENABLED -> thinkingDraft.effort() != null
+                        ? thinkingDraft.effort()
+                        : thinkingDraft.thinkingBudget() != null
+                                ? (editingBudget ? budgetInput.text() + "▏" : thinkingDraft.thinkingBudget() + " tokens")
+                                : "开启";
+            };
+            els.add(text("  " + rowMarker(1) + "强度       " + strength)
+                    .style(thinkingRow == 1 ? PICK_SEL : PICK_DESC));
+        }
+        els.add(text("  ↑↓ 选择 · ←→ 调整 · Enter 保存 · Esc 放弃").style(PICK_DESC));
+        return els.toArray(new Element[0]);
+    }
+
+    private String rowMarker(int row) {
+        return thinkingRow == row ? "❯ " : "  ";
     }
 
     // ── /skill 技能选择器 ───────────────────────────────────────────────
@@ -2735,7 +2948,8 @@ public final class CodeTuiView extends InlineApp {
         if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingPerms) return text(permsStatusText()).style(THINK);
         if (pickingTasks) return text(tasksStatusText()).style(THINK);
-        if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · Esc 取消").style(THINK);
+        if (configuringThinking) return text("↑↓/kj 选择 · ←→/hl 调整 · Enter 保存 · Esc 放弃").style(THINK);
+        if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · → 思考设置 · Esc 取消").style(THINK);
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
         if (state.isCompacting()) return richText(statusBar.compacting(state.compactElapsedNanos(), animTick));   // 压缩指示器优先于普通思考/工具状态
