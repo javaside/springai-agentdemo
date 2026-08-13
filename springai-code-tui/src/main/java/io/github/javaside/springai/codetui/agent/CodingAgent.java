@@ -655,6 +655,17 @@ public final class CodingAgent implements SubmitHandler {
         }
     }
 
+    @Override
+    public io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings thinkingSettings(String modelId) {
+        return registry != null ? registry.thinkingSettings(modelId) : null;
+    }
+
+    @Override
+    public boolean saveThinkingSettings(String modelId,
+            io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig config) {
+        return registry != null && registry.updateThinking(modelId, config);
+    }
+
     /**
      * 手动压缩：在后台线程强制立即压缩本会话。总结 LLM 调用可能耗时数分钟，绝不阻塞调用线程（UI）。
      * 并发闸门在 {@code CodeTuiView}（仅空闲且非压缩中才调用本方法）；此处再用 CAS 兜底一层，

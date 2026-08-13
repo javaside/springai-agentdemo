@@ -2,6 +2,8 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
+import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 import reactor.core.Disposable;
 
 import java.util.List;
@@ -25,6 +27,12 @@ public interface SubmitHandler {
 
     /** 切换到指定模型 id（对后续回合生效）。 */
     default void selectModel(String id) { }
+
+    /** 读取某模型的思考设置与能力；默认 null（回显桩/测试桩）。 */
+    default ModelThinkingSettings thinkingSettings(String modelId) { return null; }
+
+    /** 保存某模型的思考设置；返回写盘是否成功。默认 false。 */
+    default boolean saveThinkingSettings(String modelId, ThinkingConfig config) { return false; }
 
     /** 手动压缩会话历史（/compact）。默认空实现，便于回显桩/测试桩省略。 */
     default void compact() { }

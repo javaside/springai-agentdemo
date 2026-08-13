@@ -44,12 +44,7 @@ public class CodeTuiApplication {
         // 模型清单可选：配了 *_MODELS（逗号分隔，首项为默认模型）就覆盖，否则用各家内置清单。
         ProviderRegistry registry;
         try {
-            registry = new ProviderRegistry(java.util.List.of(
-                    new DeepSeekProvider(System.getenv("DEEPSEEK_API_KEY"), System.getenv("DEEPSEEK_BASE_URL"), System.getenv("DEEPSEEK_MODELS")),
-                    new ZhipuProvider(System.getenv("ZHIPU_API_KEY"), System.getenv("ZHIPU_BASE_URL"), System.getenv("ZHIPU_MODELS")),
-                    new QwenProvider(System.getenv("DASHSCOPE_API_KEY"), System.getenv("DASHSCOPE_BASE_URL"), System.getenv("DASHSCOPE_MODELS")),
-                    new AnthropicProvider(System.getenv("ANTHROPIC_API_KEY"), System.getenv("ANTHROPIC_BASE_URL"), System.getenv("ANTHROPIC_MODELS")),
-                    new OpenAiProvider(System.getenv("OPENAI_API_KEY"), System.getenv("OPENAI_BASE_URL"), System.getenv("OPENAI_MODELS"))));
+            registry = createProviderRegistry(root, System.getenv());
         } catch (IllegalStateException e) {
             System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
                     "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY，再运行。");
@@ -142,6 +137,17 @@ public class CodeTuiApplication {
         // 消亡（用户报错后立即 /exit 恰落在这 60s 窗口内，故"报过错就卡很久"）。TUI 退出语义即"立即终止"：
         // 会话已按事件原子落盘、无待刷新状态，quit() 也已在 run() 返回前恢复终端，故 System.exit 安全。
         System.exit(exitCode);
+    }
+
+    /** 按环境变量构建全部 provider 并加载工作区思考配置。供 main 与测试共用。 */
+    static ProviderRegistry createProviderRegistry(Path root, java.util.Map<String, String> env) {
+        return new ProviderRegistry(java.util.List.of(
+                new DeepSeekProvider(env.get("DEEPSEEK_API_KEY"), env.get("DEEPSEEK_BASE_URL"), env.get("DEEPSEEK_MODELS")),
+                new ZhipuProvider(env.get("ZHIPU_API_KEY"), env.get("ZHIPU_BASE_URL"), env.get("ZHIPU_MODELS")),
+                new QwenProvider(env.get("DASHSCOPE_API_KEY"), env.get("DASHSCOPE_BASE_URL"), env.get("DASHSCOPE_MODELS")),
+                new AnthropicProvider(env.get("ANTHROPIC_API_KEY"), env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_MODELS")),
+                new OpenAiProvider(env.get("OPENAI_API_KEY"), env.get("OPENAI_BASE_URL"), env.get("OPENAI_MODELS"))),
+                io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore.load(root));
     }
 
     /**
