@@ -1633,6 +1633,25 @@ public final class CodeTuiView extends InlineApp {
         return settings.summary();
     }
 
+    /**
+     * 状态栏模型标签：思考配置非默认时，追加括号内原生强度（如 {@code deepseek-v4-pro（high）}）。
+     *
+     * <p><b>只在非默认时追加</b>：默认配置下思考参数由官方决定、随模型演进，写出来反而像项目在
+     * 主动覆盖。括号把强度与后面的上下文百分比、后台后缀隔开，避免和既有的 {@code · } 分隔符混读。
+     */
+    String statusModelLabel() {
+        String model = onSubmit.currentModel();
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(model);
+        if (settings == null || settings.config().mode() == ThinkingMode.DEFAULT) {
+            return model;
+        }
+        try {
+            return model + "（" + settings.summary() + "）";
+        } catch (RuntimeException e) {
+            return model;   // 配置因模型能力变化而失效：只降级显示模型名，绝不让状态栏因显示崩溃
+        }
+    }
+
     private void openThinkingSettings(String modelId) {
         ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
         if (settings == null) return;
@@ -2983,7 +3002,7 @@ public final class CodeTuiView extends InlineApp {
         return switch (state.status()) {
             case IDLE -> {
                 String hint = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · "
-                        + onSubmit.currentModel() + ctxUsage.suffix() + backgroundStatusSuffix();
+                        + statusModelLabel() + ctxUsage.suffix() + backgroundStatusSuffix();
                 yield mode == null ? text(hint).style(HINT)
                         : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
             }

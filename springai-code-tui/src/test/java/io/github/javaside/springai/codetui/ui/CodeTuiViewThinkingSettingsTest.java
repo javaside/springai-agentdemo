@@ -28,6 +28,7 @@ class CodeTuiViewThinkingSettingsTest {
         String savedModel;
         ThinkingConfig savedConfig;
         boolean saveReturn = true;
+        ThinkingConfig alphaConfig = ThinkingConfig.defaults();
 
         @Override public Disposable submit(String text) { return () -> { }; }
         @Override public List<ModelOption> models() { return options; }
@@ -37,7 +38,7 @@ class CodeTuiViewThinkingSettingsTest {
         @Override public ModelThinkingSettings thinkingSettings(String modelId) {
             if ("alpha".equals(modelId)) {
                 return new ModelThinkingSettings("p", "alpha", "alpha",
-                        ThinkingConfig.defaults(),
+                        alphaConfig,
                         ThinkingCapabilities.effort(true, List.of("low", "high")));
             }
             return new ModelThinkingSettings("p", "beta", "beta",
@@ -47,6 +48,7 @@ class CodeTuiViewThinkingSettingsTest {
         @Override public boolean saveThinkingSettings(String modelId, ThinkingConfig config) {
             savedModel = modelId;
             savedConfig = config;
+            if ("alpha".equals(modelId)) alphaConfig = config;
             return saveReturn;
         }
     }
@@ -111,5 +113,28 @@ class CodeTuiViewThinkingSettingsTest {
         CodeTuiView v = new CodeTuiView(new ConversationState(), new Handler(), root);
         v.renderForTest();   // 不打开 /model，直接构造一帧 UI 树
         assertFalse(v.configuringThinkingForTest());
+    }
+
+    @Test
+    void statusLabelOmitsStrengthForDefaultConfig(@TempDir Path root) {
+        Handler handler = new Handler();
+        CodeTuiView v = new CodeTuiView(new ConversationState(), handler, root);
+        assertEquals("alpha", v.statusModelLabel());
+    }
+
+    @Test
+    void statusLabelAppendsNativeStrengthForNonDefaultConfig(@TempDir Path root) {
+        Handler handler = new Handler();
+        handler.alphaConfig = ThinkingConfig.enabledEffort("high");
+        CodeTuiView v = new CodeTuiView(new ConversationState(), handler, root);
+        assertEquals("alpha（high）", v.statusModelLabel());
+    }
+
+    @Test
+    void statusLabelFallsBackToModelWhenConfigInvalid(@TempDir Path root) {
+        Handler handler = new Handler();
+        handler.alphaConfig = ThinkingConfig.enabledEffort("medium");   // 不在能力清单里，summary 会抛
+        CodeTuiView v = new CodeTuiView(new ConversationState(), handler, root);
+        assertEquals("alpha", v.statusModelLabel());
     }
 }
