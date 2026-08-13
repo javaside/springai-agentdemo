@@ -333,14 +333,13 @@ public final class CodingAgent implements SubmitHandler {
         org.springframework.ai.chat.prompt.ChatOptions perRequestOptions;
         String modelGrounding;
         if (registry != null) {
-            LlmProvider active = registry.active();
-            String activeModelId = registry.activeModelId();
-            client = clientsByProvider.get(active.id());
+            ProviderRegistry.RequestSelection selection = registry.activeRequestSelection();
+            client = clientsByProvider.get(selection.provider().id());
             if (client == null) {
-                throw new IllegalStateException("激活 provider 无对应 ChatClient：" + active.id());
+                throw new IllegalStateException("激活 provider 无对应 ChatClient：" + selection.provider().id());
             }
-            perRequestOptions = active.options(activeModelId);
-            modelGrounding = activeModelId;
+            perRequestOptions = selection.options();
+            modelGrounding = selection.modelId();
         } else {
             client = chatClient;
             perRequestOptions = DeepSeekChatOptions.builder().model(model).build();

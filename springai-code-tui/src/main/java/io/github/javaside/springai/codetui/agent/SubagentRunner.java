@@ -194,10 +194,11 @@ public final class SubagentRunner {
      * 200+空 body（SDK 抛 *InvalidDataException、自带重试不覆盖），在 ChatModel 层按 LLM call 粒度重试。
      */
     private String execute(SubagentSpec spec, String prompt, Map<String, Object> toolContext) {
-        ChatClient client = ChatClient.builder(RetryingChatModel.wrap(registry.active().chatModel()))
+        ProviderRegistry.RequestSelection selection = resolveSelection(spec);
+        ChatClient client = ChatClient.builder(RetryingChatModel.wrap(selection.provider().chatModel()))
                 .defaultTools(effectiveTools(spec).toArray())
                 .build();
-        ChatOptions options = resolveOptions(spec);
+        ChatOptions options = selection.options();
         String result = client.prompt()
                 .system(effectiveSystemPrompt(spec))
                 .user(prompt)
@@ -530,16 +531,16 @@ public final class SubagentRunner {
         return tools.stream().map(t -> t.getToolDefinition().name()).toList();
     }
 
-    /** model 空→激活 provider 默认（activeChatOptions）；否则用 spec.model 覆盖（走激活 provider 的 options）。 */
-    private ChatOptions resolveOptions(SubagentSpec spec) {
+    /** model 空→激活 selection；否则在当前 v1 provider 路由下解析显式模型 selection。 */
+    private ProviderRegistry.RequestSelection resolveSelection(SubagentSpec spec) {
         if (spec.model() == null || spec.model().isBlank()) {
-            return registry.activeChatOptions();
+            return registry.activeRequestSelection();
         }
         // provider:model 的跨家路由留待 v2（spec §12）；v1 先在激活 provider 上按模型名覆盖。
         String modelId = spec.model().contains(":")
                 ? spec.model().substring(spec.model().indexOf(':') + 1)
                 : spec.model();
-        return registry.active().options(modelId);
+        return registry.requestSelection(modelId);
     }
 
     /** 子 agent 有效工具 = 内置装饰工具 + MCP 实时工具（registry 快照），再按 spec allow/deny 过滤（注册名精确匹配）。 */

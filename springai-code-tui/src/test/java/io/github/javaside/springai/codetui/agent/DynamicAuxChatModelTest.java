@@ -80,6 +80,20 @@ class DynamicAuxChatModelTest {
     }
 
     @Test
+    void auxAlwaysUsesDefaultConfig() {
+        RecordingChatModel a = new RecordingChatModel("A");
+        FakeProvider provider = new FakeProvider("pa", "model-a", a);
+        io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore store =
+                io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore.inMemory();
+        store.put("pa", "model-a", io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig.enabledEffort("high"));
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider), store);
+        DynamicAuxChatModel aux = new DynamicAuxChatModel(reg);
+        aux.call(new Prompt("hi"));
+        // Auxiliary path must use the compatibility options(String) entry, which carries DEFAULT.
+        assertEquals("model-a", a.lastModel);
+    }
+
+    @Test
     void streamAlsoFollowsActiveProvider() {
         RecordingChatModel a = new RecordingChatModel("A");
         RecordingChatModel b = new RecordingChatModel("B");
