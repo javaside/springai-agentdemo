@@ -2,6 +2,9 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -83,6 +86,31 @@ public final class ZhipuProvider implements LlmProvider {
     @Override
     public ChatOptions options(String modelId) {
         return OpenAiChatOptions.builder().model(modelId).build();
+    }
+
+    @Override
+    public ThinkingCapabilities thinkingCapabilities(String modelId) {
+        if ("glm-5.2".equals(modelId)) {
+            return ThinkingCapabilities.effort(true, List.of("high", "max"));
+        }
+        return ThinkingCapabilities.toggle(true);
+    }
+
+    @Override
+    public ChatOptions options(String modelId, ThinkingConfig config) {
+        thinkingCapabilities(modelId).validate(config);
+        if (config.mode() == ThinkingMode.DEFAULT) {
+            return options(modelId);
+        }
+        java.util.Map<String, Object> thinking = java.util.Map.of(
+                "type", config.mode() == ThinkingMode.ENABLED ? "enabled" : "disabled");
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
+                .model(modelId)
+                .extraBody(java.util.Map.of("thinking", thinking));
+        if (config.effort() != null) {
+            builder.reasoningEffort(config.effort());
+        }
+        return builder.build();
     }
 
     @Override public List<ModelOption> models() { return models; }

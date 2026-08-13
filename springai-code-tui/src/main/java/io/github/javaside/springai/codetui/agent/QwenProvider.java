@@ -2,6 +2,9 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -91,6 +94,28 @@ public final class QwenProvider implements LlmProvider {
     @Override
     public ChatOptions options(String modelId) {
         return OpenAiChatOptions.builder().model(modelId).build();
+    }
+
+    @Override
+    public ThinkingCapabilities thinkingCapabilities(String modelId) {
+        if ("qwen3-coder-next".equals(modelId)) {
+            return ThinkingCapabilities.toggle(true);
+        }
+        return ThinkingCapabilities.tokenBudget(true, 1, null);
+    }
+
+    @Override
+    public ChatOptions options(String modelId, ThinkingConfig config) {
+        thinkingCapabilities(modelId).validate(config);
+        if (config.mode() == ThinkingMode.DEFAULT) {
+            return options(modelId);
+        }
+        java.util.Map<String, Object> extraBody = new java.util.LinkedHashMap<>();
+        extraBody.put("enable_thinking", config.mode() == ThinkingMode.ENABLED);
+        if (config.thinkingBudget() != null) {
+            extraBody.put("thinking_budget", config.thinkingBudget());
+        }
+        return OpenAiChatOptions.builder().model(modelId).extraBody(extraBody).build();
     }
 
     @Override public List<ModelOption> models() { return models; }

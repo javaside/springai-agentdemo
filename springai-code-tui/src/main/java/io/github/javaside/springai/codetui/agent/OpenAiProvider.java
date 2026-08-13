@@ -2,6 +2,9 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -80,6 +83,21 @@ public final class OpenAiProvider implements LlmProvider {
     @Override
     public ChatOptions options(String modelId) {
         return OpenAiChatOptions.builder().model(modelId).build();
+    }
+
+    @Override
+    public ThinkingCapabilities thinkingCapabilities(String modelId) {
+        return ThinkingCapabilities.effort(true, List.of("low", "medium", "high"));
+    }
+
+    @Override
+    public ChatOptions options(String modelId, ThinkingConfig config) {
+        thinkingCapabilities(modelId).validate(config);
+        if (config.mode() == ThinkingMode.DEFAULT) {
+            return options(modelId);
+        }
+        String effort = config.mode() == ThinkingMode.DISABLED ? "none" : config.effort();
+        return OpenAiChatOptions.builder().model(modelId).reasoningEffort(effort).build();
     }
 
     @Override public List<ModelOption> models() { return models; }

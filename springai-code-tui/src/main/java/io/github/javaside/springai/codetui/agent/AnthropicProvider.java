@@ -3,6 +3,9 @@ package io.github.javaside.springai.codetui.agent;
 import com.anthropic.models.messages.Model;
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.model.ChatModel;
@@ -96,6 +99,32 @@ public final class AnthropicProvider implements LlmProvider {
                 .model(Model.of(modelId))
                 .maxTokens(MAX_TOKENS)
                 .build();
+    }
+
+    @Override
+    public ThinkingCapabilities thinkingCapabilities(String modelId) {
+        boolean fable = "claude-fable-5".equals(modelId);
+        return ThinkingCapabilities.effort(!fable, List.of("low", "medium", "high", "max"));
+    }
+
+    @Override
+    public ChatOptions options(String modelId, ThinkingConfig config) {
+        thinkingCapabilities(modelId).validate(config);
+        var builder = AnthropicChatOptions.builder()
+                .model(Model.of(modelId))
+                .maxTokens(MAX_TOKENS);
+        if (config.mode() == ThinkingMode.DEFAULT) {
+            return options(modelId);
+        }
+        if (config.mode() == ThinkingMode.DISABLED) {
+            builder.thinkingDisabled();
+        } else {
+            builder.thinkingAdaptive();
+            if (config.effort() != null) {
+                builder.effort(com.anthropic.models.messages.OutputConfig.Effort.of(config.effort()));
+            }
+        }
+        return builder.build();
     }
 
     @Override public List<ModelOption> models() { return models; }
