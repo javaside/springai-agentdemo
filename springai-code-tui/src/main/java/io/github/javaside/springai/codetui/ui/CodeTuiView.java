@@ -1777,6 +1777,10 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element[] thinkingSettingsChildren() {
+        // scope(boolean, ...) 的第二个参数每帧都会立即求值（见 render 里所有 children 方法），
+        // 未进入二级面板时 thinkingTarget 为 null，必须先在这里挡掉，否则 onSubmit.thinkingSettings(null)
+        // 会一路抛到 ProviderRegistry。
+        if (thinkingTarget == null) return new Element[0];
         ModelThinkingSettings settings = onSubmit.thinkingSettings(thinkingTarget);
         if (settings == null) return new Element[0];
         ThinkingCapabilities caps = settings.capabilities();

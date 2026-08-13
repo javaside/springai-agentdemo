@@ -104,4 +104,12 @@ class CodeTuiViewThinkingSettingsTest {
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.RIGHT));
         assertFalse(v.configuringThinkingForTest());
     }
+
+    /** scope(boolean, ...) 每帧立即求值：不进入二级面板时渲染也必须安全，不能拿 null 去查模型。 */
+    @Test
+    void renderIsSafeWithoutOpeningSettings(@TempDir Path root) {
+        CodeTuiView v = new CodeTuiView(new ConversationState(), new Handler(), root);
+        v.renderForTest();   // 不打开 /model，直接构造一帧 UI 树
+        assertFalse(v.configuringThinkingForTest());
+    }
 }
