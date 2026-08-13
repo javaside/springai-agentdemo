@@ -37,8 +37,20 @@ final class DeepSeekThinkingChatModel implements ChatModel {
     }
 
     @Override
+    public ChatOptions getOptions() {
+        // 必须返回「思考包装」而非裸 native 选项：ChatClient 合并链以 getOptions().mutate() 起 base，
+        // 若这里返回 native DeepSeekChatOptions，其 Builder 在 combineWith(每回合的 DeepSeekThinkingChatOptions.Builder)
+        // 时既不匹配 DefaultChatOptionsBuilder 也不匹配 DeepSeek 的 AbstractBuilder，模型与思考配置都会被静默丢掉。
+        return new DeepSeekThinkingChatOptions(defaultNativeOptions(), ThinkingConfig.defaults());
+    }
+
+    @Override
     public ChatOptions getDefaultOptions() {
-        return defaultDelegate.getDefaultOptions();
+        return getOptions();
+    }
+
+    private org.springframework.ai.deepseek.DeepSeekChatOptions defaultNativeOptions() {
+        return (org.springframework.ai.deepseek.DeepSeekChatOptions) defaultDelegate.getOptions();
     }
 
     int delegateCount() {
