@@ -106,7 +106,7 @@ DeepSeek 现役内置模型为 `deepseek-v4-flash`（非思考）与 `deepseek-v
 
 ## 常用操作
 
-- `/model`：切换模型。
+- `/model`：切换模型；在列表按 `→` 进入当前高亮模型的思考设置（模式开关 + provider 原生强度/token 预算），按模型独立记忆。
 - `/context`、`/compact`：查看和压缩上下文。
 - `/skills`、`/skill`、`/reload`：查看、指定和重载技能。
 - `/mcp`：运行期管理 MCP 服务。
@@ -141,6 +141,7 @@ code-tui 在工作目录的 `.codetui/` 下保存项目级数据，主要包括�
 - `sessions/`：会话事件；
 - `memory/`：长期记忆；
 - `model.json`：上次选择的模型；
+- `thinking.json`：各模型的思考模式与强度（仅对主/子 agent 生效，摘要与网页抽取沿用官方默认）；
 - `mcp.json`：项目 MCP 配置；
 - `permissions.json`：项目权限规则。
 
