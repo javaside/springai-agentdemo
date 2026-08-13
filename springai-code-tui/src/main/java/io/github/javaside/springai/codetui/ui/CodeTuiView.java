@@ -1570,7 +1570,7 @@ public final class CodeTuiView extends InlineApp {
             pickingModel = false;
             // 不用 sticky notice：notice 会一直占据状态栏、遮蔽常态行（模型名 + 上下文%）直到下次按键，
             // 造成「切换模型后状态栏信息就没了」。改为下沉一行 scrollback 确认，状态栏立刻回到常态。
-            state.pushInfo("⚙ 已切换模型 · " + chosen.label());
+            state.pushInfo("⚙ 已切换模型 · " + labelWithThinking(chosen.id(), chosen.label()));
             rememberModel(chosen.id());     // 落盘，下次启动恢复
             lastShownModel = chosen.id();   // 避免下个回合 dispatch 再重复打「⚙ 使用模型」
             return EventResult.HANDLED;
@@ -1635,20 +1635,26 @@ public final class CodeTuiView extends InlineApp {
 
     /**
      * 状态栏模型标签：思考配置非默认时，追加括号内原生强度（如 {@code deepseek-v4-pro（high）}）。
-     *
-     * <p><b>只在非默认时追加</b>：默认配置下思考参数由官方决定、随模型演进，写出来反而像项目在
-     * 主动覆盖。括号把强度与后面的上下文百分比、后台后缀隔开，避免和既有的 {@code · } 分隔符混读。
      */
     String statusModelLabel() {
         String model = onSubmit.currentModel();
-        ModelThinkingSettings settings = onSubmit.thinkingSettings(model);
-        if (settings == null || settings.config().mode() == ThinkingMode.DEFAULT) {
-            return model;
-        }
+        return labelWithThinking(model, model);
+    }
+
+    /**
+     * 把「展示名 + 思考强度」拼成一行显示标签。思考配置为默认时不追加（官方决定、随模型演进），
+     * 非默认时追加括号内原生强度（如 {@code deepseek-v4-pro（high）}）；配置因模型能力变化而失效时，
+     * 只降级返回原展示名——显示逻辑绝不让界面崩溃。状态栏与「已切换模型」确认行共用此方法，保证一致。
+     */
+    private String labelWithThinking(String modelId, String label) {
         try {
-            return model + "（" + settings.summary() + "）";
+            ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+            if (settings == null || settings.config().mode() == ThinkingMode.DEFAULT) {
+                return label;
+            }
+            return label + "（" + settings.summary() + "）";
         } catch (RuntimeException e) {
-            return model;   // 配置因模型能力变化而失效：只降级显示模型名，绝不让状态栏因显示崩溃
+            return label;
         }
     }
 

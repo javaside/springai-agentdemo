@@ -23,12 +23,14 @@ class CodeTuiViewThinkingSettingsTest {
     private static final class Handler implements SubmitHandler {
         final List<ModelOption> options = List.of(
                 new ModelOption("alpha", "alpha", "effort 模型"),
-                new ModelOption("beta", "beta", "不可配置模型"));
+                new ModelOption("beta", "beta", "不可配置模型"),
+                new ModelOption("gamma", "gamma", "effort 模型二"));
         String current = "alpha";
         String savedModel;
         ThinkingConfig savedConfig;
         boolean saveReturn = true;
         ThinkingConfig alphaConfig = ThinkingConfig.defaults();
+        ThinkingConfig gammaConfig = ThinkingConfig.defaults();
 
         @Override public Disposable submit(String text) { return () -> { }; }
         @Override public List<ModelOption> models() { return options; }
@@ -41,6 +43,11 @@ class CodeTuiViewThinkingSettingsTest {
                         alphaConfig,
                         ThinkingCapabilities.effort(true, List.of("low", "high")));
             }
+            if ("gamma".equals(modelId)) {
+                return new ModelThinkingSettings("p", "gamma", "gamma",
+                        gammaConfig,
+                        ThinkingCapabilities.effort(true, List.of("low", "high")));
+            }
             return new ModelThinkingSettings("p", "beta", "beta",
                     ThinkingConfig.defaults(), ThinkingCapabilities.unsupported());
         }
@@ -49,6 +56,7 @@ class CodeTuiViewThinkingSettingsTest {
             savedModel = modelId;
             savedConfig = config;
             if ("alpha".equals(modelId)) alphaConfig = config;
+            if ("gamma".equals(modelId)) gammaConfig = config;
             return saveReturn;
         }
     }
@@ -136,5 +144,22 @@ class CodeTuiViewThinkingSettingsTest {
         handler.alphaConfig = ThinkingConfig.enabledEffort("medium");   // 不在能力清单里，summary 会抛
         CodeTuiView v = new CodeTuiView(new ConversationState(), handler, root);
         assertEquals("alpha", v.statusModelLabel());
+    }
+
+    @Test
+    void switchConfirmationIncludesStrength(@TempDir Path root) {
+        Handler handler = new Handler();
+        handler.gammaConfig = ThinkingConfig.enabledEffort("high");
+        ConversationState state = new ConversationState();
+        CodeTuiView v = new CodeTuiView(state, handler, root);
+        v.setInputForTest("/model");
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 打开选择器
+        v.feedKeyForTest(KeyEvent.ofChar('3'));            // 选 gamma
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 确认切换
+
+        List<String> texts = state.drainPending().stream()
+                .map(ConversationState.OutputLine::text).toList();
+        assertTrue(texts.stream().anyMatch(t -> t.contains("已切换模型") && t.contains("gamma（high）")),
+                "切换确认行应带上思考强度: " + texts);
     }
 }
