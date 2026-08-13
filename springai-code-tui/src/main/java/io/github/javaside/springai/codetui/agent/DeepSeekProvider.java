@@ -2,6 +2,9 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
@@ -73,16 +76,9 @@ public final class DeepSeekProvider implements LlmProvider {
             connector.setReadTimeout(read);
             var webBuilder = org.springframework.web.reactive.function.client.WebClient.builder().clientConnector(connector);
 
-            DeepSeekApi api = DeepSeekApi.builder()
-                    .apiKey(apiKey)
-                    .baseUrl(baseUrl)
-                    .restClientBuilder(restBuilder)
-                    .webClientBuilder(webBuilder)
-                    .build();
-            m = DeepSeekChatModel.builder()
-                    .deepSeekApi(api)
-                    .options(DeepSeekChatOptions.builder().model(defaultModel()).build())
-                    .build();
+            ChatModel defaultDelegate = buildDelegate(restBuilder, webBuilder, ThinkingConfig.defaults());
+            m = new DeepSeekThinkingChatModel(defaultDelegate,
+                    config -> buildDelegate(restBuilder, webBuilder, config));
             chatModel = m;
         }
         return m;
@@ -91,6 +87,49 @@ public final class DeepSeekProvider implements LlmProvider {
     @Override
     public ChatOptions options(String modelId) {
         return DeepSeekChatOptions.builder().model(modelId).build();
+    }
+
+    @Override
+    public ThinkingCapabilities thinkingCapabilities(String modelId) {
+        return ThinkingCapabilities.effort(true, List.of("low", "high", "max"));
+    }
+
+    @Override
+    public ChatOptions options(String modelId, ThinkingConfig config) {
+        thinkingCapabilities(modelId).validate(config);
+        if (config.mode() == ThinkingMode.DEFAULT) {
+            return options(modelId);
+        }
+        return new DeepSeekThinkingChatOptions(
+                DeepSeekChatOptions.builder().model(modelId).build(), config);
+    }
+
+    private ChatModel buildDelegate(org.springframework.web.client.RestClient.Builder baseRest,
+                                    org.springframework.web.reactive.function.client.WebClient.Builder baseWeb,
+                                    ThinkingConfig config) {
+        var rest = baseRest.clone();
+        var web = baseWeb.clone();
+        if (config.mode() != ThinkingMode.DEFAULT) {
+            rest.requestInterceptor((request, body, execution) ->
+                    execution.execute(request, DeepSeekThinkingBodyCodec.decorate(body, config)));
+            // The provider's WebClient builder already owns the working JDK connector. Mutating
+            // its codecs cannot see the selected request config, so install a fixed connector below.
+            java.net.http.HttpClient jdk = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(TIMEOUTS.connectTimeout()).build();
+            var nativeConnector = new org.springframework.http.client.reactive.JdkClientHttpConnector(jdk);
+            nativeConnector.setReadTimeout(TIMEOUTS.readTimeout());
+            web.clientConnector(new DeepSeekThinkingClientHttpConnector(nativeConnector, config));
+        }
+        DeepSeekApi api = DeepSeekApi.builder()
+                .apiKey(apiKey)
+                .baseUrl(baseUrl)
+                .restClientBuilder(rest)
+                .webClientBuilder(web)
+                .build();
+        return DeepSeekChatModel.builder()
+                .deepSeekApi(api)
+                .options(DeepSeekChatOptions.builder().model(defaultModel()).build())
+                .build();
     }
 
     @Override public List<ModelOption> models() { return models; }
