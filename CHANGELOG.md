@@ -8,6 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
+| [v1.11.1](docs/release-notes/v1.11.1.md) | 修订版 | **自动压缩不再过早触发**：修复 OpenCode Go 网关同名模型上下文窗口误判（真实 1M 窗口被按 128K 算，新会话频繁触发压缩），按 modelId 同名回退复用原厂窗口；修正构建/打包命令文档（补 `-am` 与 `-Dsurefire.failIfNoSpecifiedTests=false`） |
 | [v1.11.0](docs/release-notes/v1.11.0.md) | 功能版 | **新增 OpenCode Go provider**：一把 `OPENCODE_GO_API_KEY` 接通 MiniMax / Kimi / GLM / DeepSeek / 通义 / MiMo / 混元 / OpenAI / xAI 等聚合网关模型，复用 OpenAI 兼容通路接入，思考强度走 `reasoning_effort` 三档（low/medium/high）；**修复同名模型串号**（模型身份升级为 provider+model，`/model` 与思考设置精确区分来源）；**修复多行粘贴被拆成多次提交**（开启 bracketed paste，整段粘贴一次进入输入框，仅手动 Enter 发送） |
 | [v1.10.0](docs/release-notes/v1.10.0.md) | 功能版 | **模型思考设置**：`/model` 列表按 `→` 为每个模型独立配置思考模式与强度（DeepSeek `reasoning_effort`、Anthropic/OpenAI effort、通义 token 预算、智谱 effort），按模型记忆；另有行内差分渲染与 IME 损坏修复、会话预压缩、ChatClient 合并链修复 |
 | [v1.9.1](docs/release-notes/v1.9.1.md) | 修订版 | **`/skill` 大量技能不再闪动**：技能选择器改为固定高度的跟随窗口，避免终端反复滚动重排；仍可遍历并挂载全部技能；同步理顺发布包下载运行入口与 JDK 17+ 说明 |
