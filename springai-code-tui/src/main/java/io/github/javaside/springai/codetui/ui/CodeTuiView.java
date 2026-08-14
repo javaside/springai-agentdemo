@@ -366,6 +366,12 @@ public final class CodeTuiView extends InlineApp {
     protected InlineTuiConfig configure(int height) {
         InlineTuiConfig base = super.configure(height);
         return base.toBuilder()
+                // 开启 bracketed paste：终端把整段粘贴用 ESC[200~ / ESC[201~ 包成单个 PasteEvent，
+                // 多行文本里的 \n 不再被 EventParser 逐字节解析成 Enter → submitInput()。
+                // 否则往输入框粘多行文本时，第一个换行处就会「提前提交」，后面的内容被拆成若干段
+                // 依次插话/排队（用户看到的就是「提交了部分文本」）。见 InlineTuiRunner 对
+                // config.bracketedPaste() 的处理（enableBracketedPaste / disableBracketedPaste）。
+                .bracketedPaste(true)
                 .bindings(base.bindings().toBuilder()
                         .rebind(KeyTrigger.ctrl('c'), Actions.QUIT)   // 整组替换：只剩 Ctrl+C，去掉 q/Q
                         .unbind(Actions.FOCUS_NEXT)                   // 让裸 Tab 落到输入框（补全/展开）

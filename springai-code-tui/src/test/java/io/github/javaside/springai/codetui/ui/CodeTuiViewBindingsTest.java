@@ -51,6 +51,14 @@ class CodeTuiViewBindingsTest {
     }
 
     @Test
+    void bracketedPaste_isEnabled() {
+        SubmitHandler stub = text -> null;
+        CodeTuiView view = new CodeTuiView(new ConversationState(), stub, Path.of("."));
+        assertTrue(view.configure(4).bracketedPaste(),
+                "必须开启 bracketed paste：多行粘贴才不会被拆成若干次 Enter 提交");
+    }
+
+    @Test
     void skillPickerCapsVisibleRowsWhenCatalogIsLarge() {
         List<SkillInfo> skills = IntStream.range(0, 40)
                 .mapToObj(i -> new SkillInfo("skill-" + i, "description " + i, "用户"))
