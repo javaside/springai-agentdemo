@@ -53,6 +53,40 @@ class ContextStatsTest {
     }
 
     @Test
+    void gatewaySameNameModelResolvesWindowByModelIdFromBuiltInTable() {
+        ModelContextWindows windows = ModelContextWindows.parse("", 128_000L);
+
+        assertEquals(1_000_000L, windows.resolve("opencode-go", "deepseek-v4-pro"),
+                "聚合网关提供的同名模型应复用原厂窗口条目，而不是按未知模型保守兜底");
+    }
+
+    @Test
+    void conflictingSameNameWindowsAreNotGuessed() {
+        ModelContextWindows windows = ModelContextWindows.parse(
+                "a:model-x=100000,b:model-x=200000", 128_000L);
+
+        assertEquals(128_000L, windows.resolve("gateway", "model-x"),
+                "多家同 modelId 声明的窗口互相矛盾时说明网关给的可能不是同一模型，不猜，落保守兜底");
+    }
+
+    @Test
+    void modelIdOverrideAppliesToGatewayCopyOfSameModel() {
+        ModelContextWindows windows = ModelContextWindows.parse(
+                "deepseek:deepseek-v4-pro=2000000", 128_000L);
+
+        assertEquals(2_000_000L, windows.resolve("opencode-go", "deepseek-v4-pro"),
+                "用户显式覆盖某模型的窗口时，网关同名模型应沿用该覆盖，而不是退回内置原厂值");
+    }
+
+    @Test
+    void unknownGatewayModelStillFallsBackConservatively() {
+        ModelContextWindows windows = ModelContextWindows.parse("", 128_000L);
+
+        assertEquals(128_000L, windows.resolve("opencode-go", "glm-5.2"),
+                "网关模型不在能力表且无同名原厂条目时，仍应落保守兜底");
+    }
+
+    @Test
     void tokenAwareTriggerFiresForLargeToolOutputEvenWhenMessageTextIsEmpty() {
         SessionEvent tool = SessionEvent.builder().sessionId("s").message(
                 ToolResponseMessage.builder().responses(List.of(

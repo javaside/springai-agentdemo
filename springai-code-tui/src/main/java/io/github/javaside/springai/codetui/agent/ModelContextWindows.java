@@ -51,7 +51,29 @@ final class ModelContextWindows {
         String key = normalize(providerId + ":" + modelId);
         Long override = overrides.get(key);
         if (override != null) return override;
-        return BUILT_INS.getOrDefault(key, unknownWindow);
+        Long builtIn = BUILT_INS.get(key);
+        if (builtIn != null) return builtIn;
+        // 同名模型回退：聚合网关（如 opencode-go）提供的模型与某家原厂模型同名（如 deepseek-v4-pro），
+        // 精确键（opencode-go:deepseek-v4-pro）不在表里，但窗口应等同原厂条目而非保守兜底。
+        // 显式覆盖优先于内置值（用户对该模型名说过话）；多命中且值不一致 → 不猜，落保守兜底。
+        String model = normalize(modelId);
+        if (model.isEmpty()) return unknownWindow;
+        Long byOverride = matchByModelId(overrides, model);
+        if (byOverride != null) return byOverride;
+        Long byBuiltIn = matchByModelId(BUILT_INS, model);
+        return byBuiltIn != null ? byBuiltIn : unknownWindow;
+    }
+
+    /** 在表里按 modelId 后缀找同名条目；多个命中且窗口值互相矛盾 → null（不猜）。 */
+    private static Long matchByModelId(Map<String, Long> table, String modelId) {
+        String suffix = ":" + modelId;
+        Long found = null;
+        for (Map.Entry<String, Long> entry : table.entrySet()) {
+            if (!entry.getKey().endsWith(suffix)) continue;
+            if (found != null && !found.equals(entry.getValue())) return null;
+            found = entry.getValue();
+        }
+        return found;
     }
 
     private static String normalize(String value) {
