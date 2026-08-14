@@ -26,10 +26,37 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ModelPreferenceTest {
 
     @Test
-    @DisplayName("写进去再读出来是同一个 id")
+    @DisplayName("写进去再读出来是同一个 provider + model")
     void writeThenReadRoundTrips(@TempDir Path root) {
-        assertTrue(ModelPreference.write(root, "deepseek-v4-flash"));
-        assertEquals(Optional.of("deepseek-v4-flash"), ModelPreference.read(root));
+        assertTrue(ModelPreference.write(root, "deepseek", "deepseek-v4-flash"));
+        assertEquals(Optional.of(new ModelPreference.Choice("deepseek", "deepseek-v4-flash")),
+                ModelPreference.read(root));
+    }
+
+    @Test
+    @DisplayName("旧格式 lastModel 字符串 → provider 未知（null），由调用方回退靠前 provider")
+    void legacyLastModelMigratesToUnknownProvider(@TempDir Path root) throws Exception {
+        Path f = ModelPreference.fileFor(root);
+        Files.createDirectories(f.getParent());
+        Files.writeString(f, "{\"lastModel\": \"deepseek-v4-pro\"}");
+        assertEquals(Optional.of(new ModelPreference.Choice(null, "deepseek-v4-pro")),
+                ModelPreference.read(root));
+    }
+
+    @Test
+    @DisplayName("新格式双键读回 provider + model")
+    void newFormatReadsBackBoth(@TempDir Path root) throws Exception {
+        Path f = ModelPreference.fileFor(root);
+        Files.createDirectories(f.getParent());
+        Files.writeString(f, "{\"providerId\": \"opencode-go\", \"modelId\": \"deepseek-v4-pro\"}");
+        assertEquals(Optional.of(new ModelPreference.Choice("opencode-go", "deepseek-v4-pro")),
+                ModelPreference.read(root));
+    }
+
+    @Test
+    @DisplayName("providerId 为空 → write 返回 false，不落盘")
+    void writeWithBlankProviderFails(@TempDir Path root) {
+        assertFalse(ModelPreference.write(root, "  ", "deepseek-v4-pro"));
     }
 
     @Test
@@ -189,7 +216,7 @@ class ModelPreferenceTest {
     @DisplayName(".codetui/ 不存在时 write 会把目录建出来")
     void writeCreatesCodetuiDirectory(@TempDir Path root) {
         assertFalse(Files.exists(root.resolve(".codetui")), "前提：目录本来不存在");
-        assertTrue(ModelPreference.write(root, "claude-opus-5"));
+        assertTrue(ModelPreference.write(root, "anthropic", "claude-opus-5"));
         assertTrue(Files.isRegularFile(ModelPreference.fileFor(root)));
     }
 
@@ -203,7 +230,7 @@ class ModelPreferenceTest {
     @DisplayName("写不进去 → false，且绝不抛")
     void writeFailureReturnsFalse(@TempDir Path root) throws Exception {
         Files.writeString(root.resolve(".codetui"), "我不是目录");
-        assertFalse(ModelPreference.write(root, "deepseek-v4-pro"));
+        assertFalse(ModelPreference.write(root, "deepseek", "deepseek-v4-pro"));
     }
 
     /**
@@ -213,7 +240,7 @@ class ModelPreferenceTest {
     @Test
     @DisplayName("写完不留 .tmp 残骸")
     void noTempFileLeftBehind(@TempDir Path root) throws Exception {
-        assertTrue(ModelPreference.write(root, "deepseek-v4-flash"));
+        assertTrue(ModelPreference.write(root, "deepseek", "deepseek-v4-flash"));
         try (var s = Files.list(root.resolve(".codetui"))) {
             List<String> leftovers = s.map(p -> p.getFileName().toString())
                     .filter(n -> n.endsWith(".tmp"))

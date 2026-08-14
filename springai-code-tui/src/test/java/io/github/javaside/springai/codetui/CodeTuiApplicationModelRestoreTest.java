@@ -31,7 +31,7 @@ class CodeTuiApplicationModelRestoreTest {
     @Test
     @DisplayName("记住的模型可用：激活它，且一声不吭")
     void restoresRememberedModel(@TempDir Path root) {
-        assertTrue(ModelPreference.write(root, "claude-opus-5"), "前提：偏好写得进去");
+        assertTrue(ModelPreference.write(root, "anthropic", "claude-opus-5"), "前提：偏好写得进去");
         ProviderRegistry reg = registry();
         ConversationState state = new ConversationState();
 
@@ -49,7 +49,7 @@ class CodeTuiApplicationModelRestoreTest {
     @Test
     @DisplayName("记住的模型用不了了：回退默认，并说清楚回退到了哪")
     void unavailableModelFallsBackAndSaysSo(@TempDir Path root) {
-        assertTrue(ModelPreference.write(root, "gpt-5.5"), "前提：偏好写得进去");
+        assertTrue(ModelPreference.write(root, "openai", "gpt-5.5"), "前提：偏好写得进去");
         ProviderRegistry reg = registry();      // 没有 openai ⇒ gpt-5.5 选不中
         ConversationState state = new ConversationState();
 

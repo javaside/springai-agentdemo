@@ -22,6 +22,6 @@ class CodeTuiApplicationThinkingConfigTest {
                 """);
         ProviderRegistry registry = CodeTuiApplication.createProviderRegistry(root,
                 Map.of("OPENAI_API_KEY", "k"));
-        assertEquals("high", registry.thinkingSettings("gpt-5.6-sol").config().effort());
+        assertEquals("high", registry.thinkingSettings("openai", "gpt-5.6-sol").config().effort());
     }
 }

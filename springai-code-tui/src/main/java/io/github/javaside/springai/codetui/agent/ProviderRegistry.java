@@ -50,18 +50,37 @@ public final class ProviderRegistry {
 
     public List<LlmProvider> allProviders() { return providers; }
 
-    public List<ModelOption> allModels() {
-        List<ModelOption> all = new ArrayList<>();
+    public List<ProviderModel> allModels() {
+        List<ProviderModel> all = new ArrayList<>();
         for (LlmProvider provider : providers) {
-            if (provider.available()) {
-                all.addAll(provider.models());
+            if (!provider.available()) {
+                continue;
+            }
+            for (ModelOption model : provider.models()) {
+                all.add(new ProviderModel(provider.id(), model.id(), model.label(), model.desc()));
             }
         }
         return all;
     }
 
+    /**
+     * 按「第一个拥有该 id 的可用 provider」切换（列表序靠前）。
+     *
+     * <p>这是<b>只给旧格式偏好回退</b>与历史调用点保留的宽松入口：当模型身份只有裸 modelId、
+     * 无法区分同名不同家时，只能命中靠前的那家。新代码应优先用
+     * {@link #select(String, String)} 精确指定 provider，避免同名模型串号。
+     */
     public synchronized void select(String modelId) {
         ModelOwner owner = ownerOf(modelId);
+        if (owner != null) {
+            active = owner.provider();
+            activeModelId = owner.model().id();
+        }
+    }
+
+    /** 精确切换：指定 provider 与模型。对未知/不可用的 (providerId, modelId) 静默忽略（同旧语义）。 */
+    public synchronized void select(String providerId, String modelId) {
+        ModelOwner owner = ownerOf(providerId, modelId);
         if (owner != null) {
             active = owner.provider();
             activeModelId = owner.model().id();
@@ -83,23 +102,23 @@ public final class ProviderRegistry {
         return selection(provider, modelId);
     }
 
-    public synchronized ModelThinkingSettings thinkingSettings(String modelId) {
-        ModelOwner owner = ownerOf(modelId);
+    public synchronized ModelThinkingSettings thinkingSettings(String providerId, String modelId) {
+        ModelOwner owner = ownerOf(providerId, modelId);
         if (owner == null) {
-            throw new IllegalArgumentException("未知或不可用模型: " + modelId);
+            throw new IllegalArgumentException("未知或不可用模型: " + providerId + "/" + modelId);
         }
-        ThinkingConfig config = thinkingStore.get(owner.provider().id(), modelId);
-        return new ModelThinkingSettings(owner.provider().id(), modelId, owner.model().label(), config,
+        ThinkingConfig config = thinkingStore.get(providerId, modelId);
+        return new ModelThinkingSettings(providerId, modelId, owner.model().label(), config,
                 owner.provider().thinkingCapabilities(modelId));
     }
 
-    public synchronized boolean updateThinking(String modelId, ThinkingConfig config) {
-        ModelOwner owner = ownerOf(modelId);
+    public synchronized boolean updateThinking(String providerId, String modelId, ThinkingConfig config) {
+        ModelOwner owner = ownerOf(providerId, modelId);
         if (owner == null) {
-            throw new IllegalArgumentException("未知或不可用模型: " + modelId);
+            throw new IllegalArgumentException("未知或不可用模型: " + providerId + "/" + modelId);
         }
         owner.provider().thinkingCapabilities(modelId).validate(config);
-        thinkingStore.put(owner.provider().id(), modelId, config);
+        thinkingStore.put(providerId, modelId, config);
         return thinkingStore.save();
     }
 
@@ -120,9 +139,25 @@ public final class ProviderRegistry {
         }
     }
 
+    /** 只按 modelId 找：命中「第一个拥有该 id 的可用 provider」（列表序靠前）。旧格式回退用。 */
     private ModelOwner ownerOf(String modelId) {
         for (LlmProvider provider : providers) {
             if (!provider.available()) {
+                continue;
+            }
+            for (ModelOption model : provider.models()) {
+                if (model.id().equals(modelId)) {
+                    return new ModelOwner(provider, model);
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 精确找：provider + model 都匹配才命中。 */
+    private ModelOwner ownerOf(String providerId, String modelId) {
+        for (LlmProvider provider : providers) {
+            if (!provider.available() || !provider.id().equals(providerId)) {
                 continue;
             }
             for (ModelOption model : provider.models()) {

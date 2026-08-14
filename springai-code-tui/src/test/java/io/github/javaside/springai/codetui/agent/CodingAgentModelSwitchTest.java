@@ -21,7 +21,7 @@ class CodingAgentModelSwitchTest {
 
     @Test
     void modelsAggregateAcrossProviders() {
-        List<String> ids = agentWithRegistry().models().stream().map(ModelOption::id).toList();
+        List<String> ids = agentWithRegistry().models().stream().map(ProviderModel::modelId).toList();
         assertTrue(ids.contains("deepseek-v4-flash"));
         assertTrue(ids.contains("claude-sonnet-5"));
     }
@@ -30,7 +30,8 @@ class CodingAgentModelSwitchTest {
     void selectModelSwitchesProviderAndCurrentModel() {
         CodingAgent a = agentWithRegistry();
         assertEquals("deepseek-v4-pro", a.currentModel());
-        a.selectModel("claude-opus-5");
+        a.selectModel("anthropic", "claude-opus-5");
         assertEquals("claude-opus-5", a.currentModel());
+        assertEquals("anthropic", a.currentProviderId());
     }
 }

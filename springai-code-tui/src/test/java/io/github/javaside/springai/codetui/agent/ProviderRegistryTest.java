@@ -18,7 +18,7 @@ class ProviderRegistryTest {
                 new OpenAiProvider("")));        // 不可用
         assertEquals("deepseek", reg.active().id());
         assertEquals("deepseek-v4-pro", reg.activeModelId());
-        List<String> ids = reg.allModels().stream().map(ModelOption::id).toList();
+        List<String> ids = reg.allModels().stream().map(ProviderModel::modelId).toList();
         assertTrue(ids.contains("deepseek-v4-flash"));
         assertTrue(ids.contains("claude-sonnet-5"));
         assertFalse(ids.contains("gpt-5.5"));   // openai 不可用，不列出
@@ -44,6 +44,23 @@ class ProviderRegistryTest {
     void selectUnknownModelIsIgnored() {
         ProviderRegistry reg = new ProviderRegistry(List.of(new DeepSeekProvider("k")));
         reg.select("no-such-model");
+        assertEquals("deepseek-v4-pro", reg.activeModelId());
+    }
+
+    /**
+     * 同名模型（DeepSeek 原生与 OpenCode Go 聚合网关都提供 deepseek-v4-pro）必须能精确区分：
+     * 裸 {@code select(modelId)} 只会命中列表序靠前的那家，精确 {@code select(providerId, modelId)}
+     * 才能切到真正想选的那家。
+     */
+    @Test
+    void selectSameModelIdAcrossProvidersTargetsExactProvider() {
+        ProviderRegistry reg = new ProviderRegistry(List.of(
+                new DeepSeekProvider("k"), new OpencodeGoProvider("k")));
+        assertEquals("deepseek", reg.active().id());          // 默认命中靠前的 deepseek 原生
+        assertEquals("deepseek-v4-pro", reg.activeModelId());
+
+        reg.select("opencode-go", "deepseek-v4-pro");          // 精确切到聚合网关的同名模型
+        assertEquals("opencode-go", reg.active().id());
         assertEquals("deepseek-v4-pro", reg.activeModelId());
     }
 }

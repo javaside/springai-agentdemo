@@ -635,8 +635,14 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     @Override
-    public List<ModelOption> models() {
-        return registry != null ? registry.allModels() : MODELS;
+    public List<ProviderModel> models() {
+        if (registry != null) {
+            return registry.allModels();
+        }
+        // registry==null 的旧单-client/测试桩回退路径：MODELS 都是 DeepSeek 模型。
+        return MODELS.stream()
+                .map(m -> new ProviderModel("deepseek", m.id(), m.label(), m.desc()))
+                .toList();
     }
 
     @Override
@@ -645,25 +651,31 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     @Override
-    public void selectModel(String id) {
+    public String currentProviderId() {
+        return registry != null ? registry.active().id() : "deepseek";
+    }
+
+    @Override
+    public void selectModel(String providerId, String modelId) {
         if (registry != null) {
-            registry.select(id);
+            registry.select(providerId, modelId);
             return;
         }
         for (ModelOption m : MODELS) {
-            if (m.id().equals(id)) { this.model = id; return; }   // 仅接受已知模型
+            if (m.id().equals(modelId)) { this.model = modelId; return; }   // 旧路径仅接受已知模型
         }
     }
 
     @Override
-    public io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings thinkingSettings(String modelId) {
-        return registry != null ? registry.thinkingSettings(modelId) : null;
+    public io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings thinkingSettings(
+            String providerId, String modelId) {
+        return registry != null ? registry.thinkingSettings(providerId, modelId) : null;
     }
 
     @Override
-    public boolean saveThinkingSettings(String modelId,
+    public boolean saveThinkingSettings(String providerId, String modelId,
             io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig config) {
-        return registry != null && registry.updateThinking(modelId, config);
+        return registry != null && registry.updateThinking(providerId, modelId, config);
     }
 
     /**

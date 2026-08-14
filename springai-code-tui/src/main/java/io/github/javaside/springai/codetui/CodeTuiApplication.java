@@ -197,11 +197,24 @@ public class CodeTuiApplication {
      * 是两件独立的事，凑到一起才出事，而那时谁都不会想到看这个方法。
      */
     static void restoreLastModel(ProviderRegistry registry, Path root, ConversationState state) {
-        Optional<String> remembered = ModelPreference.read(root);
+        Optional<ModelPreference.Choice> remembered = ModelPreference.read(root);
         if (remembered.isEmpty()) {
             return;                            // 首次运行：走原有行为，一个字都不多说
         }
-        String id = remembered.get();
+        ModelPreference.Choice choice = remembered.get();
+        if (choice.providerId() != null) {
+            // 新格式：精确按 provider + model 恢复，避免同名模型恢复到靠前的那家。
+            registry.select(choice.providerId(), choice.modelId());
+            if (!choice.modelId().equals(registry.activeModelId())
+                    || !choice.providerId().equals(registry.active().id())) {
+                state.pushInfo("• 上次用的模型 " + choice.providerId() + "/" + choice.modelId()
+                        + " 现在不可用，已回退到 " + registry.active().id() + "/"
+                        + registry.activeModelId() + "。");
+            }
+            return;
+        }
+        // 旧格式：只有裸 modelId，provider 未知，回退到「列表序靠前」的 provider（与旧行为一致）。
+        String id = choice.modelId();
         registry.select(id);
         if (!id.equals(registry.activeModelId())) {
             state.pushInfo("• 上次用的模型 " + id + " 现在不可用，已回退到 "

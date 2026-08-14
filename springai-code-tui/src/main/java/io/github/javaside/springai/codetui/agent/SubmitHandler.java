@@ -19,20 +19,23 @@ public interface SubmitHandler {
     default Disposable submit(String text, String skillName) { return submit(text); }
 
     // ── 模型选择（/model 选择器用；默认空实现，便于回显桩/测试桩省略） ──
-    /** 可选模型列表。 */
-    default List<ModelOption> models() { return List.of(); }
+    /** 可选模型列表（每条带 provider 归属，见 {@link ProviderModel}）。 */
+    default List<ProviderModel> models() { return List.of(); }
 
-    /** 当前使用的模型 id。 */
+    /** 当前使用的模型 id（裸 id，用于欢迎横幅/视觉判断等不关心 provider 的场合）。 */
     default String currentModel() { return ""; }
 
-    /** 切换到指定模型 id（对后续回合生效）。 */
-    default void selectModel(String id) { }
+    /** 当前使用模型的 provider id（模型选择器/思考强度显示需要精确区分同名模型）。 */
+    default String currentProviderId() { return ""; }
 
-    /** 读取某模型的思考设置与能力；默认 null（回显桩/测试桩）。 */
-    default ModelThinkingSettings thinkingSettings(String modelId) { return null; }
+    /** 切换到指定 provider 下的指定模型（对后续回合生效）。 */
+    default void selectModel(String providerId, String modelId) { }
 
-    /** 保存某模型的思考设置；返回写盘是否成功。默认 false。 */
-    default boolean saveThinkingSettings(String modelId, ThinkingConfig config) { return false; }
+    /** 读取某 provider 下某模型的思考设置与能力；默认 null（回显桩/测试桩）。 */
+    default ModelThinkingSettings thinkingSettings(String providerId, String modelId) { return null; }
+
+    /** 保存某 provider 下某模型的思考设置；返回写盘是否成功。默认 false。 */
+    default boolean saveThinkingSettings(String providerId, String modelId, ThinkingConfig config) { return false; }
 
     /** 手动压缩会话历史（/compact）。默认空实现，便于回显桩/测试桩省略。 */
     default void compact() { }

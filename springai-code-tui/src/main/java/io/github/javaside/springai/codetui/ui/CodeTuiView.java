@@ -4,7 +4,7 @@ import io.github.javaside.springai.codetui.agent.AskRequest;
 import io.github.javaside.springai.codetui.agent.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModalRequest;
-import io.github.javaside.springai.codetui.agent.ModelOption;
+import io.github.javaside.springai.codetui.agent.ProviderModel;
 import io.github.javaside.springai.codetui.agent.ModelPreference;
 import io.github.javaside.springai.codetui.agent.OptionSpec;
 import io.github.javaside.springai.codetui.agent.PermissionOutcome;
@@ -192,6 +192,7 @@ public final class CodeTuiView extends InlineApp {
     private boolean pickingModel;                                    // /model 选择器是否激活
     private boolean configuringThinking;                             // /model 的二级思考设置是否激活
     private String thinkingTarget;                                   // 正在设置的模型 id
+    private String thinkingTargetProvider;                           // 正在设置的模型所属 provider id
     private ThinkingConfig thinkingDraft;                            // 未保存的草稿
     private int thinkingRow;                                         // 二级面板当前行（0=模式，1=强度）
     private boolean editingBudget;                                   // 预算数值输入子模式
@@ -1534,44 +1535,46 @@ public final class CodeTuiView extends InlineApp {
     // ── /model 模型选择器 ───────────────────────────────────────────────
     /** 打开选择器：高亮定位到当前所选模型。 */
     private void openModelPicker() {
-        List<ModelOption> models = onSubmit.models();
+        List<ProviderModel> models = onSubmit.models();
         if (models.isEmpty()) { state.setNotice("当前没有可选模型"); return; }
         pickIndex = 0;
         String cur = onSubmit.currentModel();
+        String curProvider = onSubmit.currentProviderId();
         for (int i = 0; i < models.size(); i++) {
-            if (models.get(i).id().equals(cur)) { pickIndex = i; break; }
+            ProviderModel m = models.get(i);
+            if (m.id().equals(cur) && m.providerId().equals(curProvider)) { pickIndex = i; break; }
         }
         pickingModel = true;
     }
 
     /** 选择器按键：↑↓/kj 移动、数字快选、→ 思考设置、Enter 确认、Esc 取消。始终 HANDLED（屏蔽文本编辑）。 */
     private EventResult onModelPickerKey(KeyEvent k) {
-        List<ModelOption> models = onSubmit.models();
+        List<ProviderModel> models = onSubmit.models();
         int n = models.size();
         if (k.isCancel()) { pickingModel = false; return EventResult.HANDLED; }
         if (k.code() == KeyCode.UP || k.isChar('k'))   { pickIndex = (pickIndex - 1 + n) % n; return EventResult.HANDLED; }
         if (k.code() == KeyCode.DOWN || k.isChar('j')) { pickIndex = (pickIndex + 1) % n;     return EventResult.HANDLED; }
         if (k.code() == KeyCode.RIGHT || k.isChar('l')) {
-            String modelId = models.get(pickIndex).id();
-            ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+            ProviderModel m = models.get(pickIndex);
+            ModelThinkingSettings settings = onSubmit.thinkingSettings(m.providerId(), m.id());
             if (settings == null || !settings.capabilities().configurable()) {
                 state.setNotice("该模型不可配置思考模式");
                 return EventResult.HANDLED;
             }
-            openThinkingSettings(modelId);
+            openThinkingSettings(m.providerId(), m.id());
             return EventResult.HANDLED;
         }
         for (int i = 0; i < n && i < 9; i++) {           // 数字 1..n 快选
             if (k.isChar((char) ('1' + i))) { pickIndex = i; return EventResult.HANDLED; }
         }
         if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
-            ModelOption chosen = models.get(pickIndex);
-            onSubmit.selectModel(chosen.id());
+            ProviderModel chosen = models.get(pickIndex);
+            onSubmit.selectModel(chosen.providerId(), chosen.id());
             pickingModel = false;
             // 不用 sticky notice：notice 会一直占据状态栏、遮蔽常态行（模型名 + 上下文%）直到下次按键，
             // 造成「切换模型后状态栏信息就没了」。改为下沉一行 scrollback 确认，状态栏立刻回到常态。
-            state.pushInfo("⚙ 已切换模型 · " + labelWithThinking(chosen.id(), chosen.label()));
-            rememberModel(chosen.id());     // 落盘，下次启动恢复
+            state.pushInfo("⚙ 已切换模型 · " + labelWithThinking(chosen.providerId(), chosen.id(), chosen.label()));
+            rememberModel(chosen.providerId(), chosen.id());     // 落盘，下次启动恢复
             lastShownModel = chosen.id();   // 避免下个回合 dispatch 再重复打「⚙ 使用模型」
             return EventResult.HANDLED;
         }
@@ -1598,37 +1601,56 @@ public final class CodeTuiView extends InlineApp {
      * 的 handler 会让写盘<b>静默不发生</b>。生产的 {@code CodingAgent} 两个都实现了，
      * 今天咬不到人；写在这里是因为它失败时不报错、只是悄悄不记。
      */
-    private void rememberModel(String id) {
-        if (!id.equals(onSubmit.currentModel())) {
+    private void rememberModel(String providerId, String modelId) {
+        if (!modelId.equals(onSubmit.currentModel())
+                || !providerId.equals(onSubmit.currentProviderId())) {
             return;                          // 没生效，不留记录
         }
-        if (!ModelPreference.write(root, id)) {
+        if (!ModelPreference.write(root, providerId, modelId)) {
             state.pushInfo("⚠ 没能记住这个选择（仅本次运行生效）");
         }
     }
 
     /** 选择器面板：标题 + 每个模型一行（❯ 高亮当前、✓ 标记在用、右侧暗色说明）。 */
     private Element[] modelPickerChildren() {
-        List<ModelOption> models = onSubmit.models();
+        List<ProviderModel> models = onSubmit.models();
         String cur = onSubmit.currentModel();
+        String curProvider = onSubmit.currentProviderId();
+        Set<String> dupes = duplicateModelIds(models);
         List<Element> els = new ArrayList<>();
         els.add(text("  选择模型（↑↓ 选择 · Enter 切换 · → 思考设置 · Esc 取消）").style(PICK_TITLE));
         for (int i = 0; i < models.size(); i++) {
-            ModelOption m = models.get(i);
+            ProviderModel m = models.get(i);
             boolean sel = i == pickIndex;
-            boolean active = m.id().equals(cur);
+            boolean active = m.id().equals(cur) && m.providerId().equals(curProvider);
             String marker = (sel ? "❯ " : "  ") + (active ? "✓ " : "  ");
-            String summary = thinkingSummary(m.id());
-            els.add(text("  " + marker + (i + 1) + ". " + m.label() + "   " + m.desc()
+            String summary = thinkingSummary(m.providerId(), m.id());
+            String label = dupes.contains(m.id()) ? m.label() + " · " + m.providerId() : m.label();
+            els.add(text("  " + marker + (i + 1) + ". " + label + "   " + m.desc()
                     + "   " + summary)
                     .style(sel ? PICK_SEL : (active ? PICK_ITEM : PICK_DESC)));
         }
         return els.toArray(new Element[0]);
     }
 
+    /** 跨 provider 重名的模型 id 集合：只有这些条目需要在展示名后标注来源（providerId），其余保持原样。 */
+    private static Set<String> duplicateModelIds(List<ProviderModel> models) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (ProviderModel m : models) {
+            counts.merge(m.id(), 1, Integer::sum);
+        }
+        Set<String> dupes = new LinkedHashSet<>();
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
+            if (e.getValue() > 1) {
+                dupes.add(e.getKey());
+            }
+        }
+        return dupes;
+    }
+
     /** 模型行的思考摘要；不可配置/桩 handler 返回「—」。 */
-    private String thinkingSummary(String modelId) {
-        ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+    private String thinkingSummary(String providerId, String modelId) {
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(providerId, modelId);
         if (settings == null) return "—";
         return settings.summary();
     }
@@ -1637,8 +1659,9 @@ public final class CodeTuiView extends InlineApp {
      * 状态栏模型标签：思考配置非默认时，追加括号内原生强度（如 {@code deepseek-v4-pro（high）}）。
      */
     String statusModelLabel() {
+        String providerId = onSubmit.currentProviderId();
         String model = onSubmit.currentModel();
-        return labelWithThinking(model, model);
+        return labelWithThinking(providerId, model, model);
     }
 
     /**
@@ -1646,9 +1669,9 @@ public final class CodeTuiView extends InlineApp {
      * 非默认时追加括号内原生强度（如 {@code deepseek-v4-pro（high）}）；配置因模型能力变化而失效时，
      * 只降级返回原展示名——显示逻辑绝不让界面崩溃。状态栏与「已切换模型」确认行共用此方法，保证一致。
      */
-    private String labelWithThinking(String modelId, String label) {
+    private String labelWithThinking(String providerId, String modelId, String label) {
         try {
-            ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+            ModelThinkingSettings settings = onSubmit.thinkingSettings(providerId, modelId);
             if (settings == null || settings.config().mode() == ThinkingMode.DEFAULT) {
                 return label;
             }
@@ -1658,10 +1681,11 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
-    private void openThinkingSettings(String modelId) {
-        ModelThinkingSettings settings = onSubmit.thinkingSettings(modelId);
+    private void openThinkingSettings(String providerId, String modelId) {
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(providerId, modelId);
         if (settings == null) return;
         thinkingTarget = modelId;
+        thinkingTargetProvider = providerId;
         thinkingDraft = settings.config();
         thinkingRow = 0;
         editingBudget = false;
@@ -1670,7 +1694,7 @@ public final class CodeTuiView extends InlineApp {
 
     /** 二级设置按键：↑↓ 选行、←→ 调整、Enter 保存、Esc 放弃。 */
     private EventResult onThinkingSettingsKey(KeyEvent k) {
-        ModelThinkingSettings settings = onSubmit.thinkingSettings(thinkingTarget);
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(thinkingTargetProvider, thinkingTarget);
         if (settings == null) { configuringThinking = false; return EventResult.HANDLED; }
         ThinkingCapabilities caps = settings.capabilities();
 
@@ -1733,7 +1757,7 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private void saveThinking() {
-        boolean saved = onSubmit.saveThinkingSettings(thinkingTarget, thinkingDraft);
+        boolean saved = onSubmit.saveThinkingSettings(thinkingTargetProvider, thinkingTarget, thinkingDraft);
         configuringThinking = false;
         editingBudget = false;
         budgetInput.setText("");
@@ -1803,10 +1827,10 @@ public final class CodeTuiView extends InlineApp {
 
     private Element[] thinkingSettingsChildren() {
         // scope(boolean, ...) 的第二个参数每帧都会立即求值（见 render 里所有 children 方法），
-        // 未进入二级面板时 thinkingTarget 为 null，必须先在这里挡掉，否则 onSubmit.thinkingSettings(null)
+        // 未进入二级面板时 thinkingTarget 为 null，必须先在这里挡掉，否则 onSubmit.thinkingSettings(null, …)
         // 会一路抛到 ProviderRegistry。
         if (thinkingTarget == null) return new Element[0];
-        ModelThinkingSettings settings = onSubmit.thinkingSettings(thinkingTarget);
+        ModelThinkingSettings settings = onSubmit.thinkingSettings(thinkingTargetProvider, thinkingTarget);
         if (settings == null) return new Element[0];
         ThinkingCapabilities caps = settings.capabilities();
         List<Element> els = new ArrayList<>();

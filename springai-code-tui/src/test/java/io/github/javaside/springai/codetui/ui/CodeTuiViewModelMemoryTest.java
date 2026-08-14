@@ -2,7 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
-import io.github.javaside.springai.codetui.agent.ModelOption;
+import io.github.javaside.springai.codetui.agent.ProviderModel;
 import io.github.javaside.springai.codetui.agent.ModelPreference;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import org.junit.jupiter.api.DisplayName;
@@ -30,17 +30,18 @@ class CodeTuiViewModelMemoryTest {
 
     /** 两个模型；selectModel 只接受清单里的（与 ProviderRegistry.select 同语义）。 */
     private static class Handler implements SubmitHandler {
-        final List<ModelOption> options = List.of(
-                new ModelOption("alpha", "alpha", "第一个"),
-                new ModelOption("beta", "beta", "第二个"));
+        final List<ProviderModel> options = List.of(
+                new ProviderModel("p", "alpha", "alpha", "第一个"),
+                new ProviderModel("p", "beta", "beta", "第二个"));
         String current = "alpha";
 
         @Override public Disposable submit(String text) { return () -> { }; }
-        @Override public List<ModelOption> models() { return options; }
+        @Override public List<ProviderModel> models() { return options; }
         @Override public String currentModel() { return current; }
-        @Override public void selectModel(String id) {
-            for (ModelOption m : options) {
-                if (m.id().equals(id)) { current = id; return; }
+        @Override public String currentProviderId() { return "p"; }
+        @Override public void selectModel(String providerId, String modelId) {
+            for (ProviderModel m : options) {
+                if (m.providerId().equals(providerId) && m.id().equals(modelId)) { current = modelId; return; }
             }
             // 未知 id：静默忽略
         }
@@ -48,7 +49,7 @@ class CodeTuiViewModelMemoryTest {
 
     /** selectModel 一律不生效——模拟「选了个 registry 里其实没有的模型」。 */
     private static final class DeafHandler extends Handler {
-        @Override public void selectModel(String id) { /* 什么都不做 */ }
+        @Override public void selectModel(String providerId, String modelId) { /* 什么都不做 */ }
     }
 
     /** 打开 /model 选择器 → 数字快选第 2 项 → Enter 确认。 */
@@ -66,7 +67,7 @@ class CodeTuiViewModelMemoryTest {
 
         pickSecondModel(v);
 
-        assertEquals(Optional.of("beta"), ModelPreference.read(root));
+        assertEquals(Optional.of(new ModelPreference.Choice("p", "beta")), ModelPreference.read(root));
     }
 
     /**

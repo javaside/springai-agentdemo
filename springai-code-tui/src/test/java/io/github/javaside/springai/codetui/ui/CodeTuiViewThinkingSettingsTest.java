@@ -2,7 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
-import io.github.javaside.springai.codetui.agent.ModelOption;
+import io.github.javaside.springai.codetui.agent.ProviderModel;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
@@ -21,10 +21,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CodeTuiViewThinkingSettingsTest {
 
     private static final class Handler implements SubmitHandler {
-        final List<ModelOption> options = List.of(
-                new ModelOption("alpha", "alpha", "effort 模型"),
-                new ModelOption("beta", "beta", "不可配置模型"),
-                new ModelOption("gamma", "gamma", "effort 模型二"));
+        final List<ProviderModel> options = List.of(
+                new ProviderModel("p", "alpha", "alpha", "effort 模型"),
+                new ProviderModel("p", "beta", "beta", "不可配置模型"),
+                new ProviderModel("p", "gamma", "gamma", "effort 模型二"));
         String current = "alpha";
         String savedModel;
         ThinkingConfig savedConfig;
@@ -33,11 +33,12 @@ class CodeTuiViewThinkingSettingsTest {
         ThinkingConfig gammaConfig = ThinkingConfig.defaults();
 
         @Override public Disposable submit(String text) { return () -> { }; }
-        @Override public List<ModelOption> models() { return options; }
+        @Override public List<ProviderModel> models() { return options; }
         @Override public String currentModel() { return current; }
-        @Override public void selectModel(String id) { current = id; }
+        @Override public String currentProviderId() { return "p"; }
+        @Override public void selectModel(String providerId, String modelId) { current = modelId; }
 
-        @Override public ModelThinkingSettings thinkingSettings(String modelId) {
+        @Override public ModelThinkingSettings thinkingSettings(String providerId, String modelId) {
             if ("alpha".equals(modelId)) {
                 return new ModelThinkingSettings("p", "alpha", "alpha",
                         alphaConfig,
@@ -52,7 +53,7 @@ class CodeTuiViewThinkingSettingsTest {
                     ThinkingConfig.defaults(), ThinkingCapabilities.unsupported());
         }
 
-        @Override public boolean saveThinkingSettings(String modelId, ThinkingConfig config) {
+        @Override public boolean saveThinkingSettings(String providerId, String modelId, ThinkingConfig config) {
             savedModel = modelId;
             savedConfig = config;
             if ("alpha".equals(modelId)) alphaConfig = config;

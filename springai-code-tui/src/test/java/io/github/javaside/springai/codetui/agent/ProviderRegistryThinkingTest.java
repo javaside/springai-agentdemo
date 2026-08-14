@@ -33,7 +33,7 @@ class ProviderRegistryThinkingTest {
     void settingsForInactiveModelDoNotSwitchSelection() {
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")));
         assertEquals("gpt-5.6-sol", registry.activeModelId());
-        assertEquals("gpt-5.6-terra", registry.thinkingSettings("gpt-5.6-terra").modelId());
+        assertEquals("gpt-5.6-terra", registry.thinkingSettings("openai", "gpt-5.6-terra").modelId());
         assertEquals("gpt-5.6-sol", registry.activeModelId());
     }
 
@@ -41,16 +41,16 @@ class ProviderRegistryThinkingTest {
     void updateValidatesBeforeMutating() {
         ProviderRegistry registry = new ProviderRegistry(List.of(new ZhipuProvider("k")));
         assertThrows(IllegalArgumentException.class,
-                () -> registry.updateThinking("glm-5.1", ThinkingConfig.enabledEffort("max")));
-        assertEquals(ThinkingConfig.defaults(), registry.thinkingSettings("glm-5.1").config());
+                () -> registry.updateThinking("zhipu", "glm-5.1", ThinkingConfig.enabledEffort("max")));
+        assertEquals(ThinkingConfig.defaults(), registry.thinkingSettings("zhipu", "glm-5.1").config());
     }
 
     @Test
     void defaultRemovesSetting() {
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")));
-        assertTrue(registry.updateThinking("gpt-5.6-sol", ThinkingConfig.enabledEffort("high")));
-        assertTrue(registry.updateThinking("gpt-5.6-sol", ThinkingConfig.defaults()));
-        assertEquals(ThinkingConfig.defaults(), registry.thinkingSettings("gpt-5.6-sol").config());
+        assertTrue(registry.updateThinking("openai", "gpt-5.6-sol", ThinkingConfig.enabledEffort("high")));
+        assertTrue(registry.updateThinking("openai", "gpt-5.6-sol", ThinkingConfig.defaults()));
+        assertEquals(ThinkingConfig.defaults(), registry.thinkingSettings("openai", "gpt-5.6-sol").config());
     }
 
     @Test
@@ -58,8 +58,8 @@ class ProviderRegistryThinkingTest {
         Files.writeString(root.resolve(".codetui"), "not a directory");
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")), ThinkingConfigStore.load(root));
         ThinkingConfig config = ThinkingConfig.enabledEffort("high");
-        assertFalse(registry.updateThinking("gpt-5.6-sol", config));
-        assertEquals(config, registry.thinkingSettings("gpt-5.6-sol").config());
+        assertFalse(registry.updateThinking("openai", "gpt-5.6-sol", config));
+        assertEquals(config, registry.thinkingSettings("openai", "gpt-5.6-sol").config());
     }
 
     @Test
@@ -69,5 +69,20 @@ class ProviderRegistryThinkingTest {
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")), store);
         assertEquals("low", registry.requestSelection("gpt-5.6-terra").config().effort());
         assertEquals("gpt-5.6-sol", registry.activeModelId());
+    }
+
+    /** 同名模型的思考设置必须按 provider 隔离：配 A 家不该动 B 家。 */
+    @Test
+    void sameModelIdAcrossProvidersKeepsThinkingSeparate() {
+        ThinkingConfigStore store = ThinkingConfigStore.inMemory();
+        ProviderRegistry reg = new ProviderRegistry(List.of(
+                new DeepSeekProvider("k"), new OpencodeGoProvider("k")), store);
+
+        assertTrue(reg.updateThinking("opencode-go", "deepseek-v4-pro",
+                ThinkingConfig.enabledEffort("high")));
+        assertEquals(ThinkingConfig.defaults(),
+                reg.thinkingSettings("deepseek", "deepseek-v4-pro").config());
+        assertEquals("high",
+                reg.thinkingSettings("opencode-go", "deepseek-v4-pro").config().effort());
     }
 }

@@ -16,15 +16,17 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 「上次用的模型」的落盘：{@code <root>/.codetui/model.json}，单键 {@code lastModel}。
+ * 「上次用的模型」的落盘：{@code <root>/.codetui/model.json}，记 {@code providerId + modelId}。
  *
- * <p><b>键名是 lastModel 而不是 model</b>：在名字上说清这是「上次用的」，不是「你配置的默认」。
- * 将来真要加显式配置项，两者可以共存而不打架。
+ * <p><b>记 provider + model，不单记 modelId</b>：多家 provider 会提供<b>同名</b>模型
+ * （如 DeepSeek 原生与 OpenCode Go 聚合网关都有 {@code deepseek-v4-pro}），只记裸 id 会让
+ * 重启后恢复到「列表序靠前」的那家、而非用户上次真正选的那家。故本文件同时记
+ * {@code providerId} 与 {@code modelId}，与 {@code ProviderRegistry.select(providerId, modelId)}
+ * 的精确语义对齐。
  *
- * <p><b>只记 modelId，不记 provider</b>：{@code ProviderRegistry.select(String)} 的既有语义
- * 就是「在可用 provider 里找拥有该 id 的那家」。{@code *_MODELS} 环境变量可能造成跨家重名，
- * 此时命中列表序靠前的可用家——但 {@code /model} 面板本身也只能按 id 选，UI 层面同样区分不了重名。
- * 只记 id 与现有交互完全一致，不引入新的不一致。这是已知限制，不是疏忽。
+ * <p><b>向后兼容旧格式</b>：历史文件只有单键 {@code lastModel}（字符串，裸 modelId）。读取时
+ * 把它当作「provider 未知」（{@link Choice#providerId()} 为 null）迁移，由调用方回退到
+ * 靠前的 provider（与旧行为一致）。新写入一律用 {@code providerId + modelId} 双键。
  *
  * <p><b>降级契约</b>：读侧任何情况都返回 {@link Optional}、写侧任何情况都返回 boolean，
  * <b>两边都绝不抛</b>。这个类跑在启动路径上，抛一次异常就是 code-tui 起不来。
@@ -47,7 +49,21 @@ public final class ModelPreference {
 
     private static final Logger log = LoggerFactory.getLogger(ModelPreference.class);
 
-    private static final String KEY = "lastModel";
+    private static final String KEY = "lastModel";       // 旧格式单键（裸 modelId），仅读取时兼容
+    private static final String PROVIDER_KEY = "providerId";   // 新格式：provider 归属
+    private static final String MODEL_KEY = "modelId";         // 新格式：模型 id
+
+    /**
+     * 一次「上次用的模型」偏好。{@code providerId} 为 null 表示「旧格式迁移、provider 未知」，
+     * 由调用方回退到列表序靠前的 provider。
+     */
+    public record Choice(String providerId, String modelId) {
+        public Choice {
+            if (modelId == null || modelId.isBlank()) {
+                throw new IllegalArgumentException("modelId 不能为空");
+            }
+        }
+    }
 
     /**
      * 开重复键检测。
@@ -91,7 +107,7 @@ public final class ModelPreference {
      * （{@code root == null}、{@code v == null}、{@code !v.isString()}）
      * 加一条 catch（{@code readTree} 的 JSON 非法降级）。
      */
-    public static Optional<String> read(Path root) {
+    public static Optional<Choice> read(Path root) {
         try {
             return doRead(root);
         } catch (Exception e) {
@@ -106,7 +122,7 @@ public final class ModelPreference {
         }
     }
 
-    private static Optional<String> doRead(Path root) {
+    private static Optional<Choice> doRead(Path root) {
         if (root == null) {
             return Optional.empty();
         }
@@ -136,12 +152,26 @@ public final class ModelPreference {
         if (node == null || !node.isObject()) {
             return Optional.empty();
         }
+        // 新格式：providerId + modelId 双键。modelId 缺失/空 → empty；providerId 缺失/空 → null（按未知处理）。
+        JsonNode modelNode = node.get(MODEL_KEY);
+        if (modelNode != null && modelNode.isString()) {
+            String modelId = modelNode.stringValue().trim();
+            if (modelId.isEmpty()) {
+                return Optional.empty();
+            }
+            JsonNode providerNode = node.get(PROVIDER_KEY);
+            String providerId = providerNode != null && providerNode.isString()
+                    ? providerNode.stringValue().trim() : null;
+            return Optional.of(new Choice(
+                    providerId == null || providerId.isEmpty() ? null : providerId, modelId));
+        }
+        // 旧格式：单键 lastModel（字符串，裸 modelId）→ provider 未知。
         JsonNode v = node.get(KEY);
         if (v == null || !v.isString()) {     // Jackson 3：非文本节点调 stringValue() 会抛
             return Optional.empty();
         }
         String id = v.stringValue().trim();
-        return id.isEmpty() ? Optional.empty() : Optional.of(id);
+        return id.isEmpty() ? Optional.empty() : Optional.of(new Choice(null, id));
     }
 
     /**
@@ -150,8 +180,9 @@ public final class ModelPreference {
      * <p>原子写：先写同目录临时文件（随机后缀，两个进程同时写不会互相写坏），
      * 再 {@code ATOMIC_MOVE}；不支持的文件系统降级普通替换。
      */
-    public static boolean write(Path root, String modelId) {
-        if (root == null || modelId == null || modelId.isBlank()) {
+    public static boolean write(Path root, String providerId, String modelId) {
+        if (root == null || modelId == null || modelId.isBlank()
+                || providerId == null || providerId.isBlank()) {
             return false;
         }
         Path file = fileFor(root);
@@ -159,7 +190,8 @@ public final class ModelPreference {
         try {
             Files.createDirectories(file.getParent());     // 全新项目还没有 .codetui/
             ObjectNode node = MAPPER.createObjectNode();
-            node.put(KEY, modelId);
+            node.put(PROVIDER_KEY, providerId.trim());
+            node.put(MODEL_KEY, modelId);
             tmp = file.resolveSibling(file.getFileName() + "." + UUID.randomUUID() + ".tmp");
             Files.writeString(tmp, MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(node));
             try {
