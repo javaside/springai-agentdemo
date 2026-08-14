@@ -177,8 +177,11 @@ java -jar /path/to/springai-agentdemo/springai-code-tui/target/springai-code-tui
 维护者在仓库根目录执行：
 
 ```bash
-mvn -pl springai-code-tui clean package -Pdist
+mvn -pl springai-code-tui -am clean package -Pdist
 ```
+
+`-am` 不可省：本模块依赖同仓库的 `springai-tamboui-inline-patch`（不发布到远程仓库），
+不带 `-am` 时本地 `~/.m2` 没装过同版本就会依赖解析失败。
 
 产物位于 `springai-code-tui/target/`：
 

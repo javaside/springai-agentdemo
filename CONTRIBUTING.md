@@ -9,20 +9,31 @@
 
 ## 构建与测试
 
-**测试命令必须带模块作用域：**
+**测试命令必须带模块作用域与 `-am`：**
 
 ```bash
-mvn -pl springai-code-tui test                          # 全量
-mvn -pl springai-code-tui test -Dtest='SomeTest'        # 单个类
+mvn -pl springai-code-tui -am test                                                       # 全量
+mvn -pl springai-code-tui -am test -Dtest='SomeTest' -Dsurefire.failIfNoSpecifiedTests=false   # 单个类
 ```
 
-**不要用整仓 `mvn test`** —— 仓库里有几个空的 demo 模块会让它失败。也**不要**用
-`-DfailIfNoSpecifiedTests=false` 去盖这个问题，那只会把真实失败一起吞掉。
+`-am` 不可省：`springai-code-tui` 依赖同仓库的兄弟模块 `springai-tamboui-inline-patch`
+（compile 依赖），而它**不发布到任何远程仓库**。不带 `-am` 时只有本地 `~/.m2` 恰好装过
+同一版本才跑得通——版本一升级或换个干净机器就会报
+`Could not resolve dependencies ... springai-tamboui-inline-patch`。
+
+单类命令的 `-Dsurefire.failIfNoSpecifiedTests=false` **同样不可省**：`-Dtest` 是全局系统
+属性，`-am` 拉进 reactor 的兄弟模块也会用 `SomeTest` 去匹配它自己的测试目录，匹配不到时
+surefire 默认视为失败（`No tests matching pattern "SomeTest" were executed`），整个构建在
+兄弟模块上就断了。该参数只放宽「`-Dtest` 模式没有匹配到任何测试」这一种错误，**不吞**断言
+失败、编译失败、运行时异常——实测（2026-08-15）改坏断言后带此参数照样 `BUILD FAILURE`。
+
+**不要用整仓 `mvn test`** —— 仓库里有几个空的 demo 模块会让它失败。这条也别指望
+`surefire.failIfNoSpecifiedTests` 来救：它只作用于带 `-Dtest` 的调用，对整仓失败无效。
 
 打发布包：
 
 ```bash
-mvn -pl springai-code-tui package -Pdist      # 产出 target/*-dist.tar.gz 与 .zip
+mvn -pl springai-code-tui -am package -Pdist      # 产出 target/*-dist.tar.gz 与 .zip
 ```
 
 ## 依赖真实网络 / API key 的测试
@@ -45,7 +56,7 @@ mvn -pl springai-code-tui package -Pdist      # 产出 target/*-dist.tar.gz 与 
 13–45s 之间浮动，偶尔会超时失败。撞上时**先单跑那一条确认**，不要以为是自己改坏了：
 
 ```bash
-mvn -pl springai-code-tui test -Dtest='CodingAgentSpikeTest#todoTurnIdBinding'
+mvn -pl springai-code-tui -am test -Dtest='CodingAgentSpikeTest#todoTurnIdBinding' -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 ## 提交约定
