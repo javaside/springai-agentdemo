@@ -8,7 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
-| [v1.11.0](docs/release-notes/v1.11.0.md) | 功能版 | **新增 OpenCode Go provider**：一把 `OPENCODE_GO_API_KEY` 接通 MiniMax / Kimi / GLM / DeepSeek / 通义 / MiMo / 混元 / OpenAI / xAI 等聚合网关模型，复用 OpenAI 兼容通路接入，思考强度走 `reasoning_effort` 三档（low/medium/high） |
+| [v1.11.0](docs/release-notes/v1.11.0.md) | 功能版 | **新增 OpenCode Go provider**：一把 `OPENCODE_GO_API_KEY` 接通 MiniMax / Kimi / GLM / DeepSeek / 通义 / MiMo / 混元 / OpenAI / xAI 等聚合网关模型，复用 OpenAI 兼容通路接入，思考强度走 `reasoning_effort` 三档（low/medium/high）；**修复同名模型串号**（模型身份升级为 provider+model，`/model` 与思考设置精确区分来源） |
 | [v1.10.0](docs/release-notes/v1.10.0.md) | 功能版 | **模型思考设置**：`/model` 列表按 `→` 为每个模型独立配置思考模式与强度（DeepSeek `reasoning_effort`、Anthropic/OpenAI effort、通义 token 预算、智谱 effort），按模型记忆；另有行内差分渲染与 IME 损坏修复、会话预压缩、ChatClient 合并链修复 |
 | [v1.9.1](docs/release-notes/v1.9.1.md) | 修订版 | **`/skill` 大量技能不再闪动**：技能选择器改为固定高度的跟随窗口，避免终端反复滚动重排；仍可遍历并挂载全部技能；同步理顺发布包下载运行入口与 JDK 17+ 说明 |
 | [v1.9.0](docs/release-notes/v1.9.0.md) | 功能版 | **后台任务不再像卡死**：`/tasks` 面板 RUNNING 行加波光动画，一眼看出还在跑；后台完成通知明确要求模型继续 Todo 计划（而非仅确认结果）；`run_in_background` 使用条件写进工具描述，默认前台、减少误用后台 |
