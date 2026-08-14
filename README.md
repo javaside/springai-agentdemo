@@ -63,7 +63,7 @@ C:\path\to\springai-code-tui-<version>\bin\code-tui.cmd
 
 | | |
 |---|---|
-| **多 provider** | DeepSeek / 智谱 GLM / 通义千问 / Anthropic / OpenAI，`/model` 运行时切换（**选中即记住，下次启动自动恢复**），模型清单可经 `*_MODELS` 自定义 |
+| **多 provider** | DeepSeek / 智谱 GLM / 通义千问 / Anthropic / OpenAI / OpenCode Go，`/model` 运行时切换（**选中即记住，下次启动自动恢复**），模型清单可经 `*_MODELS` 自定义 |
 | **工具** | 文件读写、Shell、Grep/Glob、联网抓取（webFetch）、**联网搜索**（博查中文 + Brave 英文，模型按内容语言自选）、向用户反问 |
 | **视觉输入** | 支持视觉的模型**真能看见图**：你自己贴的（输入框里写路径、或把文件从访达/桌面拖进终端）与工具产的（`Read` 一张 png、MCP 截图）。**图片从不进会话记忆**，落盘的只是文本引用，聊多久上下文都不累积；有硬上限（每请求 ≤3 张用户图 + ≤1 张工具图，每回合累计 ≤12 张·次），路径是自动识别的、误附时 `Ctrl+X` 撤销 |
 | **权限管理** | 有副作用的调用**执行前**弹审批面板（允许一次 / 本会话 / 永久 / 拒绝 / 中断），规则写 `permissions.json`，`/permissions` 面板可就地删；另有一层 **任何 allow 规则都盖不住**的内置底线（「跳过权限检查」档例外——那一档只留痕不拦截）。匹配放宽只在 deny 方向（认大小写与符号链接），allow 只认原写法 |
@@ -91,7 +91,7 @@ C:\path\to\springai-code-tui-<version>\bin\code-tui.cmd
 
 **③ 综合应用层** —— `springai-code-tui`：把前两层综合成上面那个编码智能体（[回到顶部](#-springai-code-tui--本项目的重点)）。想学「这些零件怎么拼成一个真东西」，读它的源码。
 
-- **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 智谱 GLM / [通义千问](https://bailian.console.aliyun.com/)（百炼）/ Anthropic / OpenAI（各家模型清单可经 `*_MODELS` 环境变量配置，首项为默认模型）
+- **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 智谱 GLM / [通义千问](https://bailian.console.aliyun.com/)（百炼）/ Anthropic / OpenAI / OpenCode Go（各家模型清单可经 `*_MODELS` 环境变量配置，首项为默认模型）
 - **向量模型**：本地 ONNX 模型（无需 API Key，离线运行）—— 因为 DeepSeek 官方 API 只提供对话、不提供向量
 - **运行方式**：core/agent/boot 为控制台菜单（输入数字选示例）；jline/code-tui 为交互式终端程序
 
@@ -124,7 +124,7 @@ springai-agentdemo                  父工程（聚合 + 版本管理，packagin
 │   └── 单文件逐节演示：原始/回显模式、光标、颜色、按键读取、窗口尺寸…
 │
 └── springai-code-tui              【综合应用】命令行编码智能体（TUI）
-    └── 多 provider（DeepSeek/智谱/千问/Anthropic/OpenAI）+ 子 agent（Task + ParallelTasks 并行）+ 技能
+    └── 多 provider（DeepSeek/智谱/千问/Anthropic/OpenAI/OpenCode Go）+ 子 agent（Task + ParallelTasks 并行）+ 技能
         + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ MCP（接入外部工具）+ 计划/任务面板 + 会话压缩
         + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
         + 权限管理（审批面板 + 规则 + 内置底线 + 计划模式）

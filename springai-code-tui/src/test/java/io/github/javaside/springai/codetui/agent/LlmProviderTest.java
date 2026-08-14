@@ -1,9 +1,15 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.agent.thinking.ThinkingStrengthKind;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.openai.OpenAiChatOptions;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -101,6 +107,33 @@ class LlmProviderTest {
         assertThrows(IllegalStateException.class, p::chatModel);
     }
 
+    @Test
+    void opencodeGo_withKey_availableAndOptionsCarryModel() {
+        OpencodeGoProvider p = new OpencodeGoProvider("fake-key");
+        assertEquals("opencode-go", p.id());
+        assertTrue(p.available());
+        assertEquals("deepseek-v4-pro", p.defaultModel());
+        assertFalse(p.models().isEmpty());
+        assertTrue(p.chatModel() != null);   // 复用 OpenAiChatModel：build() 从 options 派生 client，网络无关
+        assertEquals("glm-5.2", p.options("glm-5.2").getModel());
+    }
+
+    @Test
+    void opencodeGo_withoutKey_isUnavailable() {
+        OpencodeGoProvider p = new OpencodeGoProvider("  ");
+        assertFalse(p.available());
+        assertThrows(IllegalStateException.class, p::chatModel);
+    }
+
+    /** qwen3.7-max 仅暴露在 Anthropic /messages 端点，走 OpenAI 兼容通路的默认清单必须不含它。 */
+    @Test
+    void opencodeGo_defaultListExcludesMessagesOnlyQwen() {
+        OpencodeGoProvider p = new OpencodeGoProvider("fake-key");
+        List<String> ids = p.models().stream().map(ModelOption::id).toList();
+        assertTrue(ids.contains("qwen3.8-max"), "同门旗舰 qwen3.8-max 应可经 /chat/completions 使用");
+        assertFalse(ids.contains("qwen3.7-max"), "qwen3.7-max 仅走 /messages，不得进默认清单");
+    }
+
     /** 自定义 base-url：非空即覆盖，仍网络无关地建出 model。 */
     @Test
     void customBaseUrl_isAcceptedAndModelStillBuilds() {
@@ -108,6 +141,7 @@ class LlmProviderTest {
         assertTrue(new AnthropicProvider("fake-key", "https://proxy.example/an").chatModel() != null);
         assertTrue(new OpenAiProvider("fake-key", "https://proxy.example/oa").chatModel() != null);
         assertTrue(new QwenProvider("fake-key", "https://proxy.example/qw").chatModel() != null);
+        assertTrue(new OpencodeGoProvider("fake-key", "https://proxy.example/go").chatModel() != null);
     }
 
     /** 空/null base-url：回落各家内置默认，仍能建出 model。 */
@@ -117,5 +151,33 @@ class LlmProviderTest {
         assertTrue(new AnthropicProvider("fake-key", null).chatModel() != null);
         assertTrue(new OpenAiProvider("fake-key", "").chatModel() != null);
         assertTrue(new QwenProvider("fake-key", "").chatModel() != null);
+        assertTrue(new OpencodeGoProvider("fake-key", null).chatModel() != null);
+    }
+
+    /** 思考强度：网关 reasoning_effort 全集虽大，但只暴露全上游通用的 low/medium/high 三档。 */
+    @Test
+    void opencodeGo_thinkingCapabilities_effortLowMediumHigh() {
+        var caps = new OpencodeGoProvider("fake-key").thinkingCapabilities("glm-5.2");
+        assertTrue(caps.configurable());
+        assertTrue(caps.supportsDisable());
+        assertEquals(ThinkingStrengthKind.EFFORT, caps.strengthKind());
+        assertEquals(List.of("low", "medium", "high"), caps.effortValues());
+    }
+
+    /** 思考装配：ENABLED+effort → reasoning_effort=档位；DISABLED → none；DEFAULT → 不带 reasoning_effort。 */
+    @Test
+    void opencodeGo_optionsThinking_effortAndDisable() {
+        OpencodeGoProvider p = new OpencodeGoProvider("fake-key");
+        OpenAiChatOptions opts =
+                (OpenAiChatOptions) p.options("glm-5.2", ThinkingConfig.enabledEffort("high"));
+        assertEquals("glm-5.2", opts.getModel());
+        assertEquals("high", opts.getReasoningEffort());
+
+        opts = (OpenAiChatOptions) p.options("glm-5.2", ThinkingConfig.disabled());
+        assertEquals("none", opts.getReasoningEffort());
+
+        opts = (OpenAiChatOptions) p.options("glm-5.2", ThinkingConfig.defaults());
+        assertEquals("glm-5.2", opts.getModel());
+        assertNull(opts.getReasoningEffort());
     }
 }

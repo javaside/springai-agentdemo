@@ -7,6 +7,7 @@ import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModelPreference;
+import io.github.javaside.springai.codetui.agent.OpencodeGoProvider;
 import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.QwenProvider;
@@ -47,7 +48,7 @@ public class CodeTuiApplication {
             registry = createProviderRegistry(root, System.getenv());
         } catch (IllegalStateException e) {
             System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
-                    "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY，再运行。");
+                    "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENCODE_GO_API_KEY，再运行。");
             return;
         }
 
@@ -146,7 +147,8 @@ public class CodeTuiApplication {
                 new ZhipuProvider(env.get("ZHIPU_API_KEY"), env.get("ZHIPU_BASE_URL"), env.get("ZHIPU_MODELS")),
                 new QwenProvider(env.get("DASHSCOPE_API_KEY"), env.get("DASHSCOPE_BASE_URL"), env.get("DASHSCOPE_MODELS")),
                 new AnthropicProvider(env.get("ANTHROPIC_API_KEY"), env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_MODELS")),
-                new OpenAiProvider(env.get("OPENAI_API_KEY"), env.get("OPENAI_BASE_URL"), env.get("OPENAI_MODELS"))),
+                new OpenAiProvider(env.get("OPENAI_API_KEY"), env.get("OPENAI_BASE_URL"), env.get("OPENAI_MODELS")),
+                new OpencodeGoProvider(env.get("OPENCODE_GO_API_KEY"), env.get("OPENCODE_GO_BASE_URL"), env.get("OPENCODE_GO_MODELS"))),
                 io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore.load(root));
     }
 

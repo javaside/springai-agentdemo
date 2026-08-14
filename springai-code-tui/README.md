@@ -1,6 +1,6 @@
 # springai-code-tui
 
-基于 Spring AI 2.0 和 [TamboUI](https://github.com/quanticc/tambo-ui) 的命令行编码智能体。它可以在终端中读写代码、运行命令、调用子 agent，并支持 DeepSeek、智谱 GLM、通义千问、Anthropic 和 OpenAI。
+基于 Spring AI 2.0 和 [TamboUI](https://github.com/quanticc/tambo-ui) 的命令行编码智能体。它可以在终端中读写代码、运行命令、调用子 agent，并支持 DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI 和 OpenCode Go。
 
 ## 快速开始（下载发布包）
 
@@ -95,7 +95,7 @@ export DEEPSEEK_API_KEY=你的key
 
 | 类别 | 能力 |
 |------|------|
-| 模型与 provider | DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI；`/model` 运行时切换，选择按项目记忆在 `.codetui/model.json` |
+| 模型与 provider | DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI、OpenCode Go；`/model` 运行时切换，选择按项目记忆在 `.codetui/model.json` |
 | 编码与联网工具 | 文件读写、Shell、Grep/Glob、任务计划、网页抓取、博查中文搜索、Brave 英文搜索、向用户提问 |
 | 权限与安全 | 有副作用的调用执行前审批；`Shift+Tab` 切换默认、自动接受编辑、计划、跳过权限检查四种模式 |
 | 子 agent 与计划 | `Task`、`ParallelTasks`、后台任务、计划面板和任务面板 |
@@ -130,6 +130,7 @@ DEEPSEEK_API_KEY=你的key
 # DASHSCOPE_API_KEY=你的key
 # ANTHROPIC_API_KEY=你的key
 # OPENAI_API_KEY=你的key
+# OPENCODE_GO_API_KEY=你的key
 ```
 
 还可以配置各家的 `*_BASE_URL`、`*_MODELS`，以及 LLM 超时、子 agent 并发数、联网搜索 Key 和 `JAVA_OPTS`。请以 `bin/config.env.example` 中的说明为准，避免在多处维护重复的配置清单。

@@ -68,4 +68,16 @@ class ProviderModelsEnvTest {
     void openai_noEnv_builtInDefault() {
         assertEquals("gpt-5.6-sol", new OpenAiProvider("key", null, null).defaultModel());
     }
+
+    @Test
+    void opencodeGo_modelsEnv_overridesList_firstIsDefault() {
+        OpencodeGoProvider p = new OpencodeGoProvider("key", null, "go-x, go-y");
+        assertEquals("go-x", p.defaultModel());
+        assertEquals(2, p.models().size());
+    }
+
+    @Test
+    void opencodeGo_noEnv_builtInDefault() {
+        assertEquals("deepseek-v4-pro", new OpencodeGoProvider("key", null, null).defaultModel());
+    }
 }
