@@ -112,14 +112,17 @@ public final class DeepSeekProvider implements LlmProvider {
         if (config.mode() != ThinkingMode.DEFAULT) {
             rest.requestInterceptor((request, body, execution) ->
                     execution.execute(request, DeepSeekThinkingBodyCodec.decorate(body, config)));
-            // The provider's WebClient builder already owns the working JDK connector. Mutating
-            // its codecs cannot see the selected request config, so install a fixed connector below.
-            java.net.http.HttpClient jdk = java.net.http.HttpClient.newBuilder()
-                    .connectTimeout(TIMEOUTS.connectTimeout()).build();
-            var nativeConnector = new org.springframework.http.client.reactive.JdkClientHttpConnector(jdk);
-            nativeConnector.setReadTimeout(TIMEOUTS.readTimeout());
-            web.clientConnector(new DeepSeekThinkingClientHttpConnector(nativeConnector, config));
         }
+        // 流式请求一律注入 stream_options.include_usage=true：DeepSeek 流式默认不带 usage（与 OpenAI 不同，
+        // spring-ai-deepseek 的 ChatCompletionRequest 又没有 stream_options 字段、也不会自动加），不注入则 token
+        // 采集器永远拿不到计费输入 → 缓存命中率恒为空。思考配置在 decorateStreaming 里叠加（DEFAULT 时仅注入
+        // stream_options）。The provider's WebClient builder already owns the working JDK connector; mutating its
+        // codecs cannot see the selected request config, so install a fixed connector below.
+        java.net.http.HttpClient jdk = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(TIMEOUTS.connectTimeout()).build();
+        var nativeConnector = new org.springframework.http.client.reactive.JdkClientHttpConnector(jdk);
+        nativeConnector.setReadTimeout(TIMEOUTS.readTimeout());
+        web.clientConnector(new DeepSeekThinkingClientHttpConnector(nativeConnector, config));
         DeepSeekApi api = DeepSeekApi.builder()
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)

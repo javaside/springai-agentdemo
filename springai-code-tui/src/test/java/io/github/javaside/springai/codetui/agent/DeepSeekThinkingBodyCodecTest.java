@@ -37,4 +37,21 @@ class DeepSeekThinkingBodyCodecTest {
         assertEquals("disabled", root.path("thinking").path("type").stringValue());
         assertEquals(false, root.has("reasoning_effort"));
     }
+
+    @Test
+    void streamingDefaultInjectsUsageFlag() throws Exception {
+        var root = MAPPER.readTree(DeepSeekThinkingBodyCodec.decorateStreaming(BASE_REQUEST, ThinkingConfig.defaults()));
+        assertEquals(true, root.path("stream_options").path("include_usage").asBoolean(),
+                "DEFAULT 思考配置下流式也须注入 stream_options.include_usage=true");
+        assertEquals(false, root.has("thinking"), "DEFAULT 不额外注入 thinking");
+    }
+
+    @Test
+    void streamingEnabledInjectsBothUsageFlagAndThinking() throws Exception {
+        var root = MAPPER.readTree(DeepSeekThinkingBodyCodec.decorateStreaming(BASE_REQUEST,
+                ThinkingConfig.enabledEffort("max")));
+        assertEquals(true, root.path("stream_options").path("include_usage").asBoolean());
+        assertEquals("enabled", root.path("thinking").path("type").stringValue());
+        assertEquals("max", root.path("reasoning_effort").stringValue());
+    }
 }

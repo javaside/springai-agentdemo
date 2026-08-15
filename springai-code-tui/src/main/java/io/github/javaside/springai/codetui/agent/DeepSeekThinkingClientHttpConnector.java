@@ -36,7 +36,7 @@ final class DeepSeekThinkingClientHttpConnector implements ClientHttpConnector {
                     byte[] bytes = new byte[joined.readableByteCount()];
                     joined.read(bytes);
                     DataBufferUtils.release(joined);
-                    byte[] decorated = DeepSeekThinkingBodyCodec.decorate(bytes, config);
+                    byte[] decorated = DeepSeekThinkingBodyCodec.decorateStreaming(bytes, config);
                     getHeaders().setContentLength(decorated.length);
                     return getDelegate().writeWith(Mono.just(bufferFactory().wrap(decorated)));
                 });
