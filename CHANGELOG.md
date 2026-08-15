@@ -8,6 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
+| [v1.13.0](docs/release-notes/v1.13.0.md) | 功能版 | **缓存命中率可见**：`/context` 新增命中率行（命中/计费输入原值），状态栏常驻「缓存命中 N%」；DeepSeek 流式补 `include_usage`、usage 终止前原子提交、缓存 token 经 nativeUsage 兜底；修复状态栏超宽时动态数据被 80 列终端截断（模型名+动态数据保完整，静态键位提示让位）；`CODETUI_CO_AUTHOR` 提交署名（默认关闭），`config.env` 改逐行解析杜绝 shell 注入 |
 | [v1.12.0](docs/release-notes/v1.12.0.md) | 功能版 | **OpenCode Go 思考档位按模型实测并扩充模型清单**：`reasoning_effort` 从一刀切三档改为按模型返回真实档位（DeepSeek/GLM/Kimi/MiniMax/混元旗舰可用到 `max`），模型清单 15 → 22（补入 10、剔除 3 项上游不可用）；修复 CI 构建/打包命令缺 `-am` |
 | [v1.11.1](docs/release-notes/v1.11.1.md) | 修订版 | **自动压缩不再过早触发**：修复 OpenCode Go 网关同名模型上下文窗口误判（真实 1M 窗口被按 128K 算，新会话频繁触发压缩），按 modelId 同名回退复用原厂窗口；修正构建/打包命令文档（补 `-am` 与 `-Dsurefire.failIfNoSpecifiedTests=false`） |
 | [v1.11.0](docs/release-notes/v1.11.0.md) | 功能版 | **新增 OpenCode Go provider**：一把 `OPENCODE_GO_API_KEY` 接通 MiniMax / Kimi / GLM / DeepSeek / 通义 / MiMo / 混元 / OpenAI / xAI 等聚合网关模型，复用 OpenAI 兼容通路接入，思考强度走 `reasoning_effort` 三档（low/medium/high）；**修复同名模型串号**（模型身份升级为 provider+model，`/model` 与思考设置精确区分来源）；**修复多行粘贴被拆成多次提交**（开启 bracketed paste，整段粘贴一次进入输入框，仅手动 Enter 发送） |
