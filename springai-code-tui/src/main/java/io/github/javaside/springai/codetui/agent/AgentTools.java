@@ -172,6 +172,12 @@ public final class AgentTools {
     private static final String WEB_SEARCH_GUIDE_KEY = "WEB_SEARCH_GUIDE";
 
     /**
+     * 提交署名指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {CO_AUTHOR_GUIDE} 占位符对应。
+     * <b>默认关闭</b>：未配置 {@code CODETUI_CO_AUTHOR} 时该段渲染为空串，模型看不到指引、也不会追加尾注。
+     */
+    private static final String CO_AUTHOR_GUIDE_KEY = "CO_AUTHOR_GUIDE";
+
+    /**
      * 权限模式提示注入的 param 键；与 SYSTEM_TEMPLATE 里的 {PERMISSION_MODE} 占位符对应。
      *
      * <p>公开可见（与上面几个 private 键不同）：模式随 Shift+Tab 运行期变化，
@@ -228,6 +234,7 @@ public final class AgentTools {
             - 当任务包含 3 个或更多明确步骤、或用户要求你组织任务时，先调用 TodoWrite 把工作拆成结构化清单再执行；
               同一时间只允许一个任务处于 in_progress，开始前标 in_progress、完成后立刻标 completed。
             - 修改文件后，用 Shell 运行构建 / 测试 / 检查命令来验证改动确实生效，再给出结论。
+            {CO_AUTHOR_GUIDE}
             - 需要项目之外的信息（外部文档、库用法、报错含义等）时，用 webFetch 传入网址和你要抽取的问题来获取；
               它只读网页、不能登录或执行 JS。别凭记忆臆断外部事实。
             - 当任务匹配某个「可用技能」的描述时（如撰写规范提交信息、遵循某领域规范），先调用 Skill 工具并传入技能名，
@@ -560,6 +567,7 @@ public final class AgentTools {
                             .param(AUTO_MEMORY_KEY, autoMemoryPrompt)
                             .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions)
                             .param(WEB_SEARCH_GUIDE_KEY, webSearchGuide)
+                            .param(CO_AUTHOR_GUIDE_KEY, coAuthorGuide(System.getenv("CODETUI_CO_AUTHOR")))
                             // 装配期给空串占位；真实值由 CodingAgent.submit 每回合覆盖（merge 语义）。
                             // 不补默认值则模板渲染时缺 param 会抛。
                             .param(PERMISSION_MODE_KEY, ""))
@@ -704,6 +712,25 @@ public final class AgentTools {
                 - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
         }
         return "";
+    }
+
+    /**
+     * 提交署名指引段：{@code CODETUI_CO_AUTHOR} 未配置（null / 空白）时返回空串——功能默认关闭，
+     * 模型看不到指引、不会主动追加尾注；配置了才返回指引，并把签名内联进尾注。
+     * 形状照 {@link #webSearchGuide}——env 读取在 {@code build}，渲染语义留在纯函数便于测试。
+     *
+     * <p>签名值<b>不得含花括号</b>：它随本段作为 param 值注入（与 webSearchGuide / AUTO_MEMORY 同法），
+     * 花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示渲染。
+     */
+    static String coAuthorGuide(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        String signature = raw.trim();
+        return """
+            - 用 git commit 提交改动时，在提交信息末尾追加署名尾注，让 GitHub 把 code-tui 计为共同作者：
+              Co-Authored-By: %s
+            """.formatted(signature);
     }
 
     static BochaWebSearchTool createWebSearchTool(String apiKey, String countEnv) {

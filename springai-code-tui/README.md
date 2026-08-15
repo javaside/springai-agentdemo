@@ -133,7 +133,7 @@ DEEPSEEK_API_KEY=你的key
 # OPENCODE_GO_API_KEY=你的key
 ```
 
-还可以配置各家的 `*_BASE_URL`、`*_MODELS`，以及 LLM 超时、子 agent 并发数、联网搜索 Key 和 `JAVA_OPTS`。请以 `bin/config.env.example` 中的说明为准，避免在多处维护重复的配置清单。
+还可以配置各家的 `*_BASE_URL`、`*_MODELS`，以及 LLM 超时、子 agent 并发数、联网搜索 Key、GitHub 提交署名（`CODETUI_CO_AUTHOR`，默认关闭）和 `JAVA_OPTS`。请以 `bin/config.env.example` 中的说明为准，避免在多处维护重复的配置清单。
 
 ### 项目数据
 
