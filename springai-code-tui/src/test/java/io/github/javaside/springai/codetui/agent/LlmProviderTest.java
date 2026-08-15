@@ -125,13 +125,15 @@ class LlmProviderTest {
         assertThrows(IllegalStateException.class, p::chatModel);
     }
 
-    /** qwen3.7-max 仅暴露在 Anthropic /messages 端点，走 OpenAI 兼容通路的默认清单必须不含它。 */
+    /** 坏模型不进默认清单：mimo-v2-omni / hy3-preview / grok-4.5 上游当前不可用。 */
     @Test
-    void opencodeGo_defaultListExcludesMessagesOnlyQwen() {
+    void opencodeGo_defaultListExcludesBrokenModels() {
         OpencodeGoProvider p = new OpencodeGoProvider("fake-key");
         List<String> ids = p.models().stream().map(ModelOption::id).toList();
-        assertTrue(ids.contains("qwen3.8-max"), "同门旗舰 qwen3.8-max 应可经 /chat/completions 使用");
-        assertFalse(ids.contains("qwen3.7-max"), "qwen3.7-max 仅走 /messages，不得进默认清单");
+        assertTrue(ids.contains("qwen3.8-max"));
+        assertFalse(ids.contains("mimo-v2-omni"));
+        assertFalse(ids.contains("hy3-preview"));
+        assertFalse(ids.contains("grok-4.5"));
     }
 
     /** 自定义 base-url：非空即覆盖，仍网络无关地建出 model。 */
@@ -154,14 +156,39 @@ class LlmProviderTest {
         assertTrue(new OpencodeGoProvider("fake-key", null).chatModel() != null);
     }
 
-    /** 思考强度：网关 reasoning_effort 全集虽大，但只暴露全上游通用的 low/medium/high 三档。 */
+    /** 思考强度按 modelId 返回各自实测档位：全档 / 无 max / 不可关闭 / 特殊档 / 仅三档。 */
     @Test
-    void opencodeGo_thinkingCapabilities_effortLowMediumHigh() {
-        var caps = new OpencodeGoProvider("fake-key").thinkingCapabilities("glm-5.2");
-        assertTrue(caps.configurable());
-        assertTrue(caps.supportsDisable());
-        assertEquals(ThinkingStrengthKind.EFFORT, caps.strengthKind());
-        assertEquals(List.of("low", "medium", "high"), caps.effortValues());
+    void opencodeGo_thinkingCapabilities_perModelEffort() {
+        OpencodeGoProvider p = new OpencodeGoProvider("fake-key");
+
+        // 全档 + 可关闭
+        var deepseek = p.thinkingCapabilities("deepseek-v4-pro");
+        assertTrue(deepseek.supportsDisable());
+        assertEquals(List.of("low", "medium", "high", "xhigh", "max"), deepseek.effortValues());
+
+        // 无 max（上游拒 max）
+        assertEquals(List.of("low", "medium", "high", "xhigh"),
+                p.thinkingCapabilities("qwen3.7-plus").effortValues());
+        assertEquals(List.of("low", "medium", "high", "xhigh"),
+                p.thinkingCapabilities("qwen3.7-max").effortValues());
+
+        // 不可关闭
+        assertFalse(p.thinkingCapabilities("kimi-k2.7-code").supportsDisable());
+        assertFalse(p.thinkingCapabilities("minimax-m2.5").supportsDisable());
+
+        // glm-5.3 只认 low/high/max，且不可关闭
+        var glm53 = p.thinkingCapabilities("glm-5.3");
+        assertFalse(glm53.supportsDisable());
+        assertEquals(List.of("low", "high", "max"), glm53.effortValues());
+
+        // 小米 MiMo 只认三档
+        assertEquals(List.of("low", "medium", "high"),
+                p.thinkingCapabilities("mimo-v2.5-pro").effortValues());
+        assertFalse(p.thinkingCapabilities("mimo-v2.5").supportsDisable());
+
+        // 未收录模型（含自定义/未知）回退保守三档。
+        assertEquals(List.of("low", "medium", "high"),
+                p.thinkingCapabilities("some-unknown-model").effortValues());
     }
 
     /** 思考装配：ENABLED+effort → reasoning_effort=档位；DISABLED → none；DEFAULT → 不带 reasoning_effort。 */

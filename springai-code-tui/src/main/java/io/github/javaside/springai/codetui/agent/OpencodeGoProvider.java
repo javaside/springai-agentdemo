@@ -9,6 +9,7 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * OpenCode Go（OpenCode Zen 的 Go 订阅）provider。key 缺失即 unavailable。
@@ -23,15 +24,15 @@ import java.util.List;
  * {@code /v1}，最终精确打 {@code .../zen/go/v1/chat/completions}。海外网关或自建代理可经
  * OPENCODE_GO_BASE_URL 覆盖。
  *
- * <p><b>qwen3.7-max 走不了 /chat/completions</b>：OpenCode Zen 把少数模型（已知 qwen3.7-max）仅暴露在
- * Anthropic 原生 {@code /messages} 端点上，{@code /chat/completions} 会拒绝（"not supported for
- * format oa-compat"）。本 provider 只走 OpenAI 兼容通路，故默认清单<b>不含</b> qwen3.7-max；
- * 需要通义旗舰时可用 qwen3.8-max。等上游暴露按模型路由的元数据后，再考虑接入 /messages 分支。
+ * <p><b>坏模型不下发</b>：网关 {@code /models} 列出的模型里，少数当前上游不可用（实测 2026-08-15）——
+ * {@code mimo-v2-pro} / {@code mimo-v2-omni} 返回「Unsupported model」、{@code hy3-preview} 返回
+ * 「Model is unavailable」、{@code grok-4.5} 返回「Endpoint is unavailable」（503）。这些不放进清单，
+ * 避免用户选中即报错。上游恢复后再加回。
  *
  * <p><b>思考强度走 reasoning_effort</b>：网关统一校验并翻译 OpenAI 兼容的 {@code reasoning_effort}
- * （合法值 none / minimal / low / medium / high / xhigh / max）。实测（2026-08-14，真实 key）各家上游
- * 并非全盘接受完整档位——mimo 只认 low/medium/high（minimal/xhigh 被上游 400 拒），故只暴露
- * <b>low / medium / high</b> 三档，关闭思考映射为 {@code none}（各家实测均能关掉）。
+ * （合法值 none / minimal / low / medium / high / xhigh / max）。各家上游对档位的接受度不一致，
+ * 故按 modelId 返回各自真实支持的档位（见 {@link #EFFORT_CAPS}），未收录的模型回退到保守的
+ * low / medium / high 三档；关闭思考映射为 {@code none}（仅 supportsDisable=true 的模型）。
  * <p>图片输入仍保守：网关是否透传图片未经验证，视觉能力沿用默认 TEXT_ONLY（未知即不支持，见
  * {@code media.VisionModels} 注释）。要用视觉请直接走对应的原生 provider。
  */
@@ -39,25 +40,66 @@ public final class OpencodeGoProvider implements LlmProvider {
 
     private static final String DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1";
     // 首项即默认模型（OPENCODE_GO_MODELS 未配置时的回退清单，约定第一项为默认）。
-    // 只列各家的旗舰/编码/快档代表，完整清单见 /models；qwen3.7-max 因仅走 /messages 端点而不在此列。
+    // 收录网关 /models 中当前可用的模型；坏模型（mimo-v2-pro/omni、hy3-preview、grok-4.5）不下发，见类注释。
     private static final List<ModelOption> MODELS = List.of(
             new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 复杂编码"),
             new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
             new ModelOption("glm-5.2",           "glm-5.2",           "Agentic 编码 · 长上下文"),
+            new ModelOption("glm-5.3",           "glm-5.3",           "GLM 新旗舰 · 低/高/最大档"),
             new ModelOption("glm-5.1",           "glm-5.1",           "长任务 · 自规划"),
-            new ModelOption("kimi-k2.7-code",    "kimi-k2.7-code",    "Kimi 编码专项"),
+            new ModelOption("glm-5",             "glm-5",             "GLM 上代"),
             new ModelOption("kimi-k3",           "kimi-k3",           "Kimi 旗舰"),
+            new ModelOption("kimi-k2.7-code",    "kimi-k2.7-code",    "Kimi 编码专项"),
+            new ModelOption("kimi-k2.6",         "kimi-k2.6",         "Kimi 均衡"),
+            new ModelOption("kimi-k2.5",         "kimi-k2.5",         "Kimi 上代"),
             new ModelOption("qwen3.8-max",       "qwen3.8-max",       "通义旗舰 · 复杂推理"),
+            new ModelOption("qwen3.7-max",       "qwen3.7-max",       "通义旗舰 · 上代"),
             new ModelOption("qwen3.7-plus",      "qwen3.7-plus",      "通义均衡 · 中档"),
+            new ModelOption("qwen3.6-plus",      "qwen3.6-plus",      "通义均衡 · 上代"),
+            new ModelOption("qwen3.5-plus",      "qwen3.5-plus",      "通义 · 上代"),
             new ModelOption("minimax-m3",        "minimax-m3",        "MiniMax 旗舰"),
+            new ModelOption("minimax-m2.7",      "minimax-m2.7",      "MiniMax 均衡"),
+            new ModelOption("minimax-m2.5",      "minimax-m2.5",      "MiniMax 上代"),
             new ModelOption("mimo-v2.5-pro",     "mimo-v2.5-pro",     "小米 MiMo 旗舰"),
-            new ModelOption("mimo-v2-omni",      "mimo-v2-omni",      "小米 MiMo 多模态"),
+            new ModelOption("mimo-v2.5",         "mimo-v2.5",         "小米 MiMo 均衡"),
             new ModelOption("hy3",               "hy3",               "腾讯混元 · 推理/Agent"),
-            new ModelOption("hy3-preview",       "hy3-preview",       "腾讯混元 · 预览"),
-            new ModelOption("gpt-5.6-luna",      "gpt-5.6-luna",      "OpenAI 快 · 便宜"),
-            new ModelOption("grok-4.5",          "grok-4.5",          "xAI 旗舰"));
+            new ModelOption("gpt-5.6-luna",      "gpt-5.6-luna",      "OpenAI 快 · 便宜"));
 
     private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
+
+    // 各模型真实支持的 reasoning_effort 档位（2026-08-15 真实 key 逐个实测）。
+    // 网关全集为 none/minimal/low/medium/high/xhigh/max，但每家上游只认其中一部分；
+    // 这里按 modelId 收录实测结果，未收录的模型（含 OPENCODE_GO_MODELS 自定义）回退 CONSERVATIVE。
+    // 约定不暴露 minimal（本项目其它 provider 一致，且 minimal 会变成「切到开启」时的默认档）。
+    private static final List<String> EFFORT_FULL = List.of("low", "medium", "high", "xhigh", "max");
+    private static final List<String> EFFORT_NO_MAX = List.of("low", "medium", "high", "xhigh");
+    private static final List<String> EFFORT_LOW_MED_HIGH = List.of("low", "medium", "high");
+    private static final List<String> EFFORT_GLM53 = List.of("low", "high", "max");   // glm-5.3 上游只认这三档
+    private static final Map<String, ThinkingCapabilities> EFFORT_CAPS = Map.ofEntries(
+            Map.entry("deepseek-v4-pro",   ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("deepseek-v4-flash", ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("glm-5.2",           ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("glm-5.3",           ThinkingCapabilities.effort(false, EFFORT_GLM53)),
+            Map.entry("glm-5.1",           ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("glm-5",             ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("kimi-k3",           ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("kimi-k2.7-code",    ThinkingCapabilities.effort(false, EFFORT_FULL)),
+            Map.entry("kimi-k2.6",         ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("kimi-k2.5",         ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("qwen3.8-max",       ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("qwen3.7-max",       ThinkingCapabilities.effort(true,  EFFORT_NO_MAX)),
+            Map.entry("qwen3.7-plus",      ThinkingCapabilities.effort(true,  EFFORT_NO_MAX)),
+            Map.entry("qwen3.6-plus",      ThinkingCapabilities.effort(true,  EFFORT_NO_MAX)),
+            Map.entry("qwen3.5-plus",      ThinkingCapabilities.effort(true,  EFFORT_NO_MAX)),
+            Map.entry("minimax-m3",        ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("minimax-m2.7",      ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            Map.entry("minimax-m2.5",      ThinkingCapabilities.effort(false, EFFORT_FULL)),
+            Map.entry("mimo-v2.5-pro",     ThinkingCapabilities.effort(true,  EFFORT_LOW_MED_HIGH)),
+            Map.entry("mimo-v2.5",         ThinkingCapabilities.effort(false, EFFORT_LOW_MED_HIGH)),
+            Map.entry("hy3",               ThinkingCapabilities.effort(true,  EFFORT_FULL)),
+            // gpt-5.6-luna 实测时被 Cloudflare 限流（403），档位未测得，暂按保守三档回退，待补测。
+            Map.entry("gpt-5.6-luna",      ThinkingCapabilities.effort(true,  EFFORT_LOW_MED_HIGH)));
+    private static final ThinkingCapabilities CONSERVATIVE = ThinkingCapabilities.effort(true, EFFORT_LOW_MED_HIGH);
 
     private final String apiKey;
     private final String baseUrl;            // 空→内置默认；配了→覆盖
@@ -113,9 +155,7 @@ public final class OpencodeGoProvider implements LlmProvider {
 
     @Override
     public ThinkingCapabilities thinkingCapabilities(String modelId) {
-        // 网关合法的 reasoning_effort 全集为 none/minimal/low/medium/high/xhigh/max，
-        // 但实测 mimo 上游只认 low/medium/high（见类注释），只暴露三档全上游通用值。
-        return ThinkingCapabilities.effort(true, List.of("low", "medium", "high"));
+        return EFFORT_CAPS.getOrDefault(modelId, CONSERVATIVE);
     }
 
     @Override
