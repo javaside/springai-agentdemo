@@ -7,7 +7,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
-import java.util.concurrent.TimeoutException;
 
 /** 为 LLM 流增加首个响应与相邻响应之间的空闲超时。 */
 final class StreamIdleTimeoutChatModel implements ChatModel {
@@ -28,10 +27,9 @@ final class StreamIdleTimeoutChatModel implements ChatModel {
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         return delegate.stream(prompt)
-                .timeout(idleTimeout)
-                .onErrorMap(TimeoutException.class, ignored -> new RuntimeException(
+                .timeout(idleTimeout, Flux.error(() -> new RuntimeException(
                         "等待模型流数据超时（" + formatSeconds(idleTimeout) + " 秒无新数据）。"
-                                + "可通过 " + LlmTimeouts.READ_TIMEOUT_ENV + " 调整。"));
+                                + "可通过 " + LlmTimeouts.READ_TIMEOUT_ENV + " 调整。")));
     }
 
     @Override

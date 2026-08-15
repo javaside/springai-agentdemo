@@ -12,6 +12,7 @@ import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -90,6 +91,18 @@ class StreamIdleTimeoutChatModelTest {
                 () -> wrapped.stream(PROMPT).blockLast());
 
         assertSame(boom, seen);
+    }
+
+    @Test
+    void upstreamTimeoutExceptionIsNotRelabeledAsStreamIdleTimeout() {
+        TimeoutException upstream = new TimeoutException("provider-timeout");
+        var wrapped = new StreamIdleTimeoutChatModel(model(Flux.error(upstream)), TIMEOUT);
+
+        RuntimeException seen = assertThrows(RuntimeException.class,
+                () -> wrapped.stream(PROMPT).blockLast());
+
+        assertSame(upstream, seen.getCause());
+        assertFalse(seen.getMessage().contains("等待模型流数据超时"));
     }
 
     @Test
