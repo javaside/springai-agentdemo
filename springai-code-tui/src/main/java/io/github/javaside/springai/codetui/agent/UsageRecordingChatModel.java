@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.agent;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
@@ -43,6 +44,24 @@ public final class UsageRecordingChatModel implements ChatModel {
                     }
                 })
                 .doFinally(signal -> record(last.get()));
+    }
+
+    /**
+     * <b>必须</b>转发 {@link #getOptions()}：ChatClient 构建请求时从这里取基础 options
+     * （{@code DefaultChatClientUtils}: {@code getChatModel().getOptions().mutate()}）。漏转发会落到
+     * 接口 default（裸 {@code DefaultChatOptions}）→ provider 的 ChatModel 强转家族 options 时直接
+     * ClassCastException。本项目在 {@code RetryingChatModel} / {@code VisionMaterializingChatModel}
+     * 上栽过同一个坑。
+     */
+    @Override
+    public ChatOptions getOptions() {
+        return delegate.getOptions();
+    }
+
+    @SuppressWarnings("removal")   // 2.0 起 deprecated，default 已委托 getOptions()；显式转发保险
+    @Override
+    public ChatOptions getDefaultOptions() {
+        return delegate.getDefaultOptions();
     }
 
     private static Usage usageOf(ChatResponse response) {

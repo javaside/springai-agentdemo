@@ -7,12 +7,15 @@ import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 class UsageRecordingChatModelTest {
 
@@ -79,5 +82,23 @@ class UsageRecordingChatModelTest {
         }
 
         assertEquals(80L, acc.snapshot().cacheReadTokens(), "报错也应提交已看到的 usage");
+    }
+
+    @Test
+    void forwardsOptionsToDelegate() {
+        // 回归：装饰器漏转发 getOptions()/getDefaultOptions() 会落到接口 default（DefaultChatOptions），
+        // 下游 provider ChatModel 强转家族 options 时抛 ClassCastException（DefaultChatOptions → DeepSeekChatOptions）。
+        ChatOptions opts = DeepSeekChatOptions.builder().model("deepseek-v4-pro").build();
+        ChatOptions defaultOpts = DeepSeekChatOptions.builder().model("deepseek-v4-flash").build();
+        ChatModel delegate = new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) { return null; }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) { return Flux.empty(); }
+            @Override public ChatOptions getOptions() { return opts; }
+            @Override public ChatOptions getDefaultOptions() { return defaultOpts; }
+        };
+        var model = new UsageRecordingChatModel(delegate, new TokenUsageAccumulator());
+
+        assertSame(opts, model.getOptions(), "getOptions() 必须转发 delegate 的家族 options");
+        assertSame(defaultOpts, model.getDefaultOptions(), "getDefaultOptions() 必须转发 delegate");
     }
 }
