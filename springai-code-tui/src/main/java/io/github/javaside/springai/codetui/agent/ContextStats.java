@@ -17,8 +17,11 @@ package io.github.javaside.springai.codetui.agent;
  * @param contextWindow   当前模型上下文窗口（token）
  * @param autoKeepEvents  自动压缩保留的最近事件数
  * @param manualKeepEvents 手动 {@code /compact} 保留的最近事件数（更激进）
- * @param visionImages    <b>本回合</b>累计兑现的图片张数
- * @param visionTokens    本回合累计兑现图片的估算视觉 token
+ * @param visionImages    <b>本回合</b>累计兑现的图片张数（不是「上一次请求」：一个回合有几十次工具
+ *                        迭代，按请求记则用户看到的几乎恒是 0，详见 {@code VisionSnapshot}）
+ * @param visionTokens    本回合累计兑现图片的估算视觉 token。<b>不含在 {@code estimatedTokens} 里</b>——
+ *                        后者只估会话存储里的文本，而图片从不进存储。两笔账必须分开，
+ *                        合并会让「压缩阈值为什么没触发」变得无法解释。
  * @param cacheReadTokens 本会话累计的缓存读 token（provider 计费）
  * @param billedInputTokens 本会话累计的计费输入 token（= promptTokens，已含缓存）
  * @param cacheHitPercent 本会话缓存命中率（%），无计费输入时为 null
