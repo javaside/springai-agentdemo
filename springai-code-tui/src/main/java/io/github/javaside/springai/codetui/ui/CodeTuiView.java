@@ -566,6 +566,9 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：当前正在审批的请求（null=非审批态）。 */
     PermissionRequest activePermissionForTest() { return activePermission; }
 
+    /** 测试专用：直接驱动上下文用量刷新（测试里没有 drain 循环，animTick 永不推进）。 */
+    ContextUsage ctxUsageForTest() { return ctxUsage; }
+
     /** 测试专用：当前正在审批的计划（null=非计划态）。 */
     PlanRequest activePlanForTest() { return activePlan; }
 
@@ -3037,8 +3040,7 @@ public final class CodeTuiView extends InlineApp {
         if (draining != null) return richText(statusBar.shimmer(draining, qs + ijs + ns + " · Ctrl+C 退出", THINK, animTick, mode));
         return switch (state.status()) {
             case IDLE -> {
-                String hint = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · "
-                        + statusModelLabel() + ctxUsage.suffix() + backgroundStatusSuffix();
+                String hint = idleHint(statusModelLabel(), ctxUsage.suffix() + backgroundStatusSuffix());
                 yield mode == null ? text(hint).style(HINT)
                         : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
             }
@@ -3050,6 +3052,37 @@ public final class CodeTuiView extends InlineApp {
                         suffix, RUNNING, animTick, mode));
             }
         };
+    }
+
+    /**
+     * 按终端宽度装填 IDLE 状态行：模型名 + 动态后缀（上下文/缓存命中/后台）必须完整，
+     * 放不下时按「静态提示先让位」的次序丢弃键位段（{@link #fitToolSummary} 同款纪律，方向相反）。
+     *
+     * <p><b>为什么必须收</b>：满配行 = 固定提示 56 列 + 模型名 ~15 列 + 后缀 ~27 列 ≈ 98 列，
+     * 80 列终端上尾部<b>整段被截没</b>——「缓存命中 78%」恰在最尾，于是命中数据明明到账
+     * （contextStats 快照 hit%=78）却永远不可见（离屏渲染实测复现：80 列断在「缓存命中」
+     * 中途、数字丢失）。静态键位提示哪里都查得到（{@code /help}），动态数据只有这里能看。
+     *
+     * <p>丢弃次序（每次丢一段、丢完再比宽）：Esc 取消 → /model 切换模型 → Ctrl+C 退出 →
+     * Enter 发送。四个全丢仍放不下时（模型名 + 后缀本身超宽），只能保留它们——终端真的放不下。
+     */
+    private String idleHint(String modelLabel, String dynamicSuffix) {
+        String[] statics = {
+                "Enter 发送", "/model 切换模型", "Esc 取消", "Ctrl+C 退出",
+        };
+        int drop = 0;   // 从尾部往前丢：0=全保留 … 4=只留模型名+后缀
+        while (drop < statics.length) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < statics.length - drop; i++) {
+                if (sb.length() > 0) sb.append(" · ");
+                sb.append(statics[i]);
+            }
+            sb.append(" · ").append(modelLabel).append(dynamicSuffix);
+            if (displayWidth(sb.toString()) <= terminalWidth()) return sb.toString();
+            drop++;
+        }
+        StringBuilder last = new StringBuilder(modelLabel).append(dynamicSuffix);
+        return last.toString();
     }
 
     /**

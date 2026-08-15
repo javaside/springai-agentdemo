@@ -95,4 +95,42 @@ class DeepSeekUsageStreamingTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void cachedTokensReachAccumulatorThroughChatClientChain() throws Exception {
+        // 模拟主 agent 生产链：UsageRecordingProvider + ChatClient + stream().chatClientResponse()。
+        // usage 分片与真实 API 一致：choices 为空数组，且带 spring-ai-deepseek 不认识的字
+        // 段（completion_tokens_details / prompt_cache_hit_tokens），验证解析容错。
+        String sse =
+                "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}],\"created\":1,\"model\":\"deepseek-v4-pro\",\"object\":\"chat.completion.chunk\"}\n\n"
+                + "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"created\":1,\"model\":\"deepseek-v4-pro\",\"object\":\"chat.completion.chunk\"}\n\n"
+                + "data: {\"id\":\"x\",\"choices\":[],\"created\":1,\"model\":\"deepseek-v4-pro\",\"object\":\"chat.completion.chunk\",\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150,\"prompt_tokens_details\":{\"cached_tokens\":80},\"completion_tokens_details\":{\"reasoning_tokens\":42},\"prompt_cache_hit_tokens\":80,\"prompt_cache_miss_tokens\":20}}\n\n"
+                + "data: [DONE]\n\n";
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            byte[] resp = sse.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        server.start();
+        try {
+            DeepSeekProvider provider = new DeepSeekProvider("fake", "http://127.0.0.1:" + server.getAddress().getPort());
+            TokenUsageAccumulator acc = new TokenUsageAccumulator();
+            UsageRecordingProvider wrapped = new UsageRecordingProvider(provider, acc);
+
+            org.springframework.ai.chat.client.ChatClient client =
+                    org.springframework.ai.chat.client.ChatClient.builder(wrapped.chatModel()).build();
+            client.prompt().user("hello")
+                    .stream().chatClientResponse().blockLast();
+
+            var s = acc.snapshot();
+            assertEquals(100L, s.promptTokens(), "计费输入应经 ChatClient 链端到端到达累加器");
+            assertEquals(80L, s.cacheReadTokens(),
+                    "cached_tokens 必须经 ChatClient 生产链到达累加器（丢失则缓存命中率不显示）");
+        } finally {
+            server.stop(0);
+        }
+    }
 }
