@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 摘要三条路径都经它，把每次模型调用的 usage 原子累加进共享的 {@link TokenUsageAccumulator}。
  *
  * <p><b>流式只记一次</b>：Spring AI 流式的每个 chunk 都带<b>累计</b> usage，最后一个 chunk 即完整值，
- * 故用 {@code doOnNext} 记最新、{@code doFinally} 提交一次（成功/报错/取消统一收口），杜绝按 chunk 重复计数。
+ * 故用 {@code doOnNext} 记最新、终止时提交一次（成功/报错/取消统一收口），杜绝按 chunk 重复计数。
  */
 public final class UsageRecordingChatModel implements ChatModel {
 
@@ -43,7 +43,12 @@ public final class UsageRecordingChatModel implements ChatModel {
                         last.set(usage);
                     }
                 })
-                .doFinally(signal -> record(last.get()));
+                // 必须用 doOnTerminate/doOnCancel 而非 doFinally：Reactor 的 FluxDoFinally 是「先
+                // downstream.onComplete() 再跑 callback」，下游收到完成信号时 record 还没提交，
+                // 恰在此刻读统计会缺最后一笔（实测：blockLast 返回后 snapshot 仍为 0）。
+                // doOnTerminate 在终止信号传播给下游之前提交；doOnCancel 在取消向上传播前提交。
+                .doOnTerminate(() -> record(last.get()))
+                .doOnCancel(() -> record(last.get()));
     }
 
     /**

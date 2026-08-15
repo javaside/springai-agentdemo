@@ -78,10 +78,45 @@ class UsageRecordingChatModelTest {
         try {
             model.stream(new Prompt("hi")).blockLast();
         } catch (RuntimeException expected) {
-            // doFinally 在 onError 后仍提交
+            // doOnTerminate 在 onError 传播前仍提交
         }
 
         assertEquals(80L, acc.snapshot().cacheReadTokens(), "报错也应提交已看到的 usage");
+    }
+
+    @Test
+    void stream_recordsBeforeDownstreamOnComplete() {
+        // 回归：Reactor doFinally 的 callback 在 downstream.onComplete() 之后才执行，
+        // 流完成信号到达下游时 record 尚未提交 → 恰好在此刻读统计会缺最后一笔。
+        // 本测试在下游 doOnComplete 里断言「已提交」，钉住语义：必须用 doOnTerminate（先提交后传播）。
+        var acc = new TokenUsageAccumulator();
+        var model = new UsageRecordingChatModel(model(null, List.of(response(100, 50, 80))), acc);
+        java.util.concurrent.atomic.AtomicLong seenAtComplete = new java.util.concurrent.atomic.AtomicLong(-1);
+
+        model.stream(new Prompt("hi"))
+                .doOnComplete(() -> seenAtComplete.set(acc.snapshot().promptTokens()))
+                .blockLast();
+
+        assertEquals(100L, seenAtComplete.get(), "下游收到完成信号时，最后一笔 usage 必须已进累加器");
+        assertEquals(100L, acc.snapshot().promptTokens());
+    }
+
+    @Test
+    void stream_cancel_stillRecordsSeenUsage() {
+        var acc = new TokenUsageAccumulator();
+        // 发一个 chunk 后挂起（永不完成），取消时提交已看到的累计 usage
+        Flux<ChatResponse> hanging = Flux.concat(Flux.just(response(100, 30, 40)), Flux.never());
+        ChatModel delegate = new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) { return null; }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) { return hanging; }
+        };
+        var model = new UsageRecordingChatModel(delegate, acc);
+
+        reactor.core.Disposable d = model.stream(new Prompt("hi")).subscribe();
+        d.dispose();
+
+        assertEquals(100L, acc.snapshot().promptTokens(), "取消也应提交已看到的 usage");
+        assertEquals(40L, acc.snapshot().cacheReadTokens());
     }
 
     @Test

@@ -12,13 +12,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 钉住 DeepSeek 流式请求必须带 {@code stream_options.include_usage=true}：不注入则 DeepSeek 流式不返回
- * usage，token 采集器拿不到计费输入、缓存命中率恒为空。这里只断言<b>出站请求体</b>（同步捕获、确定性），
- * 「usage 到达累加器」由 {@code UsageRecordingChatModelTest} / {@code CacheUsageExtractorTest} /
- * {@code TokenUsageAccumulatorTest} 各层单测覆盖。
+ * usage，token 采集器拿不到计费输入、缓存命中率恒为空。
+ *
+ * <p>① 断言<b>出站请求体</b>（同步捕获、确定性）；② 端到端断言：带 {@code prompt_tokens_details.cached_tokens}
+ * 的 SSE 响应经真实 DeepSeekChatModel 流式链后，缓存命中数到达 {@code TokenUsageAccumulator}
+ * （覆盖「各层单测手工喂 Usage 对象」测不到的 nativeUsage 保真链路）。
  */
 class DeepSeekUsageStreamingTest {
 
@@ -54,6 +57,40 @@ class DeepSeekUsageStreamingTest {
             assertTrue(request != null, "应发出一次流式请求");
             assertTrue(request.path("stream_options").path("include_usage").asBoolean(false),
                     "流式请求必须带 stream_options.include_usage=true");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void cachedTokensReachAccumulatorThroughRealStreamingChain() throws Exception {
+        // 最后 chunk 带 usage：prompt_tokens=100（含 cached_tokens=80），走真实 DeepSeekChatModel 流式链
+        String sse =
+                "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}],\"created\":1,\"model\":\"deepseek-v4-pro\",\"object\":\"chat.completion.chunk\"}\n\n"
+                + "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"created\":1,\"model\":\"deepseek-v4-pro\",\"object\":\"chat.completion.chunk\",\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n"
+                + "data: [DONE]\n\n";
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            byte[] resp = sse.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        server.start();
+        try {
+            DeepSeekProvider provider = new DeepSeekProvider("fake", "http://127.0.0.1:" + server.getAddress().getPort());
+            TokenUsageAccumulator acc = new TokenUsageAccumulator();
+            UsageRecordingChatModel recorded = new UsageRecordingChatModel(provider.chatModel(), acc);
+
+            Prompt prompt = new Prompt(List.of(new UserMessage("hello")), provider.options("deepseek-v4-pro"));
+            recorded.stream(prompt).blockLast();
+
+            var s = acc.snapshot();
+            assertEquals(100L, s.promptTokens(), "计费输入应端到端到达累加器");
+            assertEquals(50L, s.completionTokens(), "输出 token 应端到端到达累加器");
+            assertEquals(80L, s.cacheReadTokens(),
+                    "nativeUsage 里的 cached_tokens 必须经 CacheUsageExtractor 兜底记到（丢失则缓存命中率恒 0）");
         } finally {
             server.stop(0);
         }
