@@ -6,6 +6,7 @@ import io.github.javaside.springai.codetui.agent.CodingAgent;
 import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.LlmProvider;
+import io.github.javaside.springai.codetui.agent.LlmTimeouts;
 import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModelPreference;
 import io.github.javaside.springai.codetui.agent.OpencodeGoProvider;
@@ -13,6 +14,7 @@ import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.QwenProvider;
 import io.github.javaside.springai.codetui.agent.SessionIds;
+import io.github.javaside.springai.codetui.agent.StreamIdleTimeoutProvider;
 import io.github.javaside.springai.codetui.agent.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.UsageRecordingProvider;
 import io.github.javaside.springai.codetui.agent.ZhipuProvider;
@@ -27,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -153,19 +156,20 @@ public class CodeTuiApplication {
     /** 同 {@link #createProviderRegistry(Path, Map)}，额外注入会话级 token 累加器，并给每家 provider 包采集装饰器。 */
     static ProviderRegistry createProviderRegistry(Path root, java.util.Map<String, String> env,
                                                    TokenUsageAccumulator usageAccumulator) {
+        Duration idleTimeout = LlmTimeouts.from(env::get).readTimeout();
         return new ProviderRegistry(java.util.List.of(
-                wrap(new DeepSeekProvider(env.get("DEEPSEEK_API_KEY"), env.get("DEEPSEEK_BASE_URL"), env.get("DEEPSEEK_MODELS")), usageAccumulator),
-                wrap(new ZhipuProvider(env.get("ZHIPU_API_KEY"), env.get("ZHIPU_BASE_URL"), env.get("ZHIPU_MODELS")), usageAccumulator),
-                wrap(new QwenProvider(env.get("DASHSCOPE_API_KEY"), env.get("DASHSCOPE_BASE_URL"), env.get("DASHSCOPE_MODELS")), usageAccumulator),
-                wrap(new AnthropicProvider(env.get("ANTHROPIC_API_KEY"), env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_MODELS")), usageAccumulator),
-                wrap(new OpenAiProvider(env.get("OPENAI_API_KEY"), env.get("OPENAI_BASE_URL"), env.get("OPENAI_MODELS")), usageAccumulator),
-                wrap(new OpencodeGoProvider(env.get("OPENCODE_GO_API_KEY"), env.get("OPENCODE_GO_BASE_URL"), env.get("OPENCODE_GO_MODELS")), usageAccumulator)),
+                wrap(new DeepSeekProvider(env.get("DEEPSEEK_API_KEY"), env.get("DEEPSEEK_BASE_URL"), env.get("DEEPSEEK_MODELS")), usageAccumulator, idleTimeout),
+                wrap(new ZhipuProvider(env.get("ZHIPU_API_KEY"), env.get("ZHIPU_BASE_URL"), env.get("ZHIPU_MODELS")), usageAccumulator, idleTimeout),
+                wrap(new QwenProvider(env.get("DASHSCOPE_API_KEY"), env.get("DASHSCOPE_BASE_URL"), env.get("DASHSCOPE_MODELS")), usageAccumulator, idleTimeout),
+                wrap(new AnthropicProvider(env.get("ANTHROPIC_API_KEY"), env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_MODELS")), usageAccumulator, idleTimeout),
+                wrap(new OpenAiProvider(env.get("OPENAI_API_KEY"), env.get("OPENAI_BASE_URL"), env.get("OPENAI_MODELS")), usageAccumulator, idleTimeout),
+                wrap(new OpencodeGoProvider(env.get("OPENCODE_GO_API_KEY"), env.get("OPENCODE_GO_BASE_URL"), env.get("OPENCODE_GO_MODELS")), usageAccumulator, idleTimeout)),
                 io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore.load(root));
     }
 
-    /** 给一家 provider 包上 token 采集装饰器。必须在 ProviderRegistry 构造前完成（registry 构造后不可变）。 */
-    private static LlmProvider wrap(LlmProvider provider, TokenUsageAccumulator accumulator) {
-        return new UsageRecordingProvider(provider, accumulator);
+    /** 空闲超时包在 usage 采集内层，确保超时前看到的最后一笔 usage 仍在错误传播前提交。 */
+    static LlmProvider wrap(LlmProvider provider, TokenUsageAccumulator accumulator, Duration idleTimeout) {
+        return new UsageRecordingProvider(new StreamIdleTimeoutProvider(provider, idleTimeout), accumulator);
     }
 
     /**
