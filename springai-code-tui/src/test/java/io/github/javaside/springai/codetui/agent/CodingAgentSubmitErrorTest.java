@@ -3,9 +3,16 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -45,5 +52,30 @@ class CodingAgentSubmitErrorTest {
         assertTrue(d.isDisposed(), "同步失败应返回已 dispose 的句柄");
         assertTrue(state.drainPending().stream().anyMatch(l -> l.text().contains("assembly-boom")),
                 "错误信息应经 onError 落进 pending（滚入 scrollback）");
+    }
+
+    @Test
+    void asynchronousIdleTimeout_isReportedAndStateReset() throws Exception {
+        ChatOptions options = OpenAiChatOptions.builder().model("gpt-5.6-sol").build();
+        ChatModel hanging = new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) { return null; }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) { return Flux.never(); }
+            @Override public ChatOptions getOptions() { return options; }
+        };
+        ChatClient client = ChatClient.builder(
+                new StreamIdleTimeoutChatModel(hanging, Duration.ofMillis(100))).build();
+        ConversationState state = new ConversationState();
+        CodingAgent agent = new CodingAgent(client, state, "s", new AtomicLong(), null, null, null);
+
+        Disposable disposable = agent.submit("hi");
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (!state.isIdle() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertTrue(state.isIdle(), "异步超时必须经 onError 把状态复位到 IDLE");
+        assertTrue(state.drainPending().stream().anyMatch(line ->
+                line.text().contains("等待模型流数据超时")));
+        disposable.dispose();
     }
 }
