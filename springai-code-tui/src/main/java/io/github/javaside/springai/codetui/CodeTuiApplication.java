@@ -5,6 +5,7 @@ import io.github.javaside.springai.codetui.agent.AnthropicProvider;
 import io.github.javaside.springai.codetui.agent.CodingAgent;
 import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.FileSessionRepository;
+import io.github.javaside.springai.codetui.agent.LlmProvider;
 import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModelPreference;
 import io.github.javaside.springai.codetui.agent.OpencodeGoProvider;
@@ -12,6 +13,8 @@ import io.github.javaside.springai.codetui.agent.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.QwenProvider;
 import io.github.javaside.springai.codetui.agent.SessionIds;
+import io.github.javaside.springai.codetui.agent.TokenUsageAccumulator;
+import io.github.javaside.springai.codetui.agent.UsageRecordingProvider;
 import io.github.javaside.springai.codetui.agent.ZhipuProvider;
 import io.github.javaside.springai.codetui.agent.permission.DangerousPaths;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
@@ -43,9 +46,10 @@ public class CodeTuiApplication {
         // 多家 provider：谁配了 key 谁 available。至少需一家可用（通常 DeepSeek）。
         // base-url 可选：配了 *_BASE_URL 就覆盖，否则用各家内置默认（便于走代理/私有网关）。
         // 模型清单可选：配了 *_MODELS（逗号分隔，首项为默认模型）就覆盖，否则用各家内置清单。
+        TokenUsageAccumulator usageAccumulator = new TokenUsageAccumulator();   // 会话级 token 采集（主/子/摘要共享）
         ProviderRegistry registry;
         try {
-            registry = createProviderRegistry(root, System.getenv());
+            registry = createProviderRegistry(root, System.getenv(), usageAccumulator);
         } catch (IllegalStateException e) {
             System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
                     "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENCODE_GO_API_KEY，再运行。");
@@ -112,7 +116,8 @@ public class CodeTuiApplication {
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
                     runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer(),
                     mcpRegistry, runtime.permissionEngine(), runtime.visionModels(),
-                    runtime.backgroundRegistry(), runtime.backgroundResults(), runtime.interjections());
+                    runtime.backgroundRegistry(), runtime.backgroundResults(), runtime.interjections(),
+                    usageAccumulator);
 
             // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
             // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
@@ -142,14 +147,25 @@ public class CodeTuiApplication {
 
     /** 按环境变量构建全部 provider 并加载工作区思考配置。供 main 与测试共用。 */
     static ProviderRegistry createProviderRegistry(Path root, java.util.Map<String, String> env) {
+        return createProviderRegistry(root, env, new TokenUsageAccumulator());
+    }
+
+    /** 同 {@link #createProviderRegistry(Path, Map)}，额外注入会话级 token 累加器，并给每家 provider 包采集装饰器。 */
+    static ProviderRegistry createProviderRegistry(Path root, java.util.Map<String, String> env,
+                                                   TokenUsageAccumulator usageAccumulator) {
         return new ProviderRegistry(java.util.List.of(
-                new DeepSeekProvider(env.get("DEEPSEEK_API_KEY"), env.get("DEEPSEEK_BASE_URL"), env.get("DEEPSEEK_MODELS")),
-                new ZhipuProvider(env.get("ZHIPU_API_KEY"), env.get("ZHIPU_BASE_URL"), env.get("ZHIPU_MODELS")),
-                new QwenProvider(env.get("DASHSCOPE_API_KEY"), env.get("DASHSCOPE_BASE_URL"), env.get("DASHSCOPE_MODELS")),
-                new AnthropicProvider(env.get("ANTHROPIC_API_KEY"), env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_MODELS")),
-                new OpenAiProvider(env.get("OPENAI_API_KEY"), env.get("OPENAI_BASE_URL"), env.get("OPENAI_MODELS")),
-                new OpencodeGoProvider(env.get("OPENCODE_GO_API_KEY"), env.get("OPENCODE_GO_BASE_URL"), env.get("OPENCODE_GO_MODELS"))),
+                wrap(new DeepSeekProvider(env.get("DEEPSEEK_API_KEY"), env.get("DEEPSEEK_BASE_URL"), env.get("DEEPSEEK_MODELS")), usageAccumulator),
+                wrap(new ZhipuProvider(env.get("ZHIPU_API_KEY"), env.get("ZHIPU_BASE_URL"), env.get("ZHIPU_MODELS")), usageAccumulator),
+                wrap(new QwenProvider(env.get("DASHSCOPE_API_KEY"), env.get("DASHSCOPE_BASE_URL"), env.get("DASHSCOPE_MODELS")), usageAccumulator),
+                wrap(new AnthropicProvider(env.get("ANTHROPIC_API_KEY"), env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_MODELS")), usageAccumulator),
+                wrap(new OpenAiProvider(env.get("OPENAI_API_KEY"), env.get("OPENAI_BASE_URL"), env.get("OPENAI_MODELS")), usageAccumulator),
+                wrap(new OpencodeGoProvider(env.get("OPENCODE_GO_API_KEY"), env.get("OPENCODE_GO_BASE_URL"), env.get("OPENCODE_GO_MODELS")), usageAccumulator)),
                 io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore.load(root));
+    }
+
+    /** 给一家 provider 包上 token 采集装饰器。必须在 ProviderRegistry 构造前完成（registry 构造后不可变）。 */
+    private static LlmProvider wrap(LlmProvider provider, TokenUsageAccumulator accumulator) {
+        return new UsageRecordingProvider(provider, accumulator);
     }
 
     /**
