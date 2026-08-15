@@ -102,6 +102,13 @@ final class ContextUsage {
         return sb.toString();
     }
 
+    /** 忙碌态状态栏只需缓存命中率；无计费输入时不追加任何分隔符。 */
+    String cacheHitSuffix() {
+        ContextStats s = cached;
+        if (s == null || s.events() == 0 || s.cacheHitPercent() == null) return "";
+        return " · 缓存命中 " + s.cacheHitPercent() + "%";
+    }
+
     /** 占比（part/whole）取整成百分号字符串；whole<=0 视为 0%。 */
     private static String pct(long part, long whole) {
         if (whole <= 0) return "0%";

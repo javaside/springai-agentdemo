@@ -3038,16 +3038,18 @@ public final class CodeTuiView extends InlineApp {
         String ns = notice.isEmpty() ? "" : " · " + notice;
         Span mode = modeTag(onSubmit.permissionMode());
         if (draining != null) return richText(statusBar.shimmer(draining, qs + ijs + ns + " · Ctrl+C 退出", THINK, animTick, mode));
+        String cacheHit = ctxUsage.cacheHitSuffix();
         return switch (state.status()) {
             case IDLE -> {
                 String hint = idleHint(statusModelLabel(), ctxUsage.suffix() + backgroundStatusSuffix());
                 yield mode == null ? text(hint).style(HINT)
                         : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
             }
-            case THINKING -> richText(statusBar.shimmer("● 思考中…", qs + ijs + ns + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
+            case THINKING -> richText(statusBar.shimmer("● 思考中…",
+                    qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
             case RUNNING_TOOL -> {
-                String suffix = qs + ijs + ns + " · Esc 取消";
-                String s = fitToolSummary(state.activeToolSummary(), state.activeTool(), suffix);
+                String suffix = qs + ijs + ns + cacheHit + " · Esc 取消";
+                String s = fitToolSummary(state.activeToolSummary(), state.activeTool(), suffix, mode);
                 yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
                         suffix, RUNNING, animTick, mode));
             }
@@ -3100,12 +3102,13 @@ public final class CodeTuiView extends InlineApp {
      * <p>留 {@code ≥12} 列给摘要：再窄就只剩省略号，不如不显示；此时尾部照旧会被终端截，
      * 但那是终端真的放不下，不是被我们自己挤掉的。
      */
-    private String fitToolSummary(String summary, String toolName, String suffix) {
+    private String fitToolSummary(String summary, String toolName, String suffix, Span leading) {
         if (summary == null || summary.isEmpty()) {
             return "";
         }
-        // 固定开销：「⏺ 运行 」+ 工具名 + 「: 」+ 结尾「…」+ 后缀；modeTag 另占几列，宽松留 6
-        int overhead = displayWidth("⏺ 运行 : …") + displayWidth(toolName) + displayWidth(suffix) + 6;
+        // 固定开销：「⏺ 运行 」+ 工具名 + 「: 」+ 结尾「…」+ 后缀 + 权限模式前导标签。
+        int leadingWidth = leading == null ? 0 : displayWidth(leading.content());
+        int overhead = displayWidth("⏺ 运行 : …") + displayWidth(toolName) + displayWidth(suffix) + leadingWidth;
         int room = terminalWidth() - overhead;
         if (room >= displayWidth(summary)) {
             return summary;
