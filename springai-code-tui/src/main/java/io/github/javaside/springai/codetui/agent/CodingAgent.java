@@ -88,6 +88,8 @@ public final class CodingAgent implements SubmitHandler {
     private final io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults;           // 可空（测试桩）：后台结果进会话前的限幅
     /** 可空（测试桩）：插话队列，与 ChatClient 装饰链共用同一实例；null 时插话相关方法全 no-op。 */
     private final Interjections interjections;
+    /** 可空（测试桩）：会话级 token 用量累加器；contextStats() 读快照、clearContext() 清零。 */
+    private final TokenUsageAccumulator usageAccumulator;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -137,6 +139,7 @@ public final class CodingAgent implements SubmitHandler {
         this.backgroundRegistry = null;  // 单-client 桩路径：无后台子系统（四个后台方法退回"什么都没有"）
         this.backgroundResults = null;
         this.interjections = null;       // 单-client 桩路径：无插话队列（插话门面全 no-op、回合末不补历史）
+        this.usageAccumulator = null;    // 单-client 桩路径：无采集（缓存列恒 0/null）
     }
 
     /**
@@ -272,6 +275,25 @@ public final class CodingAgent implements SubmitHandler {
                        io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
                        io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults,
                        Interjections interjections) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, mcpRegistry, permissionEngine, visionModels, backgroundRegistry,
+                backgroundResults, interjections, null);
+    }
+
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
+                       PermissionEngine permissionEngine,
+                       java.util.Map<String, VisionMaterializingChatModel> visionModels,
+                       io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
+                       io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults,
+                       Interjections interjections,
+                       TokenUsageAccumulator usageAccumulator) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -293,6 +315,7 @@ public final class CodingAgent implements SubmitHandler {
         this.backgroundRegistry = backgroundRegistry;
         this.backgroundResults = backgroundResults;
         this.interjections = interjections;
+        this.usageAccumulator = usageAccumulator;
         // 送达 → 信息流。刻意复用 onUserMessage 而不是新开一路回调：插话本来就是一条用户消息，
         // 走这条路它渲出来与排队消息出队时一模一样（› 原话 + Kind.USER），还白送 turnId 迟到过滤
         // （Esc 之后迟到的送达自动被挡）。另起一路就得把这两件事各自重写一遍。
@@ -706,6 +729,9 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public void clearContext() {
         this.sessionId = SessionIds.newId();
+        if (usageAccumulator != null) {
+            usageAccumulator.reset();   // /clear 换新会话，缓存命中率从 0 重新累计
+        }
         if (permissionEngine != null) {
             permissionEngine.clearSessionRules();
         }
@@ -857,10 +883,14 @@ public final class CodingAgent implements SubmitHandler {
         }
         long tokens = SessionTokenEstimator.estimateMessages(sessionService.getMessages(sid), tokenCountEstimator);
         VisionSnapshot vision = snapshotOf(visionModels, registry);
+        TokenUsageAccumulator.Snapshot usage = usageAccumulator == null
+                ? TokenUsageAccumulator.Snapshot.empty()
+                : usageAccumulator.snapshot();
         return new ContextStats(events.size(), user, assistant, tool, other, tokens,
                 AgentTools.autoCompactionThreshold(registry), AgentTools.contextWindow(registry),
                 AgentTools.MAX_EVENTS_TO_KEEP, AgentTools.MANUAL_MAX_EVENTS_TO_KEEP,
-                vision.images(), vision.tokens());
+                vision.images(), vision.tokens(),
+                usage.cacheReadTokens(), usage.billedInputTokens(), usage.cacheHitPercent());
     }
 
     /**
