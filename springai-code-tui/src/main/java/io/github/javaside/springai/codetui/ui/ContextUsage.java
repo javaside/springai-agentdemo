@@ -50,6 +50,11 @@ final class ContextUsage {
         } else {
             sink.accept(String.format("  估算 token：%,d", s.estimatedTokens()));
         }
+        // 缓存命中率：有计费输入才打印。命中/计费输入用 %,d 原值（小会话不足千也不显示成 0）。
+        if (s.cacheHitPercent() != null) {
+            sink.accept(String.format("  缓存命中率：%d%%（命中 %,d / 计费输入 %,d token）",
+                    s.cacheHitPercent(), s.cacheReadTokens(), s.billedInputTokens()));
+        }
         // 视觉占用单列一行，紧跟文本估算之后：图片从不进会话存储，上面那笔 JTokkit 估算<b>看不见它们</b>，
         // 恒比真实请求小（最多差 6k）。不写出来这笔钱就等于不存在，用户没法管理。
         // 用 %,d 原值而不是 /1000 的「k」：一张小图不足 1000 token 会显示成「0k」，读起来像不要钱。
@@ -83,11 +88,18 @@ final class ContextUsage {
         }
     }
 
-    /** 状态栏上下文用量后缀（如 {@code " · 上下文 3%"}，占窗口比例）；尚无对话/窗口未知时返回空串。 */
+    /** 状态栏上下文用量后缀（如 {@code " · 上下文 3% · 缓存命中 80%"}）；尚无对话时返回空串。 */
     String suffix() {
         ContextStats s = cached;
-        if (s == null || s.events() == 0 || s.contextWindow() <= 0) return "";
-        return " · 上下文 " + pct(s.estimatedTokens(), s.contextWindow());
+        if (s == null || s.events() == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        if (s.contextWindow() > 0) {
+            sb.append(" · 上下文 ").append(pct(s.estimatedTokens(), s.contextWindow()));
+        }
+        if (s.cacheHitPercent() != null) {
+            sb.append(" · 缓存命中 ").append(s.cacheHitPercent()).append("%");
+        }
+        return sb.toString();
     }
 
     /** 占比（part/whole）取整成百分号字符串；whole<=0 视为 0%。 */

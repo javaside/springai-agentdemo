@@ -162,4 +162,47 @@ class ContextUsageTest {
         cu.refresh();
         assertEquals(" · 上下文 49%", cu.suffix(), "49.4% 取整到 49%（排除 ceil）");
     }
+
+    private static ContextStats withCache(long cacheRead, long billedInput, Integer hitPercent) {
+        return new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 100_000L, 20, 10, 0, 0L,
+                cacheRead, billedInput, hitPercent);
+    }
+
+    @Test
+    void report_cacheHit_printsLineAfterTokenEstimate() {
+        RecordingSink sink = new RecordingSink();
+        ContextStats s = withCache(80L, 100L, 80);
+        new ContextUsage(() -> s, sink).report();
+
+        int tokenIdx = indexOfContaining(sink.lines, "估算 token");
+        int cacheIdx = indexOfContaining(sink.lines, "缓存命中率");
+        assertTrue(cacheIdx > tokenIdx, "命中行在估算 token 行之后");
+        String line = sink.lines.get(cacheIdx);
+        assertTrue(line.contains("缓存命中率：80%"), "命中率文案：" + line);
+        assertTrue(line.contains("命中 80"), "命中数：" + line);
+        assertTrue(line.contains("计费输入 100"), "计费输入数：" + line);
+    }
+
+    private static int indexOfContaining(List<String> lines, String needle) {
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains(needle)) return i;
+        }
+        return -1;
+    }
+
+    @Test
+    void report_noCacheData_omitsCacheLine() {
+        RecordingSink sink = new RecordingSink();
+        new ContextUsage(ContextUsageTest::full, sink).report();   // full() 缓存字段为 0/0/null
+
+        assertTrue(sink.lines.stream().noneMatch(l -> l.contains("缓存命中率")), "无缓存数据不打印命中行");
+    }
+
+    @Test
+    void suffix_cacheHit_appendsAfterContext() {
+        ContextStats s = withCache(80L, 100L, 80);
+        ContextUsage cu = new ContextUsage(() -> s, new RecordingSink());
+        cu.refresh();
+        assertEquals(" · 上下文 30% · 缓存命中 80%", cu.suffix());
+    }
 }
