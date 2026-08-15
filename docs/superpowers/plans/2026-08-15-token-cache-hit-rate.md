@@ -762,15 +762,15 @@ git commit -m "feat: extend ContextStats with cache-hit fields"
     private final TokenUsageAccumulator usageAccumulator;
 ```
 
-- [ ] **Step 2: 四个单-client 构造各补一行**
+- [ ] **Step 2: 终态单-client 构造补一行**
 
-在 4 个单-client 构造（它们各自设置 `this.interjections = null;` 的那一段）里，紧跟其后各加：
+只有<b>直接给字段赋值</b>的那个终态单-client 构造（以 `this.interjections = null;` 结尾、`registry = null` 那一个）需要补赋值——`usageAccumulator` 是 `final`，其余三个单-client 构造经 `this(...)` 委托到它、无需改动。在 `this.interjections = null;` 之后加：
 
 ```java
         this.usageAccumulator = null;      // 单-client 桩路径：无采集（缓存列恒 0/null）
 ```
 
-（即 `CodingAgent(ChatClient, …)` 与三个重载的尾部，共 4 处；它们现在都以 `this.interjections = null;` 结尾。）
+（共 1 处；`grep "this.interjections = null" CodingAgent.java` 只有一处。）
 
 - [ ] **Step 3: 把现全参构造改为委托、新增 21 参构造**
 
