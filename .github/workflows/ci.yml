@@ -33,10 +33,12 @@ jobs:
           cache: maven
 
       # 必须带 -pl：整仓 mvn test 会被几个空的 demo 模块打挂（见 CONTRIBUTING.md）。
+      # 必须带 -am：springai-code-tui 依赖同仓库、不发布到远程仓库的兄弟模块
+      # springai-tamboui-inline-patch，不带 -am 时 Maven 会去 Maven Central 解析而失败。
       # 需要真实 API key 的冒烟测试全部由 @EnabledIfEnvironmentVariable 门控，
       # CI 上没有这些变量，它们会自动跳过而非失败。
       - name: 测试 springai-code-tui
-        run: mvn -B -pl springai-code-tui test
+        run: mvn -B -pl springai-code-tui -am test
 
       - name: 编译其余模块
         run: mvn -B -DskipTests package
@@ -62,8 +64,9 @@ jobs:
           cache: maven
 
       # 只验证 -Pdist 能产出包，不上传——正式发布物由维护者本地构建并附校验和。
+      # 同样需要 -am：兄弟模块 springai-tamboui-inline-patch 不进远程仓库，只能就地构建。
       - name: 构建发布包
-        run: mvn -B -pl springai-code-tui package -Pdist -DskipTests
+        run: mvn -B -pl springai-code-tui -am package -Pdist -DskipTests
 
       - name: 确认产物存在
         run: ls -lh springai-code-tui/target/*-dist.tar.gz springai-code-tui/target/*-dist.zip
