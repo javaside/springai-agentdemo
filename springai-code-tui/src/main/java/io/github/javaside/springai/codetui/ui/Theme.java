@@ -11,20 +11,29 @@ import dev.tamboui.style.Style;
  * 且这些常量本就零耦合。{@link CodeTuiView} 用 {@code import static ...Theme.*} 引入，正文里
  * {@code DIM}/{@code HINT}/… 的写法保持不变。
  *
- * <p><b>暗色终端可读性</b>：正文/信息行避开近黑的 {@code DARK_GRAY}，改用可读灰白（indexed 248/250）；
- * {@code DARK_GRAY} 仅留给固定区的次要装饰（待办○、diff 上下文行号）。
+ * <p><b>暗色终端可读性</b>：灰色一律走 256 色灰阶三档（{@link #GRAY_TEXT} / {@link #GRAY_INFO} /
+ * {@link #GRAY_MUTED}），不用 ANSI 0–15 里的黑与亮黑——那两档的实际取值由用户终端 profile 决定，
+ * 深色窗口下常与背景同色。取值下限由 {@code ThemeContrastTest} 守。
  */
 final class Theme {
 
     private Theme() {}
 
+    // ── 灰阶三档 ───────────────────────────────────────────────────────
+    // 取值一律来自 256 色灰阶区（232–255）：各家终端 profile 基本不改这一段，是可控的；
+    // ANSI 0–15 则由 profile 说了算（亮黑常与深色背景同色，正是「界面很多字看不见」的根源）。
+    // 括号里是对参考底 #1e1e1e 的对比度，下限 3:1（= 灰阶 242），由 ThemeContrastTest 守。
+    static final Color GRAY_TEXT  = Color.indexed(250);   // #bcbcbc 8.8:1  提示 / 空态
+    static final Color GRAY_INFO  = Color.indexed(248);   // #a8a8a8 7.0:1  信息行 / 引用正文
+    static final Color GRAY_MUTED = Color.indexed(244);   // #808080 4.2:1  装饰性最次要
+
     // 配色（层次感）：用户输入=灰色次要，AI 回复=默认亮色（重点）
-    static final Style DIM        = Style.create().fg(Color.DARK_GRAY);
-    // 占位符/空态提示（输入框空态、状态栏空闲行）：用灰白而非近黑的 DARK_GRAY，暗色终端下更清晰可读
-    static final Style HINT       = Style.create().fg(Color.indexed(250));
-    // 下沉到 scrollback 的信息行（/context 统计、/help、⚙ 模型、压缩结果等）：同样避开近黑的 DIM，
-    // 用可读的灰白（略深于 HINT，作为「内容而非提示」的层次）。DIM 仍留给固定区的次要元素（待办○、状态后缀）。
-    static final Style INFO_LINE  = Style.create().fg(Color.indexed(248));
+    static final Style DIM        = Style.create().fg(GRAY_MUTED);
+    // 占位符/空态提示（输入框空态、状态栏空闲行）
+    static final Style HINT       = Style.create().fg(GRAY_TEXT);
+    // 下沉到 scrollback 的信息行（/context 统计、/help、⚙ 模型、压缩结果等）：略深于 HINT，
+    // 作为「内容而非提示」的层次。DIM 更次一档，留给固定区的装饰性元素（待办○、状态行后缀）。
+    static final Style INFO_LINE  = Style.create().fg(GRAY_INFO);
     static final Style USER       = Style.create().fg(Color.GRAY);
     static final Color USER_BG     = Color.indexed(238);                              // 用户消息底色=中灰
     static final Style USER_BLOCK  = Style.create().fg(Color.BRIGHT_WHITE).bg(USER_BG); // 灰底白字，仿 Claude Code
@@ -42,7 +51,7 @@ final class Theme {
     // 比「亮白 vs 灰」的纯明度差更醒目；纯前景故无底色残留。
     static final Style PICK_SEL    = Style.create().fg(Color.indexed(215)).bold();          // 高亮项=暖橙加粗（无底色）
     static final Style PICK_ITEM   = Style.create().fg(Color.GRAY);                        // 普通项
-    static final Style PICK_DESC   = Style.create().fg(Color.DARK_GRAY);                   // 项说明
+    static final Style PICK_DESC   = Style.create().fg(GRAY_MUTED);                        // 项说明
     static final Style TOOL       = Style.create().fg(Color.LIGHT_YELLOW);   // 工具调用行：淡黄，暗色终端可读（原 DARK_GRAY 近黑看不清）
     static final Style OK         = Style.create().fg(Color.GREEN);
     static final Style FAIL       = Style.create().fg(Color.RED);
@@ -79,8 +88,8 @@ final class Theme {
     static final Style DIFF_HEADER = Style.create().fg(Color.BRIGHT_WHITE).bold();
     static final Style DIFF_NO_ADD = Style.create().fg(Color.indexed(114)).bg(ADD_BG);   // 新增行号=浅绿
     static final Style DIFF_NO_DEL = Style.create().fg(Color.indexed(210)).bg(DEL_BG);   // 删除行号=浅红
-    static final Style DIFF_NO_CTX = Style.create().fg(Color.DARK_GRAY);                 // 上下文行号=暗灰
-    static final Style DIFF_TRUNC  = Style.create().fg(Color.DARK_GRAY);
+    static final Style DIFF_NO_CTX = Style.create().fg(GRAY_MUTED);                      // 上下文行号=次要灰
+    static final Style DIFF_TRUNC  = Style.create().fg(GRAY_MUTED);
 
     /** 把一条已下沉行的类型映射到样式；{@code ASSISTANT} 返回 null（用默认色，正文最易读）。 */
     static Style styleFor(OutputLine.Kind kind) {
@@ -92,7 +101,7 @@ final class Theme {
             case TOOL_FAIL -> FAIL;
             case TODO -> TODO;
             case ERROR -> ERROR;
-            case INFO -> INFO_LINE;   // 灰白，暗色终端可读（原 DIM=DARK_GRAY 近黑看不清）
+            case INFO -> INFO_LINE;   // 灰白，暗色终端可读（见 GRAY_INFO）
             case SUBAGENT_START -> RUNNING;   // ▸ Task(...) 起始：青色，醒目区分委派
             case SUBAGENT_TOOL -> TOOL;       // 内部工具行：与主流工具同为淡黄
             case SUBAGENT_END -> INFO_LINE;   // 结论行：灰白

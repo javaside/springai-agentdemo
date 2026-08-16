@@ -20,13 +20,18 @@ import java.util.List;
 public final class MarkdownRenderer {
 
     // ---- 样式常量 ----
-    private static final Style DIM = Style.create().fg(Color.DARK_GRAY);
+    private static final Style DIM = Style.create().fg(Theme.GRAY_MUTED);
     private static final Style HEADER = Style.create().fg(Color.LIGHT_CYAN).bold();
     private static final Style BOLD = Style.create().bold();
     private static final Style ITALIC = Style.create().italic();
     private static final Style INLINE_CODE = Style.create().fg(Color.LIGHT_GREEN);
-    private static final Style QUOTE = Style.create().fg(Color.DARK_GRAY).italic();
-    private static final Style GUTTER = Style.create().fg(Color.rgb(120, 150, 200)); // 代码块左边栏
+    // 引用块是模型回复的<b>正文内容</b>，不是界面装饰：与信息行同级（GRAY_INFO），
+    // 与正文的区分交给斜体与行首标记，不靠压暗。
+    private static final Style QUOTE = Style.create().fg(Theme.GRAY_INFO).italic();
+    // 代码块左边栏。⚠ 不能用 Color.rgb()：目标终端（Apple Terminal，COLORTERM 为空）不支持
+    // truecolor，38;2;r;g;b 被静默忽略、左边栏退回默认前景色。110 = #87afd7，是 256 色区里
+    // 最接近原 rgb(120,150,200) 的一档。
+    private static final Style GUTTER = Style.create().fg(Color.indexed(110));
     private static final String BAR = "▎ ";
 
     /** 给代码行加左边栏，视觉上成块。 */

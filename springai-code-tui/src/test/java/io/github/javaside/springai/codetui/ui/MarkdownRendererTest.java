@@ -120,10 +120,13 @@ class MarkdownRendererTest {
     }
 
     @Test
-    void blockquoteDimmed() {
+    void blockquoteUsesReadableInfoGray() {
+        // 引用块是模型回复的<b>正文内容</b>，不是界面装饰：与信息行同级（Theme.GRAY_INFO），
+        // 与正文的区分交给斜体。原先用 DARK_GRAY（ANSI 亮黑）——取值由终端 profile 决定，
+        // 深色窗口下常与背景同色，用户实报「界面很多地方是黑的，看不见」。
         List<Span> spans = new MarkdownRenderer().renderFinalized("> quoted");
         assertEquals("> quoted", concat(spans));
-        assertTrue(hasFg(spans.get(0), Color.DARK_GRAY));
+        assertTrue(hasFg(spans.get(0), Theme.GRAY_INFO));
     }
 
     @Test
