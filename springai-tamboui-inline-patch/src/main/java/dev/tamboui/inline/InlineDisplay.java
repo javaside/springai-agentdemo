@@ -140,14 +140,23 @@ public final class InlineDisplay implements AutoCloseable {
         syncWidth();
         int desiredHeight = Math.max(0, contentHeight);
         StringBuilder batch = new StringBuilder();
-        resizeDisplay(desiredHeight, batch);
-        if (currentHeight <= 0) {
+        if (desiredHeight <= 0) {
+            resizeDisplay(0, batch, null);
+            currentBuffer = Buffer.empty(Rect.of(width, 0));
             submit(batch);
             return;
         }
 
+        // ⚠ 顺序：先把新帧渲染进内存，再动终端。高度变化时 resizeDisplay 要拿新帧和上一帧比对，
+        // 才知道增减的行在 live 区<b>顶部</b>还是底部——选错方向会逼出一次整区逐行重画，
+        // 而那正是「输入框上下闪出两根线」的来源（见 resizeDisplay 注释）。
+        if (currentBuffer.width() != width || currentBuffer.height() != desiredHeight) {
+            currentBuffer = Buffer.empty(Rect.of(width, desiredHeight));
+        }
         currentBuffer.clear();
         renderer.accept(currentBuffer.area(), currentBuffer);
+        resizeDisplay(desiredHeight, batch, currentBuffer);
+
         int targetX = cursorX >= 0 && cursorY >= 0 ? cursorX : findLastContentPosition(currentBuffer, 0);
         int targetY = cursorX >= 0 && cursorY >= 0 ? cursorY : 0;
         targetX = Math.max(0, Math.min(targetX, Math.max(0, width - 1)));
@@ -206,7 +215,7 @@ public final class InlineDisplay implements AutoCloseable {
             // 后立即重画，这里合并为每批一次（仍满足「一批至多一次 live 提交」）。
             // 注意：render() 结束时会交换 current/previous，已显示内容此刻在 previousBuffer。
             if (printBatch != null && !printBatch.isEmpty() && currentHeight > 0 && previousFrameValid) {
-                appendFullRedraw(printBatch, previousBuffer, -1, -1);
+                appendLiveRestore(printBatch, previousBuffer, -1, -1);
             }
             submit(printBatch);
             printBatch = null;
@@ -305,11 +314,29 @@ public final class InlineDisplay implements AutoCloseable {
         }
     }
 
-    private void resizeDisplay(int newHeight, StringBuilder batch) {
+    /**
+     * 调整 live 区高度。
+     *
+     * <p><b>行加在顶部还是底部，决定了下一帧要不要整区重画</b>。本 TUI 的 live 区贴屏幕底部，
+     * 内容也贴底（输入框与状态行永远是最后几行），高度变化几乎总是「顶部多/少一行」——流式预览行、
+     * 计划/排队等面板都长在输入框上方。若照旧在<b>底部</b>加减行，输入框相对终端就整体挪了一行，
+     * 逐行差分于是把每一行都判成变化；重画进行到一半时屏上同时存在新旧两条边框，用户看到的就是
+     * 「输入框上下各多一根线，一闪又没，反复出现」（模型输出期间预览行不停增删，故一直在闪）。
+     *
+     * <p>改法：拿新帧与上一帧比一次行对齐方式；若「整体平移」比「顶部对齐」对上更多行，就用终端的
+     * IL/DL 在 live 区<b>顶部</b>插/删行——终端一次原子上/下移，输入框与状态行相对屏幕纹丝不动，
+     * 帧差随之缩到真正变化的那几行（常见情形是零行，一个字节都不必发）。平移没有更优时（例如新行
+     * 确实加在底部）保持原有的底部增减，故不会比修复前更差。
+     *
+     * @param nextFrame 已渲染好的新帧；{@code null}（高度归零）时按底部增减处理
+     */
+    private void resizeDisplay(int newHeight, StringBuilder batch, Buffer nextFrame) {
         if (newHeight == currentHeight) return;
         int oldHeight = currentHeight;
-        appendHome(batch);
         int delta = newHeight - oldHeight;
+        boolean shiftRows = oldHeight > 0 && newHeight > 0 && previousFrameValid && nextFrame != null
+                && shiftAlignsBetter(previousBuffer, nextFrame, delta);
+        appendHome(batch);
         if (delta > 0) {
             if (oldHeight > 0) down(batch, oldHeight - 1);
             for (int i = 0; i < delta; i++) batch.append("\r\n");
@@ -317,6 +344,10 @@ public final class InlineDisplay implements AutoCloseable {
             // 否则整个 live 区比预期低 1 行——「启动画面整体下移一行」的根源。
             up(batch, newHeight - (oldHeight > 0 ? 1 : 0));
             batch.append('\r');
+            // 上面的换行只把 live 区向下撑开（贴底时即滚屏腾行）；这一步再把空行挪到顶部。
+            if (shiftRows) batch.append("\u001b[").append(delta).append('L');
+        } else if (shiftRows) {
+            batch.append("\u001b[").append(-delta).append('M');   // 光标已在 live 区顶部，直接删顶部若干行
         } else {
             down(batch, newHeight);
             batch.append('\r').append("\u001b[").append(-delta).append('M');
@@ -324,12 +355,34 @@ public final class InlineDisplay implements AutoCloseable {
             batch.append('\r');
         }
         previousBuffer = previousFrameValid
-                ? InlinePatch.preserveOverlap(previousBuffer, width, newHeight)
+                ? InlinePatch.realign(previousBuffer, width, newHeight, shiftRows ? delta : 0)
                 : Buffer.empty(Rect.of(width, newHeight));
-        currentBuffer = Buffer.empty(Rect.of(width, newHeight));
         currentHeight = newHeight;
         lastCursorX = 0;
         lastCursorY = 0;
+    }
+
+    /**
+     * 「内容整体平移 {@code delta} 行」是否比「顶部对齐」对上更多行。相等时返回 {@code false}：
+     * 平移要多发一条 IL/DL，没有收益就不发。
+     */
+    private boolean shiftAlignsBetter(Buffer previous, Buffer next, int delta) {
+        int shifted = 0;
+        int aligned = 0;
+        for (int row = 0; row < next.height(); row++) {
+            if (rowsEqual(previous, row - delta, next, row)) shifted++;
+            if (rowsEqual(previous, row, next, row)) aligned++;
+        }
+        return shifted > aligned;
+    }
+
+    private boolean rowsEqual(Buffer previous, int previousRow, Buffer next, int nextRow) {
+        if (previousRow < 0 || previousRow >= previous.height()) return false;
+        int cols = Math.min(previous.width(), next.width());
+        for (int col = 0; col < cols; col++) {
+            if (!previous.get(col, previousRow).equals(next.get(col, nextRow))) return false;
+        }
+        return true;
     }
 
     private void appendFramePatch(StringBuilder batch, List<InlinePatch.PatchRun> runs, boolean bandTail,
@@ -403,20 +456,39 @@ public final class InlineDisplay implements AutoCloseable {
 
     /**
      * Full rewrite of the live area: move to its top, erase each row tail, write the row content,
-     * then park the cursor. Used for the first frame, after snapshot invalidation, and at the end
-     * of a scrollback print batch (where inserted lines may have pushed the bottom of the live
-     * area off the screen).
-     *
-     * @param source the buffer whose content should be drawn (current frame inside render(), the
-     *               already-displayed frame at the end of a print batch)
+     * then park the cursor. Used only for the first frame and after snapshot invalidation, when
+     * stale terminal content must be removed.
      */
     private void appendFullRedraw(StringBuilder batch, Buffer source, int cursorX, int cursorY) {
+        appendLiveArea(batch, source, cursorX, cursorY, true);
+    }
+
+    /**
+     * 批末把 live 区恢复到屏幕底部，<b>不逐行 EL</b>。
+     *
+     * <p>可以不擦是因为每一行落点上的内容本来就等于要写的内容：println 的 ESC[1L 只是把 live 区
+     * 整体下推（内容不变），被挤出屏幕的行则由本方法行间的 LF 滚屏重新腾出——那是<b>全新的空行</b>。
+     * 先擦后写反而会让不支持同步输出的终端（如 Apple Terminal）看到「边框先没后有」的中间帧，
+     * 模型输出期间每批一次，看起来就是输入框在闪。
+     */
+    private void appendLiveRestore(StringBuilder batch, Buffer source, int cursorX, int cursorY) {
+        appendLiveArea(batch, source, cursorX, cursorY, false);
+    }
+
+    private void appendLiveArea(StringBuilder batch, Buffer source, int cursorX, int cursorY, boolean eraseRowTails) {
         if (currentHeight <= 0) return;
         appendHome(batch);
         try (AnsiCellWriter cells = new AnsiCellWriter(batch::append)) {
             for (int row = 0; row < currentHeight; row++) {
+                // ⚠ 行间必须走 LF，不能换成 CUD（ESC[1B）：<b>底行的那次滚屏是刚需</b>。
+                // println 用 ESC[1L 在 live 区顶部插行，把 live 区整体下推、底行被挤出屏幕；本次恢复
+                // 写到最后一行时正落在屏幕底行，LF 触发滚屏才腾回那一行。改成 CUD 后光标在底行原地
+                // 不动，状态行直接盖在输入框底边框上（用户实报「输入框和状态栏重叠」「输入框下面多
+                // 一条边框线」），且此后 live 区顶部记账整体偏移一行，后续帧会把输入框画到 scrollback
+                // 上、边打边吃掉已经输出的正文。
                 if (row > 0) batch.append("\r\n");
-                batch.append('\r').append("\u001b[K");
+                batch.append('\r');
+                if (eraseRowTails) batch.append("\u001b[K");
                 appendRowOverwrite(batch, cells, source, row);
             }
         }

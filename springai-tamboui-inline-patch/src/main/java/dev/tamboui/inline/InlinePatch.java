@@ -78,14 +78,26 @@ final class InlinePatch {
     }
 
     static Buffer preserveOverlap(Buffer previous, int newWidth, int newHeight) {
-        Buffer preserved = Buffer.empty(Rect.of(newWidth, newHeight));
+        return realign(previous, newWidth, newHeight, 0);
+    }
+
+    /**
+     * 把上一帧搬进新尺寸的快照，并按 {@code rowShift} 整体平移：{@code new[row] = previous[row - rowShift]}。
+     *
+     * <p>{@code rowShift == 0} 即顶部对齐（尺寸变化时保留重叠部分）。live 区在顶部插/删行时，
+     * 终端里的内容<b>确实</b>整体下移/上移了，快照必须跟着移——不移的话下一帧的逐行差分会把每一行
+     * 都判成变化，等于白插/白删，还会重画出新旧两条边框（见 {@code InlineDisplay#resizeDisplay}）。
+     */
+    static Buffer realign(Buffer previous, int newWidth, int newHeight, int rowShift) {
+        Buffer moved = Buffer.empty(Rect.of(newWidth, newHeight));
         int width = Math.min(previous.width(), newWidth);
-        int height = Math.min(previous.height(), newHeight);
-        for (int row = 0; row < height; row++) {
+        for (int row = 0; row < newHeight; row++) {
+            int source = row - rowShift;
+            if (source < 0 || source >= previous.height()) continue;
             for (int col = 0; col < width; col++) {
-                preserved.set(col, row, previous.get(col, row));
+                moved.set(col, row, previous.get(col, source));
             }
         }
-        return preserved;
+        return moved;
     }
 }

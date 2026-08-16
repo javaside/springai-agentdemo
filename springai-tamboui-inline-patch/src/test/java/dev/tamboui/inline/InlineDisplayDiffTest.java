@@ -179,6 +179,81 @@ class InlineDisplayDiffTest {
     }
 
     @Test
+    void printBatchRedrawDoesNotEraseLiveRowsBeforeRepaintingThem() {
+        InlineDisplay display = display(3);
+        renderBox(display, "input");
+        backend.resetCounts();
+
+        display.beginPrintBatch();
+        display.println("streamed response");
+        display.endPrintBatch();
+
+        String raw = backend.outputUtf8();
+        assertTrue(raw.contains("╭"), raw);
+        assertTrue(raw.contains("╯"), raw);
+        // println 清理新插入的 scrollback 行尾时保留一次 EL；live 区恢复前不得再逐行擦除。
+        assertEquals(1, occurrences(raw, "\u001b[K"), raw);
+    }
+
+    @Test
+    void printBatchRestoreUsesLineFeedsSoTheBottomRowScrollsBackIntoView() {
+        // println 的 ESC[1L 在 live 区顶部插行，把 live 区整体下推、<b>底行被挤出屏幕</b>。
+        // 批末恢复写到最后一行时正落在屏幕底行，只有 LF 会滚屏、把那一行腾回来。
+        // 换成 CUD（ESC[1B）光标在底行原地不动 → 状态行盖在输入框底边框上、此后整个 live 区
+        // 记账偏移一行（用户实报「输入框和状态栏重叠」「排版全乱」）。
+        InlineDisplay display = display(3);
+        renderBox(display, "input");
+        backend.resetCounts();
+
+        display.println("streamed response");
+
+        String raw = backend.outputUtf8();
+        int restoreStart = raw.indexOf("╭");
+        assertTrue(restoreStart >= 0, raw);
+        String restore = raw.substring(restoreStart);
+        assertEquals(2, occurrences(restore, "\r\n"), "3 行 live 区恢复须用 2 次 LF 换行：" + restore);
+        assertFalse(restore.contains("\u001b[1B"), "行间不得用 CUD 代替 LF：" + restore);
+    }
+
+    @Test
+    void liveAreaGrowingAtTheTopInsertsARowInsteadOfRepaintingEveryRow() {
+        // 流式预览行出现 = live 区顶部多一行，其余行相对屏幕不该动：终端收一条 IL 即可，
+        // 已有行一个字节都不必重发。旧实现在底部加行，导致每一行都被判成变化而逐行重画——
+        // 重画到一半时屏上同时存在新旧两条边框（用户实报「输入框上下多两根线」）。
+        // 光标停在最后一行，让被断言的行都落在光标带（±1）之外，排除 IME 重申窗口的干扰。
+        InlineDisplay display = display(6);
+        renderRows(display, new String[]{"box-top", "text", "box-bottom", "tail", "status"}, 0, 4);
+        backend.resetCounts();
+
+        renderRows(display, new String[]{"preview", "box-top", "text", "box-bottom", "tail", "status"}, 0, 5);
+
+        String raw = backend.outputUtf8();
+        assertTrue(raw.contains("\u001b[1L"), "顶部增行须用 IL 整体下移：" + raw);
+        assertTrue(raw.contains("preview"), "只有新增的那一行需要画：" + raw);
+        assertFalse(raw.contains("box-top"), "已有行不得重画：" + raw);
+        assertFalse(raw.contains("box-bottom"), "已有行不得重画：" + raw);
+        assertFalse(raw.contains("text"), "已有行不得重画：" + raw);
+    }
+
+    @Test
+    void liveAreaShrinkingAtTheTopDeletesTheTopRowWithoutRepaintingAnything() {
+        // 预览行消失 = live 区顶部少一行。旧实现在<b>底部</b>删行，于是每一行都要重画：
+        // 画到第一行时屏上出现两条顶边框、画到第三行时两条底边框——正是用户看到的「上下多两根线」。
+        // 顶部删行后终端内容已等于新帧，除了光标定位<b>不应该再有任何格子被重写</b>。
+        InlineDisplay display = display(6);
+        renderRows(display, new String[]{"preview", "box-top", "text", "box-bottom", "tail", "status"}, 0, 5);
+        backend.resetCounts();
+
+        renderRows(display, new String[]{"box-top", "text", "box-bottom", "tail", "status"}, 0, 4);
+
+        String raw = backend.outputUtf8();
+        assertTrue(raw.contains("\u001b[1M"), "顶部减行须用 DL 整体上移：" + raw);
+        assertFalse(raw.contains("box-top"), "存活行不得重画（重画即闪出双边框）：" + raw);
+        assertFalse(raw.contains("box-bottom"), "存活行不得重画（重画即闪出双边框）：" + raw);
+        assertFalse(raw.contains("status"), "存活行不得重画：" + raw);
+    }
+
+    @Test
     void growingFromZeroMovesCursorUpByFullHeight() {
         InlineDisplay display = display(4);
         display.render((area, buffer) -> buffer.setString(0, 0, "a", Style.EMPTY), 4, 0, 0);
