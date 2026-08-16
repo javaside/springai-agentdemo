@@ -7,7 +7,10 @@ import dev.tamboui.text.Text;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import static io.github.javaside.springai.codetui.ui.Theme.CACHE_HIT_VALUE;
 import static io.github.javaside.springai.codetui.ui.Theme.DIM;
 import static io.github.javaside.springai.codetui.ui.Theme.SHIMMER_HI;
 import static io.github.javaside.springai.codetui.ui.Theme.THINK;
@@ -23,6 +26,30 @@ import static io.github.javaside.springai.codetui.ui.Theme.THINK;
  * 编排职责，读的是 #4/#5/#6 的态；本类只把选中的「动画型」内容渲染出来。
  */
 final class StatusBar {
+
+    private static final Pattern CACHE_HIT = Pattern.compile("(缓存命中 )(\\d+%)");
+
+    /** 保留调用方基础样式，仅把状态栏 {@code 缓存命中 N%} 中的百分比值切成强调 Span。 */
+    static List<Span> cacheHitSpans(String text, Style base) {
+        Matcher matcher = CACHE_HIT.matcher(text);
+        List<Span> spans = new ArrayList<>();
+        int cursor = 0;
+        while (matcher.find()) {
+            if (matcher.start() > cursor) {
+                spans.add(Span.styled(text.substring(cursor, matcher.start()), base));
+            }
+            spans.add(Span.styled(matcher.group(1), base));
+            spans.add(Span.styled(matcher.group(2), CACHE_HIT_VALUE));
+            cursor = matcher.end();
+        }
+        if (cursor < text.length()) {
+            spans.add(Span.styled(text.substring(cursor), base));
+        }
+        if (spans.isEmpty()) {
+            spans.add(Span.styled(text, base));
+        }
+        return spans;
+    }
 
     /**
      * 处理中状态行内容：{@code label} 上叠一道随 {@code animTick} 左→右扫过的高亮波光（表示系统在动），
@@ -42,7 +69,7 @@ final class StatusBar {
     Text shimmer(String label, String suffix, Style base, long animTick, Span leading) {
         List<Span> spans = shimmerSpans(label, base, animTick);
         if (leading != null) spans.add(0, leading);
-        if (!suffix.isEmpty()) spans.add(Span.styled(suffix, DIM));
+        if (!suffix.isEmpty()) spans.addAll(cacheHitSpans(suffix, DIM));
         return Text.from(Line.from(spans));
     }
 

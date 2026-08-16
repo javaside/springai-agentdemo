@@ -3045,8 +3045,9 @@ public final class CodeTuiView extends InlineApp {
                 String hint = idleHint(statusModelLabel(),
                         ctxUsage.suffix() + backgroundStatusSuffix(),
                         terminalWidth() - modeWidth);
-                yield mode == null ? text(hint).style(HINT)
-                        : richText(Text.from(Line.from(List.of(mode, Span.styled(hint, HINT)))));
+                yield mode == null
+                        ? richText(Text.from(Line.from(StatusBar.cacheHitSpans(hint, HINT))))
+                        : richText(Text.from(Line.from(withLeading(mode, StatusBar.cacheHitSpans(hint, HINT)))));
             }
             case THINKING -> richText(statusBar.shimmer("● 思考中…",
                     qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
@@ -3157,6 +3158,14 @@ public final class CodeTuiView extends InlineApp {
             case PLAN -> Span.styled("⏸ " + mode.label() + " · ", MODE_PLAN);
             case BYPASS -> Span.styled("⚠ " + mode.label() + " · ", MODE_BYPASS);
         };
+    }
+
+    /** 在富文本状态行前插入权限模式标签，不修改调用方提供的 Span 列表。 */
+    static List<Span> withLeading(Span leading, List<Span> rest) {
+        List<Span> spans = new ArrayList<>(rest.size() + 1);
+        spans.add(leading);
+        spans.addAll(rest);
+        return spans;
     }
 
     // ── 内部工具 ─────────────────────────────────────────────────────────

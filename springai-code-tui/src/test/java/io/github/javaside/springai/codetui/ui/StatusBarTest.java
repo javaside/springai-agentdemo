@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.style.Color;
 import dev.tamboui.style.Modifier;
+import dev.tamboui.style.Style;
 import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,33 @@ class StatusBarTest {
     private static boolean isHighlight(Span s) {
         return s.style().effectiveModifiers().contains(Modifier.BOLD)
                 && s.style().fg().map(c -> c.equals(Color.BRIGHT_WHITE)).orElse(false);
+    }
+
+    @Test
+    void cacheHitSpansHighlightsOnlyPercentage() {
+        Style base = Theme.HINT;
+        List<Span> spans = StatusBar.cacheHitSpans(
+                "deepseek-chat · 上下文 50% · 缓存命中 78%", base);
+
+        assertEquals("deepseek-chat · 上下文 50% · 缓存命中 78%",
+                spans.stream().map(Span::content).collect(java.util.stream.Collectors.joining()));
+        Span value = spans.stream().filter(s -> s.content().equals("78%")).findFirst().orElseThrow();
+        assertEquals(Color.indexed(115), value.style().fg().orElseThrow());
+        assertTrue(value.style().effectiveModifiers().contains(Modifier.BOLD));
+        assertTrue(spans.stream()
+                .filter(s -> !s.content().equals("78%"))
+                .allMatch(s -> s.style().equals(base)));
+    }
+
+    @Test
+    void cacheHitSpansLeavesOtherPercentagesAndMissingCacheTextAlone() {
+        Style base = Theme.DIM;
+        List<Span> plain = StatusBar.cacheHitSpans(" · 上下文 50% · Esc 取消", base);
+
+        assertEquals(1, plain.size());
+        assertEquals(" · 上下文 50% · Esc 取消", plain.get(0).content());
+        assertEquals(base, plain.get(0).style());
+        assertFalse(plain.get(0).style().effectiveModifiers().contains(Modifier.BOLD));
     }
 
     @Test

@@ -50,6 +50,8 @@ final class Theme {
     static final Style ERROR      = Style.create().fg(Color.RED).bold();
     static final Style THINK      = Style.create().fg(Color.YELLOW);
     static final Style RUNNING    = Style.create().fg(Color.CYAN);
+    /** 状态栏缓存命中率数值：冷薄荷加粗，强调数据但不表达成功或警告。 */
+    static final Style CACHE_HIT_VALUE = Style.create().fg(Color.indexed(115)).bold();
     static final Style SHIMMER_HI  = Style.create().fg(Color.BRIGHT_WHITE).bold();   // 状态栏波光高亮
     // 权限模式常驻标识（仅非 DEFAULT 显示，见 CodeTuiView#modeTag）。故意与状态行其余部分<b>拉开色相</b>：
     // 这一段要在你没盯着它的时候仍能被余光扫到——它说明的是「接下来的工具调用会不会问你」。
