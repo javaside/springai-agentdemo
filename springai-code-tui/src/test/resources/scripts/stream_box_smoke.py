@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """流式输出期间输入框的 PTY 实机冒烟：<b>不许闪出第二条边框，也不许吃掉正文</b>。
 
-用户实报（2026-08-16）两条，根因不同、都只有实机看得见：
+用户实报（2026-08-16）三条，根因不同、都只有实机看得见：
 
   1. <b>「输入框上下各多一根线，一闪又没，反复出现」</b>。流式预览行（`printer.preview`）随
      token 不停出现/消失，live 区在 4/5 行间反复增减。旧实现在 live 区<b>底部</b>加减行，
@@ -15,9 +15,14 @@
      换成 CUD（`ESC[1B`），底行不再滚屏：状态行盖在输入框底边框上，此后 live 区记账整体
      偏移一行，后续帧把输入框画进 scrollback、边打边吃已输出的正文。
 
-<b>为什么单测不够</b>：两条都是「终端坐标系里的事故」。离屏 Buffer 的单测两边共用同一套排版，
+  3. <b>「次要文字在深色窗口里看不见」</b>。ANSI 亮黑（SGR 90）的实际取值由终端 profile 决定，
+     深色配色下常与背景同色。单测（ThemeContrastTest）只证调色板的取值，这里证颜色确实按
+     256 色灰阶发到了终端。
+
+<b>为什么单测不够</b>：前两条是「终端坐标系里的事故」——离屏 Buffer 的单测两边共用同一套排版，
 `InlineDisplayDiffTest` 也只能断言字节序列的形状；「屏幕上到底有几条边框」「正文有没有被盖掉」
-必须由真 VT 解释器（pyte）回放才看得见。
+必须由真 VT 解释器（pyte）回放才看得见。第三条则是「样式有没有真发出去」：调色板改对了，
+渲染链路上任何一处把它丢掉都照样是黑的。
 
 <b>怎么看见「一闪而过」的中间态</b>：整帧采样看不到——它只存在于一帧<b>内部</b>。本脚本用
 `-Dcodetui.syncOutput=always` 把每次 submit 用 DECSET 2026 括起来，再把原始字节流按
@@ -67,6 +72,7 @@ BEGIN, END = b"\x1b[?2026h", b"\x1b[?2026l"
 # 一个 token = 一条 ESC 序列，或一段普通字符
 TOKEN = re.compile(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[a-zA-Z]|\x1b[a-zA-Z=>]|[^\x1b]+")
 CHECKPOINT = re.compile(rb"^(?:\r|\n|\x1b\[[0-9]*[ABCDLM])$")
+SGR = re.compile(rb"\x1b\[([0-9;]*)m")
 
 USAGE = {
     "prompt_tokens": 12000, "completion_tokens": 300, "total_tokens": 12300,
@@ -126,6 +132,33 @@ def start_stub():
 
 
 # ── 断言 ──────────────────────────────────────────────────────────────────
+def ansi_black_hits(raw):
+    """原始字节流里把<b>前景</b>设成 ANSI 黑/亮黑的次数。
+
+    不能拿 ESC[90m 做子串匹配：AnsiCellWriter 发的是<b>合并形态</b> ESC[0;90m，子串永远命中
+    不到（实测 v1.14.0 流式 422KB 中 ESC[90m 出现 0 次、ESC[0;90m 出现 276 次），照那样写就是
+    一条永远绿的假断言。必须按分号切参数，并跳过 38;5;N 与 38;2;r;g;b 的内层数字，否则
+    indexed(30) 会被误判成 ANSI 黑。
+    """
+    hits = 0
+    for m in SGR.finditer(raw):
+        params = m.group(1).split(b";")
+        i = 0
+        while i < len(params):
+            token = params[i]
+            if token in (b"38", b"48") and i + 1 < len(params):
+                if params[i + 1] == b"5":
+                    i += 3
+                    continue
+                if params[i + 1] == b"2":
+                    i += 5
+                    continue
+            if token in (b"30", b"90"):
+                hits += 1
+            i += 1
+    return hits
+
+
 def box_counts(screen):
     """屏上满宽圆角框的上/下边框条数。欢迎横幅比终端窄，不会误命中。"""
     try:
@@ -211,6 +244,13 @@ def main():
             rs.die("流式期间闪出第二条输入框边框 %d 次——用户实报「输入框上下多两根线」；"
                    "live 区增减行必须走顶部 IL/DL，不能逐行重画" % ghosts, list(session.screen.display))
         print("无重影 OK: 逐游标动作重放，全程只有一条输入框边框")
+
+        black = ansi_black_hits(raw)
+        if black:
+            rs.die("流式期间 %d 次把前景设成 ANSI 黑/亮黑——ANSI 0–15 由终端 profile 决定，"
+                   "深色窗口下常与背景同色；次要文字必须走 256 色灰阶（见 Theme 的三档）" % black,
+                   list(session.screen.display))
+        print("无亮黑 OK: 流式期间未把前景设成 ANSI 黑/亮黑")
 
         text = session.screen_text()
         missing = [i for i in range(LINES) if (BODY % i) not in text]
