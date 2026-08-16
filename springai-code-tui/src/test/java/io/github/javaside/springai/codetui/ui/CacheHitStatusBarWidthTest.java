@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.ContextStats;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -9,6 +10,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -20,12 +23,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CacheHitStatusBarWidthTest {
 
     private static class CtxStub implements SubmitHandler {
+        private final String model;
+        private final PermissionMode mode;
+
+        private CtxStub() {
+            this("deepseek-v4-pro", PermissionMode.DEFAULT);
+        }
+
+        private CtxStub(String model, PermissionMode mode) {
+            this.model = model;
+            this.mode = mode;
+        }
+
         @Override public reactor.core.Disposable submit(String text) { return null; }
+        @Override public String currentModel() { return model; }
+        @Override public PermissionMode permissionMode() { return mode; }
         @Override public ContextStats contextStats() {
             // 复刻线上日志实测快照（hit=78）：events>0、有窗口、有缓存命中。
             return new ContextStats(100, 40, 50, 8, 2, 155_184L, 100_000L, 200_000L, 20, 10, 0, 0L,
                     120_832L, 155_184L, 78);
         }
+    }
+
+    private static String idleScreen(Path root, CtxStub stub) {
+        ConversationState state = new ConversationState();
+        CodeTuiView view = new CodeTuiView(state, stub, root);
+        state.onUserMessage(1L, "hello");
+        view.ctxUsageForTest().refresh();
+        return ViewScreen.of(view, 80);
     }
 
     @Test
@@ -43,9 +68,69 @@ class CacheHitStatusBarWidthTest {
                 "80 列下缓存命中必须完整可见（修复前：断在「缓存命中」中途，数字被截没）：\n" + screen80);
         assertTrue(screen80.contains("上下文 78%"),
                 "80 列下上下文占用也必须保留（静态键位提示应主动让位）：\n" + screen80);
-        // 对照：120 列下键位提示应全保留——证明丢弃是宽度驱动、不是无条件砍
-        String screen120 = ViewScreen.of(v, 120);
-        assertTrue(screen120.contains("缓存命中 78%"), "120 列下应完整显示：\n" + screen120);
-        assertTrue(screen120.contains("Enter 发送"), "120 列宽裕时静态提示应保留：\n" + screen120);
+    }
+
+    @Test
+    @DisplayName("宽度不足时次要帮助整组隐藏，Enter 与动态状态保留")
+    void secondaryHelpDisappearsAsOneGroup(@TempDir Path root) {
+        String screen = idleScreen(root, new CtxStub());
+
+        assertTrue(screen.contains("Enter 发送"), screen);
+        assertFalse(screen.contains("/model 切换模型"), screen);
+        assertFalse(screen.contains("Esc 取消"), screen);
+        assertFalse(screen.contains("Ctrl+C 退出"), screen);
+        assertTrue(screen.contains("deepseek-v4-pro"), screen);
+        assertTrue(screen.contains("上下文 78%"), screen);
+        assertTrue(screen.contains("缓存命中 78%"), screen);
+    }
+
+    @Test
+    @DisplayName("更窄时 Enter 也让位，只保留模型与动态状态")
+    void primaryActionDisappearsBeforeCoreStatus(@TempDir Path root) {
+        String model = "provider/very-long-context-model-name-xyz";
+        String screen = idleScreen(root, new CtxStub(model, PermissionMode.DEFAULT));
+
+        assertFalse(screen.contains("Enter 发送"), screen);
+        assertFalse(screen.contains("/model 切换模型"), screen);
+        assertTrue(screen.contains(model), screen);
+        assertTrue(screen.contains("上下文 78%"), screen);
+        assertTrue(screen.contains("缓存命中 78%"), screen);
+    }
+
+    @Test
+    @DisplayName("权限模式标签占用宽度后，Enter 继续让位给核心状态")
+    void permissionModeTagParticipatesInWidthBudget(@TempDir Path root) {
+        String model = "deepseek-v4-pro-xxxxxx";
+        String screen = idleScreen(root, new CtxStub(model, PermissionMode.ACCEPT_EDITS));
+
+        assertTrue(screen.contains("自动接受编辑"), screen);
+        assertFalse(screen.contains("Enter 发送"),
+                "不扣权限标签宽度时这段仍放得下，会形成假绿：\n" + screen);
+        assertFalse(screen.contains("/model 切换模型"), screen);
+        assertFalse(screen.contains("Esc 取消"), screen);
+        assertFalse(screen.contains("Ctrl+C 退出"), screen);
+        assertTrue(screen.contains(model), screen);
+        assertTrue(screen.contains("上下文 78%"), screen);
+        assertTrue(screen.contains("缓存命中 78%"), screen);
+    }
+
+    @Test
+    @DisplayName("候选恰好等于可用宽度时不提前降级")
+    void exactWidthKeepsCandidate() {
+        String full = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · model · 上下文 1%";
+        int exactWidth = dev.tamboui.text.CharWidth.of(full);
+
+        assertEquals(full, CodeTuiView.idleHint("model", " · 上下文 1%", exactWidth));
+    }
+
+    @Test
+    @DisplayName("宽度判断按终端列宽而非 Java 字符数")
+    void fittingUsesTerminalColumnWidth() {
+        String model = "模型";
+        String full = "Enter 发送 · /model 切换模型 · Esc 取消 · Ctrl+C 退出 · " + model;
+
+        assertEquals("Enter 发送 · " + model,
+                CodeTuiView.idleHint(model, "", full.length()),
+                "中文占两列；若误用 String.length() 会错误保留完整帮助组");
     }
 }
