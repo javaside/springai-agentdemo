@@ -41,7 +41,9 @@
 <b>变异实测（2026-08-16）</b>：
   * 把 resizeDisplay 的顶部 IL/DL 去掉（回到底部增减）→ `中间态双边框` 断言红，报 50 处；
   * 把 appendLiveArea 行间的 LF 换回 CUD → `正文完整` 与 `静态单框` 断言红（正文丢行、
-    状态行与底边框重叠）。两条互不遮蔽。
+    状态行与底边框重叠）；
+  * 把 Theme.DIM 改回 Color.DARK_GRAY → `无亮黑` 断言红，报 15 处，而 `无重影` 仍绿。
+  三条互不遮蔽，各由不同断言判红。
 """
 import importlib.util
 import json
