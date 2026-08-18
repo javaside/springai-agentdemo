@@ -101,6 +101,7 @@ export DEEPSEEK_API_KEY=你的key
 | 子 agent 与计划 | `Task`、`ParallelTasks`、后台任务、计划面板和任务面板 |
 | 会话与记忆 | `-c` 恢复会话、自动/手动上下文压缩、项目级长期记忆、`AGENTS.md` 项目指令 |
 | 扩展与多模态 | MCP、Skills、视觉输入、回合中插话 |
+| 终端注意提示 | 任务完成或需要你回答/确认时，改写 tab 标题（`⏳ 等待你的输入` / `✓ 已完成`）并响一声铃——切去别的窗口也看得出它在等你（见 [docs/guide/reference.md](docs/guide/reference.md#终端注意提示tab-标题--响铃)） |
 
 DeepSeek 现役内置模型为 `deepseek-v4-flash`（非思考）与 `deepseek-v4-pro`（强推理）；旧模型名 `deepseek-chat` / `deepseek-reasoner` 已停用。
 

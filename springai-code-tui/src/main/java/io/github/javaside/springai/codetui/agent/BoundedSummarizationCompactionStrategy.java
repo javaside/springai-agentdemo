@@ -68,19 +68,27 @@ final class BoundedSummarizationCompactionStrategy implements CompactionStrategy
     private final Function<String, String> summarizer;
     private final Supplier<ModelSnapshot> snapshot;  // 校准模式专用;悲观模式下为 null
     private final CalibrationState calibration;      // 非 null 即校准模式
+    private final int maxEventsToKeep;              // 0 = 按 token 预算保留; >0 = 强制保留最近 N 个事件
 
     /** 悲观模式(测试兼容)。 */
     BoundedSummarizationCompactionStrategy(long targetTokens, long chunkTokens,
                                            ToIntFunction<String> estimator,
                                            Function<String, String> summarizer) {
-        this(() -> targetTokens, () -> chunkTokens, estimator, summarizer);
+        this(() -> targetTokens, () -> chunkTokens, estimator, summarizer, 0);
     }
 
     /** 悲观模式(测试兼容):固定 chunk 预算预分片,无校准能力。 */
     BoundedSummarizationCompactionStrategy(LongSupplier targetTokens, LongSupplier chunkTokens,
                                            ToIntFunction<String> estimator,
                                            Function<String, String> summarizer) {
-        this(targetTokens, chunkTokens, estimator, summarizer, null, null);
+        this(targetTokens, chunkTokens, estimator, summarizer, 0);
+    }
+
+    BoundedSummarizationCompactionStrategy(LongSupplier targetTokens, LongSupplier chunkTokens,
+                                           ToIntFunction<String> estimator,
+                                           Function<String, String> summarizer,
+                                           int maxEventsToKeep) {
+        this(targetTokens, chunkTokens, estimator, summarizer, null, null, maxEventsToKeep);
     }
 
     /** 校准模式(生产装配):乐观全量 + 区间学习。auto/manual 两条策略须共享同一个 calibration。 */
@@ -89,22 +97,34 @@ final class BoundedSummarizationCompactionStrategy implements CompactionStrategy
                                            Function<String, String> summarizer,
                                            Supplier<ModelSnapshot> snapshot,
                                            CalibrationState calibration) {
+        this(targetTokens, estimator, summarizer, snapshot, calibration, 0);
+    }
+
+    BoundedSummarizationCompactionStrategy(LongSupplier targetTokens,
+                                           ToIntFunction<String> estimator,
+                                           Function<String, String> summarizer,
+                                           Supplier<ModelSnapshot> snapshot,
+                                           CalibrationState calibration,
+                                           int maxEventsToKeep) {
         this(targetTokens, null, estimator, summarizer,
                 Objects.requireNonNull(snapshot, "snapshot"),
-                Objects.requireNonNull(calibration, "calibration"));
+                Objects.requireNonNull(calibration, "calibration"),
+                maxEventsToKeep);
     }
 
     private BoundedSummarizationCompactionStrategy(LongSupplier targetTokens, LongSupplier chunkTokens,
                                                    ToIntFunction<String> estimator,
                                                    Function<String, String> summarizer,
                                                    Supplier<ModelSnapshot> snapshot,
-                                                   CalibrationState calibration) {
+                                                   CalibrationState calibration,
+                                                   int maxEventsToKeep) {
         this.targetTokens = targetTokens;
         this.chunkTokens = chunkTokens;
         this.estimator = estimator;
         this.summarizer = summarizer;
         this.snapshot = snapshot;
         this.calibration = calibration;
+        this.maxEventsToKeep = maxEventsToKeep;
     }
 
     @Override
@@ -116,25 +136,15 @@ final class BoundedSummarizationCompactionStrategy implements CompactionStrategy
             throw new IllegalStateException("token budgets must be positive");
         }
         long total = SessionTokenEstimator.estimateEvents(events, estimator);
-        if (total <= targetBudget) {
+        boolean forceByEventCount = maxEventsToKeep > 0 && events.size() > maxEventsToKeep;
+        if (!forceByEventCount && total <= targetBudget) {
             return new CompactionResult(events, List.of(), 0);
         }
 
-        long keepBudget = Math.max(1L, targetBudget / 2L);
-        int split = newestSuffixStart(events, keepBudget);
-        if (split <= 0) {
-            split = events.size() == 1 ? 1 : Math.max(1, events.size() - 1);
-        }
-        List<SessionEvent> archived = List.copyOf(events.subList(0, split));
-        List<SessionEvent> kept = List.copyOf(events.subList(split, events.size()));
-        if (SessionTokenEstimator.estimateEvents(kept, estimator) > keepBudget) {
-            archived = events;
-            kept = List.of();
-        }
-
+        EventSplit split = splitEvents(events, targetBudget);
         return calibration == null
-                ? compactPessimistic(request, archived, kept, targetBudget, total)
-                : compactCalibrated(request, archived, kept, targetBudget, total);
+                ? compactPessimistic(request, split.archived(), split.kept(), targetBudget, total)
+                : compactCalibrated(request, split.archived(), split.kept(), targetBudget, total);
     }
 
     // ==================== 校准模式 ====================
@@ -375,6 +385,31 @@ final class BoundedSummarizationCompactionStrategy implements CompactionStrategy
     }
 
     // ==================== 共用工具 ====================
+
+    private record EventSplit(List<SessionEvent> archived, List<SessionEvent> kept) { }
+
+    private EventSplit splitEvents(List<SessionEvent> events, long targetBudget) {
+        if (maxEventsToKeep > 0 && events.size() > maxEventsToKeep) {
+            int split = events.size() - maxEventsToKeep;
+            while (split > 0 && !events.get(split).isRootEvent()) split--;
+            if (split <= 0) split = events.size() == 1 ? 1 : Math.max(1, events.size() - 1);
+            return new EventSplit(List.copyOf(events.subList(0, split)),
+                    List.copyOf(events.subList(split, events.size())));
+        }
+
+        long keepBudget = Math.max(1L, targetBudget / 2L);
+        int split = newestSuffixStart(events, keepBudget);
+        if (split <= 0) {
+            split = events.size() == 1 ? 1 : Math.max(1, events.size() - 1);
+        }
+        List<SessionEvent> archived = List.copyOf(events.subList(0, split));
+        List<SessionEvent> kept = List.copyOf(events.subList(split, events.size()));
+        if (SessionTokenEstimator.estimateEvents(kept, estimator) > keepBudget) {
+            archived = events;
+            kept = List.of();
+        }
+        return new EventSplit(archived, kept);
+    }
 
     private int newestSuffixStart(List<SessionEvent> events, long budget) {
         long used = 0L;

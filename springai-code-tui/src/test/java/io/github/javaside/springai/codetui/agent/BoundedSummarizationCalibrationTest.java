@@ -47,6 +47,22 @@ class BoundedSummarizationCalibrationTest {
         return result.compactedEvents().get(1).getMessage().getText();
     }
 
+    @Test
+    void forcedEventWindowCompactsEvenWhenTotalIsBelowTargetBudget() {
+        CalibrationState calibration = new CalibrationState();
+        BoundedSummarizationCompactionStrategy strategy = new BoundedSummarizationCompactionStrategy(
+                () -> 234_000L, String::length, input -> "summary",
+                () -> new BoundedSummarizationCompactionStrategy.ModelSnapshot(KEY, WINDOW, RESERVE),
+                calibration, AgentTools.MANUAL_MAX_EVENTS_TO_KEEP);
+
+        CompactionResult result = strategy.compact(request(events(470, 10)));
+
+        assertEquals(450, result.eventsRemoved(),
+                "手动 /compact 必须按事件窗口激进归档,不能因 total <= targetBudget 误报无可压缩内容");
+        assertEquals(AgentTools.MANUAL_MAX_EVENTS_TO_KEEP + 2, result.compactedEvents().size(),
+                "压缩产物应是摘要标记 + 摘要正文 + 最近 20 个事件");
+    }
+
     // 场景 1:窗口装得下 → 一次全量调用,knownGood 学到 E
     @Test
     void fullSummarizationSucceedsInSingleCall() {

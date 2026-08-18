@@ -134,6 +134,16 @@ public final class CodeTuiView extends InlineApp {
 
     private final ConversationState state;
     private final SubmitHandler onSubmit;
+    /**
+     * 「需要你看一眼」的边沿检测（BEL + tab 标题），见 {@link AttentionTracker}。
+     * 与 {@link #bgPending} 一样只在渲染线程（drain / 按键事件线程）读写。
+     */
+    private final AttentionTracker attention = new AttentionTracker();
+    /**
+     * 上一帧到本帧之间用户是否主动按 Esc 取消了回合（抑制「完成」铃声——他刚按过键，必然在场）。
+     * 按键线程置位、drain 消费后复位；volatile：按键与 drain 可能不在同一线程。
+     */
+    private volatile boolean userCancelledSinceLastTick;
     private final TextAreaState inputState = new TextAreaState();    // 输入源（多行编辑模型）
     // 仅用于复用 textArea 的完整编辑键处理（退格/方向/Home/End/字符/中文…）。⚠ 从不渲染它——
     // 一旦渲染，TextAreaElement 会以自增 id 自注册进焦点链、抢走焦点，导致外层拦不到 Enter。
@@ -476,6 +486,9 @@ public final class CodeTuiView extends InlineApp {
                 printPlan(pl.plan());   // 正文进 scrollback（几十行塞进行内面板会把输入框顶出屏幕）
             }
         }
+        // ── 终端注意提示（tab 标题 + BEL，仿 Claude Code）──
+        // 放在出队之前：出队路径可能 return，跳过它这一拍就不完整（下一拍边沿已经错过）。
+        advanceAttention(head != null || activeAsk != null || activePermission != null || activePlan != null);
         // 回合结束后自动出队下一条排队消息。submit() 同步置 THINKING，故本 tick 只会出队一条，无重复提交竞态。
         if (!busy()) {   // 空闲、非压缩中、且无在飞子 agent 才出队（见 busy()）
             // 兜底：用户在<b>收尾流</b>期间插的话没赶上 inject()（最后一次模型调用早已发出），
@@ -560,10 +573,35 @@ public final class CodeTuiView extends InlineApp {
         bgProbedWhileBraked = false;
     }
 
+    /**
+     * 推进终端注意提示一拍（渲染线程）：按 {@link AttentionTracker} 的边沿动作写 tab 标题 / 响 BEL。
+     *
+     * <p><b>「忙」的定义与 {@link #busy()} 对齐但减去模态一份</b>：模态在场时（modalWaiting）
+     * 状态机优先走 WAITING_USER，故 busy 只需覆盖「回合在跑 / 压缩中 / 在飞子 agent 收尾」。
+     * {@code state.isBusy()} 含「有模态」，直接用它会把 WAITING_USER 拍成 BUSY，故这里用
+     * {@code state.isIdle() && !onSubmit.hasInFlightSubagents() && !state.isCompacting()} 取反。
+     *
+     * <p><b>标题文案</b>：等待用户 = 「⏳ Code TUI 等待你的输入」，完成 = 「✓ Code TUI 已完成」。
+     * 前缀符号让多 tab 并排时一眼分得出是哪种状态（macOS 会把 tab 标题截短，符号在最前才保得住）。
+     * 写入失败（反射 / IO）静默降级——提示是锦上添花，绝不拖垮主流程（见 TerminalAttention 契约）。
+     */
+    private void advanceAttention(boolean modalWaiting) {
+        boolean busy = !(state.isIdle() && !onSubmit.hasInFlightSubagents()) || state.isCompacting();
+        boolean cancelled = userCancelledSinceLastTick;
+        userCancelledSinceLastTick = false;
+        switch (attention.advance(modalWaiting, busy, cancelled)) {
+            case ALERT_WAITING -> TerminalAttention.alert(runner(), "⏳ Code TUI 等待你的输入");
+            case ALERT_DONE -> TerminalAttention.alert(runner(), "✓ Code TUI 已完成");
+            case RESTORE -> TerminalAttention.restore(runner(), AttentionTracker.DEFAULT_TITLE);
+            case NONE -> { /* 平态 */ }
+        }
+    }
+
     /** 测试专用：跑一次 drain（侦测队首模态并进入作答/审批态）。 */
     void tickForTest() { drain(); }
 
-    /** 测试专用：当前正在审批的请求（null=非审批态）。 */
+    /** 测试专用：终端注意提示状态机（断言 drain 接线的边沿落点；IO 已静默降级）。 */
+    AttentionTracker attentionForTest() { return attention; }
     PermissionRequest activePermissionForTest() { return activePermission; }
 
     /** 测试专用：直接驱动上下文用量刷新（测试里没有 drain 循环，animTick 永不推进）。 */
@@ -980,6 +1018,8 @@ public final class CodeTuiView extends InlineApp {
             shutdownAndQuit();
             return EventResult.HANDLED;
         }
+        // 任意用户按键 = 人在场：DONE 态的提示标题就此收场（下一拍 drain 恢复默认标题）。
+        attention.userActed();
         // 任意按键消费掉上一条 sticky notice（如「已取消当前回合」），恢复状态栏常态行。
         // 本次按键若要显示新 notice，会在下方各分支重新 setNotice（晚于此处），故当次提示不受影响。
         // 修复：真实输入走 inputState 编辑器、不再触发旧 typeChar 清 notice，导致取消长回合（如子 agent）
@@ -1038,6 +1078,8 @@ public final class CodeTuiView extends InlineApp {
         if (k.isCancel()) {
             boolean running = !state.isIdle();
             int dropped = state.queuedCount();
+            // 用户主动取消：置位抑制本拍忙→闲下降沿的「已完成」提示（他刚按过键，必然在场）。
+            if (running || dropped > 0) userCancelledSinceLastTick = true;
             // 未送达 + 已送达的插话一起要回来，<b>回填输入框而不是丢弃</b>：按 Esc 通常正是
             // 「别跑了，听我的」，那句话不该跟着一起没。已送达的那条尤其不能丢——取消走 doOnCancel，
             // handleComplete 不跑、没人补它进历史，不还给用户就是模型看过、历史没有、用户也拿不回来。

@@ -539,7 +539,7 @@ public final class AgentTools {
                 new BoundedSummarizationCompactionStrategy(manualTargetBudget,
                         tokenCountEstimator::estimate,
                         summarizeChunk(auxClient),
-                        snapshot, calibrationState));
+                        snapshot, calibrationState, MANUAL_MAX_EVENTS_TO_KEEP));
 
         SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
                 .defaultUserId(DEFAULT_USER_ID)
