@@ -160,4 +160,110 @@ class BoundedSummarizationCalibrationTest {
                 "兜底摘要不能为空");
         assertTrue(SessionTokenEstimator.estimateEvents(result.compactedEvents(), String::length) <= TARGET);
     }
+
+    // 场景 7:安全阀——数字锚定出的预算跌破 16k 下限 → 不切块,直接本地兜底
+    @Test
+    void safetyValveBudgetBelowFloorFallsBackLocally() {
+        List<String> inputs = new ArrayList<>();
+        CalibrationState calibration = new CalibrationState();
+        CompactionResult result = strategy(calibration, input -> {
+            inputs.add(input);
+            throw new RuntimeException("prompt is too long: 120000 tokens > 20000 maximum");
+        }).compact(request(events(12, 10_000)));
+
+        // 20000 - 12000(预留) = 8000 < 16000:切块只会制造一串必败请求
+        assertEquals(1, inputs.size(), "预算跌破下限时不得再发任何切块请求");
+        assertTrue(summaryText(result).contains("compacted locally"));
+        assertEquals(inputs.get(0).length(), (long) calibration.get(KEY).knownBad(),
+                "失败的全量输入量仍应记入 knownBad");
+    }
+
+    // 场景 8:安全阀——预算合法但块数超 8 上限 → 全量失败 1 次后直接兜底,无切块调用
+    @Test
+    void safetyValveChunkCountOverEightFallsBackLocally() {
+        List<String> inputs = new ArrayList<>();
+        CalibrationState calibration = new CalibrationState();
+        CompactionResult result = strategy(calibration, input -> {
+            inputs.add(input);
+            throw new RuntimeException("prompt is too long: 160000 tokens > 30000 maximum");
+        }).compact(request(events(16, 10_000)));
+
+        // 30000 - 12000 = 18000 ≥ 16000 合法,但 archived≈150k / 18k → 9 块 > 8 上限
+        assertEquals(1, inputs.size(), "块数超上限时不得发出任何切块请求");
+        assertTrue(summaryText(result).contains("compacted locally"));
+    }
+
+    // 场景 9:全局调用硬上限 20——回显型摘要(每轮只缩 10%,永远压不到目标)必须在恰 20 次调用时被掐断
+    @Test
+    void globalCallBudgetCapsAtTwenty() {
+        List<String> inputs = new ArrayList<>();
+        CalibrationState calibration = new CalibrationState();
+        CompactionResult result = strategy(calibration, input -> {
+            inputs.add(input);
+            if (inputs.isEmpty() || inputs.size() == 1) {
+                throw new RuntimeException("prompt is too long: 160000 tokens > 32000 maximum");
+            }
+            // 恒收缩 10%:切块与再压缩循环永不收敛到 40k 目标,直到预算耗尽
+            return input.substring(0, (int) (input.length() * 0.9));
+        }).compact(request(events(15, 10_000)));
+
+        // 32000 - 12000 = 20000,E≈150k → 8 块(恰在上限内);随后再压缩循环内耗尽:1+8+8+3 = 20
+        assertEquals(20, inputs.size(), "全局调用上限必须恰好在第 20 次掐断(不多发一次,也不提前放弃)");
+        assertTrue(summaryText(result).contains("compacted locally"), "预算耗尽必须落本地兜底,不得抛出");
+    }
+
+    // 场景 10:切块中途失败 → 整体兜底,但失败块的容量学习保留(防下次原样再撞)
+    @Test
+    void partialChunkFailureFallsBackButKeepsLearnedIntervals() {
+        List<String> inputs = new ArrayList<>();
+        CalibrationState calibration = new CalibrationState();
+        CompactionResult result = strategy(calibration, input -> {
+            inputs.add(input);
+            if (inputs.size() == 1) {
+                throw new RuntimeException("prompt is too long: 120000 tokens > 60000 maximum");
+            }
+            if (inputs.size() == 3) {
+                throw new RuntimeException("maximum context length exceeded");   // 第 2 块超限
+            }
+            return "summary";
+        }).compact(request(events(12, 10_000)));
+
+        long budget = 60_000L - RESERVE;   // 48_000
+        assertEquals(3, inputs.size(), "全量失败 + 第 1 块成功 + 第 2 块失败即止");
+        assertEquals(budget, inputs.get(1).length(), "第 1 块按锚定预算切块");
+        assertTrue(summaryText(result).contains("compacted locally"), "中途失败不复用部分摘要,整体兜底");
+
+        // 同一量级(48k)先成功后失败 = 窗口中途收缩:以最新失败为准——knownBad=48k,
+        // knownGood 收缩到 47_999 并撤销证明(诚实口径:不复用已失效的成功证据)
+        assertEquals(budget, (long) calibration.get(KEY).knownBad(), "失败块的输入量应记为 knownBad");
+        assertEquals(budget - 1, calibration.get(KEY).knownGood(), "knownGood 须收缩到 knownBad-1");
+        assertFalse(calibration.get(KEY).goodProven(), "矛盾证据下必须撤销 goodProven");
+    }
+
+    // 场景 11:共享校准——A 策略学到的 knownBad,B 策略(另一实例)首次压缩直接切块、零试探
+    @Test
+    void sharedCalibrationGivesSecondStrategyZeroTrial() {
+        CalibrationState calibration = new CalibrationState();
+        List<String> firstInputs = new ArrayList<>();
+        strategy(calibration, input -> {
+            firstInputs.add(input);
+            if (firstInputs.size() == 1) {
+                throw new RuntimeException("prompt is too long: 120000 tokens > 60000 maximum");
+            }
+            return "summary";
+        }).compact(request(events(12, 10_000)));
+        long e = firstInputs.get(0).length();
+        assertEquals(e, (long) calibration.get(KEY).knownBad(), "前置:A 应学到 knownBad=E");
+
+        List<String> secondInputs = new ArrayList<>();
+        strategy(calibration, input -> {
+            secondInputs.add(input);
+            return "summary";
+        }).compact(request(events(12, 10_000)));
+
+        assertTrue(secondInputs.get(0).length() < e,
+                "B 的首次请求不得是注定失败的全量(knownBad 短路必须跨策略实例生效)");
+        assertTrue(secondInputs.stream().allMatch(in -> in.length() < e),
+                "B 的所有请求都必须低于已知失败量");
+    }
 }
