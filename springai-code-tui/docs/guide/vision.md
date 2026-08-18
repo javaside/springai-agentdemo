@@ -60,7 +60,7 @@
 **不在名单里的一律判「不支持」**——误判「不支持」只是拦住你、提示可见可改；误判「支持」是把图真发出去吃一个看不懂的 400。
 
 > **内置模型清单里能直接用上视觉的只有 OpenAI 与 Anthropic 两家**（`gpt-5.6-*` / `gpt-5.5` / `gpt-5.4`、`claude-*`）。
-> 千问与智谱的内置清单是 `qwen3.7-max`/`qwen3.6-flash`/`qwen3-coder-next` 与 `glm-5.2`/`glm-5.1`/`glm-5-turbo`，**没有一个命中名单**——
+> 千问与智谱的内置清单是 `qwen3.7-max`/`qwen3.6-flash`/`qwen3-coder-next` 与 `glm-5.3`/`glm-5.2`/`glm-5.1`/`glm-5-turbo`，**没有一个命中名单**——
 > 要在这两家用视觉，得自己用 `DASHSCOPE_MODELS` / `ZHIPU_MODELS` 配一个 `-vl` / `glm-4v` 系的 id。
 
 ### 图片从不进会话记忆

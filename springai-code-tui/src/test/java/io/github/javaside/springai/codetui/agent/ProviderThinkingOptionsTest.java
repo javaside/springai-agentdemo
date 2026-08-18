@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -53,6 +54,22 @@ class ProviderThinkingOptionsTest {
                 .options("qwen3-coder-next", ThinkingConfig.enabledWithoutStrength())).getExtraBody());
         assertThrows(IllegalArgumentException.class, () -> provider
                 .options("qwen3-coder-next", ThinkingConfig.enabledBudget(1024)));
+    }
+
+    @Test
+    void zhipuGlm53CarriesEffortAndCannotDisable() {
+        ZhipuProvider provider = new ZhipuProvider("k");
+        OpenAiChatOptions options = (OpenAiChatOptions) provider
+                .options("glm-5.3", ThinkingConfig.enabledEffort("max"));
+        assertEquals(Map.of("type", "enabled"), options.getExtraBody().get("thinking"));
+        assertEquals("max", options.getReasoningEffort());
+        // 官方文档：glm-5.3 仅支持开启思考；档位 low/high/max。
+        assertFalse(provider.thinkingCapabilities("glm-5.3").supportsDisable());
+        assertEquals(List.of("low", "high", "max"), provider.thinkingCapabilities("glm-5.3").effortValues());
+        assertThrows(IllegalArgumentException.class, () -> provider
+                .options("glm-5.3", ThinkingConfig.disabled()));
+        assertThrows(IllegalArgumentException.class, () -> provider
+                .options("glm-5.3", ThinkingConfig.enabledEffort("medium")));
     }
 
     @Test

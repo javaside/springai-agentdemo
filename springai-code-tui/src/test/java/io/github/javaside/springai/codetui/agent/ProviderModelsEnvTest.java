@@ -32,7 +32,7 @@ class ProviderModelsEnvTest {
 
     @Test
     void zhipu_noEnv_builtInDefault() {
-        assertEquals("glm-5.2", new ZhipuProvider("key", null, null).defaultModel());
+        assertEquals("glm-5.3", new ZhipuProvider("key", null, null).defaultModel());
     }
 
     @Test
