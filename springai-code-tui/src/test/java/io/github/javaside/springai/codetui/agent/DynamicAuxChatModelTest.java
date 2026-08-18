@@ -19,10 +19,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class DynamicAuxChatModelTest {
 
-    /** 记录收到的模型 id、并返回一个可辨识的标签文本，用来断言「调到了哪家」。 */
+    /** 记录收到的模型 id 与 maxTokens、并返回一个可辨识的标签文本，用来断言「调到了哪家、带什么输出上限」。 */
     private static final class RecordingChatModel implements ChatModel {
         private final String tag;
         volatile String lastModel;
+        volatile Integer lastMaxTokens;
 
         RecordingChatModel(String tag) {
             this.tag = tag;
@@ -31,6 +32,7 @@ class DynamicAuxChatModelTest {
         @Override
         public ChatResponse call(Prompt prompt) {
             this.lastModel = prompt.getOptions() == null ? null : prompt.getOptions().getModel();
+            this.lastMaxTokens = prompt.getOptions() == null ? null : prompt.getOptions().getMaxTokens();
             return new ChatResponse(List.of(new Generation(new AssistantMessage(tag))));
         }
 
@@ -40,22 +42,34 @@ class DynamicAuxChatModelTest {
         }
     }
 
-    /** 最小可用 provider：一个可辨识的 ChatModel + 一个模型 id。 */
+    /** 最小可用 provider：一个可辨识的 ChatModel + 一个模型 id + 可选的每请求基础 maxTokens。 */
     private static final class FakeProvider implements LlmProvider {
         private final String id;
         private final String modelId;
         private final RecordingChatModel model;
+        private final Integer baseMaxTokens;
 
         FakeProvider(String id, String modelId, RecordingChatModel model) {
+            this(id, modelId, model, null);
+        }
+
+        FakeProvider(String id, String modelId, RecordingChatModel model, Integer baseMaxTokens) {
             this.id = id;
             this.modelId = modelId;
             this.model = model;
+            this.baseMaxTokens = baseMaxTokens;
         }
 
         @Override public String id() { return id; }
         @Override public boolean available() { return true; }
         @Override public ChatModel chatModel() { return model; }
-        @Override public ChatOptions options(String modelId) { return ChatOptions.builder().model(modelId).build(); }
+        @Override public ChatOptions options(String modelId) {
+            ChatOptions.Builder b = ChatOptions.builder().model(modelId);
+            if (baseMaxTokens != null) {
+                b.maxTokens(baseMaxTokens);
+            }
+            return b.build();
+        }
         @Override public List<ModelOption> models() { return List.of(new ModelOption(modelId, modelId, "")); }
         @Override public String defaultModel() { return modelId; }
     }
@@ -106,5 +120,37 @@ class DynamicAuxChatModelTest {
         ChatResponse resp = aux.stream(new Prompt("hi")).blockLast();
         assertEquals("B", resp.getResult().getOutput().getText());
         assertEquals("model-b", b.lastModel);
+    }
+
+    /**
+     * prompt 自带 maxTokens（摘要路径的 8192 输出上限）必须<b>覆盖</b> provider 基础 options 的同名值，
+     * 而不是被整体替换丢掉——否则压缩摘要一旦切到带基础 maxTokens 的家（如 Anthropic 的必填项），
+     * 输出上限就静默漂移。
+     */
+    @Test
+    void promptMaxTokensOverridesProviderBase() {
+        RecordingChatModel a = new RecordingChatModel("A");
+        ProviderRegistry reg = new ProviderRegistry(List.of(
+                new FakeProvider("pa", "model-a", a, 4096)));
+        DynamicAuxChatModel aux = new DynamicAuxChatModel(reg);
+
+        aux.call(new Prompt("hi", ChatOptions.builder().maxTokens(8192).build()));
+
+        assertEquals("model-a", a.lastModel, "模型 id 仍须注入");
+        assertEquals(8192, a.lastMaxTokens, "prompt 的 maxTokens 应覆盖 provider 基础值");
+    }
+
+    /** 对照：prompt 不带 maxTokens 时，provider 基础 options（如 Anthropic 必填项）必须原样保留。 */
+    @Test
+    void promptWithoutMaxTokensKeepsProviderBase() {
+        RecordingChatModel a = new RecordingChatModel("A");
+        ProviderRegistry reg = new ProviderRegistry(List.of(
+                new FakeProvider("pa", "model-a", a, 4096)));
+        DynamicAuxChatModel aux = new DynamicAuxChatModel(reg);
+
+        aux.call(new Prompt("hi"));
+
+        assertEquals("model-a", a.lastModel);
+        assertEquals(4096, a.lastMaxTokens, "无 prompt 覆盖时应保留 provider 基础 maxTokens");
     }
 }
