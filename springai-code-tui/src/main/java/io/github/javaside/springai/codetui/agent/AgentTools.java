@@ -109,19 +109,40 @@ public final class AgentTools {
     private static final ModelContextWindows MODEL_CONTEXT_WINDOWS = ModelContextWindows.fromEnvironment();
     private static final double AUTO_COMPACTION_RATIO = 0.70d;
     private static final double COMPACTION_TARGET_RATIO = 0.55d;
-    private static final long MAX_SUMMARY_CHUNK_TOKENS = 64_000L;
     /** MediaReferencePreserving 在 base 预算完成后最多插入 20 条有界清单；提前留足 token，保证完整装饰链仍低于触发线。 */
     static final long MEDIA_MANIFEST_TOKEN_RESERVE = 16_000L;
-    /** 摘要请求还含固定 system prompt、角色封装和输出空间；user chunk 只使用安全输入预算的一部分。 */
+    /** 摘要请求还含固定 system prompt 与角色封装；user chunk 只使用安全输入预算的一部分。 */
     private static final long SUMMARY_PROMPT_TOKEN_RESERVE = 4_000L;
+    /** 摘要输出的显式上限（maxTokens=8192 之外的预留量）：乐观全量的成功判据是「输入预算内」，输出由再压缩与本地兜底兜住。 */
+    private static final long SUMMARY_OUTPUT_RESERVE = 8_000L;
+    /** 摘要请求的硬输出上限：无它时部分家的输出可膨胀到输入级，压缩产物反而顶破目标预算。 */
+    private static final int SUMMARY_MAX_OUTPUT_TOKENS = 8192;
 
     static long contextWindow(ProviderRegistry registry) {
-        return registry == null ? CONTEXT_WINDOW_TOKENS
-                : MODEL_CONTEXT_WINDOWS.resolve(registry.active().id(), registry.activeModelId());
+        return modelSnapshot(registry).windowTokens();
     }
 
     static long autoCompactionThreshold(ProviderRegistry registry) {
         return Math.max(32_000L, (long) (contextWindow(registry) * AUTO_COMPACTION_RATIO));
+    }
+
+    /**
+     * 单次 {@link ProviderRegistry#activeRequestSelection()} 快照派生模型身份与窗口。
+     *
+     * <p><b>为什么必须单快照</b>：校准 key 与输入预算若分两次读注册表，{@code /model} 并发切换可在两读
+     * 之间交错——把「A 家的区间」配「B 家的窗口」，学习与预算双双失真。{@code null} registry 走旧测试
+     * 兜底窗口（行为不变）。
+     */
+    static BoundedSummarizationCompactionStrategy.ModelSnapshot modelSnapshot(ProviderRegistry registry) {
+        if (registry == null) {
+            return new BoundedSummarizationCompactionStrategy.ModelSnapshot(
+                    "test:legacy", CONTEXT_WINDOW_TOKENS, SUMMARY_PROMPT_TOKEN_RESERVE + SUMMARY_OUTPUT_RESERVE);
+        }
+        ProviderRegistry.RequestSelection sel = registry.activeRequestSelection();
+        long window = MODEL_CONTEXT_WINDOWS.resolve(sel.provider().id(), sel.modelId());
+        return new BoundedSummarizationCompactionStrategy.ModelSnapshot(
+                sel.provider().id() + ":" + sel.modelId(), window,
+                SUMMARY_PROMPT_TOKEN_RESERVE + SUMMARY_OUTPUT_RESERVE);
     }
 
     /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收（压缩为销毁式，见类注释）。须 > overlapSize 且其 token 量远低于阈值。可调。 */
@@ -499,26 +520,26 @@ public final class AgentTools {
         java.util.function.LongSupplier targetBudget = () ->
                 Math.max(8_000L, (long) (contextWindow.getAsLong() * COMPACTION_TARGET_RATIO)
                         - MEDIA_MANIFEST_TOKEN_RESERVE);
-        java.util.function.LongSupplier chunkBudget = () ->
-                Math.max(4_000L, Math.min(MAX_SUMMARY_CHUNK_TOKENS,
-                        contextWindow.getAsLong() / 8L) - SUMMARY_PROMPT_TOKEN_RESERVE);
-
-        CompactionStrategy autoStrategy = autoCompaction(
-                new BoundedSummarizationCompactionStrategy(targetBudget, chunkBudget,
-                        tokenCountEstimator::estimate,
-                        chunk -> auxClient.prompt()
-                                .system("Summarize this conversation chunk for continuation. Preserve decisions, constraints, completed work, pending tasks, errors, commands, and file paths. Be concise.")
-                                .user(chunk).call().content()),
-                listener);
-
         java.util.function.LongSupplier manualTargetBudget = () ->
                 Math.max(8_000L, contextWindow.getAsLong() / 4L - MEDIA_MANIFEST_TOKEN_RESERVE);
-        CompactionStrategy manualStrategy = manualCompaction(
-                new BoundedSummarizationCompactionStrategy(manualTargetBudget, chunkBudget,
+
+        // 单一 CalibrationState：auto/manual 两条策略共享——/compact 学到的容量立即被自动压缩复用，反之亦然。
+        CalibrationState calibrationState = new CalibrationState();
+        java.util.function.Supplier<BoundedSummarizationCompactionStrategy.ModelSnapshot> snapshot =
+                () -> modelSnapshot(registry);
+
+        CompactionStrategy autoStrategy = autoCompaction(
+                new BoundedSummarizationCompactionStrategy(targetBudget,
                         tokenCountEstimator::estimate,
-                        chunk -> auxClient.prompt()
-                                .system("Summarize this conversation chunk for continuation. Preserve decisions, constraints, completed work, pending tasks, errors, commands, and file paths. Be concise.")
-                                .user(chunk).call().content()));
+                        summarizeChunk(auxClient),
+                        snapshot, calibrationState),
+                listener);
+
+        CompactionStrategy manualStrategy = manualCompaction(
+                new BoundedSummarizationCompactionStrategy(manualTargetBudget,
+                        tokenCountEstimator::estimate,
+                        summarizeChunk(auxClient),
+                        snapshot, calibrationState));
 
         SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
                 .defaultUserId(DEFAULT_USER_ID)
@@ -833,6 +854,25 @@ public final class AgentTools {
      */
     static ChatModel auxChatModel(ProviderRegistry registry) {
         return new DynamicAuxChatModel(registry);
+    }
+
+    /**
+     * 压缩摘要的单次 LLM 调用（auto/manual 共用）。
+     *
+     * <p><b>maxTokens=8192</b>：摘要输出若无硬上限，部分家的输出可膨胀到输入级——压缩产物反而顶破
+     * 目标预算，触发线形同虚设。经 {@code DynamicAuxChatModel} 字段级合并后覆盖该家基础值。
+     * system prompt 同步声明输出量级，让上限对模型本身可见（双保险：提示 + 硬截断）。
+     */
+    private static java.util.function.Function<String, String> summarizeChunk(ChatClient auxClient) {
+        return chunk -> auxClient.prompt()
+                .system("Summarize this conversation chunk for continuation. Preserve decisions, constraints, "
+                        + "completed work, pending tasks, errors, commands, and file paths. "
+                        + "Keep the summary under 8000 tokens.")
+                .user(chunk)
+                .options(org.springframework.ai.chat.prompt.ChatOptions.builder()
+                        .maxTokens(SUMMARY_MAX_OUTPUT_TOKENS))
+                .call()
+                .content();
     }
 
     /**
