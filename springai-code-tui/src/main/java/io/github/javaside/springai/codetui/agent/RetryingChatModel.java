@@ -8,10 +8,13 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.MessageAggregator;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 
+import java.io.IOException;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongConsumer;
 
 /**
  * 子 agent 专用 ChatModel 装饰器（见 {@link SubagentRunner}）：把阻塞式 {@link #call} <b>桥接到流式</b>
@@ -31,24 +34,54 @@ import java.util.concurrent.atomic.AtomicReference;
  * 工具调用时视同瞬态失败重试，绝不把空串静默交回主 agent（实测曾致主 agent 误判「子代理返回空响应」）。
  *
  * <p><b>不</b>重试取消/中断（回合 Esc 要立即退出，且中断标志位必须保留）；stream() 原样透传（子 agent 不用）。
+ *
+ * <p><b>退避</b>：指数 500ms×2^n 封顶 4s，总尝试 5 次。瞬态判据见 {@link #shouldRetry}（2026-08-17
+ * 生产日志实测扩容）。休眠可注入（{@link RetryingChatModel#RetryingChatModel(ChatModel, LongConsumer)}），
+ * 测试不必真实等待。
  */
 final class RetryingChatModel implements ChatModel {
 
     private static final Logger log = LoggerFactory.getLogger(RetryingChatModel.class);
 
-    /** 总尝试次数（1 次原始 + 2 次重试）。 */
-    static final int MAX_ATTEMPTS = 3;
-    /** 首次重试前的退避毫秒数；之后线性翻倍（300、600）。 */
-    private static final long BACKOFF_MS = 300;
+    /** 总尝试次数（1 次原始 + 4 次重试）。日志实测网关坏窗口/限流以十秒计，3 次等价没等。 */
+    static final int MAX_ATTEMPTS = 5;
+    /** 首次重试前的退避毫秒数；之后指数翻倍（500、1000、2000、4000），封顶见 {@link #CAP_BACKOFF_MS}。 */
+    private static final long BACKOFF_MS = 500;
+    /** 单次退避封顶：再往上也只是干等，网关级别的长坏窗口救不了（那是换流式传输解决的事）。 */
+    private static final long CAP_BACKOFF_MS = 4000;
 
     private final ChatModel delegate;
+    /** 休眠器：生产 Thread::sleep；测试注入收集间隔的桩，避免真实等待。 */
+    private final LongConsumer sleeper;
 
     private RetryingChatModel(ChatModel delegate) {
+        this(delegate, ms -> {
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(ie);
+            }
+        });
+    }
+
+    /** 测试可见：注入自定义休眠器（收集中断请求等）。 */
+    RetryingChatModel(ChatModel delegate, LongConsumer sleeper) {
         this.delegate = delegate;
+        this.sleeper = sleeper;
     }
 
     static ChatModel wrap(ChatModel delegate) {
         return new RetryingChatModel(delegate);
+    }
+
+    /** 计算第 attempt 次失败后的退避毫秒数：BACKOFF_MS × 2^(attempt-1)，封顶 CAP_BACKOFF_MS。纯函数。 */
+    static long backoffMsAfter(int attempt) {
+        long ms = BACKOFF_MS;
+        for (int i = 1; i < attempt && ms < CAP_BACKOFF_MS; i++) {
+            ms *= 2;
+        }
+        return Math.min(ms, CAP_BACKOFF_MS);
     }
 
     @Override
@@ -56,12 +89,7 @@ final class RetryingChatModel implements ChatModel {
         RuntimeException last = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             if (attempt > 1) {
-                try {
-                    Thread.sleep(BACKOFF_MS * (attempt - 1));
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();   // 回合取消：保留中断标志、立即放弃重试
-                    throw last;
-                }
+                sleeper.accept(backoffMsAfter(attempt - 1));
             }
             try {
                 ChatResponse aggregated = streamAndAggregate(prompt);
@@ -125,22 +153,54 @@ final class RetryingChatModel implements ChatModel {
     }
 
     /**
-     * 是否值得重试：cause 链上有「2xx + 坏 body」特征——各家 SDK 的 *InvalidDataException
-     * （openai/anthropic 同名后缀，按类名匹配保持 provider 中立）或 Jackson 的 end-of-input。
-     * 取消/中断（Esc 回合取消的伴生）绝不重试。纯函数，便于单测。
+     * 是否值得重试：cause 链逐层判断，取消/中断优先短路（Esc 回合取消的伴生，绝不重试）。
+     *
+     * <p>瞬态判据（2026-08-17 生产日志实测的四类故障，spec：
+     * {@code docs/superpowers/specs/2026-08-18-subagent-retry-transient-expansion-design.md}）：
+     * <ul>
+     *   <li>「2xx + 坏 body」解析失败：*InvalidDataException 类名后缀（openai/anthropic 同名后缀，
+     *       按类名匹配保持 provider 中立）或 Jackson 的 "No content to map"；
+     *   <li>网络断连：{@link IOException} 家族（EOF/SocketTimeout/Connect 均子类），或类名以
+     *       IoException 结尾（openai-java 的 OpenAIIoException，同法不引新依赖）；
+     *   <li>流中途断开：message 含 "EOF reached while reading"（WebClientResponseException 把
+     *       EOFException 摊平进顶层 message、cause 链上只剩自身的场景）；
+     *   <li>限流：message 含 "rate limit"（大小写不敏感；覆盖 200-wrapped 的 SseException 与 429）；
+     *   <li>网关 5xx：cause 链上的 WebClientResponseException 且 is5xxServerError。
+     * </ul>
+     *
+     * <p><b>红线不重试</b>：401/403（欠费、密钥错——重试只会更慢更花钱）、其余 4xx（请求本身有病）、
+     * 中断/取消。把 IOException 全家族视为瞬态有理论误伤面（证书错误等），但误伤代价只是几次
+     * 快速失败，漏掉代价是整个子 agent 报废重跑。纯函数，便于单测。
      */
     static boolean shouldRetry(Throwable ex) {
-        boolean transientParse = false;
+        boolean transientFailure = false;
         for (Throwable t = ex; t != null; t = t.getCause()) {
             if (t instanceof InterruptedException || t instanceof CancellationException) {
                 return false;
             }
             String cls = t.getClass().getSimpleName();
-            if (cls.endsWith("InvalidDataException")
-                    || (t.getMessage() != null && t.getMessage().contains("No content to map"))) {
-                transientParse = true;
+            if (cls.endsWith("InvalidDataException") || cls.endsWith("IoException")
+                    || t instanceof IOException) {
+                transientFailure = true;
+            }
+            if (t instanceof WebClientResponseException wcre) {
+                if (wcre.getStatusCode().is5xxServerError()) {
+                    transientFailure = true;
+                } else if (wcre.getStatusCode().is4xxClientError()) {
+                    // 4xx（401/403/400…）是确定态：重试无意义且欠费场景下更花钱。
+                    // 2xx 不在此列——「200 OK 但 body 坏」正是网关坏窗口的形态，交给 EOF/解析特征判定。
+                    return false;
+                }
+            }
+            String msg = t.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("no content to map") || lower.contains("eof reached while reading")
+                        || lower.contains("rate limit")) {
+                    transientFailure = true;
+                }
             }
         }
-        return transientParse;
+        return transientFailure;
     }
 }

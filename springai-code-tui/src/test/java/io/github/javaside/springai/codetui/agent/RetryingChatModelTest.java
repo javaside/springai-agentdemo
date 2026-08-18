@@ -7,8 +7,12 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 
+import java.io.EOFException;
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -176,5 +180,106 @@ class RetryingChatModelTest {
         assertFalse(RetryingChatModel.shouldRetry(cancelled));
         assertFalse(RetryingChatModel.shouldRetry(
                 new RuntimeException("outer", new InterruptedException("sleep interrupted"))));
+    }
+
+    // ---- shouldRetry 扩容：日志实测的四类瞬态故障（2026-08-17 / springai-code-tui-1.14.0/logs）----
+
+    /** 模拟 openai-java 的 OpenAIIoException（OkHttp 断连：Request failed / Stream failed）。 */
+    private static final class FakeIoException extends RuntimeException {
+        FakeIoException(String message) {
+            super(message, new java.io.IOException("connection closed"));
+        }
+    }
+
+    /** java.io.IOException 家族（EOFException/SocketTimeout/Connect 全是子类）→ 瞬态重试。 */
+    @Test
+    void shouldRetryIoExceptionFamily() {
+        assertTrue(RetryingChatModel.shouldRetry(
+                new RuntimeException(new EOFException("EOF reached while reading"))));
+        assertTrue(RetryingChatModel.shouldRetry(
+                new RuntimeException(new SocketTimeoutException("read timed out"))));
+        assertTrue(RetryingChatModel.shouldRetry(
+                new RuntimeException(new IOException("connection reset"))));
+        // 类名后缀匹配（provider 中立，与 InvalidDataException 同法）
+        assertTrue(RetryingChatModel.shouldRetry(new FakeIoException("Request failed")));
+    }
+
+    /** WebClientResponseException 包着 EOF（200 OK 但 body 中途断）→ 按 message 特征匹配。 */
+    @Test
+    void shouldRetryEofMidBody() {
+        WebClientResponseException wrapped = WebClientResponseException.create(
+                200, "OK", null, null, null);
+        RuntimeException eofBody = new RuntimeException(
+                "200 OK from POST https://api.deepseek.com/chat/completions, "
+                        + "but response failed with cause: java.io.EOFException: EOF reached while reading",
+                wrapped);
+        assertTrue(RetryingChatModel.shouldRetry(eofBody));
+    }
+
+    /** 限流（SseException: 200: Upstream rate limit exceeded, please retry later）→ 大小写不敏感。 */
+    @Test
+    void shouldRetryRateLimit() {
+        assertTrue(RetryingChatModel.shouldRetry(
+                new RuntimeException("200: Upstream rate limit exceeded, please retry later")));
+        assertTrue(RetryingChatModel.shouldRetry(
+                new RuntimeException("429 Too Many Requests: RATE LIMIT hit")));
+    }
+
+    /** 网关 5xx（502/504 上游坏）→ 瞬态重试。 */
+    @Test
+    void shouldRetry5xxFromGateway() {
+        WebClientResponseException badGateway = WebClientResponseException.create(
+                502, "Bad Gateway", null, null, null);
+        assertTrue(RetryingChatModel.shouldRetry(new RuntimeException("upstream failed", badGateway)));
+    }
+
+    /** 红线：401/403（欠费、密钥错）绝不重试——重试只会更慢更花钱（2026-08-17 生产事故：403 预扣费失败）。 */
+    @Test
+    void shouldNotRetryUnauthorizedOrForbidden() {
+        WebClientResponseException unauthorized = WebClientResponseException.create(
+                401, "Unauthorized", null, null, null);
+        assertFalse(RetryingChatModel.shouldRetry(new RuntimeException("auth failed", unauthorized)));
+        WebClientResponseException forbidden = WebClientResponseException.create(
+                403, "Forbidden", null, null, null);
+        assertFalse(RetryingChatModel.shouldRetry(new RuntimeException("forbidden", forbidden)));
+    }
+
+    // ---- 指数退避 ----
+
+    /** backoffMsAfter 纯函数：500/1000/2000/4000，封顶后不再增长。 */
+    @Test
+    void backoffSequenceIsExponentialCapped() {
+        assertEquals(500, RetryingChatModel.backoffMsAfter(1));
+        assertEquals(1000, RetryingChatModel.backoffMsAfter(2));
+        assertEquals(2000, RetryingChatModel.backoffMsAfter(3));
+        assertEquals(4000, RetryingChatModel.backoffMsAfter(4));
+        assertEquals(4000, RetryingChatModel.backoffMsAfter(99), "封顶后不再增长");
+    }
+
+    /** 全部失败时按指数序列真实休眠（经注入桩收集），且总尝试次数 = MAX_ATTEMPTS。 */
+    @Test
+    void exhaustsRetriesWithExponentialBackoff() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Long> slept = new java.util.ArrayList<>();
+        RetryingChatModel m = new RetryingChatModel(
+                flaky(99, new FakeIoException("Request failed"), calls), slept::add);
+        assertThrows(RuntimeException.class, () -> m.call(new Prompt("hi")));
+        assertEquals(RetryingChatModel.MAX_ATTEMPTS, calls.get());
+        assertEquals(List.of(500L, 1000L, 2000L, 4000L), slept);
+    }
+
+    /** 休眠中被中断：保留中断标志、立即抛出，不再继续重试（Esc 语义）。 */
+    @Test
+    void interruptionDuringBackoffStopsRetrying() {
+        AtomicInteger calls = new AtomicInteger();
+        RetryingChatModel m = new RetryingChatModel(
+                flaky(99, new FakeIoException("Request failed"), calls), ms -> {
+                    // 与生产休眠器同款行为：置中断标志再抛
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(new InterruptedException("sleep interrupted"));
+                });
+        assertThrows(RuntimeException.class, () -> m.call(new Prompt("hi")));
+        assertEquals(1, calls.get(), "休眠即中断：只有首次尝试发生");
+        assertTrue(Thread.interrupted(), "中断标志必须保留");
     }
 }

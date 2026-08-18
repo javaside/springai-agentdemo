@@ -70,11 +70,13 @@ class SubagentRunnerBackgroundTest {
     }
 
     private static void awaitDone(BackgroundTaskRegistry reg, String id) throws InterruptedException {
-        for (int i = 0; i < 100; i++) {
+        // 500 轮 ×20ms = 10s：失败路径会走满 5 次重试 ×指数退避（500+1000+2000+4000 = 7.5s），
+        // 旧 2s 上限在退避升级后必然超时。10s 仍留 ~2.5s 余量给调度抖动。
+        for (int i = 0; i < 500; i++) {
             if (reg.find(id) != null && reg.find(id).finished()) return;
             Thread.sleep(20);
         }
-        throw new AssertionError("后台任务在 2s 内未结束");
+        throw new AssertionError("后台任务在 10s 内未结束");
     }
 
     @Test
