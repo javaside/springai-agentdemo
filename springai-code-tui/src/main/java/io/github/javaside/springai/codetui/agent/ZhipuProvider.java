@@ -28,9 +28,11 @@ public final class ZhipuProvider implements LlmProvider {
 
     // 国内官方端点；海外/Coding Plan 可经 ZHIPU_BASE_URL 覆盖为 https://api.z.ai/api/paas/v4。
     private static final String DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
-    // 2026 在售 GLM-5 系：glm-5.2 旗舰（Agentic Coding，对标 Opus 4.8）/ glm-5.1 长任务 / glm-5-turbo 快档。
+    // 2026 在售 GLM-5 系：glm-5.3 旗舰（2026-08-14 发布，同 5.2 基座、后训练强化，编码 +50%）
+    // / glm-5.2 上代旗舰 / glm-5.1 长任务 / glm-5-turbo 快档。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("glm-5.2",     "glm-5.2",     "旗舰 · Agentic 编码/长上下文"),
+            new ModelOption("glm-5.3",     "glm-5.3",     "旗舰 · Agentic 编码/长上下文"),
+            new ModelOption("glm-5.2",     "glm-5.2",     "上代旗舰 · Agentic 编码"),
             new ModelOption("glm-5.1",     "glm-5.1",     "长任务 · 自规划"),
             new ModelOption("glm-5-turbo", "glm-5-turbo", "快 · 便宜"));
 
@@ -90,6 +92,10 @@ public final class ZhipuProvider implements LlmProvider {
 
     @Override
     public ThinkingCapabilities thinkingCapabilities(String modelId) {
+        // glm-5.3（官方文档）：仅支持开启思考、不可禁用；reasoning_effort 取 low/high/max（默认 max）。
+        if ("glm-5.3".equals(modelId)) {
+            return ThinkingCapabilities.effort(false, List.of("low", "high", "max"));
+        }
         if ("glm-5.2".equals(modelId)) {
             return ThinkingCapabilities.effort(true, List.of("high", "max"));
         }

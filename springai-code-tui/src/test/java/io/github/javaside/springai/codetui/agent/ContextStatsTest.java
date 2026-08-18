@@ -87,6 +87,16 @@ class ContextStatsTest {
     }
 
     @Test
+    void zhipuGlm53HasMillionTokenWindow() {
+        ModelContextWindows windows = ModelContextWindows.parse("", 128_000L);
+
+        assertEquals(1_000_000L, windows.resolve("zhipu", "glm-5.3"),
+                "官方模型卡：glm-5.3 上下文 1M");
+        // 网关同名回退：opencode-go 的 glm-5.3 应复用原厂条目，而非保守兜底。
+        assertEquals(1_000_000L, windows.resolve("opencode-go", "glm-5.3"));
+    }
+
+    @Test
     void tokenAwareTriggerFiresForLargeToolOutputEvenWhenMessageTextIsEmpty() {
         SessionEvent tool = SessionEvent.builder().sessionId("s").message(
                 ToolResponseMessage.builder().responses(List.of(
