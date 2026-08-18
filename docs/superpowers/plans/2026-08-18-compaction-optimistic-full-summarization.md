@@ -1190,7 +1190,71 @@ git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agen
         springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/BoundedSummarizationCalibrationTest.java
 git commit -m "feat(tui): 压缩策略乐观全量摘要 + 区间校准(新构造器)"
 ```
-<!-- TASK-5 -->
-<!-- TASK-6 -->
-<!-- TASK-7 -->
-<!-- TASK-8 -->
+### Task 5: DynamicAuxChatModel——一次快照 + maxTokens 合并
+
+**Files:**
+- Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/DynamicAuxChatModel.java`
+- Modify: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/DynamicAuxChatModelTest.java`
+
+**前置事实（已核实）：**
+- aux 路径的 options 契约是 **DEFAULT 思考配置**（`auxAlwaysUsesDefaultConfig` 守卫），而 `activeRequestSelection().options()` 是思考配置感知的——所以快照只取**身份**（provider+modelId），options 仍走 `sel.provider().options(sel.modelId())` 一参 DEFAULT 入口，行为不变。
+- 现状 `registry.active()` + `registry.activeModelId()` 两次读取的交错窗口即设计「快照一致性」要修的 bug。
+- `ChatOptions.mutate().maxTokens(Integer).build()`：native options 协变 Builder、状态全保留（前置须知 C）。
+- stream() 的 `Flux.defer`（延迟订阅）属 usage-domain 评审 P2，**不在本设计范围**，不做。
+
+- [x] **Step 1: 写失败测试**（DynamicAuxChatModelTest 补 2 例，RecordingChatModel 增记 `lastMaxTokens`，FakeProvider 支持基础 maxTokens）
+
+`promptMaxTokensOverridesProviderBase`：prompt 带 maxTokens=8192 → delegate 收到 model=model-a 且 maxTokens=8192。
+`promptWithoutMaxTokensKeepsProviderBase`：provider 基础 maxTokens=4096、prompt 不带 → delegate 仍见 4096。
+
+- [x] **Step 2: 红** `mvn -pl springai-code-tui test -Dtest=DynamicAuxChatModelTest`
+- [x] **Step 3: 实现**——call/stream 各取一次 `activeRequestSelection()`；`withActiveOptions` 改合并式：
+
+```java
+private Prompt withActiveOptions(Prompt prompt, ProviderRegistry.RequestSelection sel) {
+    ChatOptions base = sel.provider().options(sel.modelId());   // DEFAULT 思考配置（aux 契约）
+    ChatOptions override = prompt.getOptions();
+    ChatOptions merged = override == null || override.getMaxTokens() == null
+            ? base
+            : base.mutate().maxTokens(override.getMaxTokens()).build();
+    return new Prompt(prompt.getInstructions(), merged);
+}
+```
+
+- [x] **Step 4: 绿**（含原有 3 例不回归）
+- [x] **Step 5: 提交** `feat(tui): 辅助模型一次快照与 maxTokens 合并`
+
+### Task 6: AgentTools 装配——共享 CalibrationState + 校准构造器 + 摘要 maxTokens
+
+**Files:**
+- Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/AgentTools.java`
+
+- [x] **Step 1: 实现**（装配级改动，行为由 Task 7/8 的策略级与守卫测试覆盖）：
+  1. 新增 `SUMMARY_OUTPUT_RESERVE = 8_000L`；`modelSnapshot(registry)` 静态方法：一次 `activeRequestSelection()` 派生 `ModelSnapshot(key=provider.id()+":"+modelId, window=MODEL_CONTEXT_WINDOWS.resolve(...), inputReserve=SUMMARY_PROMPT_TOKEN_RESERVE+SUMMARY_OUTPUT_RESERVE)`（registry null 走 `CONTEXT_WINDOW_TOKENS` 旧兜底）。
+  2. `contextWindow(registry)` 的两次读取改为同款单快照派生（设计「快照一致性」，行为等价）。
+  3. `build()` 创建**一个** `CalibrationState`；auto/manual 两条策略改走 5 参校准构造器，共享之；`chunkBudget` supplier 与 `MAX_SUMMARY_CHUNK_TOKENS` 常量删除（前置须知 D.2）。
+  4. 摘要 lambda 抽成共用方法：system prompt 追加「Keep the summary under 8000 tokens.」，并 `.options(ChatOptions.builder().maxTokens(8192))`（收 Builder，前置须知 C）。
+
+- [x] **Step 2: 编译 + 守卫** `mvn -pl springai-code-tui test -Dtest='AgentToolsCompactionWiringTest,AuxClientNotVisionWrappedTest,ContextStatsTest'`（须全绿）
+- [x] **Step 3: 提交** `feat(tui): 压缩策略接入校准装配与摘要输出上限`
+
+### Task 7: 策略级剩余行为测试（安全阀/全局上限/局部失败/共享校准）
+
+**Files:**
+- Modify: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/BoundedSummarizationCalibrationTest.java`
+
+- [x] **Step 1: 补 4 例（先跑确认红或行为不符，再对照实现）：**
+  1. `safetyValveBudgetBelowFloorFallsBackLocally`：数字锚定出 < 16k 的预算（如窗口 20k）→ 只 1 次失败调用即 localDigest，不切块。
+  2. `safetyValveChunkCountOverEightFallsBackLocally`：预算 ≥16k 但 ⌈E/budget⌉ > 8 → 全量失败 1 次后直接兜底，无切块调用。
+  3. `globalCallBudgetCapsAtTwenty`：summarizer 恒回显输入（非空、体积不减）→ 恰 20 次调用后 localDigest（1 全量 + 1 探测 + 4 切块 + 14 再压缩内耗尽）。
+  4. `partialChunkFailureFallsBackButKeepsLearnedIntervals`：全量失败（无数字）→ 探测成功 → 首块成功、次块超限 → 整体兜底；knownGood=max(探测, 首块)，knownBad=次块 estimate。
+  5. `sharedCalibrationGivesSecondStrategyZeroTrial`：两个策略实例共享同一 CalibrationState，A 学到 knownBad 后 B 的首次压缩直接切块（不发全量）。
+
+- [x] **Step 2: 绿** `mvn -pl springai-code-tui test -Dtest=BoundedSummarizationCalibrationTest`
+- [x] **Step 3: 提交** `test(tui): 压缩校准安全阀/上限/共享状态行为测试`
+
+### Task 8: 全量回归 + 收尾
+
+- [x] **Step 1: 模块全测** `mvn -pl springai-code-tui test`（全绿，0 失败）
+- [x] **Step 2: 勾选本计划全部 checkbox，提交** `docs: 压缩乐观全量摘要计划执行完毕`
+- [x] **Step 3: 汇报**：不合并回 main（共用树有并行在途改动，由用户决定合并时机）。
