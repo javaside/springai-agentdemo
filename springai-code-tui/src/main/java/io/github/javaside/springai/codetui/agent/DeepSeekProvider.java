@@ -172,9 +172,8 @@ public final class DeepSeekProvider implements LlmProvider {
     @Override public String defaultModel() { return models.get(0).id(); }
 
     /**
-     * DeepSeek 目前没有视觉模型，这里仍显式覆写：让「这家没有视觉模型」成为一个写下来的事实，
-     * 而不是「忘了覆写」留下的默认行为。判定同样按模型走 {@link VisionModels}，将来这家出了
-     * 视觉模型只需改名单。
+     * DeepSeek 视觉能力按模型名单判定（见 {@link VisionModels}）：目前仅 deepseek-v4-flash-vision-exp
+     * 支持图片输入。这里显式覆写让判定清晰化，将来名单变化只需动 VisionModels。
      */
     @Override
     public ModelCapabilities capabilities(String modelId) {

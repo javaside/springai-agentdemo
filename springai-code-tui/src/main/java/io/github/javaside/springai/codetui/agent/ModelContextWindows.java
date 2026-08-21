@@ -15,6 +15,7 @@ final class ModelContextWindows {
             Map.entry("openai:gpt-5.6-luna", 1_050_000L),
             Map.entry("deepseek:deepseek-v4-pro", 1_000_000L),
             Map.entry("deepseek:deepseek-v4-flash", 1_000_000L),
+            Map.entry("deepseek:deepseek-v4-flash-vision-exp", 1_000_000L),
             Map.entry("zhipu:glm-5.3", 1_000_000L),
             Map.entry("anthropic:claude-opus-5", 1_000_000L),
             Map.entry("anthropic:claude-fable-5", 1_000_000L),
