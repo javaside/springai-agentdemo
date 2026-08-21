@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DeepSeekThinkingChatModelVisionTest {
 
-    /** 桩 delegate：构造注入与 ChatModel 同一个 registry；call/stream 时消费 key(0,0)，记录是否命中。 */
+    /** 桩 delegate：构造注入与 ChatModel 同一个 registry；call/stream 时<b>检查但不消费</b>（`!registry.isEmpty()`），记录是否命中。注册表非空只有模型注册能达到；清理只能由模型的 finally/doFinally 完成。 */
     static final class StubDelegate implements ChatModel {
         private final DeepSeekVisionMediaRegistry registry;
         boolean sawImage;
@@ -32,13 +32,13 @@ class DeepSeekThinkingChatModelVisionTest {
 
         @Override
         public ChatResponse call(Prompt prompt) {
-            sawImage = registry.take(DeepSeekVisionMediaRegistry.key(0, 0)) != null;
+            sawImage = !registry.isEmpty();
             return ChatResponse.builder().generations(List.of(new Generation(new AssistantMessage("ok")))).build();
         }
 
         @Override
         public Flux<ChatResponse> stream(Prompt prompt) {
-            sawImage = registry.take(DeepSeekVisionMediaRegistry.key(0, 0)) != null;
+            sawImage = !registry.isEmpty();
             return Flux.empty();
         }
 

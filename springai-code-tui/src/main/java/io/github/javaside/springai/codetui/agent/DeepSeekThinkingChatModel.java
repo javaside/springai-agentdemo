@@ -65,19 +65,18 @@ final class DeepSeekThinkingChatModel implements ChatModel {
      * 「某条 user 消息 + media 列表」。
      *
      * <p><b>并发论证</b>：有图请求在本项目只有主 agent 当前回合（串行）；无图请求
-     * （子 agent、摘要等）{@code registerMedia} 返回空列表，finally/doFinally 的清理是 no-op，
-     * <b>不碰注册表</b>——与并发有图请求互不干扰。注册前防御性清空：若上一次有图请求
-     * 的 Flux 从未被订阅（理论不发生，ChatClient 总是立即订阅），残留不会污染本次。
+     * （子 agent、摘要等）第一遍扫描（{@link #hasRegistrableMedia}）确认无 media 后直接返回
+     * ——<b>不 clear、不 put、不碰注册表</b>，与并发有图请求互不干扰。仅当确认本次请求确有
+     * media 要注册时才执行防御性清空（若上一次有图请求的 Flux 从未被订阅——理论不发生，
+     * ChatClient 总是立即订阅——残留不会污染本次），随后第二遍扫描实际注册。
      */
     private java.util.List<String> registerMedia(Prompt prompt) {
         java.util.List<String> keys = new java.util.ArrayList<>();
         java.util.List<org.springframework.ai.chat.messages.Message> msgs = prompt.getInstructions();
-        if (msgs == null || msgs.isEmpty()) {
-            return keys;
+        if (msgs == null || msgs.isEmpty() || !hasRegistrableMedia(msgs)) {
+            return keys;   // 纯文本请求：绝不 clear、绝不 put
         }
-        if (!visionRegistry.isEmpty()) {
-            visionRegistry.clear();
-        }
+        visionRegistry.clear();   // 防御性清空——仅当确认本次确有 media 要注册
         for (int i = 0; i < msgs.size(); i++) {
             org.springframework.ai.chat.messages.Message m = msgs.get(i);
             if (!(m instanceof UserMessage user)) {
@@ -100,6 +99,26 @@ final class DeepSeekThinkingChatModel implements ChatModel {
             }
         }
         return keys;
+    }
+
+    /** 第一遍扫描：是否有任何 {@code UserMessage} 带「可注册」media（data 非空）——与注册判定一致。 */
+    private static boolean hasRegistrableMedia(java.util.List<org.springframework.ai.chat.messages.Message> msgs) {
+        for (org.springframework.ai.chat.messages.Message m : msgs) {
+            if (!(m instanceof UserMessage user)) {
+                continue;
+            }
+            java.util.List<Media> media = user.getMedia();
+            if (media == null || media.isEmpty()) {
+                continue;
+            }
+            for (Media md : media) {
+                byte[] bytes = md.getDataAsByteArray();
+                if (bytes != null && bytes.length > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Override
