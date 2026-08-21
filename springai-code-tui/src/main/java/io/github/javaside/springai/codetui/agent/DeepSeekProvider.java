@@ -34,6 +34,8 @@ public final class DeepSeekProvider implements LlmProvider {
     private final String baseUrl;            // 空→内置默认；配了→覆盖
     private final List<ModelOption> models;   // DEEPSEEK_MODELS 解析结果；未配置=内置 MODELS
     private volatile ChatModel chatModel;   // 懒建，单例
+    private final io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry visionRegistry =
+            new io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry();
 
     public DeepSeekProvider(String apiKey) {
         this(apiKey, null);
@@ -89,7 +91,7 @@ public final class DeepSeekProvider implements LlmProvider {
 
             ChatModel defaultDelegate = buildDelegate(restBuilder, webBuilder, ThinkingConfig.defaults());
             m = new DeepSeekThinkingChatModel(defaultDelegate,
-                    config -> buildDelegate(restBuilder, webBuilder, config));
+                    config -> buildDelegate(restBuilder, webBuilder, config), visionRegistry);
             chatModel = m;
         }
         return m;
@@ -122,7 +124,7 @@ public final class DeepSeekProvider implements LlmProvider {
         var web = baseWeb.clone();
         if (config.mode() != ThinkingMode.DEFAULT) {
             rest.requestInterceptor((request, body, execution) ->
-                    execution.execute(request, DeepSeekThinkingBodyCodec.decorate(body, config)));
+                    execution.execute(request, DeepSeekThinkingBodyCodec.decorate(body, config, visionRegistry)));
         }
         // 流式请求一律注入 stream_options.include_usage=true：DeepSeek 流式默认不带 usage（与 OpenAI 不同，
         // spring-ai-deepseek 的 ChatCompletionRequest 又没有 stream_options 字段、也不会自动加），不注入则 token
@@ -133,7 +135,7 @@ public final class DeepSeekProvider implements LlmProvider {
                 .connectTimeout(TIMEOUTS.connectTimeout()).build();
         var nativeConnector = new org.springframework.http.client.reactive.JdkClientHttpConnector(jdk);
         nativeConnector.setReadTimeout(TIMEOUTS.readTimeout());
-        web.clientConnector(new DeepSeekThinkingClientHttpConnector(nativeConnector, config));
+        web.clientConnector(new DeepSeekThinkingClientHttpConnector(nativeConnector, config, visionRegistry));
         DeepSeekApi api = DeepSeekApi.builder()
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)

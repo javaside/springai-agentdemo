@@ -20,10 +20,13 @@ final class DeepSeekThinkingClientHttpConnector implements ClientHttpConnector {
 
     private final ClientHttpConnector delegate;
     private final ThinkingConfig config;
+    private final io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry visionRegistry;
 
-    DeepSeekThinkingClientHttpConnector(ClientHttpConnector delegate, ThinkingConfig config) {
+    DeepSeekThinkingClientHttpConnector(ClientHttpConnector delegate, ThinkingConfig config,
+                                        io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry visionRegistry) {
         this.delegate = delegate;
         this.config = config;
+        this.visionRegistry = visionRegistry;
     }
 
     @Override
@@ -36,7 +39,7 @@ final class DeepSeekThinkingClientHttpConnector implements ClientHttpConnector {
                     byte[] bytes = new byte[joined.readableByteCount()];
                     joined.read(bytes);
                     DataBufferUtils.release(joined);
-                    byte[] decorated = DeepSeekThinkingBodyCodec.decorateStreaming(bytes, config);
+                    byte[] decorated = DeepSeekThinkingBodyCodec.decorateStreaming(bytes, config, visionRegistry);
                     getHeaders().setContentLength(decorated.length);
                     return getDelegate().writeWith(Mono.just(bufferFactory().wrap(decorated)));
                 });
