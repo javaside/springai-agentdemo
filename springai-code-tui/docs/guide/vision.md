@@ -55,13 +55,15 @@
 | Anthropic | `claude-` |
 | 通义千问 | `qwen-vl`、`qwen2-vl`、`qwen2.5-vl`、`qwen3-vl` |
 | 智谱 | `glm-4v`、`glm-4.1v`、`glm-4.5v` |
-| DeepSeek | *（无视觉模型，显式登记为「这家没有」而非漏配）* |
+| DeepSeek | `deepseek-v4-flash-vision` |
 
 **不在名单里的一律判「不支持」**——误判「不支持」只是拦住你、提示可见可改；误判「支持」是把图真发出去吃一个看不懂的 400。
 
 > **内置模型清单里能直接用上视觉的只有 OpenAI 与 Anthropic 两家**（`gpt-5.6-*` / `gpt-5.5` / `gpt-5.4`、`claude-*`）。
 > 千问与智谱的内置清单是 `qwen3.7-max`/`qwen3.6-flash`/`qwen3-coder-next` 与 `glm-5.3`/`glm-5.2`/`glm-5.1`/`glm-5-turbo`，**没有一个命中名单**——
 > 要在这两家用视觉，得自己用 `DASHSCOPE_MODELS` / `ZHIPU_MODELS` 配一个 `-vl` / `glm-4v` 系的 id。
+> DeepSeek 的内置清单**已含视觉模型**（`deepseek-v4-flash-vision-exp`，`/model` 直接可切），
+> 是除 OpenAI / Anthropic 外第三家内置可用视觉的 provider。
 
 ### 图片从不进会话记忆
 
@@ -106,11 +108,24 @@
 export CODETUI_VISION=off     # 全局关闭整条视觉链路（引用照常，零行为变化）
 ```
 
+DeepSeek 专属传输开关（默认内联；`files` 走 Files API 的 `file_id` 引用，单图上限 64 MiB，
+上传失败自动降级内联）：
+
+```bash
+export DEEPSEEK_VISION_TRANSPORT=files
+```
+
+DeepSeek 每张图按服务端自动缩放后计费，**单张最多 384 token**（远低于本工具按
+`宽×高/750` 的估算，预算只会更宽松）。
+
 ### ⚠️ 验证范围（别当成「五家都能用」）
 
 「工具结果 → 合成一条 user 消息（带图）」这个消息序列，只在**一个本地兼容中转网关 + `gpt-5.6-sol`** 上做过真机验证：发纯红 / 纯绿 / 纯蓝三张图，模型三次全答对；**对照组**（同样序列但不挂图）明确回答「只看到图片文件引用，无法看到实际图像内容」。
 
 **`api.openai.com` 原生端点，以及 Anthropic / 千问 / 智谱三家，完全没有验证过**（本机没有对应 API key）。它们第一次真用时**仍可能返回 400**。请不要把这一节读成「已支持五家」。
+
+**DeepSeek**：`deepseek-v4-flash-vision-exp` 的<b>内联 base64 通道</b>已真机验证（纯红图 →
+模型答对颜色）。Files API 通道（`DEEPSEEK_VISION_TRANSPORT=files`）已做单测覆盖，未真机验证。
 
 ### 不支持的场景
 
