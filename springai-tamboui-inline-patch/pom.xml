@@ -19,6 +19,17 @@
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-core</artifactId>
         </dependency>
+        <!--
+          允许本模块 shadow 同包同名类 dev.tamboui.tui.InlineTuiRunner（事件循环抗异常治本修复）。
+          本模块只"引用" tamboui-tui 的 Event/RenderThread/Schedulers 等符号以编译 shadow 类，
+          不改其行为；运行期由 code-tui 的 MANIFEST Class-Path 顺序保证本模块 jar 排在
+          tamboui-tui 之前，从而 JVM 优先加载本模块的 InlineTuiRunner。
+          tamboui-tui 不依赖本模块，故无循环依赖。
+        -->
+        <dependency>
+            <groupId>dev.tamboui</groupId>
+            <artifactId>tamboui-tui</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
