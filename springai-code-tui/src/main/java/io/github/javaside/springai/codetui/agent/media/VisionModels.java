@@ -24,7 +24,8 @@ public final class VisionModels {
             "gpt-5.", "gpt-4o", "o4-",
             "claude-",
             "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl",
-            "glm-4v", "glm-4.1v", "glm-4.5v"
+            "glm-4v", "glm-4.1v", "glm-4.5v",
+            "deepseek-v4-flash-vision"        // ★ DeepSeek 视觉实验模型（2026-08-21 上线）
     );
 
     /**
@@ -60,7 +61,7 @@ public final class VisionModels {
 
     /** 开关值的解析（纯函数，供单测——{@code System.getenv} 在进程内无法注入，
      *  不抽出来这个 kill switch 就永远没有测试覆盖）。 */
-    static boolean enabledFor(String envValue) {
+    public static boolean enabledFor(String envValue) {
         return envValue == null || !envValue.trim().equalsIgnoreCase("off");
     }
 }

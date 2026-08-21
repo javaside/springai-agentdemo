@@ -24,7 +24,9 @@ public final class DeepSeekProvider implements LlmProvider {
     // 首项即默认模型（*_MODELS 未配置时的回退清单，约定第一项为默认）。
     private static final List<ModelOption> MODELS = List.of(
             new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 1.6T · 更慢更贵"),
-            new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"));
+            new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
+            new ModelOption("deepseek-v4-flash-vision-exp", "deepseek-v4-flash-vision-exp",
+                    "视觉 · 实验 · 快（图最多 384 token/张）"));
 
     private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
 
@@ -48,6 +50,15 @@ public final class DeepSeekProvider implements LlmProvider {
     }
 
     @Override public String id() { return "deepseek"; }
+
+    /** 视觉传输通道：inline=base64 内联（默认），files=Files API file_id。 */
+    enum VisionTransport { INLINE, FILES }
+
+    /** 严格等于 files（忽略大小写、不去空格）才走 Files API；其余一律内联。纯函数供单测。 */
+    static VisionTransport visionTransportFor(String envValue) {
+        return envValue != null && envValue.equalsIgnoreCase("files")
+                ? VisionTransport.FILES : VisionTransport.INLINE;
+    }
 
     @Override public boolean available() { return !apiKey.isBlank(); }
 

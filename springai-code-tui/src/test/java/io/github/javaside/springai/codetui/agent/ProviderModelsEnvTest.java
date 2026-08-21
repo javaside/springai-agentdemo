@@ -20,7 +20,7 @@ class ProviderModelsEnvTest {
         DeepSeekProvider p = new DeepSeekProvider("key", null, null);
         assertEquals("deepseek-v4-pro", p.defaultModel());
         assertEquals("deepseek-v4-pro", p.models().get(0).id());   // 内置清单首项 = 默认（本 Task 调序）
-        assertEquals(2, p.models().size());
+        assertEquals(3, p.models().size());   // pro + flash + flash-vision-exp（2026-08-21 视觉实验模型）
     }
 
     @Test
