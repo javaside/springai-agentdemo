@@ -21,18 +21,22 @@ final class DeepSeekThinkingChatModel implements ChatModel {
     private final Function<ThinkingConfig, ChatModel> delegateFactory;
     private final Map<ThinkingConfig, ChatModel> delegates = new ConcurrentHashMap<>();
     private final io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry visionRegistry;
+    /** 可空：files 通道上传器（bytes+filename → file_id）；null = 纯内联。 */
+    private final java.util.function.BiFunction<byte[], String, java.util.Optional<String>> fileUploader;
 
     /** 既有两参构造：配一个私有注册表（仅测试用；文本请求不碰注册表，行为与之前一致）。 */
     DeepSeekThinkingChatModel(ChatModel defaultDelegate, Function<ThinkingConfig, ChatModel> delegateFactory) {
-        this(defaultDelegate, delegateFactory, new io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry());
+        this(defaultDelegate, delegateFactory, new io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry(), null);
     }
 
     DeepSeekThinkingChatModel(ChatModel defaultDelegate,
                               Function<ThinkingConfig, ChatModel> delegateFactory,
-                              io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry visionRegistry) {
+                              io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry visionRegistry,
+                              java.util.function.BiFunction<byte[], String, java.util.Optional<String>> fileUploader) {
         this.defaultDelegate = defaultDelegate;
         this.delegateFactory = delegateFactory;
         this.visionRegistry = visionRegistry;
+        this.fileUploader = fileUploader;
     }
 
     @Override
@@ -93,12 +97,24 @@ final class DeepSeekThinkingChatModel implements ChatModel {
                     continue;
                 }
                 String mime = md.getMimeType() == null ? "image/png" : md.getMimeType().toString();
-                visionRegistry.put(i, j,
-                        io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.Entry.inline(bytes, mime));
+                visionRegistry.put(i, j, entryFor(bytes, mime, md));
                 keys.add(io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.key(i, j));
             }
         }
         return keys;
+    }
+
+    /** files 通道优先（上传成功用 file_id），失败/未配置降级内联。 */
+    private io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.Entry entryFor(
+            byte[] bytes, String mime, Media md) {
+        if (fileUploader == null) {
+            return io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.Entry.inline(bytes, mime);
+        }
+        String filename = md.getName() == null || md.getName().isBlank() ? "image.png" : md.getName();
+        java.util.Optional<String> fileId = fileUploader.apply(bytes, filename);
+        return fileId
+                .map(io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.Entry::file)
+                .orElseGet(() -> io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.Entry.inline(bytes, mime));
     }
 
     /** 第一遍扫描：是否有任何 {@code UserMessage} 带「可注册」media（data 非空）——与注册判定一致。 */

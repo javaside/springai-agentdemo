@@ -89,9 +89,28 @@ public final class DeepSeekProvider implements LlmProvider {
             connector.setReadTimeout(read);
             var webBuilder = org.springframework.web.reactive.function.client.WebClient.builder().clientConnector(connector);
 
+            // 视觉传输通道：files 走 Files API（sha 幂等上传 → file_id），失败自动降级内联；默认内联。
+            java.util.function.BiFunction<byte[], String, java.util.Optional<String>> fileUploader = null;
+            if (visionTransportFor(System.getenv("DEEPSEEK_VISION_TRANSPORT")) == VisionTransport.FILES) {
+                io.github.javaside.springai.codetui.agent.media.DeepSeekFileStore store =
+                        new io.github.javaside.springai.codetui.agent.media.DeepSeekFileStore(form -> {
+                            org.springframework.web.client.RestClient rc = org.springframework.web.client.RestClient.builder()
+                                    .baseUrl(baseUrl)
+                                    .defaultHeader("Authorization", "Bearer " + apiKey)
+                                    .requestFactory(rf)
+                                    .build();
+                            return rc.post().uri("/files")
+                                    .contentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA)
+                                    .body(form)
+                                    .retrieve()
+                                    .body(String.class);
+                        });
+                fileUploader = (bytes, filename) -> store.fileIdFor(bytes, filename);
+            }
+
             ChatModel defaultDelegate = buildDelegate(restBuilder, webBuilder, ThinkingConfig.defaults());
             m = new DeepSeekThinkingChatModel(defaultDelegate,
-                    config -> buildDelegate(restBuilder, webBuilder, config), visionRegistry);
+                    config -> buildDelegate(restBuilder, webBuilder, config), visionRegistry, fileUploader);
             chatModel = m;
         }
         return m;

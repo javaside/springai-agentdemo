@@ -62,7 +62,7 @@ class DeepSeekThinkingChatModelVisionTest {
     void call_registersMedia_beforeDelegate_andCleansAfter() {
         DeepSeekVisionMediaRegistry registry = new DeepSeekVisionMediaRegistry();
         StubDelegate d = new StubDelegate(registry);
-        DeepSeekThinkingChatModel model = new DeepSeekThinkingChatModel(d, c -> d, registry);
+        DeepSeekThinkingChatModel model = new DeepSeekThinkingChatModel(d, c -> d, registry, null);
 
         model.call(new Prompt(imageMessage(), DeepSeekChatOptions.builder().model("deepseek-v4-pro").build()));
 
@@ -74,7 +74,7 @@ class DeepSeekThinkingChatModelVisionTest {
     void stream_registersMedia_andCleansOnTermination() {
         DeepSeekVisionMediaRegistry registry = new DeepSeekVisionMediaRegistry();
         StubDelegate d = new StubDelegate(registry);
-        DeepSeekThinkingChatModel model = new DeepSeekThinkingChatModel(d, c -> d, registry);
+        DeepSeekThinkingChatModel model = new DeepSeekThinkingChatModel(d, c -> d, registry, null);
 
         model.stream(new Prompt(imageMessage(), DeepSeekChatOptions.builder().model("deepseek-v4-pro").build()))
                 .blockLast();
@@ -87,7 +87,7 @@ class DeepSeekThinkingChatModelVisionTest {
     void textOnlyPrompt_registersNothing() {
         DeepSeekVisionMediaRegistry registry = new DeepSeekVisionMediaRegistry();
         StubDelegate d = new StubDelegate(registry);
-        DeepSeekThinkingChatModel model = new DeepSeekThinkingChatModel(d, c -> d, registry);
+        DeepSeekThinkingChatModel model = new DeepSeekThinkingChatModel(d, c -> d, registry, null);
 
         model.call(new Prompt("纯文本", DeepSeekChatOptions.builder().model("deepseek-v4-pro").build()));
 
