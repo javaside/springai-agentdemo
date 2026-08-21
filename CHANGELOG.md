@@ -8,6 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
+| [v1.17.1](docs/release-notes/v1.17.1.md) | 修订版 | **根治行内 TUI 卡死**：`/model` 切换模型长时间不选择再回车、对话输入后「思考中」界面永久定格、任何按键失效——根因是依赖库 `tamboui-tui` 的 `InlineTuiRunner.run()` 事件循环对 `handler.handle`/`UiRunnable.run` 零 try-catch（全屏版 `TuiRunner` 有），异常逃出循环即杀死渲染线程；现以同包同名 shadow 类给事件循环包 `try(Throwable)`（记录日志并 continue），渲染线程永不因 handler 异常死亡 |
 | [v1.17.0](docs/release-notes/v1.17.0.md) | 功能版 | **DeepSeek 视觉模型支持**：`deepseek-v4-flash-vision-exp` 入内置清单（`/model` 可切，默认仍 v4-pro），视觉能力按前缀精确判定、未知模型不发图；修复 spring-ai-deepseek 2.0.0 序列化静默丢图（HTTP 层改写 content → text + image_url/file 块，无图请求逐字节不变、fail-open）；双传输通道（默认 base64 内联，`DEEPSEEK_VISION_TRANSPORT=files` 走 Files API，sha 幂等 + 失败自动降级内联）；沿用「图片只活当轮、单回合硬上限」纪律，每图最多 384 token 计费 |
 | [v1.16.0](docs/release-notes/v1.16.0.md) | 功能版 | **终端 tab 会主动提醒，手动压缩恢复保留 20 事件语义**：回合完成或问询/审批等待用户时写 OSC 0/2 tab 标题并发送 BEL，Esc 取消不误响、按键恢复默认标题；修复 glm-5.3 / 1M 窗口下手动 `/compact` 因 token 预算过大而误报「无可压缩内容」，现在长会话即使低于 token 目标也会按最近 20 事件强制归档 |
 | [v1.15.0](docs/release-notes/v1.15.0.md) | 功能版 | **长会话压缩降为一次调用、子 agent 重试真正生效**：自动压缩改乐观全量摘要（约 8 次调用 → 1 次），窗口虚高时按真实失败校准容量（数字锚定一步到位 / 减半探测），knownGood/knownBad 区间按模型跨压缩记忆、绝不重发注定失败的请求，20 次调用硬上限 + 本地兜底永不失控；glm-5.3 入内置清单（默认旗舰，1M 窗口，thinking 不可禁用）；子 agent 重试判定对齐生产日志四类瞬态故障（此前重试层 0 触发、失败全冒泡），改指数退避 |
