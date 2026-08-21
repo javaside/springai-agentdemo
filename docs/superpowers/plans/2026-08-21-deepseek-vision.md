@@ -2,6 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> ## ✅ 已全部完成并合并 main（2026-08-21）
+>
+> 6 个任务全部落地（9 个提交，`9427f95` 合入 main），全模块 `mvn test -pl springai-code-tui`
+> 实测 **Tests run: 1596, Failures: 0**（合并前后各跑一次）。真机探针（`DeepSeekVisionSmokeTest`，
+> `CODETUI_LIVE_TESTS=1` 才跑）验证流式生产路径：纯红图 → 模型答「红色」，图片真正送达模型。
+>
+> **审查抓到并修复的真缺陷**（每个都走了修复 + 复审查）：Task 4 防御性 clear 时机破坏并发论证
+> （F1，两遍扫描修复）；测试清理断言是空断言（F2，桩改检查不消费，突变验证真实）；Task 6 探针走
+> 阻塞 `call()`+DEFAULT 实际不触发 HTTP 改写（假阳性，改走流式生产路径 + 颜色断言）。
+>
+> **决策修正（与设计 spec §4.3 决策记录同步）**：默认内联 base64 的论证漏算了「轮内迭代重传」这
+> 笔真实的账——同一回合每次工具迭代都重发请求，内联意味着同一张图的字节被反复送，而 files 通道
+> 上传一次拿 `file_id`、后续迭代只引用 id，能在这一层省下真实传输量（带宽/延迟，**不是钱**——计费
+> 按每图最多 384 token，与传输方式无关）。用户已拍板**保持现状**（默认内联 + files 可选），`file_id`
+> 持久化复用（写进引用块跨轮/跨会话复用）留待按需再议。详见 [设计 spec §4.3 决策记录](../specs/2026-08-21-deepseek-vision-design.md)。
+
 **Goal:** 让 `deepseek-v4-flash-vision-exp`（DeepSeek 唯一视觉模型，2026-08-21 上线）真正收到图片——支持 base64 内联与 Files API 双通道，复用既有兑现/预算/UI 全链路。
 
 **Architecture:** spring-ai-deepseek 2.0.0 序列化消息时只用 `getText()`、`UserMessage` 的 `Media` 被静默丢弃、`ChatCompletionMessage.content` 又是 `String` 装不下数组——故视觉必须走「HTTP 层改写序列化 JSON」：`DeepSeekThinkingChatModel` 把当轮 `UserMessage` 的 Media 按「消息序号:media 序号」注册进进程内注册表，既有 `DeepSeekThinkingBodyCodec`（阻塞）与 `DeepSeekThinkingClientHttpConnector`（流式）在改写请求体时按序号取图，把 user 消息的 `content` 从 string 改写成 `[text 块 + image_url/file 块]`。Files 通道经 `DeepSeekFileStore` sha 幂等上传，失败自动降级内联。
