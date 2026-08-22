@@ -67,6 +67,27 @@ class ConversationStateTest {
         assertEquals(OutputLine.Kind.ASSISTANT, drained.get(0).kind(), "助手正文类型");
     }
 
+    /**
+     * 1.5 残行上限：超长残行（模型长时间不换行）会被切行下沉，残行预览永远 ≤ 上限。
+     *
+     * <p>回归：渲染线程每帧拿残行做预览/高亮/折行，若残行无限累积（实测百万字符单行），
+     * 渲染线程被 O(百万) 的每帧字符串操作拖死，打字即卡。上限保证残行预览只面对有限长度。
+     */
+    @Test
+    void streamingTail_capsOversizedPartialLine_bySinkingExcess() {
+        ConversationState state = new ConversationState();
+        state.onTurnStarted(1L);
+        // 一次性灌入远超上限的残行（含换行，确保可切分）。
+        String big = ("a".repeat(150_000) + "\n") + ("b".repeat(150_000));
+        state.onAssistantToken(1L, big);
+        // 残行回到上限内，且换行前的完整行已下沉定稿。
+        assertTrue(state.streaming().length() <= 200_000, "残行不得超上限，实际=" + state.streaming().length());
+        assertTrue(state.streaming().startsWith("b"), "残行保留最后一段，实际前缀=" + state.streaming().substring(0, 1));
+        List<OutputLine> drained = state.drainPending();
+        assertEquals(1, drained.size(), "超限完整行已定稿下沉");
+        assertEquals(150_000, drained.get(0).text().length(), "下沉的是换行前那一段");
+    }
+
     /** 2. 取消：在建行定稿进 pending，之后同回合迟到 token 被丢弃。 */
     @Test
     void cancel_flushesPartial_thenDropsLateTokens() {

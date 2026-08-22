@@ -60,6 +60,8 @@ import dev.tamboui.widgets.input.TextAreaState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -151,6 +153,15 @@ public final class CodeTuiView extends InlineApp {
     private final StatusBar statusBar = new StatusBar();             // 状态行动画内容（波光/压缩条）渲染
     private final ScrollbackPrinter printer;                        // scrollback 打印（欢迎/用户块/工具 diff/助手正文）
     private final ContextUsage ctxUsage;                             // 上下文用量追踪/报告（/context 报告 + 状态栏后缀）
+    // 上下文用量刷新的独立线程：token 估算在大会话下可达数百 ms（1MB+ 历史实测 ~300ms），
+    // 绝不能占渲染线程——否则每 ~1s 一次的 refresh 会让输入/渲染周期性冻结（用户感知为"code-tui 卡死"）。
+    // ContextUsage.cached 是 volatile，渲染线程读快照安全；单线程 + 1s 周期，任务不会积压。
+    private final ExecutorService contextUsageExecutor =
+            Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "context-usage-refresh");
+                t.setDaemon(true);
+                return t;
+            });
     /** 后台任务结果的自动送达判定与失控刹车（纯状态机，见其类注释）。只在渲染线程（drain）读写。 */
     private final BackgroundNotifier notifier = new BackgroundNotifier();
     /**
@@ -159,6 +170,15 @@ public final class CodeTuiView extends InlineApp {
      */
     private int lastSeenWidth;
     /** resize 停稳判定：33ms × 4 帧 ≈132ms 静默后只重放一次。只在渲染线程读写。 */
+    /**
+     * 残行预览节流：流式输出中残行每帧都在变，若每帧都重画预览行，Terminal.app 的
+     * 输入法合成（中文打字）会被高频 ANSI 打断而崩溃（EXC_BAD_ACCESS，崩溃栈在
+     * NSTextInputContext/IMKInputSession）。预览行只允许每 ~150ms 更新一次，
+     * 输出中的终端写入频率随之大降。渲染线程单线程访问，无需同步。
+     */
+    private static final long PREVIEW_THROTTLE_NANOS = 150_000_000L;
+    private String lastPreviewedTail = "";
+    private long lastPreviewAtNanos = 0L;
     private final ResizeSettle resizeSettle = new ResizeSettle(4);
     /**
      * resize 进行中（首个宽度变化事件 → 停稳重放完成）临时把硬件光标钉到显示区第 0 行。
@@ -326,7 +346,18 @@ public final class CodeTuiView extends InlineApp {
         // ⚠ 必须是非破坏性快照。接到 takePendingInterjections() 上的话，渲染一帧就把队列清空，
         // 而面板看上去还很正常（它读的就是刚被自己清掉的那份）——插话再也送不到模型手里。
         List<String> interjections = onSubmit.pendingInterjectionTexts();
-        String tail = lastLine(state.streaming());   // 流式当前残行（未换行段）
+        // 流式当前残行（未换行段）。节流：内容变化且距上次预览 ≥150ms 才更新——
+        // 输出中残行每帧都在变，预览行不节流就会每帧重写（高频 ANSI → Terminal.app 输入法崩溃，
+        // 见字段注释）。tail 为空（无流式）时立即清空，保证回合结束预览行马上消失。
+        String tail;
+        String curTail = lastLine(state.streaming());
+        long nowNanos = System.nanoTime();
+        if (curTail.isEmpty()
+                || !curTail.equals(lastPreviewedTail) && (nowNanos - lastPreviewAtNanos >= PREVIEW_THROTTLE_NANOS)) {
+            lastPreviewedTail = curTail;
+            lastPreviewAtNanos = nowNanos;
+        }
+        tail = lastPreviewedTail;
         return column(
                 scope(!tail.isEmpty(), richText(printer.preview(tail)).ellipsisStart()),
                 scope(!todos.isEmpty(), todoChildren(todos)),
@@ -381,6 +412,12 @@ public final class CodeTuiView extends InlineApp {
                 // 否则往输入框粘多行文本时，第一个换行处就会「提前提交」，后面的内容被拆成若干段
                 // 依次插话/排队（用户看到的就是「提交了部分文本」）。见 InlineTuiRunner 对
                 // config.bracketedPaste() 的处理（enableBracketedPaste / disableBracketedPaste）。
+                // 渲染降频（修复 Terminal.app 多窗口高频重绘导致整个 app 冻结）：
+                // 默认 tick 40ms（≈25fps 全量重绘）+ drain 33ms，两个 code-tui 同时输出时 ANSI
+                // 流量叠加，macOS Terminal.app 渲染线程扛不住 → 整个 app 卡死（Java 进程健康，
+                // 表现为画面冻结、输入无效、只能关窗口）。tick 降到 100ms（10fps）：波光/压缩条
+                // 动画略慢但可感知，ANSI 流量降 60%+；drain 频率见 onStart 的 66ms。
+                .tickRate(Duration.ofMillis(100))
                 .bracketedPaste(true)
                 .bindings(base.bindings().toBuilder()
                         .rebind(KeyTrigger.ctrl('c'), Actions.QUIT)   // 整组替换：只剩 Ctrl+C，去掉 q/Q
@@ -388,6 +425,12 @@ public final class CodeTuiView extends InlineApp {
                         .unbind(Actions.FOCUS_PREVIOUS)               // 让 Shift+Tab 落到输入框（权限模式循环）
                         .build())
                 .build();
+    }
+
+    @Override
+    protected void onStop() {
+        contextUsageExecutor.shutdownNow();
+        super.onStop();
     }
 
     @Override
@@ -407,7 +450,9 @@ public final class CodeTuiView extends InlineApp {
         runner().runOnRenderThread(() -> printer.welcome(onSubmit.currentModel(),
                 io.github.javaside.springai.codetui.AppInfo.versionLabel()));   // 启动欢迎横幅（一次性下沉 scrollback）
         // 在渲染线程、两帧之间安全推进 scrollback（println 会移动光标/插行，绝不能在绘制中途调用）。
-        runner().scheduleRepeating(() -> runner().runOnRenderThread(this::drain), Duration.ofMillis(33));
+        // 渲染降频：scrollback 下沉从 33ms 放宽到 66ms（配合 configure 的 tick 100ms，
+                // 降低每窗口 ANSI 输出频率，见 configure 注释）。输出行到达延迟最多 +33ms，无感知。
+                runner().scheduleRepeating(() -> runner().runOnRenderThread(this::drain), Duration.ofMillis(66));
     }
 
     // ── scrollback 下沉（渲染线程） ──────────────────────────────────────
@@ -421,7 +466,10 @@ public final class CodeTuiView extends InlineApp {
 
     private void drainInsideBatch() {
         animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
-        if (animTick % 30 == 0) ctxUsage.refresh();            // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）
+        // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）。
+        // ⚠ 必须在独立线程跑：大会话下 token 估算耗时数百 ms，直接在渲染线程调会周期性冻结
+        // 输入与渲染（用户感知为"code-tui 卡死"）。cached 是 volatile，后台刷新、渲染线程读快照安全。
+        if (animTick % 30 == 0) contextUsageExecutor.execute(ctxUsage::refresh);
         // ResizeEvent 的兜底：内核对 SIGWINCH 只留一个 pending，快拖时中间档位的信号会被合并掉，
         // 事件没来但 size 已经变了。每帧比对一次列宽，抓到后同样只重置停稳计时，不清屏。
         int polledWidth = terminalWidth();

@@ -130,6 +130,16 @@ public final class ConversationState implements AgentListener {
     /** 排队的用户消息 + 其挂载技能（可空）。挂载随消息入队，出队时一并带出。 */
     public record Queued(String text, String skill) {}
 
+    /**
+     * 在建残行（未换行段）的<b>字符上限</b>。
+     *
+     * <p>模型输出可能长时间不换行（长代码/长文本），若残行无限累积（实测会话里出现百万字符单行），
+     * 渲染线程每帧都要对整段残行做预览+语法高亮+折行——O(百万) 的每帧字符串操作会把渲染线程拖死，
+     * 用户一打字（事件排队）就表现为"卡死"。超过上限把多余部分切行下沉（一次性定稿），
+     * 残行预览永远只面对 ≤ 此长度的字符串。
+     */
+    private static final int MAX_STREAMING_PREVIEW = 200_000;
+
     private final Deque<Queued> queued = new ArrayDeque<>();       // 忙时排队的用户消息（回合结束后自动出队提交）
     private final StringBuilder streaming = new StringBuilder();
     private final List<String> todo = new ArrayList<>();          // 主 agent（控制器）的 todo/计划（todo 面板，不进 scrollback）
@@ -405,6 +415,22 @@ public final class ConversationState implements AgentListener {
     public synchronized void onAssistantToken(long turnId, String token) {
         if (turnId != acceptingTurnId) return;
         streaming.append(token);
+        if (streaming.length() > MAX_STREAMING_PREVIEW) {
+            // 残行超上限：把超出部分切行下沉（一次性定稿），残行预览回到上限内。
+            // 只在当前残行<b>包含换行</b>时切：此刻能按 \n 把整段拆干净，不破坏仍在同一逻辑行的内容。
+            // 若这一行真的就是超长单行，它最终会随 turn 结束/取消经 flushStreaming 定稿。
+            int idx = streaming.lastIndexOf("\n");
+            if (idx > 0) {
+                String complete = streaming.substring(0, idx);
+                String partial = streaming.substring(idx + 1);
+                streaming.setLength(0);
+                streaming.append(partial);
+                for (String l : complete.split("\n", -1)) {
+                    pending.add(new OutputLine(l.endsWith("\r") ? l.substring(0, l.length() - 1) : l,
+                            OutputLine.Kind.ASSISTANT));
+                }
+            }
+        }
     }
 
     @Override
