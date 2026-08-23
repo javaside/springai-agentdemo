@@ -50,17 +50,34 @@ final class ContextUsage {
         } else {
             sink.accept(String.format("  估算 token：%,d", s.estimatedTokens()));
         }
-        // 系统提示词单列：烘焙在 ChatClient 里、从不进会话存储，上方估算看不见它——
-        // 但它每回合都完整重发，是真实的固定开销。不写出来这笔钱就等于不存在。
-        if (s.systemPromptTokens() > 0) {
-            sink.accept(String.format("  系统提示词：%,d（每回合固定重发，另计）", s.systemPromptTokens()));
-        }
-        // 消息 token 分类：与上方估算同口径，各分类之和 == 估算 token（同一趟遍历，恒对上账）。
-        // 每项后附占比（桶 / 消息总数）；占比经 largest remainder 分配，总和恒为 100%
+        // 每回合请求构成：系统提示词 + 会话消息 = 每回合真实发出的总 token。
+        // 系统提示词烘焙在 ChatClient 里、从不进会话存储，上方「估算 token」看不见它，
+        // 但它每回合都完整重发，是真实的固定开销——不写出来这笔钱就等于不存在。
+        // 各分类占「每回合总请求」的比，一次 largest remainder 分配，合计恒为 100%
         // （各自四舍五入会得 99%/101%，又会对不上账）。「系统/摘要」桶为 0 时省略（与事件分桶的「其他」同款处理）。
         ContextStats.TokenBreakdown b = s.tokens();
-        if (b != null && (b.userTokens() + b.assistantTokens() + b.toolTokens() + b.systemTokens()) > 0) {
-            boolean showSystem = b.systemTokens() > 0;
+        if (b == null) b = ContextStats.TokenBreakdown.empty();
+        boolean showSystem = b.systemTokens() > 0;
+        if (s.systemPromptTokens() > 0) {
+            long[] parts = showSystem
+                    ? new long[]{s.systemPromptTokens(), b.userTokens(), b.assistantTokens(), b.toolTokens(), b.systemTokens()}
+                    : new long[]{s.systemPromptTokens(), b.userTokens(), b.assistantTokens(), b.toolTokens()};
+            String[] names = showSystem
+                    ? new String[]{"系统提示词", "用户", "助手", "工具", "系统/摘要"}
+                    : new String[]{"系统提示词", "用户", "助手", "工具"};
+            long total = 0L;
+            for (long p : parts) total += p;
+            int[] pcts = percents(parts);
+            StringBuilder line = new StringBuilder("  每回合请求（合计 ")
+                    .append(String.format("%,d", total)).append(" token，系统提示词每回合固定重发）：");
+            for (int i = 0; i < parts.length; i++) {
+                if (i > 0) line.append(" · ");
+                line.append(names[i]).append(' ').append(String.format("%,d", parts[i]))
+                        .append('（').append(pcts[i]).append('%').append('）');
+            }
+            sink.accept(line.toString());
+        } else if (b.userTokens() + b.assistantTokens() + b.toolTokens() + b.systemTokens() > 0) {
+            // 无系统提示词数据（桩路径）：分类占比以消息总数为分母。
             long[] parts = showSystem
                     ? new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens(), b.systemTokens()}
                     : new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens()};
