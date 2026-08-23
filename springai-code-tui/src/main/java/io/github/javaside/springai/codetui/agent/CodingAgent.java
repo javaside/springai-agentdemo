@@ -90,6 +90,8 @@ public final class CodingAgent implements SubmitHandler {
     private final Interjections interjections;
     /** 可空（测试桩）：会话级 token 用量累加器；contextStats() 读快照、clearContext() 清零。 */
     private final TokenUsageAccumulator usageAccumulator;
+    /** 系统提示词估算 token（装配期快照，每回合固定重发）；contextStats() 分类展示用，单-client 桩路径为 0。 */
+    private final long systemPromptTokens;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
@@ -140,6 +142,7 @@ public final class CodingAgent implements SubmitHandler {
         this.backgroundResults = null;
         this.interjections = null;       // 单-client 桩路径：无插话队列（插话门面全 no-op、回合末不补历史）
         this.usageAccumulator = null;    // 单-client 桩路径：无采集（缓存列恒 0/null）
+        this.systemPromptTokens = 0L;    // 单-client 桩路径：无装配期估算（分类列恒 0）
     }
 
     /**
@@ -278,7 +281,7 @@ public final class CodingAgent implements SubmitHandler {
         this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
                 tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
                 fileExternalizer, mcpRegistry, permissionEngine, visionModels, backgroundRegistry,
-                backgroundResults, interjections, null);
+                backgroundResults, interjections, null, 0L);
     }
 
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
@@ -293,7 +296,8 @@ public final class CodingAgent implements SubmitHandler {
                        io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
                        io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults,
                        Interjections interjections,
-                       TokenUsageAccumulator usageAccumulator) {
+                       TokenUsageAccumulator usageAccumulator,
+                       long systemPromptTokens) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -316,6 +320,7 @@ public final class CodingAgent implements SubmitHandler {
         this.backgroundResults = backgroundResults;
         this.interjections = interjections;
         this.usageAccumulator = usageAccumulator;
+        this.systemPromptTokens = systemPromptTokens;
         // 送达 → 信息流。刻意复用 onUserMessage 而不是新开一路回调：插话本来就是一条用户消息，
         // 走这条路它渲出来与排队消息出队时一模一样（› 原话 + Kind.USER），还白送 turnId 迟到过滤
         // （Esc 之后迟到的送达自动被挡）。另起一路就得把这两件事各自重写一遍。
@@ -889,7 +894,10 @@ public final class CodingAgent implements SubmitHandler {
                 other++;   // 系统 / 摘要等
             }
         }
-        long tokens = SessionTokenEstimator.estimateMessages(sessionService.getMessages(sid), tokenCountEstimator);
+        // 分桶与总数出自同一次遍历（buckets.total()），保证 /context 上「总数 == 各分类之和」恒成立。
+        SessionTokenEstimator.Buckets buckets =
+                SessionTokenEstimator.estimateMessagesByType(sessionService.getMessages(sid), tokenCountEstimator);
+        long tokens = buckets.total();
         VisionSnapshot vision = snapshotOf(visionModels, registry);
         TokenUsageAccumulator.Snapshot usage = usageAccumulator == null
                 ? TokenUsageAccumulator.Snapshot.empty()
@@ -898,7 +906,10 @@ public final class CodingAgent implements SubmitHandler {
                 AgentTools.autoCompactionThreshold(registry), AgentTools.contextWindow(registry),
                 AgentTools.MAX_EVENTS_TO_KEEP, AgentTools.MANUAL_MAX_EVENTS_TO_KEEP,
                 vision.images(), vision.tokens(),
-                usage.cacheReadTokens(), usage.billedInputTokens(), usage.cacheHitPercent());
+                usage.cacheReadTokens(), usage.billedInputTokens(), usage.cacheHitPercent(),
+                new ContextStats.TokenBreakdown(buckets.systemTokens(), buckets.userTokens(),
+                        buckets.assistantTokens(), buckets.toolTokens()),
+                systemPromptTokens);
     }
 
     /**

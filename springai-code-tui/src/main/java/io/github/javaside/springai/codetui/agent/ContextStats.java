@@ -25,6 +25,9 @@ package io.github.javaside.springai.codetui.agent;
  * @param cacheReadTokens 本会话累计的缓存读 token（provider 计费）
  * @param billedInputTokens 本会话累计的计费输入 token（= promptTokens，已含缓存）
  * @param cacheHitPercent 本会话缓存命中率（%），无计费输入时为 null
+ * @param tokens          会话消息 token 的按类型分桶（用户/助手/工具/系统摘要），四桶之和 == estimatedTokens
+ * @param systemPromptTokens 系统提示词估算 token（装配期快照，每回合固定重发）——<b>不含在 {@code estimatedTokens}
+ *                        与 {@code tokens} 里</b>：系统提示词烘焙在 ChatClient，从不进会话存储。
  */
 public record ContextStats(int events,
                            int userEvents,
@@ -40,7 +43,35 @@ public record ContextStats(int events,
                            long visionTokens,
                            long cacheReadTokens,
                            long billedInputTokens,
-                           Integer cacheHitPercent) {
+                           Integer cacheHitPercent,
+                           TokenBreakdown tokens,
+                           long systemPromptTokens) {
+
+    /**
+     * 会话消息 token 的按类型分桶（纯数据，/context 分类展示用）。
+     *
+     * @param systemTokens   系统/摘要消息 token（MessageType.SYSTEM 与未知类型）
+     * @param userTokens     用户消息 token
+     * @param assistantTokens 助手消息 token（含其 tool_calls 名字与参数）
+     * @param toolTokens     工具结果 token（ToolResponseMessage 各 response 的 responseData）
+     */
+    public record TokenBreakdown(long systemTokens, long userTokens,
+                                 long assistantTokens, long toolTokens) {
+
+        public static TokenBreakdown empty() {
+            return new TokenBreakdown(0L, 0L, 0L, 0L);
+        }
+    }
+
+    /** 17 参便捷构造：老调用点不填缓存与分桶字段（等价无缓存命中数据、零分桶）。 */
+    public ContextStats(int events, int userEvents, int assistantEvents, int toolEvents, int otherEvents,
+                        long estimatedTokens, long tokenThreshold, long contextWindow,
+                        int autoKeepEvents, int manualKeepEvents, int visionImages, long visionTokens,
+                        long cacheReadTokens, long billedInputTokens, Integer cacheHitPercent) {
+        this(events, userEvents, assistantEvents, toolEvents, otherEvents, estimatedTokens,
+                tokenThreshold, contextWindow, autoKeepEvents, manualKeepEvents, visionImages, visionTokens,
+                cacheReadTokens, billedInputTokens, cacheHitPercent, TokenBreakdown.empty(), 0L);
+    }
 
     /** 12 参便捷构造：老调用点不填缓存字段（等价无缓存命中数据）。 */
     public ContextStats(int events, int userEvents, int assistantEvents, int toolEvents, int otherEvents,
@@ -54,6 +85,6 @@ public record ContextStats(int events,
     /** 空快照（会话尚无事件 / 回显桩用）。 */
     public static ContextStats empty() {
         return new ContextStats(0, 0, 0, 0, 0, 0L,
-                0L, 0L, 0, 0, 0, 0L, 0L, 0L, null);
+                0L, 0L, 0, 0, 0, 0L, 0L, 0L, null, TokenBreakdown.empty(), 0L);
     }
 }

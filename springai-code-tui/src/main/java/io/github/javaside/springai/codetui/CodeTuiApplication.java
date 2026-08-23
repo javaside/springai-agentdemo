@@ -120,7 +120,7 @@ public class CodeTuiApplication {
                     runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer(),
                     mcpRegistry, runtime.permissionEngine(), runtime.visionModels(),
                     runtime.backgroundRegistry(), runtime.backgroundResults(), runtime.interjections(),
-                    usageAccumulator);
+                    usageAccumulator, runtime.systemPromptTokens());
 
             // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
             // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。

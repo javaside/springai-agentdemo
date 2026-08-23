@@ -50,6 +50,24 @@ final class ContextUsage {
         } else {
             sink.accept(String.format("  估算 token：%,d", s.estimatedTokens()));
         }
+        // 系统提示词单列：烘焙在 ChatClient 里、从不进会话存储，上方估算看不见它——
+        // 但它每回合都完整重发，是真实的固定开销。不写出来这笔钱就等于不存在。
+        if (s.systemPromptTokens() > 0) {
+            sink.accept(String.format("  系统提示词：%,d（每回合固定重发，另计）", s.systemPromptTokens()));
+        }
+        // 消息 token 分类：与上方估算同口径，各分类之和 == 估算 token（同一趟遍历，恒对上账）。
+        // 「系统/摘要」桶为 0 时省略（与事件分桶的「其他」同款处理）。
+        ContextStats.TokenBreakdown b = s.tokens();
+        if (b != null && (b.userTokens() > 0 || b.assistantTokens() > 0
+                || b.toolTokens() > 0 || b.systemTokens() > 0)) {
+            StringBuilder cls = new StringBuilder("  消息分类：用户 ").append(String.format("%,d", b.userTokens()))
+                    .append(" · 助手 ").append(String.format("%,d", b.assistantTokens()))
+                    .append(" · 工具 ").append(String.format("%,d", b.toolTokens()));
+            if (b.systemTokens() > 0) {
+                cls.append(" · 系统/摘要 ").append(String.format("%,d", b.systemTokens()));
+            }
+            sink.accept(cls.toString());
+        }
         // 缓存命中率：有计费输入才打印。命中/计费输入用 %,d 原值（小会话不足千也不显示成 0）。
         if (s.cacheHitPercent() != null) {
             sink.accept(String.format("  缓存命中率：%d%%（命中 %,d / 计费输入 %,d token）",

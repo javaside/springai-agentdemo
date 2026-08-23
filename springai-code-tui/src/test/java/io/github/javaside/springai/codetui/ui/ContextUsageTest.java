@@ -168,6 +168,67 @@ class ContextUsageTest {
                 cacheRead, billedInput, hitPercent);
     }
 
+    /** 带 token 分桶与系统提示词的快照：对话消息 30,000（用户 12,000 / 助手 10,000 / 工具 8,000），系统提示词 2,500。 */
+    private static ContextStats withBreakdown() {
+        return new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 100_000L, 20, 10, 0, 0L,
+                0L, 0L, null,
+                new ContextStats.TokenBreakdown(0L, 12_000L, 10_000L, 8_000L), 2_500L);
+    }
+
+    @Test
+    void report_tokenBreakdown_printsCategoryLineRightAfterEstimate() {
+        RecordingSink sink = new RecordingSink();
+        new ContextUsage(() -> withBreakdown(), sink).report();
+
+        int estIdx = indexOfContaining(sink.lines, "估算 token");
+        int clsIdx = indexOfContaining(sink.lines, "消息分类");
+        assertTrue(clsIdx > estIdx, "分类行应在估算 token 行之后");
+        String cls = sink.lines.get(clsIdx);
+        assertTrue(cls.contains("用户 12,000"), "用户桶原值：实际=" + cls);
+        assertTrue(cls.contains("助手 10,000"), "助手桶原值：实际=" + cls);
+        assertTrue(cls.contains("工具 8,000"), "工具桶原值：实际=" + cls);
+        assertFalse(cls.contains("系统/摘要"), "系统/摘要桶为 0 时省略：实际=" + cls);
+    }
+
+    @Test
+    void report_systemPromptTokens_printsOwnLineBeforeBreakdown() {
+        RecordingSink sink = new RecordingSink();
+        new ContextUsage(() -> withBreakdown(), sink).report();
+
+        int estIdx = indexOfContaining(sink.lines, "估算 token");
+        int spIdx = indexOfContaining(sink.lines, "系统提示词");
+        int clsIdx = indexOfContaining(sink.lines, "消息分类");
+        assertTrue(spIdx > estIdx, "系统提示词行应在估算 token 行之后：行序=" + sink.lines);
+        assertTrue(clsIdx > spIdx, "分类行应在系统提示词行之后：行序=" + sink.lines);
+        String line = sink.lines.get(spIdx);
+        assertTrue(line.contains("2,500"), "系统提示词 token 原值：实际=" + line);
+        assertTrue(line.contains("另计"), "必须注明另计（不混入上方估算）：实际=" + line);
+        // 上方估算行仍应是 30,000——系统提示词不得混进对话消息估算。
+        assertTrue(sink.lines.get(estIdx).contains("30,000"), "估算行不许把系统提示词加进去");
+    }
+
+    @Test
+    void report_systemBucketShown_whenSystemMessagesExist() {
+        ContextStats s = new ContextStats(5, 2, 1, 1, 1, 5_000L, 0L, 0L, 0, 0, 0, 0L,
+                0L, 0L, null,
+                new ContextStats.TokenBreakdown(500L, 2_000L, 1_500L, 1_000L), 0L);
+        RecordingSink sink = new RecordingSink();
+        new ContextUsage(() -> s, sink).report();
+
+        String cls = sink.lines.get(indexOfContaining(sink.lines, "消息分类"));
+        assertTrue(cls.contains("系统/摘要 500"), "系统桶非零应显示：实际=" + cls);
+    }
+
+    @Test
+    void report_noBreakdownData_omitsBothLines() {
+        // 12 参便捷构造器：tokens 为空桶、systemPromptTokens 为 0 → 分类两行都不打印（老快照/桩路径）。
+        RecordingSink sink = new RecordingSink();
+        new ContextUsage(ContextUsageTest::full, sink).report();
+
+        assertTrue(sink.lines.stream().noneMatch(l -> l.contains("消息分类")), "零分桶数据不打印分类行");
+        assertTrue(sink.lines.stream().noneMatch(l -> l.contains("系统提示词")), "零系统提示词不打印该行");
+    }
+
     @Test
     void report_cacheHit_printsLineAfterTokenEstimate() {
         RecordingSink sink = new RecordingSink();

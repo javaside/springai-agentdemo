@@ -563,6 +563,22 @@ public final class AgentTools {
         // 否则模型会去调一个不存在的工具。
         String webSearchGuide = webSearchGuide(webSearch != null, braveWebSearch != null);
 
+        // 署名指引：抽出来供 defaultSystem 与下面的系统提示词估算共用，避免重复解析环境变量。
+        String coAuthorGuideText = coAuthorGuide(System.getenv("CODETUI_CO_AUTHOR"));
+
+        // 系统提示词 token 估算（/context 分类展示用）：装配期渲染一份与 defaultSystem 同源的文本估算。
+        // 运行期 GIT_STATUS / PERMISSION_MODE 每回合变化，但量级稳定（±几百 token），装配期快照足够
+        // 回答「每回合固定开销有多大」；PERMISSION_MODE 按装配期空串计，AGENT_MODEL 取激活 provider。
+        long systemPromptTokens = tokenCountEstimator.estimate(SYSTEM_TEMPLATE
+                .replace(AgentEnvironment.ENVIRONMENT_INFO_KEY, environmentInfo)
+                .replace(AgentEnvironment.GIT_STATUS_KEY, gitStatus)
+                .replace(AgentEnvironment.AGENT_MODEL_KEY, registry.active().defaultModel())
+                .replace(AUTO_MEMORY_KEY, autoMemoryPrompt)
+                .replace(PROJECT_INSTRUCTIONS_KEY, projectInstructions)
+                .replace(WEB_SEARCH_GUIDE_KEY, webSearchGuide)
+                .replace(CO_AUTHOR_GUIDE_KEY, coAuthorGuideText)
+                .replace(PERMISSION_MODE_KEY, ""));
+
         // 为每个可用 provider 各建一个 ChatClient：共享同一套装饰工具 + 会话记忆 advisor + 系统模板，
         // 仅底层 ChatModel 不同。CodingAgent.submit 按激活 provider 选对应 ChatClient 实现跨家切换。
         java.util.Map<String, ChatClient> clients = new java.util.LinkedHashMap<>();
@@ -604,7 +620,7 @@ public final class AgentTools {
                             .param(AUTO_MEMORY_KEY, autoMemoryPrompt)
                             .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions)
                             .param(WEB_SEARCH_GUIDE_KEY, webSearchGuide)
-                            .param(CO_AUTHOR_GUIDE_KEY, coAuthorGuide(System.getenv("CODETUI_CO_AUTHOR")))
+                            .param(CO_AUTHOR_GUIDE_KEY, coAuthorGuideText)
                             // 装配期给空串占位；真实值由 CodingAgent.submit 每回合覆盖（merge 语义）。
                             // 不补默认值则模板渲染时缺 param 会抛。
                             .param(PERMISSION_MODE_KEY, ""))
@@ -620,7 +636,7 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
-                backgroundRegistry, backgroundResults, interjections);
+                backgroundRegistry, backgroundResults, interjections, systemPromptTokens);
     }
 
     /**
@@ -851,7 +867,8 @@ public final class AgentTools {
                                java.util.Map<String, VisionMaterializingChatModel> visionModels,
                                BackgroundTaskRegistry backgroundRegistry,
                                TaskResultStore backgroundResults,
-                               Interjections interjections) {
+                               Interjections interjections,
+                               long systemPromptTokens) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }

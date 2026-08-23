@@ -221,4 +221,25 @@ class ContextStatsTest {
         assertTrue(estimated > 100_000L,
                 "自动压缩计数必须覆盖 responseData 和 tool-call arguments，不能走 Message.getText() 漏算");
     }
+
+    @Test
+    void estimateMessagesByType_bucketsByMessageType_andSumsToTotal() {
+        java.util.List<org.springframework.ai.chat.messages.Message> messages = List.of(
+                new org.springframework.ai.chat.messages.SystemMessage("sys"),
+                new UserMessage("user"),
+                AssistantMessage.builder().content("").toolCalls(List.of(
+                        new AssistantMessage.ToolCall("call-1", "function", "Read", "args"))).build(),
+                ToolResponseMessage.builder().responses(List.of(
+                        new ToolResponseMessage.ToolResponse("call-1", "Read", "result"))).build());
+
+        SessionTokenEstimator.Buckets b = SessionTokenEstimator.estimateMessagesByType(messages, String::length);
+
+        assertTrue(b.systemTokens() > 0, "system 消息应进系统桶");
+        assertTrue(b.userTokens() > 0, "user 消息应进用户桶");
+        assertTrue(b.assistantTokens() > 0, "assistant 消息（含 tool-call 名/参数）应进助手桶");
+        assertTrue(b.toolTokens() > 0, "tool 结果应进工具桶");
+        // 分桶之和 == 总数：/context 展示依赖「总数 == 各分类之和」恒成立。
+        assertEquals(SessionTokenEstimator.estimateMessages(messages, String::length), b.total(),
+                "分桶之和必须等于总数");
+    }
 }
