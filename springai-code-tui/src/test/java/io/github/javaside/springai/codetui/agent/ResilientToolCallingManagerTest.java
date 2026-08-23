@@ -24,7 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link ResilientToolCallingManager} 行为验证：
  * <ul>
  *   <li>工具名解析失败（模型拼错）→ 返回「工具不存在，请用正确工具名重试」的 tool 结果，而不是抛异常毁回合；</li>
- *   <li>正确工具与拼错工具同批出现 → 正确工具不被误报不存在（提示可解析但未执行）；</li>
+ *   <li>正确工具与拼错工具同批出现 → 按位置精确报告：失败前的「已执行但结果未回传」、
+ *       失败后的「未执行」，均不误报不存在；</li>
+ *   <li>定位不到失败工具位置 → 中性兜底「执行状态无法确认」，不声称任何执行状态；</li>
  *   <li>非解析失败异常 → 原样抛出；</li>
  *   <li>正常路径 → 原样透传。</li>
  * </ul>
@@ -138,36 +140,78 @@ class ResilientToolCallingManagerTest {
     }
 
     @Test
-    void mixedValidAndMisspelled_correctToolNotReportedMissing() {
+    void mixedValidAndMisspelled_reportByPosition() {
         Stub stub = new Stub(
                 new IllegalStateException("No ToolCallback found for tool name: BoochaWebSearch"), null);
         ResilientToolCallingManager mgr = new ResilientToolCallingManager(stub);
 
-        // 模型同批调用了正确工具 Read 和拼错的 BoochaWebSearch：delegate 在 BoochaWebSearch 处抛异常，
-        // Read 此前解析成功但结果随异常丢失。两者都不能毁回合，且正确工具不能被误报「不存在」。
+        // 模型同批调用 [Read, BoochaWebSearch(拼错), Grep]：delegate 在 BoochaWebSearch 处抛异常，
+        // Spring AI 按序执行 → Read 确实已执行（结果被框架丢弃）、Grep 从未轮到。
+        // 三种回复都不能误导模型：Read 不能报「未执行」（否则模型重试、重复副作用），
+        // 也不能报「不存在」；Grep 报未执行且告知可解析。
         AssistantMessage am = AssistantMessage.builder()
                 .toolCalls(List.of(
                         new AssistantMessage.ToolCall("call-1", "function", "Read", "{}"),
-                        new AssistantMessage.ToolCall("call-2", "function", "BoochaWebSearch", "{}")))
+                        new AssistantMessage.ToolCall("call-2", "function", "BoochaWebSearch", "{}"),
+                        new AssistantMessage.ToolCall("call-3", "function", "Grep", "{}")))
                 .build();
         ToolExecutionResult result = mgr.executeToolCalls(
-                promptWithTools("Read", "BochaWebSearch"),
+                promptWithTools("Read", "Grep", "BochaWebSearch"),
                 ChatResponse.builder().generations(List.of(new Generation(am))).build());
 
         ToolResponseMessage last = (ToolResponseMessage) result.conversationHistory()
                 .get(result.conversationHistory().size() - 1);
-        assertEquals(2, last.getResponses().size(), "两个 tool call 都应有一条响应");
+        assertEquals(3, last.getResponses().size(), "三个 tool call 都应有一条响应");
 
         ToolResponseMessage.ToolResponse readResp = last.getResponses().stream()
                 .filter(r -> r.name().equals("Read")).findFirst().orElseThrow();
         assertFalse(readResp.responseData().contains("不存在"),
                 "正确工具不应被误报不存在，实际=" + readResp.responseData());
-        assertTrue(readResp.responseData().contains("可解析但未执行"),
-                "应告知正确工具可解析但未执行，实际=" + readResp.responseData());
+        assertTrue(readResp.responseData().contains("已执行"),
+                "排在失败工具之前的确实已执行，实际=" + readResp.responseData());
+        assertTrue(readResp.responseData().contains("结果未回传"),
+                "应说明结果随异常丢失，实际=" + readResp.responseData());
+        assertTrue(readResp.responseData().contains("勿盲目重试"),
+                "应警示不要盲目重试，实际=" + readResp.responseData());
 
         ToolResponseMessage.ToolResponse misspelledResp = last.getResponses().stream()
                 .filter(r -> r.name().equals("BoochaWebSearch")).findFirst().orElseThrow();
         assertTrue(misspelledResp.responseData().contains("不存在"),
                 "拼错工具应报不存在，实际=" + misspelledResp.responseData());
+
+        ToolResponseMessage.ToolResponse grepResp = last.getResponses().stream()
+                .filter(r -> r.name().equals("Grep")).findFirst().orElseThrow();
+        assertTrue(grepResp.responseData().contains("可解析但未执行"),
+                "排在失败工具之后的应报未执行且告知可解析，实际=" + grepResp.responseData());
+        assertFalse(grepResp.responseData().contains("已执行，"),
+                "排在失败工具之后的从未执行，不得声称已执行，实际=" + grepResp.responseData());
+    }
+
+    @Test
+    void unparseableFailureName_fallsBackToUnknownState() {
+        // 异常消息解析不出工具名（如消息格式变化）：定位不到失败位置，不得声称任何执行状态。
+        Stub stub = new Stub(new IllegalStateException("No ToolCallback found"), null);
+        ResilientToolCallingManager mgr = new ResilientToolCallingManager(stub);
+
+        AssistantMessage am = AssistantMessage.builder()
+                .toolCalls(List.of(
+                        new AssistantMessage.ToolCall("call-1", "function", "Read", "{}"),
+                        new AssistantMessage.ToolCall("call-2", "function", "Grep", "{}")))
+                .build();
+        ToolExecutionResult result = mgr.executeToolCalls(
+                promptWithTools("Read", "Grep"),
+                ChatResponse.builder().generations(List.of(new Generation(am))).build());
+
+        ToolResponseMessage last = (ToolResponseMessage) result.conversationHistory()
+                .get(result.conversationHistory().size() - 1);
+        assertEquals(2, last.getResponses().size());
+        for (ToolResponseMessage.ToolResponse r : last.getResponses()) {
+            assertTrue(r.responseData().contains("无法确认"),
+                    "定位不到失败位置时应中性兜底，实际=" + r.responseData());
+            assertFalse(r.responseData().contains("已执行"),
+                    "不得声称已执行，实际=" + r.responseData());
+            assertFalse(r.responseData().contains("不存在"),
+                    "不得声称不存在，实际=" + r.responseData());
+        }
     }
 }
