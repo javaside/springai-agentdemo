@@ -30,7 +30,7 @@ final class ContextUsage {
     }
 
     /**
-     * /context：把当前会话上下文用量（事件数分桶 + 估算 token + 距自动压缩阈值）打进 scrollback（灰色信息行）。
+     * /context：把当前会话上下文用量（事件数分桶 + 每回合请求总数/构成占比 + 距自动压缩阈值）打进 scrollback（灰色信息行）。
      * 只读快照，任何时刻都可查；尚无对话时各项为 0，明确提示「尚无对话历史」。
      */
     void report() {
@@ -44,61 +44,56 @@ final class ContextUsage {
         sink.accept(String.format("  事件数：%,d 条（用户 %,d · 助手 %,d · 工具 %,d%s）",
                 s.events(), s.userEvents(), s.assistantEvents(), s.toolEvents(),
                 s.otherEvents() > 0 ? " · 其他 " + s.otherEvents() : ""));
+        // 唯一的总数口径：每回合真实请求 = 系统提示词 + 会话消息。系统提示词烘焙在 ChatClient 里、
+        // 从不进会话存储，单列一个「会话估算」行会与它互相矛盾（两行数字不同，用户无从对账）。
+        // 占窗口也按这个总数算，与状态栏「上下文 N%」同一口径。
         if (s.contextWindow() > 0) {
-            sink.accept(String.format("  估算 token：%,d / %,d（占窗口 %s）",
-                    s.estimatedTokens(), s.contextWindow(), pct(s.estimatedTokens(), s.contextWindow())));
+            sink.accept(String.format("  每回合请求：%,d / %,d token（占窗口 %s）",
+                    s.perTurnTokens(), s.contextWindow(), pct(s.perTurnTokens(), s.contextWindow())));
         } else {
-            sink.accept(String.format("  估算 token：%,d", s.estimatedTokens()));
+            sink.accept(String.format("  每回合请求：%,d token", s.perTurnTokens()));
         }
-        // 每回合请求构成：系统提示词 + 会话消息 = 每回合真实发出的总 token。
-        // 系统提示词烘焙在 ChatClient 里、从不进会话存储，上方「估算 token」看不见它，
-        // 但它每回合都完整重发，是真实的固定开销——不写出来这笔钱就等于不存在。
-        // 各分类占「每回合总请求」的比，一次 largest remainder 分配，合计恒为 100%
-        // （各自四舍五入会得 99%/101%，又会对不上账）。「系统/摘要」桶为 0 时省略（与事件分桶的「其他」同款处理）。
-        ContextStats.TokenBreakdown b = s.tokens();
-        if (b == null) b = ContextStats.TokenBreakdown.empty();
+        // 构成逐行展示（挤在一行长串里读不动）：系统提示词 + 消息四桶，各占每回合请求的比，
+        // 一次 largest remainder 分配、合计恒为 100%（各自四舍五入会得 99%/101%，又对不上账）。
+        // 桩路径 systemPromptTokens=0 时分母即消息总数；「系统/摘要」桶为 0 时省略（与事件分桶的「其他」同款处理）。
+        ContextStats.TokenBreakdown b = s.tokens() == null ? ContextStats.TokenBreakdown.empty() : s.tokens();
         boolean showSystem = b.systemTokens() > 0;
-        if (s.systemPromptTokens() > 0) {
-            long[] parts = showSystem
-                    ? new long[]{s.systemPromptTokens(), b.userTokens(), b.assistantTokens(), b.toolTokens(), b.systemTokens()}
-                    : new long[]{s.systemPromptTokens(), b.userTokens(), b.assistantTokens(), b.toolTokens()};
-            String[] names = showSystem
-                    ? new String[]{"系统提示词", "用户", "助手", "工具", "系统/摘要"}
-                    : new String[]{"系统提示词", "用户", "助手", "工具"};
+        boolean includePrompt = s.systemPromptTokens() > 0;
+        if (includePrompt || b.userTokens() + b.assistantTokens() + b.toolTokens() + b.systemTokens() > 0) {
+            long[] parts;
+            String[] names;
+            if (includePrompt) {
+                parts = showSystem
+                        ? new long[]{s.systemPromptTokens(), b.userTokens(), b.assistantTokens(), b.toolTokens(), b.systemTokens()}
+                        : new long[]{s.systemPromptTokens(), b.userTokens(), b.assistantTokens(), b.toolTokens()};
+                names = showSystem
+                        ? new String[]{"系统提示词", "用户消息", "助手消息", "工具结果", "系统/摘要"}
+                        : new String[]{"系统提示词", "用户消息", "助手消息", "工具结果"};
+            } else {
+                parts = showSystem
+                        ? new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens(), b.systemTokens()}
+                        : new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens()};
+                names = showSystem
+                        ? new String[]{"用户消息", "助手消息", "工具结果", "系统/摘要"}
+                        : new String[]{"用户消息", "助手消息", "工具结果"};
+            }
             long total = 0L;
             for (long p : parts) total += p;
             int[] pcts = percents(parts);
-            StringBuilder line = new StringBuilder("  每回合请求（合计 ")
-                    .append(String.format("%,d", total)).append(" token，系统提示词每回合固定重发）：");
+            sink.accept(String.format("  构成（合计 %,d token）：", total));
             for (int i = 0; i < parts.length; i++) {
-                if (i > 0) line.append(" · ");
-                line.append(names[i]).append(' ').append(String.format("%,d", parts[i]))
-                        .append('（').append(pcts[i]).append('%').append('）');
+                StringBuilder line = new StringBuilder("    ").append(names[i]).append(' ')
+                        .append(String.format("%,d", parts[i])).append(" · ").append(pcts[i]).append('%');
+                if (includePrompt && i == 0) line.append("（每回合固定重发）");
+                sink.accept(line.toString());
             }
-            sink.accept(line.toString());
-        } else if (b.userTokens() + b.assistantTokens() + b.toolTokens() + b.systemTokens() > 0) {
-            // 无系统提示词数据（桩路径）：分类占比以消息总数为分母。
-            long[] parts = showSystem
-                    ? new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens(), b.systemTokens()}
-                    : new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens()};
-            String[] names = showSystem
-                    ? new String[]{"用户", "助手", "工具", "系统/摘要"}
-                    : new String[]{"用户", "助手", "工具"};
-            int[] pcts = percents(parts);
-            StringBuilder cls = new StringBuilder("  消息分类：");
-            for (int i = 0; i < parts.length; i++) {
-                if (i > 0) cls.append(" · ");
-                cls.append(names[i]).append(' ').append(String.format("%,d", parts[i]))
-                        .append('（').append(pcts[i]).append('%').append('）');
-            }
-            sink.accept(cls.toString());
         }
         // 缓存命中率：有计费输入才打印。命中/计费输入用 %,d 原值（小会话不足千也不显示成 0）。
         if (s.cacheHitPercent() != null) {
             sink.accept(String.format("  缓存命中率：%d%%（命中 %,d / 计费输入 %,d token）",
                     s.cacheHitPercent(), s.cacheReadTokens(), s.billedInputTokens()));
         }
-        // 视觉占用单列一行，紧跟文本估算之后：图片从不进会话存储，上面那笔 JTokkit 估算<b>看不见它们</b>，
+        // 视觉占用单列一行，紧跟文本合计之后：图片从不进会话存储，上面那笔估算<b>看不见它们</b>，
         // 恒比真实请求小（最多差 6k）。不写出来这笔钱就等于不存在，用户没法管理。
         // 用 %,d 原值而不是 /1000 的「k」：一张小图不足 1000 token 会显示成「0k」，读起来像不要钱。
         // 口径是「本回合累计」而非「上次请求」：一个回合有几十次工具迭代，按请求记则用户按下
@@ -106,12 +101,14 @@ final class ContextUsage {
         // 顺带写出每回合上限，用户才读得出还剩多少额度——这也是把口径对齐到 VisionBudget 的意义。
         // 严格说单位是「张·次」（同一张图跨迭代重发计两次，与上限同一口径），面板上从简写作「张」。
         if (s.visionImages() > 0) {
-            sink.accept(String.format("  视觉图片：本回合 %,d 张 · 约 %,d token（每回合上限 %d 张，不计入上方文本估算）",
+            sink.accept(String.format("  视觉图片：本回合 %,d 张 · 约 %,d token（每回合上限 %d 张，不计入上方合计）",
                     s.visionImages(), s.visionTokens(), VisionBudget.MAX_TURN_DELIVERIES));
         }
         if (s.tokenThreshold() > 0) {
-            sink.accept(String.format("  自动压缩：达 %,d token 触发（当前 %s）· 按 token 保留近期完整回合",
-                    s.tokenThreshold(), pct(s.estimatedTokens(), s.tokenThreshold())));
+            // 压缩阈值按「会话消息」（不含系统提示词）判定——压缩删的也是消息，系统提示词不在其列。
+            // 分子写成原值：与上方构成里的消息项之和对得上账，不写原值则「50% 是谁的 50%」无解。
+            sink.accept(String.format("  自动压缩：会话消息达 %,d token 触发（当前 %,d · %s）· 按 token 保留近期完整回合",
+                    s.tokenThreshold(), s.estimatedTokens(), pct(s.estimatedTokens(), s.tokenThreshold())));
         }
         if (s.manualKeepEvents() > 0) {
             sink.accept("  手动 /compact：立即按 token 更激进压缩");
@@ -137,7 +134,8 @@ final class ContextUsage {
         if (s == null || s.events() == 0) return "";
         StringBuilder sb = new StringBuilder();
         if (s.contextWindow() > 0) {
-            sb.append(" · 上下文 ").append(pct(s.estimatedTokens(), s.contextWindow()));
+            // 与 /context 报告同一分母（每回合请求，含系统提示词），两处百分比不会互相矛盾。
+            sb.append(" · 上下文 ").append(pct(s.perTurnTokens(), s.contextWindow()));
         }
         if (s.cacheHitPercent() != null) {
             sb.append(" · 缓存命中 ").append(s.cacheHitPercent()).append("%");

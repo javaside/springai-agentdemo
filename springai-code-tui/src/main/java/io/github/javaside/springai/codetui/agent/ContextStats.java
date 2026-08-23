@@ -63,6 +63,16 @@ public record ContextStats(int events,
         }
     }
 
+    /**
+     * 每回合真实请求的估算 token = 会话消息估算 + 系统提示词快照。
+     * {@code /context} 总数行与状态栏「上下文 N%」统一用这个口径：
+     * 系统提示词每回合都完整重发，单看会话消息会把这笔固定开销算没，
+     * 两处各用各的分母又会互相矛盾。
+     */
+    public long perTurnTokens() {
+        return estimatedTokens + systemPromptTokens;
+    }
+
     /** 17 参便捷构造：老调用点不填缓存与分桶字段（等价无缓存命中数据、零分桶）。 */
     public ContextStats(int events, int userEvents, int assistantEvents, int toolEvents, int otherEvents,
                         long estimatedTokens, long tokenThreshold, long contextWindow,
