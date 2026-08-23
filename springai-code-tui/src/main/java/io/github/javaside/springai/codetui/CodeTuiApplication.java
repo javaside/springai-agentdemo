@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -149,12 +150,12 @@ public class CodeTuiApplication {
     }
 
     /** 按环境变量构建全部 provider 并加载工作区思考配置。供 main 与测试共用。 */
-    static ProviderRegistry createProviderRegistry(Path root, java.util.Map<String, String> env) {
+    static ProviderRegistry createProviderRegistry(Path root, Map<String, String> env) {
         return createProviderRegistry(root, env, new TokenUsageAccumulator());
     }
 
     /** 同 {@link #createProviderRegistry(Path, Map)}，额外注入会话级 token 累加器，并给每家 provider 包采集装饰器。 */
-    static ProviderRegistry createProviderRegistry(Path root, java.util.Map<String, String> env,
+    static ProviderRegistry createProviderRegistry(Path root, Map<String, String> env,
                                                    TokenUsageAccumulator usageAccumulator) {
         Duration idleTimeout = LlmTimeouts.from(env::get).readTimeout();
         return new ProviderRegistry(java.util.List.of(
