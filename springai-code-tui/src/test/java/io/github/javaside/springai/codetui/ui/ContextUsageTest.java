@@ -56,13 +56,13 @@ class ContextUsageTest {
         RecordingSink sink = new RecordingSink();
         new ContextUsage(ContextUsageTest::full, sink).report();
 
-        // 标题 + 事件桶 + 每回合请求/占窗口 + 自动压缩 + 手动 = 5 行
+        // 标题 + 事件桶 + 上下文占用/占窗口 + 自动压缩 + 手动 = 5 行
         assertEquals(5, sink.lines.size(), "满快照 → 5 行报告");
         assertTrue(sink.lines.get(0).contains("上下文用量"));
         String bucket = sink.lines.get(1);
         assertTrue(bucket.contains("用户 40") && bucket.contains("助手 50") && bucket.contains("工具 8"), "事件分桶");
         assertTrue(bucket.contains("其他 2"), "otherEvents>0 才带其他");
-        assertTrue(sink.lines.get(2).contains("每回合请求"), "总数行行名");
+        assertTrue(sink.lines.get(2).contains("上下文占用"), "总数行行名");
         assertTrue(sink.lines.get(2).contains("占窗口 30%"), "30000/100000 = 30%");
         assertTrue(sink.lines.get(3).contains("30,000 · 50%"), "自动压缩写原值分子：30000/60000 = 50%");
         assertTrue(sink.lines.get(3).contains("按 token 保留近期完整回合"));
@@ -71,7 +71,7 @@ class ContextUsageTest {
 
     /**
      * 视觉占用单列一行，且必须紧跟总数行——图片从不进会话存储，上面那笔估算看不见它们。
-     * 顺带钉住「不许把视觉 token 加进每回合请求」：那行仍应是 30,000。
+     * 顺带钉住「不许把视觉 token 加进上下文占用」：那行仍应是 30,000。
      */
     @Test
     void report_visionUsage_printsOwnLineRightAfterTextEstimate() {
@@ -109,8 +109,8 @@ class ContextUsageTest {
 
         assertEquals(3, sink.lines.size(), "无窗口/阈值/手动 → 3 行");
         assertFalse(sink.lines.get(1).contains("其他"), "otherEvents=0 不带其他");
-        assertTrue(sink.lines.get(2).contains("每回合请求") && !sink.lines.get(2).contains("占窗口"),
-                "窗口=0 → 只打每回合请求总数，无占窗口");
+        assertTrue(sink.lines.get(2).contains("上下文占用") && !sink.lines.get(2).contains("占窗口"),
+                "窗口=0 → 只打上下文占用总数，无占窗口");
     }
 
     @Test
@@ -126,7 +126,7 @@ class ContextUsageTest {
         assertEquals(" · 上下文 30%", cu.suffix(), "refresh 后读缓存：30000/100000 = 30%");
     }
 
-    /** 状态栏与 /context 报告同一分母（每回合请求，含系统提示词），两处百分比不许互相矛盾。 */
+    /** 状态栏与 /context 报告同一分母（上下文占用，含系统提示词），两处百分比不许互相矛盾。 */
     @Test
     void suffix_withSystemPrompt_countsItInContextPercent() {
         ContextUsage cu = new ContextUsage(() -> withBreakdown(), new RecordingSink());
@@ -189,12 +189,12 @@ class ContextUsageTest {
         RecordingSink sink = new RecordingSink();
         new ContextUsage(() -> withBreakdown(), sink).report();
 
-        int turnIdx = indexOfContaining(sink.lines, "每回合请求");
+        int turnIdx = indexOfContaining(sink.lines, "上下文占用");
         int compIdx = indexOfContaining(sink.lines, "构成");
-        assertTrue(compIdx > turnIdx, "构成行应在每回合请求行之后：行序=" + sink.lines);
-        // 每回合请求 = 系统提示词 2,500 + 消息 30,000 = 32,500
+        assertTrue(compIdx > turnIdx, "构成行应在上下文占用行之后：行序=" + sink.lines);
+        // 上下文占用 = 系统提示词 2,500 + 消息 30,000 = 32,500
         assertTrue(sink.lines.get(turnIdx).contains("32,500 / 100,000"),
-                "每回合请求须含系统提示词：实际=" + sink.lines.get(turnIdx));
+                "上下文占用须含系统提示词：实际=" + sink.lines.get(turnIdx));
         // 构成逐行：系统提示词第一项，消息三项各占一行（不再挤成一长串）
         String sp = sink.lines.get(indexOfContaining(sink.lines, "系统提示词"));
         assertTrue(sp.contains("2,500 · 8%"), "系统提示词占比（7.7% 补余到 8%）：实际=" + sp);
@@ -223,15 +223,15 @@ class ContextUsageTest {
         assertTrue(sink.lines.get(indexOfContaining(sink.lines, "工具结果")).contains("1,000 · 33%"));
     }
 
-    /** 唯一的 token 总数行是「每回合请求」——不许再出现第二个「会话估算」行制造两套对不上的数字。 */
+    /** 唯一的 token 总数行是「上下文占用」——不许再出现第二个「会话估算」行制造两套对不上的数字。 */
     @Test
     void report_onlyOneTokenTotalLine() {
         RecordingSink sink = new RecordingSink();
         new ContextUsage(() -> withBreakdown(), sink).report();
 
         assertTrue(sink.lines.stream().noneMatch(l -> l.contains("估算 token")), "不许出现第二个总数行");
-        assertEquals(1, sink.lines.stream().filter(l -> l.contains("每回合请求")).count(),
-                "每回合请求行只允许一行");
+        assertEquals(1, sink.lines.stream().filter(l -> l.contains("上下文占用")).count(),
+                "上下文占用行只允许一行");
     }
 
     @Test
@@ -249,13 +249,13 @@ class ContextUsageTest {
     @Test
     void report_noBreakdownData_omitsCompositionLines() {
         // 12 参便捷构造器：tokens 为空桶、systemPromptTokens 为 0 → 不打印构成与系统提示词行；
-        // 但「每回合请求」总数行无论有无分桶都打印（它是唯一总数）。
+        // 但「上下文占用」总数行无论有无分桶都打印（它是唯一总数）。
         RecordingSink sink = new RecordingSink();
         new ContextUsage(ContextUsageTest::full, sink).report();
 
         assertTrue(sink.lines.stream().noneMatch(l -> l.contains("构成")), "零分桶数据不打印构成行");
         assertTrue(sink.lines.stream().noneMatch(l -> l.contains("系统提示词")), "零系统提示词不打印该行");
-        assertTrue(sink.lines.stream().anyMatch(l -> l.contains("每回合请求")), "总数行必须打印");
+        assertTrue(sink.lines.stream().anyMatch(l -> l.contains("上下文占用")), "总数行必须打印");
     }
 
     @Test
@@ -264,9 +264,9 @@ class ContextUsageTest {
         ContextStats s = withCache(80L, 100L, 80);
         new ContextUsage(() -> s, sink).report();
 
-        int tokenIdx = indexOfContaining(sink.lines, "每回合请求");
+        int tokenIdx = indexOfContaining(sink.lines, "上下文占用");
         int cacheIdx = indexOfContaining(sink.lines, "缓存命中率");
-        assertTrue(cacheIdx > tokenIdx, "命中行在每回合请求行之后");
+        assertTrue(cacheIdx > tokenIdx, "命中行在上下文占用行之后");
         String line = sink.lines.get(cacheIdx);
         assertTrue(line.contains("缓存命中率：80%"), "命中率文案：" + line);
         assertTrue(line.contains("命中 80"), "命中数：" + line);

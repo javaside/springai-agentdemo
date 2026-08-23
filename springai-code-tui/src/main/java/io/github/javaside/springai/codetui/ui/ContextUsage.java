@@ -30,7 +30,7 @@ final class ContextUsage {
     }
 
     /**
-     * /context：把当前会话上下文用量（事件数分桶 + 每回合请求总数/构成占比 + 距自动压缩阈值）打进 scrollback（灰色信息行）。
+     * /context：把当前会话上下文用量（事件数分桶 + 上下文占用总数/构成占比 + 距自动压缩阈值）打进 scrollback（灰色信息行）。
      * 只读快照，任何时刻都可查；尚无对话时各项为 0，明确提示「尚无对话历史」。
      */
     void report() {
@@ -44,16 +44,17 @@ final class ContextUsage {
         sink.accept(String.format("  事件数：%,d 条（用户 %,d · 助手 %,d · 工具 %,d%s）",
                 s.events(), s.userEvents(), s.assistantEvents(), s.toolEvents(),
                 s.otherEvents() > 0 ? " · 其他 " + s.otherEvents() : ""));
-        // 唯一的总数口径：每回合真实请求 = 系统提示词 + 会话消息。系统提示词烘焙在 ChatClient 里、
-        // 从不进会话存储，单列一个「会话估算」行会与它互相矛盾（两行数字不同，用户无从对账）。
+        // 唯一的总数口径：上下文占用 = 系统提示词 + 会话消息（就是当前上下文里躺着的全部 token，
+        // 也是每回合真实发出去的量）。系统提示词烘焙在 ChatClient 里、从不进会话存储，单列一个
+        // 「会话估算」行会与它互相矛盾（两行数字不同，用户无从对账）。
         // 占窗口也按这个总数算，与状态栏「上下文 N%」同一口径。
         if (s.contextWindow() > 0) {
-            sink.accept(String.format("  每回合请求：%,d / %,d token（占窗口 %s）",
+            sink.accept(String.format("  上下文占用：%,d / %,d token（占窗口 %s）",
                     s.perTurnTokens(), s.contextWindow(), pct(s.perTurnTokens(), s.contextWindow())));
         } else {
-            sink.accept(String.format("  每回合请求：%,d token", s.perTurnTokens()));
+            sink.accept(String.format("  上下文占用：%,d token", s.perTurnTokens()));
         }
-        // 构成逐行展示（挤在一行长串里读不动）：系统提示词 + 消息四桶，各占每回合请求的比，
+        // 构成逐行展示（挤在一行长串里读不动）：系统提示词 + 消息四桶，各占上下文占用的比，
         // 一次 largest remainder 分配、合计恒为 100%（各自四舍五入会得 99%/101%，又对不上账）。
         // 桩路径 systemPromptTokens=0 时分母即消息总数；「系统/摘要」桶为 0 时省略（与事件分桶的「其他」同款处理）。
         ContextStats.TokenBreakdown b = s.tokens() == null ? ContextStats.TokenBreakdown.empty() : s.tokens();
@@ -134,7 +135,7 @@ final class ContextUsage {
         if (s == null || s.events() == 0) return "";
         StringBuilder sb = new StringBuilder();
         if (s.contextWindow() > 0) {
-            // 与 /context 报告同一分母（每回合请求，含系统提示词），两处百分比不会互相矛盾。
+            // 与 /context 报告同一分母（上下文占用，含系统提示词），两处百分比不会互相矛盾。
             sb.append(" · 上下文 ").append(pct(s.perTurnTokens(), s.contextWindow()));
         }
         if (s.cacheHitPercent() != null) {
