@@ -184,10 +184,25 @@ class ContextUsageTest {
         int clsIdx = indexOfContaining(sink.lines, "消息分类");
         assertTrue(clsIdx > estIdx, "分类行应在估算 token 行之后");
         String cls = sink.lines.get(clsIdx);
-        assertTrue(cls.contains("用户 12,000"), "用户桶原值：实际=" + cls);
-        assertTrue(cls.contains("助手 10,000"), "助手桶原值：实际=" + cls);
-        assertTrue(cls.contains("工具 8,000"), "工具桶原值：实际=" + cls);
+        assertTrue(cls.contains("用户 12,000（40%）"), "用户桶原值与占比：实际=" + cls);
+        assertTrue(cls.contains("助手 10,000（33%）"), "助手桶原值与占比：实际=" + cls);
+        assertTrue(cls.contains("工具 8,000（27%）"), "工具桶原值与占比（26.7% 进位）：实际=" + cls);
         assertFalse(cls.contains("系统/摘要"), "系统/摘要桶为 0 时省略：实际=" + cls);
+    }
+
+    /** 占比经 largest remainder 分配：三桶各 1/3 时总和仍须是 100%，不许 33+33+33=99。 */
+    @Test
+    void report_tokenBreakdown_percentsAlwaysSumTo100() {
+        ContextStats s = new ContextStats(3, 1, 1, 1, 0, 3_000L, 0L, 0L, 0, 0, 0, 0L,
+                0L, 0L, null,
+                new ContextStats.TokenBreakdown(0L, 1_000L, 1_000L, 1_000L), 0L);
+        RecordingSink sink = new RecordingSink();
+        new ContextUsage(() -> s, sink).report();
+
+        String cls = sink.lines.get(indexOfContaining(sink.lines, "消息分类"));
+        assertTrue(cls.contains("用户 1,000（34%）"), "余量补给小数部分最大者：实际=" + cls);
+        assertTrue(cls.contains("助手 1,000（33%）"), "实际=" + cls);
+        assertTrue(cls.contains("工具 1,000（33%）"), "实际=" + cls);
     }
 
     @Test
@@ -216,7 +231,7 @@ class ContextUsageTest {
         new ContextUsage(() -> s, sink).report();
 
         String cls = sink.lines.get(indexOfContaining(sink.lines, "消息分类"));
-        assertTrue(cls.contains("系统/摘要 500"), "系统桶非零应显示：实际=" + cls);
+        assertTrue(cls.contains("系统/摘要 500（10%）"), "系统桶非零应显示且带占比：实际=" + cls);
     }
 
     @Test

@@ -56,15 +56,23 @@ final class ContextUsage {
             sink.accept(String.format("  系统提示词：%,d（每回合固定重发，另计）", s.systemPromptTokens()));
         }
         // 消息 token 分类：与上方估算同口径，各分类之和 == 估算 token（同一趟遍历，恒对上账）。
-        // 「系统/摘要」桶为 0 时省略（与事件分桶的「其他」同款处理）。
+        // 每项后附占比（桶 / 消息总数）；占比经 largest remainder 分配，总和恒为 100%
+        // （各自四舍五入会得 99%/101%，又会对不上账）。「系统/摘要」桶为 0 时省略（与事件分桶的「其他」同款处理）。
         ContextStats.TokenBreakdown b = s.tokens();
-        if (b != null && (b.userTokens() > 0 || b.assistantTokens() > 0
-                || b.toolTokens() > 0 || b.systemTokens() > 0)) {
-            StringBuilder cls = new StringBuilder("  消息分类：用户 ").append(String.format("%,d", b.userTokens()))
-                    .append(" · 助手 ").append(String.format("%,d", b.assistantTokens()))
-                    .append(" · 工具 ").append(String.format("%,d", b.toolTokens()));
-            if (b.systemTokens() > 0) {
-                cls.append(" · 系统/摘要 ").append(String.format("%,d", b.systemTokens()));
+        if (b != null && (b.userTokens() + b.assistantTokens() + b.toolTokens() + b.systemTokens()) > 0) {
+            boolean showSystem = b.systemTokens() > 0;
+            long[] parts = showSystem
+                    ? new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens(), b.systemTokens()}
+                    : new long[]{b.userTokens(), b.assistantTokens(), b.toolTokens()};
+            String[] names = showSystem
+                    ? new String[]{"用户", "助手", "工具", "系统/摘要"}
+                    : new String[]{"用户", "助手", "工具"};
+            int[] pcts = percents(parts);
+            StringBuilder cls = new StringBuilder("  消息分类：");
+            for (int i = 0; i < parts.length; i++) {
+                if (i > 0) cls.append(" · ");
+                cls.append(names[i]).append(' ').append(String.format("%,d", parts[i]))
+                        .append('（').append(pcts[i]).append('%').append('）');
             }
             sink.accept(cls.toString());
         }
@@ -131,5 +139,33 @@ final class ContextUsage {
     private static String pct(long part, long whole) {
         if (whole <= 0) return "0%";
         return Math.round(part * 100.0 / whole) + "%";
+    }
+
+    /**
+     * 把非负 token 桶换算成<b>总和恒为 100</b> 的整数百分比（largest remainder）：
+     * 先截断取整，再把余量（最多 {@code parts.length-1} 点）按小数部分从大到小各补 1%。
+     * 每项都落在自己的 floor/ceil 之间、永不越界——比起「各自四舍五入、最后一项凑数」，
+     * 不会出现 99.5% 四舍五入成 100% 后把最后一项逼成 -1% 的边角。
+     */
+    private static int[] percents(long[] parts) {
+        long total = 0L;
+        for (long p : parts) total += p;
+        int[] pct = new int[parts.length];
+        if (total <= 0) return pct;
+        double[] exact = new double[parts.length];
+        int sum = 0;
+        for (int i = 0; i < parts.length; i++) {
+            exact[i] = parts[i] * 100.0 / total;
+            pct[i] = (int) exact[i];
+            sum += pct[i];
+        }
+        for (int remain = 100 - sum; remain > 0; remain--) {
+            int best = 0;
+            for (int i = 1; i < parts.length; i++) {
+                if (exact[i] - pct[i] > exact[best] - pct[best]) best = i;
+            }
+            pct[best]++;
+        }
+        return pct;
     }
 }
