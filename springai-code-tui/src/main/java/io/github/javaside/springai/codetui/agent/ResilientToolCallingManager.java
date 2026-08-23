@@ -9,15 +9,18 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 对 {@link org.springframework.ai.model.tool.DefaultToolCallingManager} 的容错包装：
  * 工具名解析失败（模型把工具名拼错/编造，如 {@code BochaWebSearch} 写成 {@code BoochaWebSearch}）
- * 时，<b>不再让整个回合崩掉</b>，而是把「工具 X 不存在，请使用正确的工具名重新调用」作为一条
+ * 时，<b>不再让整个回合崩掉</b>，而是把「工具 X 不存在，请使用正确的工具名重新调用」等信息作为
  * tool 结果回给模型，让模型自己纠正工具名后继续。
  *
  * <p><b>为什么需要它</b>：Spring AI 的 {@code DefaultToolCallingManager.executeToolCall} 在
@@ -28,7 +31,8 @@ import java.util.List;
  * 模型看到提示后会改用正确工具名重试。
  *
  * <p><b>实现</b>：先尝试委托原 manager；仅在捕获到「No ToolCallback found」异常时介入，
- * 构造一条 {@link ToolResponseMessage}（对每个未解析出的 tool_call 说明该名字不存在），
+ * 构造一条 {@link ToolResponseMessage} 回给模型：真正解析失败的那个工具名报「不存在」，
+ * 同批其余工具报「未执行」（可用清单里的工具明确告知它可解析、只是随异常被跳过），
  * 与请求历史一起拼成 {@link ToolExecutionResult} 返回——形状与正常工具执行结果完全一致，
  * Spring AI 会照常喂回模型。其余异常原样抛出。
  *
@@ -70,20 +74,26 @@ public final class ResilientToolCallingManager implements ToolCallingManager {
      */
     private ToolExecutionResult toolNotFoundResult(Prompt prompt, ChatResponse chatResponse, String notFoundMessage) {
         String unknown = extractUnknownToolName(notFoundMessage);
+        Set<String> resolvable = resolvableToolNames(prompt);
         AssistantMessage assistant = firstAssistantMessage(chatResponse);
 
         List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
         if (assistant != null && assistant.getToolCalls() != null) {
             for (AssistantMessage.ToolCall call : assistant.getToolCalls()) {
                 String name = call.name();
-                String data = toolNotFoundData(name, unknown);
+                // 三种情况分别对待，信息互不混淆：
+                // 1) 真正解析失败的那个工具 → 报「不存在」；
+                // 2) 可用清单里的工具（同批、被跳过）→ 报「可解析但未执行」；
+                // 3) 其余未尝试解析的 → 中性报「未执行」，不评判其存在性。
+                String data = unknown.equals(name)
+                        ? notFoundData(name)
+                        : skippedData(name, resolvable.contains(name));
                 responses.add(new ToolResponseMessage.ToolResponse(call.id(), name, data));
             }
         }
         // 兜底：即使拿不到 assistant message 也保证至少一条响应（带未知工具名）。
         if (responses.isEmpty()) {
-            String data = toolNotFoundData(unknown, unknown);
-            responses.add(new ToolResponseMessage.ToolResponse("unknown-tool-call", unknown, data));
+            responses.add(new ToolResponseMessage.ToolResponse("unknown-tool-call", unknown, notFoundData(unknown)));
         }
 
         List<Message> history = new ArrayList<>(prompt.getInstructions());
@@ -104,14 +114,31 @@ public final class ResilientToolCallingManager implements ToolCallingManager {
         return message;
     }
 
-    private static String toolNotFoundData(String requestedName, String unknown) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("工具 \"").append(requestedName).append("\" 不存在");
-        if (unknown != null && !unknown.isEmpty() && !unknown.equals(requestedName)) {
-            sb.append("（错误工具名：").append(unknown).append("）");
+    /** 「工具不存在」：仅用于真正解析失败的那个工具名。 */
+    private static String notFoundData(String name) {
+        return "工具 \"" + name + "\" 不存在。请使用正确的工具名重新调用。";
+    }
+
+    /** 「未执行」：同批调用因某个工具名解析失败被整体打断。可解析的工具明确告知它可用。 */
+    private static String skippedData(String name, boolean resolvable) {
+        return resolvable
+                ? "工具 \"" + name + "\" 可解析但未执行：同批工具调用中有工具名解析失败，请重新发起调用。"
+                : "工具 \"" + name + "\" 未执行：同批工具调用中有工具名解析失败，请重新发起调用。";
+    }
+
+    /** 当前请求中工具解析器可见的工具名集合（来自 prompt options 的 toolCallbacks）。 */
+    private static Set<String> resolvableToolNames(Prompt prompt) {
+        if (prompt == null || !(prompt.getOptions() instanceof ToolCallingChatOptions opts)
+                || opts.getToolCallbacks() == null) {
+            return Set.of();
         }
-        sb.append("。请使用正确的工具名重新调用。");
-        return sb.toString();
+        Set<String> names = new HashSet<>();
+        for (ToolCallback cb : opts.getToolCallbacks()) {
+            if (cb != null && cb.getToolDefinition() != null && cb.getToolDefinition().name() != null) {
+                names.add(cb.getToolDefinition().name());
+            }
+        }
+        return names;
     }
 
     private static AssistantMessage firstAssistantMessage(ChatResponse chatResponse) {

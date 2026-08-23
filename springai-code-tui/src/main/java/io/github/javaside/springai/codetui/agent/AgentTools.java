@@ -584,7 +584,7 @@ public final class AgentTools {
             // 队列已被第一次尝试排空，插话会在一次网络抖动后静默消失。
             // 工具名解析失败容错：模型拼错工具名（如 BochaWebSearch → BoochaWebSearch）时，
             // Spring AI 默认直接抛异常毁掉整回合。包一层 ResilientToolCallingManager，
-            // 把「工具不存在 + 可用工具清单」回给模型让它自己纠正重试（见该类的 javadoc）。
+            // 把「工具不存在，请用正确工具名重试」等信息回给模型让它自己纠正（见该类的 javadoc）。
             ToolCallingAdvisor.Builder<?> toolAdvisorBuilder = ToolCallingAdvisor.builder()
                     .toolCallingManager(new ResilientToolCallingManager(
                             DefaultToolCallingManager.builder()
