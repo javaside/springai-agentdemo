@@ -67,8 +67,6 @@ final class SessionTokenEstimator {
 
     /** 会话消息 token 的按类型分桶（纯数据，供 ContextStats 拷贝）。 */
     record Buckets(long systemTokens, long userTokens, long assistantTokens, long toolTokens) {
-        static final Buckets EMPTY = new Buckets(0L, 0L, 0L, 0L);
-
         long total() {
             return systemTokens + userTokens + assistantTokens + toolTokens;
         }
