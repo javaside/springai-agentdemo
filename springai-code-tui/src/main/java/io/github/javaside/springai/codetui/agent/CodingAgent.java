@@ -369,11 +369,19 @@ public final class CodingAgent implements SubmitHandler {
             modelGrounding = model;
         }
         try {
-            Disposable reactive = client.prompt()
-                    .user(effectiveText)
-                    // MCP 工具每回合快照注入：与 defaultTools 合并（Spring AI 2.0 per-request tools 语义），
-                    // /mcp 启停在下一回合即生效；mcp__ 前缀保证不与内置工具重名。空数组为 no-op。
-                    .tools(mcpRegistry == null ? new Object[0] : mcpRegistry.activeTools().toArray())
+            var builder = client.prompt()
+                    .user(effectiveText);
+            // MCP 工具每回合快照注入：与 defaultTools 合并（Spring AI 2.0 per-request tools 语义），
+            // /mcp 启停在下一回合即生效；mcp__ 前缀保证不与内置工具重名。
+            // ⚠ 只在 MCP 工具<b>非空</b>时才调 .tools()：传空数组在 Spring AI 2.0 下会覆盖 defaultTools，
+            //    使内置工具（BochaWebSearch 等）在本次请求的 tool 解析器里不可见——MCP 尚在后台连接
+            //    （启动后头几秒 activeTools() 为空）时，模型一调内置工具就报
+            //    "No ToolCallback found for tool name: X"。空时不传，defaultTools 原样生效。
+            Object[] mcpTools = mcpRegistry == null ? null : mcpRegistry.activeTools().toArray();
+            if (mcpTools != null && mcpTools.length > 0) {
+                builder = builder.tools(mcpTools);
+            }
+            Disposable reactive = builder
                     .options(perRequestOptions.mutate())   // 每次请求按当前所选模型覆盖（mutate 回 native builder，保留 maxTokens 等）
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）；
                     // {PERMISSION_MODE} 必须每回合重算——模式随 Shift+Tab 运行期变化，而 defaultSystem 是 build 期烘焙的。

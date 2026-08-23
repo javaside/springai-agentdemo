@@ -25,7 +25,11 @@ import org.springaicommunity.agent.tools.SmartWebFetchTool;
 import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springaicommunity.agent.utils.AgentEnvironment;
+import io.micrometer.observation.ObservationRegistry;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
+import org.springframework.ai.model.tool.DefaultToolCallingManager;
+import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
@@ -578,7 +582,19 @@ public final class AgentTools {
             // （工具结果落库与「构建下一次 prompt」是同一步，会话存储层看不到这个位置）。
             // 若将来主 agent 也用上 RetryingChatModel，本层必须仍在它<b>外面</b>——反了的话重试时
             // 队列已被第一次尝试排空，插话会在一次网络抖动后静默消失。
-            ChatClient c = ChatClient.builder(InterjectingChatModel.wrap(visionModel, interjections))
+            // 工具名解析失败容错：模型拼错工具名（如 BochaWebSearch → BoochaWebSearch）时，
+            // Spring AI 默认直接抛异常毁掉整回合。包一层 ResilientToolCallingManager，
+            // 把「工具不存在 + 可用工具清单」回给模型让它自己纠正重试（见该类的 javadoc）。
+            ToolCallingAdvisor.Builder<?> toolAdvisorBuilder = ToolCallingAdvisor.builder()
+                    .toolCallingManager(new ResilientToolCallingManager(
+                            DefaultToolCallingManager.builder()
+                                    .observationRegistry(ObservationRegistry.NOOP)
+                                    // 工具执行异常不终止回合：转成错误文本回给模型让它继续（见该类 javadoc）。
+                                    .toolExecutionExceptionProcessor(new ResilientToolExecutionExceptionProcessor())
+                                    .build()));
+            ChatClient c = ChatClient.builder(
+                    InterjectingChatModel.wrap(visionModel, interjections),
+                    ObservationRegistry.NOOP, null, null, toolAdvisorBuilder)
                     .defaultSystem(s -> s.text(SYSTEM_TEMPLATE)
                             .param(AgentEnvironment.ENVIRONMENT_INFO_KEY, environmentInfo)
                             .param(AgentEnvironment.GIT_STATUS_KEY, gitStatus)
