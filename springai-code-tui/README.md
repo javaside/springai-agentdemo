@@ -110,7 +110,7 @@ DeepSeek 现役内置模型为 `deepseek-v4-flash`（非思考）、`deepseek-v4
 ## 常用操作
 
 - `/model`：切换模型；在列表按 `→` 进入当前高亮模型的思考设置（模式开关 + provider 原生强度/token 预算），按模型独立记忆。
-- `/context`、`/compact`：查看和压缩上下文。
+- `/context`：查看上下文占用明细（事件分桶、占用总数、构成占比、缓存命中率）；`/compact`：压缩上下文。
 - `/skills`、`/skill`、`/reload`：查看、指定和重载技能。
 - `/mcp`：运行期管理 MCP 服务。
 - `/tasks`：查看后台任务。
