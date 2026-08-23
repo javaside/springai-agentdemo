@@ -30,10 +30,23 @@ class MemoryPromptTest {
     }
 
     @Test
+    void render_loadsProjectOverride_notUpstreamJarVersion() {
+        // classpath 顺序下，本项目 resources 里的精简版应覆盖 spring-ai-agent-utils jar 里的上游版。
+        // 若这个断言挂了，说明覆盖失效、静默回退到了上游 10.9KB 原版（token 白花）。
+        String out = MemoryPrompt.render("/x/memory");
+        assertTrue(out.contains("code-tui concise version"),
+                "应加载项目精简版（其头部注释有该标记），实际长度=" + out.length());
+        // 精简版应显著小于上游 10.9KB 原版。
+        assertTrue(out.length() < 8000,
+                "精简版应远小于上游原版，实际长度=" + out.length());
+    }
+
+    @Test
     void render_nonBlank_andReasonablySized() {
         String out = MemoryPrompt.render("/x/memory");
         assertFalse(out.isBlank(), "渲染结果不应为空白");
-        assertTrue(out.length() > 2000, "真 prompt ~11KB，长度应 > 2000");
+        // 精简版约 4.6KB：完整保留格式契约，但远小于上游 10.9KB 原版。
+        assertTrue(out.length() > 3000, "精简版 ~4.6KB，长度应 > 3000");
     }
 
     @Test
