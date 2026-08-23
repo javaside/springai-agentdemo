@@ -129,6 +129,57 @@ class MediaExternalizingCallbackTest {
         assertEquals(body, result, "文本文件读取这一回合原样放行");
     }
 
+    /**
+     * ★ 回归：Read <b>项目外</b> PNG 时不得放行 hexdump 字节进模型。
+     *
+     * <p>线上事故（session 20260823T142540）：模型 Read 了 {@code ~/Downloads/xxx.png}
+     * （越界路径），{@code resolveReadPath} 返回 null → 引用分支被跳过 → BinarySniff 判不出
+     * hexdump 文本 → 分支 4 把 204KB 的 PNG 原始字节当文本放行进模型。修复：越界但真实存在的
+     * 非文本文件 → 复制进 artifacts 外置成引用（与用户附件同策略），字节绝不进模型。
+     */
+    @Test
+    void readOutsideRootPng_stillExternalizedAsImage_neverLeaksBytes(@TempDir Path root) throws Exception {
+        Path outside = root.resolveSibling("outside-" + System.nanoTime() + ".png");
+        Files.write(outside, png());
+        try {
+            String toolInput = "{\"filePath\":\"" + outside.toAbsolutePath() + "\"}";
+            StringBuilder hex = new StringBuilder("File: outside.png\nShowing lines 1-3\n");
+            for (int i = 0; i < 200; i++) hex.append("     ").append(i).append("\t").append("IDAT bytes ").append('\n');
+            hex.append("�PNG marker\n");
+            String hexdump = hex.toString();
+            assertFalse(BinarySniff.looksBinary(hexdump), "前提：这段 hexdump 文本 BinarySniff 判不出二进制");
+
+            String result = wrap(delegate("Read", hexdump), root).call(toolInput, null);
+            assertTrue(FileReference.isReference(result), "项目外 PNG 的 hexdump 也必须外置为引用，实际:\n" + result);
+            assertTrue(result.contains("kind: image"), "应按磁盘魔数标 image");
+            assertFalse(result.contains("IDAT bytes"), "hexdump 正文不得留在会话——字节泄漏进模型的 bug 必须堵死");
+        } finally {
+            Files.deleteIfExists(outside);
+        }
+    }
+
+    /**
+     * ★ 回归：Read artifacts 副本时引用 id 必须与用户附件一致（都是<b>内容哈希</b>）。
+     *
+     * <p>线上事故（session 20260823T142540）：用户贴 {@code ~/Downloads/QQ.png}（项目外）→
+     * {@code copyIntoArtifacts} 复制进 artifacts，文件名/引用 id 是内容哈希
+     * （{@code sha256:f15c71fead633c1b}）；模型随后 Read 该副本 → {@code referenceExistingFile}
+     * 用<b>路径哈希</b>（{@code sha256:db2b095ceab70ea9}）→ 同一张图两个 id，模型当两张。
+     * 修复：artifacts 内是内容寻址产物（文件名=内容哈希），Read 时须沿用内容哈希。
+     */
+    @Test
+    void readArtifactsCopy_keepsContentHashId_matchingUserAttachment(@TempDir Path root) throws Exception {
+        MediaArtifactStore store = new MediaArtifactStore(root.resolve(".codetui/artifacts"), root);
+        MediaArtifact a = store.put(png(), null, "QQ.png");   // 附件侧：内容哈希命名
+        String toolInput = "{\"filePath\":\"" + a.path().toAbsolutePath() + "\"}";
+        String garbled = "\uFFFD\uFFFD PNG bytes here";
+        String result = wrap(delegate("Read", garbled), root).call(toolInput, null);
+        assertTrue(FileReference.isReference(result), "Read artifacts 副本应外置为引用");
+        assertTrue(result.contains("id: sha256:" + a.shortId()),
+                "Read artifacts 副本的 id 必须与附件一致（内容哈希），实际:\n" + result);
+        assertTrue(result.contains("path: .codetui/artifacts/"), "引用 path 应仍是 artifacts 相对路径");
+    }
+
     @Test
     void delegateThrows_propagates(@TempDir Path root) {
         ToolCallback boom = new ToolCallback() {
@@ -139,6 +190,32 @@ class MediaExternalizingCallbackTest {
             @Override public String call(String in, ToolContext ctx) { throw new RuntimeException("boom"); }
         };
         assertThrows(RuntimeException.class, () -> wrap(boom, root).call("i", null));
+    }
+
+    /**
+     * 已确认项目外目标为非文本时，artifacts 外置失败必须 fail-closed，不能回退放行 hexdump。
+     * 这是 session 20260823T142540 的 PNG 字节泄漏在磁盘满/目录不可写时的安全回归。
+     */
+    @Test
+    void readOutsideRootPng_storeFailure_omitsHexdumpInsteadOfReturningRaw(@TempDir Path root) throws Exception {
+        Path outside = root.resolveSibling("outside-fail-" + System.nanoTime() + ".png");
+        Files.write(outside, png());
+        Path blocker = root.resolve("blocker.txt");
+        Files.writeString(blocker, "not a directory");
+        MediaArtifactStore brokenStore = new MediaArtifactStore(blocker.resolve("artifacts"), root);
+        String hexdump = "File: outside.png\n     1\tIDAT raw bytes that must not leak\n�PNG marker\n";
+        assertFalse(BinarySniff.looksBinary(hexdump), "前提：hexdump 不能依赖 BinarySniff 拦住");
+
+        try {
+            String toolInput = "{\"filePath\":\"" + outside.toAbsolutePath() + "\"}";
+            String result = new MediaExternalizingCallback(delegate("Read", hexdump), brokenStore,
+                    new TextReferenceMediaHandler(), root).call(toolInput, null);
+
+            assertEquals("[工具返回二进制文件，外置失败后内容已从会话移除]", result);
+            assertFalse(result.contains("IDAT raw bytes"), "外置失败时也绝不得放行 hexdump");
+        } finally {
+            Files.deleteIfExists(outside);
+        }
     }
 
     @Test

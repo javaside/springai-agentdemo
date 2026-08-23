@@ -62,6 +62,13 @@ final class DeepSeekThinkingBodyCodec {
      * <b>无任何命中 → 原样返回同一 body</b>（纯文本请求零行为变化）。文本块与原 content
      * 逐字一致（引用块、delivery 行等原样保留，模型照常能读「这是哪张图」）。
      *
+     * <p><b>key 按「user 消息序号」而非「数组绝对下标」对齐</b>（与注册侧
+     * {@code DeepSeekThinkingChatModel.registerMedia} 同一套计数）：序列化层把一条
+     * {@code ToolResponseMessage} 的 N 条响应 flatMap 展开成 N 条消息，绝对下标会在带图 user
+     * 之前有工具历史时漂移——按绝对下标消费 key 就错位、图片静默丢失（fail-open）。而每条
+     * UserMessage 序列化后恰好是一条 role=user 消息、相对顺序不变，故「第几条 user」恒定一致。
+     * 这里每见一条 role=user 消息序号 +1（无图的也占位），与注册侧逐字对应。
+     *
      * <p><b>查不到 key 即 break 继续</b>（fail-open）：key 是按序号递增的，首个空洞之后的
      * 序号不可能再命中（注册是连续的）；改写失败绝不连累请求。
      */
@@ -80,6 +87,7 @@ final class DeepSeekThinkingBodyCodec {
                 return body;
             }
             boolean changed = false;
+            int userSeq = 0;   // 与注册侧同一套「user 序号」计数：每条 role=user 都占位
             for (int i = 0; i < messages.size(); i++) {
                 JsonNode msgNode = messages.get(i);
                 if (!(msgNode instanceof ObjectNode msg)) {
@@ -88,6 +96,7 @@ final class DeepSeekThinkingBodyCodec {
                 if (!"user".equals(msg.path("role").asText())) {
                     continue;
                 }
+                int thisUser = userSeq++;
                 JsonNode content = msg.get("content");
                 if (content == null || content.isNull()) {
                     continue;
@@ -103,7 +112,7 @@ final class DeepSeekThinkingBodyCodec {
                 int j = 0;
                 while (true) {
                     io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.Entry e =
-                            registry.take(io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.key(i, j));
+                            registry.take(io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.key(thisUser, j));
                     if (e == null) {
                         break;
                     }

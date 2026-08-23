@@ -63,10 +63,18 @@ final class DeepSeekThinkingChatModel implements ChatModel {
     }
 
     /**
-     * 把当轮 {@code UserMessage} 上的 {@code Media} 按「消息下标:media 序号」注册进
+     * 把当轮 {@code UserMessage} 上的 {@code Media} 按「user 消息序号:media 序号」注册进
      * {@link DeepSeekVisionMediaRegistry}，供 HTTP 层改写器（{@code DeepSeekThinkingBodyCodec}）
      * 消费。<b>用户图与工具图（合成消息）在这里一视同仁</b>——两者对改写器都是
      * 「某条 user 消息 + media 列表」。
+     *
+     * <p><b>为什么用「user 序号」而不是「instructions 绝对下标」</b>：{@code decorateVision}
+     * 消费的是<b>序列化后</b>的 messages 数组，而 spring-ai-deepseek 序列化时把一条
+     * {@code ToolResponseMessage} 的 N 条响应 {@code flatMap} 展开成 N 条独立消息——绝对下标
+     * 在带图 user 之前只要有工具历史就会漂移，key 错位后图片静默丢失（fail-open 不报错）。
+     * 而 UserMessage 在序列化后恰好产生一条 role=user 消息、相对顺序不变，故「第几条 user」
+     * 在 instructions 与序列化数组两侧恒定一致。消费侧（{@code decorateVision}）必须用同一套
+     * 计数：每见一条 role=user 消息序号 +1，无图消息同样占位。
      *
      * <p><b>并发论证</b>：有图请求在本项目只有主 agent 当前回合（串行）；无图请求
      * （子 agent、摘要等）第一遍扫描（{@link #hasRegistrableMedia}）确认无 media 后直接返回
@@ -81,11 +89,12 @@ final class DeepSeekThinkingChatModel implements ChatModel {
             return keys;   // 纯文本请求：绝不 clear、绝不 put
         }
         visionRegistry.clear();   // 防御性清空——仅当确认本次确有 media 要注册
-        for (int i = 0; i < msgs.size(); i++) {
-            org.springframework.ai.chat.messages.Message m = msgs.get(i);
+        int userSeq = 0;          // 与 decorateVision 消费侧同一套「user 序号」计数
+        for (org.springframework.ai.chat.messages.Message m : msgs) {
             if (!(m instanceof UserMessage user)) {
                 continue;
             }
+            int thisUser = userSeq++;   // 每条 user 都占位，无图也占——序号必须与序列化数组一致
             java.util.List<Media> media = user.getMedia();
             if (media == null || media.isEmpty()) {
                 continue;
@@ -97,8 +106,8 @@ final class DeepSeekThinkingChatModel implements ChatModel {
                     continue;
                 }
                 String mime = md.getMimeType() == null ? "image/png" : md.getMimeType().toString();
-                visionRegistry.put(i, j, entryFor(bytes, mime, md));
-                keys.add(io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.key(i, j));
+                visionRegistry.put(thisUser, j, entryFor(bytes, mime, md));
+                keys.add(io.github.javaside.springai.codetui.agent.media.DeepSeekVisionMediaRegistry.key(thisUser, j));
             }
         }
         return keys;
