@@ -760,7 +760,7 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 
 | 桥 | 类 | 做什么 |
 | --- | --- | --- |
-| 传输桥 | `RetryingChatModel` | 把阻塞 `call` 桥成 `stream` + `MessageAggregator` 聚合（代理网关非流式端点有分钟级坏窗口）。**必须转发 `getOptions()`**，漏了会导致 options 不是 `ToolCallingChatOptions` → `ToolCallingAdvisor` 整个跳过 → 子 agent 静默丢全部工具 |
+| 传输桥 | `RetryingChatModel` | 把阻塞 `call` 桥成 `stream` + `MessageAggregator` 聚合（代理网关非流式端点有分钟级坏窗口）。5 次尝试、500ms 指数退避封顶 4s，瞬态判据与红线见 [ADR](adr/subagent-streaming-bridge.md#7-参数与判据)。**必须转发 `getOptions()`**，漏了会导致 options 不是 `ToolCallingChatOptions` → `ToolCallingAdvisor` 整个跳过 → 子 agent 静默丢全部工具 |
 | UI 事件桥 | `toolContext` 携 `turnId=parentTurnId` + `taskId` | 由 `ToolEventCallback` 读出上报，TUI 据 taskId 缩进。**子 agent 的 assistant token 不回传**，回主 agent 的只有最终文本 |
 
 不挂 `SessionMemory` advisor → 子 agent 上下文独立。失败时 `describe(ex)` 把 cause 链摊平
@@ -782,7 +782,9 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 `SubagentTool.batchFunction` 的失败隔离与单任务**有意不同**：单任务遇未知 type **抛异常**，
 批量则把该条降级成失败文本、不抛。
 
-> 已知：`SubagentSpec.skills` 被解析但**全仓无消费方**（`effectiveSystemPrompt` 没读它），是死字段。
+> `SubagentSpec.skills` 被解析但**当前无消费方**（`effectiveSystemPrompt` 没读它），是为
+> 「按 spec 预挂载技能」预留的字段；子 agent 现有的技能能力来自工具集里的 `Skill`
+> 工具（模型按需自调用）。已在 `SubagentSpec` javadoc 上标注，含实现该功能的入手点。
 
 ---
 

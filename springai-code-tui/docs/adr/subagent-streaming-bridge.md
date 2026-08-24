@@ -19,7 +19,7 @@
 | 轮次 | 动作 | 结果 |
 |---|---|---|
 | 1 | 只加诊断（cause 链摊平 + 全栈日志） | 抓到 Jackson end-of-input，证实空 body，但未修复 |
-| 2 | `call()` 级重试（300ms 线性退避 ×3） | **穿不过分钟级坏窗口**——用户看到「一直在重试」 |
+| 2 | `call()` 级重试（当时是 300ms 线性退避 ×3） | **穿不过分钟级坏窗口**——用户看到「一直在重试」 |
 | 3 | 换传输路径：call 桥接流式聚合 | 修复；重试降级为二道防线 |
 
 **核心教训：评估重试方案前先量化故障持续时长。** 秒级抖动重试有效；分钟级窗口无论退避多少次都穿不过去，必须绕道（换到实测健康的传输路径）。
@@ -38,7 +38,7 @@ SubagentRunner.run
 - **聚合用框架自带 `MessageAggregator`**：与 ToolCallingAdvisor 流式路径同款，工具调用增量已由各 provider 的 stream 实现合并成完整 ToolCall，聚合结果对工具循环等价。
 - **空流守卫**：聚合结果既无文本也无工具调用 → 视同瞬态失败重试，穷尽后抛出——绝不把空串静默交回主 agent。
 - **不重试取消/中断**：cause 链上出现 `InterruptedException` / `CancellationException` 直抛（Esc 取消回合要立即退出，且中断标志位保留）。
-- **`shouldRetry` 按类名后缀匹配** `*InvalidDataException`（openai/anthropic SDK 同名后缀，保持 provider 中立）+ Jackson `No content to map`。
+- **`shouldRetry` 判据**：cause 链逐层判断，初版只认 `*InvalidDataException` 类名后缀 + Jackson `No content to map`；`cbba97f` 按生产日志扩到五类瞬态并加了红线，见下方「7. 参数与判据」。
 
 ## 5. 踩坑：装饰 ChatModel 必须转发 2.0 的 getOptions()
 
@@ -53,12 +53,43 @@ SubagentRunner.run
 
 SDK 顶层 message 笼统（`Error reading response`），根因在 cause 里，而工具异常处理器只把 `getMessage()` 交回模型。`SubagentRunner.describe()` 把 cause 链摊平成 `顶层 ← Cause类名: 根因` 文本（去重相邻重复、循环链封顶 5 层），重抛 `SubagentFailedException`（message=摊平文本、cause 保留供日志全栈）。
 
-## 7. 参数
+## 7. 参数与判据
+
+> 本节在 `cbba97f` 随代码更新过一次。初版参数（`MAX_ATTEMPTS=3`、`BACKOFF_MS=300` 线性）
+> 是「桥接已治本、重试只兜秒级残余抖动」的假设下定的；生产日志推翻了这个假设，详见下方。
 
 | 参数 | 值 | 说明 |
 |---|---|---|
-| `MAX_ATTEMPTS` | 3 | 总尝试次数（1 原始 + 2 重试）——只兜秒级残余抖动 |
-| `BACKOFF_MS` | 300 | 首次重试退避，之后线性（300、600ms） |
+| `MAX_ATTEMPTS` | 5 | 总尝试次数（1 原始 + 4 重试） |
+| `BACKOFF_MS` | 500 | 首次重试退避，之后**指数**（500、1000、2000、4000ms） |
+| `CAP_BACKOFF_MS` | 4000 | 退避封顶 |
+
+`Thread.sleep` 抽成可注入的 sleeper，测试不必真实等待。
+
+**为什么从 3 次线性改成 5 次指数**：1.14.0 运行目录的生产日志（2026-08-17）显示子 agent 失败
+10 次而重试层**触发 0 次**——判据太窄，匹配不到网关实际抛出的故障类型。扩容后退避也跟着放宽，
+因为真实瞬态故障（限流、5xx）的恢复时间比「秒级残余抖动」长。
+
+**瞬态判据**（五类，cause 链逐层判断）：
+
+| 类别 | 判据 |
+|---|---|
+| 「2xx + 坏 body」解析失败 | `*InvalidDataException` 类名后缀（openai/anthropic SDK 同名后缀，按类名匹配保持 provider 中立）或 Jackson `No content to map` |
+| 网络断连 | `IOException` 家族（EOF/SocketTimeout/Connect 均其子类），或类名以 `IoException` 结尾（openai-java 的 `OpenAIIoException`，同法不引新依赖） |
+| 流中途断开 | message 含 `EOF reached while reading`（`WebClientResponseException` 把 `EOFException` 摊平进顶层 message、cause 链上只剩自身的场景） |
+| 限流 | message 含 `rate limit`（大小写不敏感；覆盖 200-wrapped 的 SseException 与 429） |
+| 网关 5xx | cause 链上的 `WebClientResponseException` 且 `is5xxServerError` |
+
+**红线不重试**：
+
+- 401/403 与其余 4xx —— 确定态，重试无意义且欠费场景下更花钱。**2xx 不在此列**——「200 OK 但 body 坏」
+  正是网关坏窗口的形态，交给 EOF/解析特征判定（这条边界是 TDD 逼出来的修正）。
+- `InterruptedException` / `CancellationException` —— 优先短路，见 §4。
+
+把 `IOException` 全家族视为瞬态有理论误伤面（证书错误等），但误伤代价只是几次快速失败，
+漏掉代价是整个子 agent 报废重跑。
+
+判据扩容的完整推导见 `docs/superpowers/specs/2026-08-18-subagent-retry-transient-expansion-design.md`（仓库根目录下）。
 
 ## 8. 诊断手法备忘
 
@@ -68,3 +99,4 @@ SDK 顶层 message 笼统（`Error reading response`），根因在 cause 里，
 ## 9. 提交记录
 
 - `d3747b4` fix(code-tui)：子 agent 改走流式传输，修复网关坏窗口致「Error reading response」
+- `cbba97f` fix(tui)：子 agent 重试覆盖真实瞬态故障，改指数退避（§7 参数与判据随此提交更新）
