@@ -17,7 +17,11 @@ import java.util.List;
 public final class McpMediaParser {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /** 一个媒体块的原始字节 + 声明 MIME。 */
+    /** 一个媒体块的原始字节 + 声明 MIME。
+     *
+     * @param bytes            已 base64 解码的原始字节
+     * @param declaredMimeType server 声明的 MIME（外部输入，不可信；真实类型由 MagicSniffer 判定）
+     */
     public record MediaBlock(byte[] bytes, String declaredMimeType) {}
 
     public record Parsed(boolean isMcpArray, List<MediaBlock> mediaBlocks, List<String> textBlocks) {}

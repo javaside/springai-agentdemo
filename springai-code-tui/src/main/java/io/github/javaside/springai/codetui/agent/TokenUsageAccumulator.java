@@ -43,7 +43,13 @@ public final class TokenUsageAccumulator {
         cacheWriteTokens.reset();
     }
 
-    /** 不可变快照（纯 Java）。 */
+    /** 不可变快照（纯 Java）。
+     *
+     * @param promptTokens     累计输入 token（各家的 prompt_tokens/input_tokens，<b>已含缓存部分</b>）
+     * @param completionTokens 累计输出 token
+     * @param cacheReadTokens  命中缓存被读取的 token
+     * @param cacheWriteTokens 写入缓存的 token
+     */
     public record Snapshot(long promptTokens, long completionTokens,
                            long cacheReadTokens, long cacheWriteTokens) {
 

@@ -17,7 +17,11 @@ public final class CacheUsageExtractor {
     private CacheUsageExtractor() {
     }
 
-    /** 一次模型调用的缓存读写 token。 */
+    /** 一次模型调用的缓存读写 token。
+     *
+     * @param cacheRead  命中缓存被读取的 prompt token 数
+     * @param cacheWrite 写入缓存的 prompt token 数
+     */
     public record CacheTokens(long cacheRead, long cacheWrite) {
     }
 

@@ -29,6 +29,7 @@ public final class BackgroundDigest {
      * 重派正是要的结果。在这里给它们加任何指引（「先看看失败原因」之类），
      * 都是替用户做了他敲下 {@code /continue} 时已经做过的决定。
      *
+     * @param snapshot 注册表快照（一次取好传进来，避免实现里取两次而两次之间状态已变）
      * @return 需要提醒时的文本；两格都空且注册表非空时返回<b>空串</b>（调用方据此不改提示词）
      */
     public static String forContinue(List<BackgroundTask> snapshot) {
@@ -54,7 +55,11 @@ public final class BackgroundDigest {
         return "当前进程仍有后台任务：\n" + String.join("\n", rows);
     }
 
-    /** 给 {@code ListTasks} 用：列全部四种状态。空注册表返回一句话而非空串。 */
+    /** 给 {@code ListTasks} 用：列全部四种状态。空注册表返回一句话而非空串。
+     *
+     * @param snapshot 注册表快照
+     * @return 全部任务的清单文本
+     */
     public static String full(List<BackgroundTask> snapshot) {
         List<BackgroundTask> tasks = snapshot == null ? List.of() : snapshot;
         if (tasks.isEmpty()) {

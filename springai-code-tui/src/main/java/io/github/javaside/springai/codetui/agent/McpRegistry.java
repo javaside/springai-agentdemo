@@ -42,11 +42,24 @@ public final class McpRegistry {
 
     public enum Status { CONNECTED, FAILED, DISABLED, CONNECTING }
 
-    /** /mcp 面板一行的数据。toolNames 为去掉 {@code mcp__<server>__} 前缀的短名。 */
+    /** /mcp 面板一行的数据。
+     *
+     * @param name      server 逻辑名
+     * @param source    配置来源层（用户级 / 项目级）
+     * @param status    当前状态；判定顺序见 {@code servers()}
+     * @param toolCount 该 server 发现的工具数
+     * @param toolNames 去掉 {@code mcp__<server>__} 前缀的短名
+     * @param error     失败原因；正常时为 null
+     */
     public record ServerView(String name, McpConfigLoader.ConfigSource source, Status status,
                              int toolCount, List<String> toolNames, String error) { }
 
-    /** 切换结果：applied=内存态是否达成（enable=已连接；disable=恒 true），persisted=回写是否成功。 */
+    /** 切换结果。
+     *
+     * @param applied   内存态是否达成（enable = 已连接；disable = 恒 true）
+     * @param persisted 回写 mcp.json 是否成功
+     * @param error     失败原因；成功时为 null
+     */
     public record ToggleResult(boolean applied, boolean persisted, String error) { }
 
     private static final class Entry {

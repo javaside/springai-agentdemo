@@ -67,6 +67,11 @@ public final class BackgroundNotifier {
      *
      * <p>⚠ <b>有副作用</b>：真正判定为「该送达」时会消耗一次刹车额度。调用方必须真的用返回值去起回合，
      * 调了却丢弃返回值等于白白烧掉额度。
+     *
+     * @param results    已完成待送达的结果
+     * @param idle       当前是否空闲（有活跃回合时不送）
+     * @param inputEmpty 输入框是否为空（用户正在打字时不送）
+     * @return 该送达时的通知文本；否则 {@link Optional#empty()}
      */
     public Optional<String> shouldNotifyResults(List<SubmitHandler.BackgroundResult> results,
                                                 boolean idle, boolean inputEmpty) {

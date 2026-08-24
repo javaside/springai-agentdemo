@@ -55,7 +55,13 @@ import java.nio.file.PathMatcher;
 public record PermissionRule(String toolName, String pattern,
                              PermissionBehavior behavior, RuleScope scope) {
 
-    /** 解析 DSL；非法返回 {@code null}（调用方记 WARN 跳过，<b>绝不抛异常</b>）。 */
+    /** 解析 DSL；非法返回 {@code null}（调用方记 WARN 跳过，<b>绝不抛异常</b>）。
+     *
+     * @param dsl      规则 DSL，形如 {@code Bash(git status:*)}
+     * @param behavior 命中后的结论
+     * @param scope    存放层
+     * @return 解析出的规则；DSL 非法时为 null
+     */
     public static PermissionRule parse(String dsl, PermissionBehavior behavior, RuleScope scope) {
         if (dsl == null) {
             return null;
@@ -113,10 +119,15 @@ public record PermissionRule(String toolName, String pattern,
      * allow 方向只是白问一次，<b>deny 方向却是实打实的绕过</b>：
      * 一条 {@code deny:WebFetch(https://evil.com/:*)} 加个 {@code ?a=1&b=2} 就躲开了。
      *
+     * @param callTool           本次调用的工具注册名
+     * @param target             判定目标（路径已 normalize；非路径目标是原串）
+     * @param pathTarget         目标是否为路径，决定走 glob 还是整串相等
+     * @param root               项目根目录，用于相对 pattern 的匹配
      * @param separatorSensitive 目标可能是 shell 命令（COMMAND 类别、以及判定目标是整串入参的
      *                           UNKNOWN / MCP 工具）时传 true，保留守卫；
      *                           url / query / bash_id 这类已知非命令的目标传 false。
      *                           四参重载一律 true——默认保守。
+     * @return 是否命中本规则
      */
     public boolean matches(String callTool, String target, boolean pathTarget, Path root,
                            boolean separatorSensitive) {
@@ -220,6 +231,9 @@ public record PermissionRule(String toolName, String pattern,
      *
      * <p>不转义会出事：{@code report[2026].md} 里的 {@code [2026]} 被 glob 读成字符类，
      * 生成的规则<b>永不命中被批准的那个文件</b>，反而放开了 {@code report0/2/6.md}。
+     *
+     * @param literal 字面路径
+     * @return 只匹配该路径本身的 glob pattern
      */
     public static String escapeGlob(String literal) {
         StringBuilder sb = new StringBuilder(literal.length() + 8);

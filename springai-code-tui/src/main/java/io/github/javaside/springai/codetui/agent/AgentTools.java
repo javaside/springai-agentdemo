@@ -648,6 +648,12 @@ public final class AgentTools {
      * {@code McpRegistry} 里那个旧的。这种错法失效时<b>不报错</b>：用户 Shift+Tab 切到更严的模式，
      * 状态栏也跟着变了，而 MCP 工具仍按旧模式放行。故这里从 registry 取，让「共用同一个引擎」
      * 由类型而不是由调用纪律来保证。{@code mcpRegistry == null} 时全场只有这一个引擎，无从不一致。
+     *
+     * @param registry    provider 注册表
+     * @param root        项目根目录（工具工作目录、各类状态文件的基准）
+     * @param listener    UI 接缝
+     * @param mcpRegistry MCP 注册表；null = 无 MCP 支持
+     * @return 装配好的运行时
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
                                       McpRegistry mcpRegistry) {
@@ -655,7 +661,13 @@ public final class AgentTools {
                 mcpRegistry == null ? testEngine(root) : mcpRegistry.permissionEngine());
     }
 
-    /** 向后兼容：无 MCP 支持（等价 registry=null）。现有测试与旧调用走这条。 */
+    /** 向后兼容：无 MCP 支持（等价 registry=null）。现有测试与旧调用走这条。
+     *
+     * @param registry provider 注册表
+     * @param root     项目根目录
+     * @param listener UI 接缝
+     * @return 装配好的运行时
+     */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener) {
         return build(registry, root, listener, (McpRegistry) null);
     }
@@ -852,6 +864,9 @@ public final class AgentTools {
      * @param visionModels        每个 provider 的视觉兑现装饰器，键同 {@code clients}；供 {@code /context} 按激活 provider 读 {@code lastSnapshot()}
      * @param interjections       插话队列，全 provider 共用一个实例；与 {@code clients} 的 {@link InterjectingChatModel} 装饰层是同一个对象，
      *                            {@code CodingAgent} 拿它做门面与回合末补历史。另建一个等于 UI 投的话永远没人取
+     * @param backgroundRegistry  后台任务注册表（进程内、不落盘）；{@code TaskOutput} / {@code ListTasks} / {@code /tasks} 面板共用
+     * @param backgroundResults   后台结果限幅存储；超长正文落 artifacts 并在返回文本里给出路径
+     * @param systemPromptTokens  装配期一次性估算的系统提示词 token 数，供 {@code /context} 与状态栏用同一分母
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,

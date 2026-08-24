@@ -282,7 +282,11 @@ public final class BochaWebSearchTool {
             this.apiKey = apiKey.trim();
         }
 
-        /** 仅供测试指向本地 stub server；生产走 {@link #DEFAULT_BASE_URL}。 */
+        /** 仅供测试指向本地 stub server；生产走 {@link #DEFAULT_BASE_URL}。
+         *
+         * @param baseUrl 覆盖用的 base URL；null / 空白则保持默认
+         * @return this
+         */
         public Builder baseUrl(String baseUrl) {
             if (baseUrl != null && !baseUrl.isBlank()) {
                 this.baseUrl = baseUrl.trim();
@@ -294,6 +298,9 @@ public final class BochaWebSearchTool {
          * 结果条数，钳到 {@code [1, MAX_COUNT]}。与 {@link #resolveResultCount} 的钳制<b>不是</b>冗余：
          * 那里是 env 字符串的解析语义（含非数字回退），这里是所有构造路径的不变量守卫——
          * 测试与将来的其它调用方都直接走 builder，不经过 env 解析。两处都别删。
+         *
+         * @param resultCount 结果条数
+         * @return this
          */
         public Builder resultCount(int resultCount) {
             this.resultCount = Math.min(MAX_COUNT, Math.max(1, resultCount));

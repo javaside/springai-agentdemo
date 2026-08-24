@@ -566,7 +566,12 @@ public final class SubagentRunner {
         return result;
     }
 
-    /** 一次批量委派中的单个子任务：路由后的 spec + 该子任务的 prompt/description。 */
+    /** 一次批量委派中的单个子任务：路由后的 spec + 该子任务的 prompt/description。
+     *
+     * @param spec        已按 subagent_type 解析出的子 agent 定义
+     * @param prompt      该子任务的自包含任务提示
+     * @param description 3-5 词简述，进 UI 任务面板
+     */
     public record Dispatch(SubagentSpec spec, String prompt, String description) {
     }
 }

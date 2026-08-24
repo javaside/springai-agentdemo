@@ -74,7 +74,11 @@ public final class BashCommandSplitter {
     private BashCommandSplitter() {
     }
 
-    /** 按 {@code && || ; | &} 与换行拆段，同时判定「拆不动就问」。 */
+    /** 按 {@code && || ; | &} 与换行拆段，同时判定「拆不动就问」。
+     *
+     * @param command 整条命令；null / 空白视为零段且可解析
+     * @return 分段结果，{@code parseable=false} 表示语义不确定、调用方应 ASK
+     */
     public static Split split(String command) {
         List<String> segs = new ArrayList<>();
         if (command == null || command.isBlank()) {
@@ -124,6 +128,9 @@ public final class BashCommandSplitter {
      *
      * <p>先自查一遍复合结构与重定向：调用方理论上已拆过段，但本方法是 public 的安全判定，
      * 不能把「调用方拆对了」当前提——漏一次就是把整条复合命令按首词放行。
+     *
+     * @param segment 单段命令
+     * @return 是否可判定为无副作用的只读操作
      */
     public static boolean isReadOnly(String segment) {
         if (!isSingleSideEffectFreeSegment(segment)) {
@@ -144,7 +151,12 @@ public final class BashCommandSplitter {
         return READ_ONLY.contains(head);
     }
 
-    /** 单段是否属于 {@code ACCEPT_EDITS} 下额外放行的文件系统写。 */
+    /** 单段是否属于 {@code ACCEPT_EDITS} 下额外放行的文件系统写。
+     *
+     * @param segment 单段命令
+     * @return 首词是否为 mkdir/touch/mv/cp 之一。<b>本方法不看目标在哪</b>，
+     *         调用方必须另外判工作区包含（见 {@code PermissionEngine.allPathArgsInsideRoot}）
+     */
     public static boolean isFileSystemWrite(String segment) {
         if (!isSingleSideEffectFreeSegment(segment)) {
             return false;

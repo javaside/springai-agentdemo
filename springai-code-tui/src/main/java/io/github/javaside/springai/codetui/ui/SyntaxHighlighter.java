@@ -233,7 +233,11 @@ public final class SyntaxHighlighter {
         return Character.isLetterOrDigit(c) || c == '_' || c == '$';
     }
 
-    /** 高亮结果：spans 及离开本行后是否仍处于跨行块注释中。 */
+    /** 高亮结果：spans 及离开本行后是否仍处于跨行块注释中。
+     *
+     * @param spans               本行的高亮片段，按起始位置升序
+     * @param stillInBlockComment 本行结束时是否仍在块注释内（供下一行接续判断）
+     */
     public record Result(List<Span> spans, boolean stillInBlockComment) {
     }
 

@@ -56,6 +56,9 @@ public final class ModelPreference {
     /**
      * 一次「上次用的模型」偏好。{@code providerId} 为 null 表示「旧格式迁移、provider 未知」，
      * 由调用方回退到列表序靠前的 provider。
+     *
+     * @param providerId provider id；null = 旧格式，provider 未知
+     * @param modelId    模型 id，不能为空
      */
     public record Choice(String providerId, String modelId) {
         public Choice {

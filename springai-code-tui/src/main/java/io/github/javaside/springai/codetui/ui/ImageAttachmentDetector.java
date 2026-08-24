@@ -31,7 +31,11 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class ImageAttachmentDetector {
 
-    /** 识别结果 + 因超上限被丢弃的张数（附件行要如实说出来，不能静默截断）。 */
+    /** 识别结果 + 因超上限被丢弃的张数（附件行要如实说出来，不能静默截断）。
+     *
+     * @param images   识别到并保留的图片，最多 {@code VisionBudget.MAX_USER_IMAGES} 张
+     * @param overflow 因超上限被丢弃的张数
+     */
     public record Result(List<DetectedImage> images, int overflow) {
         static final Result EMPTY = new Result(List.of(), 0);
     }

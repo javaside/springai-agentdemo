@@ -31,7 +31,11 @@ public final class BackgroundTaskListTool {
     private BackgroundTaskListTool() {
     }
 
-    /** 构建名为 "ListTasks" 的 ToolCallback。 */
+    /** 构建名为 "ListTasks" 的 ToolCallback。
+     *
+     * @param registry 后台任务注册表，每次调用现取快照
+     * @return 可注册进 ChatClient 的工具
+     */
     public static ToolCallback create(BackgroundTaskRegistry registry) {
         return FunctionToolCallback.builder("ListTasks",
                         (NoArgs a) -> BackgroundDigest.full(registry.all()))

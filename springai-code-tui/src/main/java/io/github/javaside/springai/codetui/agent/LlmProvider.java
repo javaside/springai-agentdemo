@@ -29,27 +29,50 @@ public interface LlmProvider {
      */
     ChatModel chatModel();
 
-    /** 每请求覆盖模型用的该家 native {@link ChatOptions}（只设 model，Anthropic 另附必填 maxTokens）。 */
+    /** 每请求覆盖模型用的该家 native {@link ChatOptions}（只设 model，Anthropic 另附必填 maxTokens）。
+     *
+     * @param modelId 目标模型 id
+     * @return 该家 native options，可直接交给对应 ChatModel
+     */
     ChatOptions options(String modelId);
 
-    /** 该模型支持的思考配置；默认不支持，保持旧 provider 的零行为变化。 */
+    /** 该模型支持的思考配置；默认不支持，保持旧 provider 的零行为变化。
+     *
+     * @param modelId 目标模型 id
+     * @return 该模型的思考能力描述
+     */
     default ThinkingCapabilities thinkingCapabilities(String modelId) {
         return ThinkingCapabilities.unsupported();
     }
 
-    /** 带思考配置的每请求 options；默认只接受 DEFAULT。 */
+    /** 带思考配置的每请求 options；默认只接受 DEFAULT。
+     *
+     * @param modelId 目标模型 id
+     * @param config  思考配置；与 {@link #thinkingCapabilities} 不兼容时抛异常
+     * @return 该家 native options
+     */
     default ChatOptions options(String modelId, ThinkingConfig config) {
         thinkingCapabilities(modelId).validate(config);
         return options(modelId);
     }
 
-    /** 该家可选模型（供 /model 展示与选择）。 */
+    /** 该家可选模型（供 /model 展示与选择）。
+     *
+     * @return 模型清单，首项即 {@link #defaultModel()}
+     */
     List<ModelOption> models();
 
-    /** 该家默认模型 id（激活该家时的初始模型）。 */
+    /** 该家默认模型 id（激活该家时的初始模型）。
+     *
+     * @return 默认模型 id
+     */
     String defaultModel();
 
-    /** 该模型的能力（视觉等）。现全部返回 TEXT_ONLY（零行为变化）；接视觉模型时对应 provider 覆写此方法。 */
+    /** 该模型的能力（视觉等）。判定统一委托 {@code VisionModels}，未知模型一律判不支持。
+     *
+     * @param modelId 目标模型 id
+     * @return 该模型的输入能力
+     */
     default ModelCapabilities capabilities(String modelId) {
         return ModelCapabilities.TEXT_ONLY;
     }

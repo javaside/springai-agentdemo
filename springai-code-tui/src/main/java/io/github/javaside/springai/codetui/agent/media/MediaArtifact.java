@@ -8,8 +8,12 @@ import java.nio.file.Path;
  *  @param relativePath   相对项目 root 的短路径（写进引用给模型看/可 Read）
  *  @param mimeType       实际类型（magic 嗅探；未知用 application/octet-stream）
  *  @param declaredMimeType 声明类型（MCP 的 mimeType；可空）
- *  @param width/height   仅图片、且能解析时非空
+ *  @param kind           按实际类型判定的大类（IMAGE/VIDEO/BINARY/TEXT）
+ *  @param size           字节数
+ *  @param width          仅图片、且能解析时非空
+ *  @param height         仅图片、且能解析时非空
  *  @param lineCount      仅文本、可空
+ *  @param source         产物来源：指向既有文件还是本 store 落盘的
  *  @param ownedByStore   true=artifact store 拥有该文件；false=指向项目内既有文件
  *  @param originalName  原始文件名（EXISTING_FILE=磁盘文件名；MATERIALIZED=用户原名或合成名）。
  *                       MCP 内联字节没有名字，由调用方合成——否则模型跨回合只能看到一串 sha，

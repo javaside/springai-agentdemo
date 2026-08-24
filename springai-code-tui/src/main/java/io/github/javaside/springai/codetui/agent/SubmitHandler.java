@@ -15,26 +15,54 @@ public interface SubmitHandler {
     /**
      * 带指定技能提交：发送前先调用该技能工具、把正文注入到 text 前。
      * skillName 为 null 时等价 {@link #submit(String)}。默认实现委托无技能提交，便于桩省略。
+     *
+     * @param text      用户输入的原文
+     * @param skillName {@code /skill} 挂载的技能名；null = 不挂载
+     * @return 可用于 Esc 取消的 handle
      */
     default Disposable submit(String text, String skillName) { return submit(text); }
 
     // ── 模型选择（/model 选择器用；默认空实现，便于回显桩/测试桩省略） ──
-    /** 可选模型列表（每条带 provider 归属，见 {@link ProviderModel}）。 */
+    /** 可选模型列表（每条带 provider 归属，见 {@link ProviderModel}）。
+     *
+     * @return 全部可用模型
+     */
     default List<ProviderModel> models() { return List.of(); }
 
-    /** 当前使用的模型 id（裸 id，用于欢迎横幅/视觉判断等不关心 provider 的场合）。 */
+    /** 当前使用的模型 id（裸 id，用于欢迎横幅/视觉判断等不关心 provider 的场合）。
+     *
+     * @return 模型 id
+     */
     default String currentModel() { return ""; }
 
-    /** 当前使用模型的 provider id（模型选择器/思考强度显示需要精确区分同名模型）。 */
+    /** 当前使用模型的 provider id（模型选择器/思考强度显示需要精确区分同名模型）。
+     *
+     * @return provider id
+     */
     default String currentProviderId() { return ""; }
 
-    /** 切换到指定 provider 下的指定模型（对后续回合生效）。 */
+    /** 切换到指定 provider 下的指定模型（对后续回合生效）。
+     *
+     * @param providerId 目标 provider
+     * @param modelId    目标模型
+     */
     default void selectModel(String providerId, String modelId) { }
 
-    /** 读取某 provider 下某模型的思考设置与能力；默认 null（回显桩/测试桩）。 */
+    /** 读取某 provider 下某模型的思考设置与能力；默认 null（回显桩/测试桩）。
+     *
+     * @param providerId 目标 provider
+     * @param modelId    目标模型
+     * @return 思考设置与能力；不支持时为 null
+     */
     default ModelThinkingSettings thinkingSettings(String providerId, String modelId) { return null; }
 
-    /** 保存某 provider 下某模型的思考设置；返回写盘是否成功。默认 false。 */
+    /** 保存某 provider 下某模型的思考设置；返回写盘是否成功。默认 false。
+     *
+     * @param providerId 目标 provider
+     * @param modelId    目标模型
+     * @param config     要保存的思考配置；DEFAULT 语义是删记录
+     * @return 写盘是否成功
+     */
     default boolean saveThinkingSettings(String providerId, String modelId, ThinkingConfig config) { return false; }
 
     /** 手动压缩会话历史（/compact）。默认空实现，便于回显桩/测试桩省略。 */
@@ -72,10 +100,18 @@ public interface SubmitHandler {
     /** 已结束、可送达、尚未消费的后台任务结果（供自动送达判定）。 */
     default List<BackgroundResult> completedBackgroundTasks() { return List.of(); }
 
-    /** 标记某个后台任务的结果已交给模型。返回是否本次真的完成了标记（互斥闸，见注册表）。 */
+    /** 标记某个后台任务的结果已交给模型。返回是否本次真的完成了标记（互斥闸，见注册表）。
+     *
+     * @param taskId 后台任务 id
+     * @return 是否本次真的完成了标记
+     */
     default boolean markBackgroundConsumed(String taskId) { return false; }
 
-    /** 终止一个运行中的后台任务（/tasks 面板的 k 键）。 */
+    /** 终止一个运行中的后台任务（/tasks 面板的 k 键）。
+     *
+     * @param taskId 后台任务 id
+     * @return 是否真的改变了状态；已结束返回 false
+     */
     default boolean killBackgroundTask(String taskId) { return false; }
 
     /**
@@ -116,6 +152,12 @@ public interface SubmitHandler {
     /**
      * 一条可送达的后台任务结果。<b>刻意是 UI 层能直接消费的扁平结构</b>——
      * 不让 UI 去 import agent.background 包的领域类型，接缝两侧各自演进。
+     *
+     * @param taskId      后台任务 id
+     * @param agentName   subagent_type
+     * @param description 委派时给的简述
+     * @param result      结果正文（已由 {@code TaskResultStore} 限幅）
+     * @param ok          true = 正常完成，false = 执行失败
      */
     record BackgroundResult(String taskId, String agentName, String description,
                             String result, boolean ok) { }
@@ -124,10 +166,18 @@ public interface SubmitHandler {
     /** 已安装 MCP server 视图（含禁用项）。 */
     default List<McpRegistry.ServerView> mcpServers() { return List.of(); }
 
-    /** 启用（含连接，阻塞秒级——调用方放后台线程）。null 表示无 MCP 支持。 */
+    /** 启用（含连接，阻塞秒级——调用方放后台线程）。null 表示无 MCP 支持。
+     *
+     * @param name server 逻辑名
+     * @return 切换结果；无 MCP 支持时为 null
+     */
     default McpRegistry.ToggleResult enableMcp(String name) { return null; }
 
-    /** 禁用（即时完成）。null 表示无 MCP 支持。 */
+    /** 禁用（即时完成）。null 表示无 MCP 支持。
+     *
+     * @param name server 逻辑名
+     * @return 切换结果；无 MCP 支持时为 null
+     */
     default McpRegistry.ToggleResult disableMcp(String name) { return null; }
 
     // ── 权限管理（/permissions 与 Shift+Tab 用；默认空实现，便于回显桩/测试桩省略） ──
@@ -144,12 +194,18 @@ public interface SubmitHandler {
      * 删一条规则（{@code /permissions} 面板用）。默认 false，便于回显桩/测试桩省略。
      *
      * <p>落地端须<b>同时</b>更新落盘文件与内存规则表——只改一处会让面板与实际判定分家。
+     *
+     * @param rule 要删除的规则（按 equals 匹配，scope 是分量之一故不会摘错层）
+     * @return 是否真的删掉了
      */
     default boolean removePermissionRule(PermissionRule rule) { return false; }
 
     // ── 插话（回合进行中输入的消息，不打断回合、随下一次模型调用送达） ──
 
-    /** 忙时提交一条插话：不打断回合，随下一次模型调用送达。默认无操作（桩）。 */
+    /** 忙时提交一条插话：不打断回合，随下一次模型调用送达。默认无操作（桩）。
+     *
+     * @param text 插话原文
+     */
     default void interject(String text) { }
 
     /** 尚未送达模型的插话条数（状态栏用）。 */

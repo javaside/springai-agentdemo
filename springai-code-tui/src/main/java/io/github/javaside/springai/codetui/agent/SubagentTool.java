@@ -64,7 +64,13 @@ public final class SubagentTool {
     private SubagentTool() {
     }
 
-    /** 子 agent 调用入参。{@code run_in_background} 缺省 / null 均视为前台（向后兼容）。 */
+    /** 子 agent 调用入参。{@code run_in_background} 缺省 / null 均视为前台（向后兼容）。
+     *
+     * @param description       3-5 词简述，进 UI 任务面板
+     * @param prompt            自包含的任务提示（子 agent 看不到主对话）
+     * @param subagent_type     子 agent 名，取值见 {@code SubagentLoader.loadBuiltins()}
+     * @param run_in_background true = 后台执行；null / 缺省 = 前台，判空请用 {@link #background()}
+     */
     public record SubagentCall(
             @ToolParam(description = "3-5 word summary of what the subagent will do") String description,
             @ToolParam(description = "Detailed, self-contained task prompt for the subagent") String prompt,
@@ -84,7 +90,11 @@ public final class SubagentTool {
         }
     }
 
-    /** 批量子 agent 调用入参。 */
+    /** 批量子 agent 调用入参。
+     *
+     * @param tasks             并发执行的子任务列表，结果按入参顺序返回
+     * @param run_in_background 整批是否后台执行；null / 缺省 = 前台，判空请用 {@link #background()}
+     */
     public record ParallelCall(
             @ToolParam(description = "List of independent subtasks to run concurrently") List<SubagentCall> tasks,
             @ToolParam(required = false, description =

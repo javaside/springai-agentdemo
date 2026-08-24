@@ -52,7 +52,12 @@ public final class McpConfigLoader {
     /** 配置来源层：决定 /mcp 面板标注与回写目标文件。 */
     public enum ConfigSource { USER, PROJECT }
 
-    /** 全量加载的单条目：配置 + 来源层 + 所属文件（回写目标）。 */
+    /** 全量加载的单条目：配置 + 来源层 + 所属文件（回写目标）。
+     *
+     * @param config 该 server 的配置
+     * @param source 来源层；项目层覆盖同名用户层时，本字段一并换成项目层
+     * @param file   所属 mcp.json 的路径，即运行期启停的回写目标
+     */
     public record LoadedServer(McpServerConfig config, ConfigSource source, Path file) { }
 
     /** 生产入口（全量版）：与 {@link #load(Path)} 同源两文件，但保留 enabled:false 条目，供 /mcp 列出再启用。 */

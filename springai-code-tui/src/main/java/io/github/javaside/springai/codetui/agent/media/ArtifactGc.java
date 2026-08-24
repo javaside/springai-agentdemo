@@ -34,7 +34,11 @@ public final class ArtifactGc {
 
     private ArtifactGc() {}
 
-    /** 目录总字节超过 {@code maxBytes} 则按 mtime 从旧到新删除，直到不超过为止。 */
+    /** 目录总字节超过 {@code maxBytes} 则按 mtime 从旧到新删除，直到不超过为止。
+     *
+     * @param artifactsDir artifacts 目录；不存在则直接返回
+     * @param maxBytes     目录总字节上限
+     */
     public static void sweep(Path artifactsDir, long maxBytes) {
         try {
             if (!Files.isDirectory(artifactsDir)) return;

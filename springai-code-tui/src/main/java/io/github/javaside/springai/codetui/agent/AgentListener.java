@@ -14,20 +14,45 @@ public interface AgentListener {
     void onToolFinished(long turnId, String toolName, String output, boolean ok);
 
     // ── 子 agent（Task 工具委派） ──
-    /** 子 agent 开始。taskId 唯一标识一次委派；agentName=subagent_type；description=调用方给的简述。 */
+    /**
+     * 子 agent 开始。
+     *
+     * @param turnId      所属回合，供 UI 过滤迟到事件
+     * @param taskId      唯一标识一次委派
+     * @param agentName   subagent_type
+     * @param description 调用方给的简述
+     */
     void onSubagentStarted(long turnId, String taskId, String agentName, String description);
-    /** 子 agent 结束。finalText=子 agent 的最终返回文本（回灌主 agent 的内容）。 */
+    /**
+     * 子 agent 结束。
+     *
+     * @param turnId    所属回合
+     * @param taskId    对应 {@link #onSubagentStarted} 的 taskId
+     * @param finalText 子 agent 的最终返回文本（回灌主 agent 的内容）
+     */
     void onSubagentFinished(long turnId, String taskId, String finalText);
 
     /**
-     * 子 agent 结束（带成败维度）。ok=true 正常返回、false 执行抛错。
+     * 子 agent 结束（带成败维度）。
      * 默认委托回 3 参版本，只有需要区分成败的实现（ConversationState 面板）覆写本方法。
+     *
+     * @param turnId    所属回合
+     * @param taskId    对应 {@link #onSubagentStarted} 的 taskId
+     * @param finalText 子 agent 的最终返回文本
+     * @param ok        true 正常返回、false 执行抛错
      */
     default void onSubagentFinished(long turnId, String taskId, String finalText, boolean ok) {
         onSubagentFinished(turnId, taskId, finalText);
     }
 
-    /** 带 taskId 的工具事件（子 agent 内部工具）：默认委托无 taskId 版本，只有需缩进渲染的实现覆写。 */
+    /**
+     * 带 taskId 的工具事件（子 agent 内部工具）：默认委托无 taskId 版本，只有需缩进渲染的实现覆写。
+     *
+     * @param turnId   所属回合
+     * @param taskId   发起该工具调用的子 agent
+     * @param toolName 工具注册名
+     * @param input    工具入参（已序列化）
+     */
     default void onToolStarted(long turnId, String taskId, String toolName, String input) {
         onToolStarted(turnId, toolName, input);
     }
@@ -40,6 +65,10 @@ public interface AgentListener {
      * 带 taskId 的 Todo 事件：taskId==null 是控制器（主 agent）的计划 todo（开发计划进度，进任务面板）；
      * taskId!=null 是子 agent 内部 todo（当前子 agent 的进度，进 todo 面板）。
      * 默认委托无 taskId 版本，只有需按层分流的实现（ConversationState）覆写本方法。
+     *
+     * @param turnId    所属回合
+     * @param taskId    子 agent 的 taskId；null = 主 agent
+     * @param todoLines 已转成可显示形式的 todo 行
      */
     default void onTodoUpdated(long turnId, String taskId, List<String> todoLines) {
         onTodoUpdated(turnId, todoLines);
@@ -50,6 +79,9 @@ public interface AgentListener {
     /**
      * 模型经 AskUserQuestionTool 发问：UI 应弹出作答面板并最终经 {@code request.responder()} 应答。
      * 与其它方法一样带 turnId 供迟到过滤。落地端会阻塞工具线程直到 UI 应答（见 UserQuestionBridge）。
+     *
+     * @param turnId  所属回合
+     * @param request 问询请求（含题目、选项与应答出口）
      */
     void onQuestionAsked(long turnId, AskRequest request);
 
@@ -73,6 +105,9 @@ public interface AgentListener {
      *       在回调里阻塞会冻住<b>整个 TUI</b>（连 Esc 都按不动），而不只是一个工具线程。
      *       本方法必须立刻返回，阻塞由工具线程在应答口上完成。</li>
      * </ul>
+     *
+     * @param turnId  所属回合，供迟到过滤
+     * @param request 审批请求（含工具名、判定目标、理由、建议规则与应答出口）
      */
     default void onPermissionRequested(long turnId, PermissionRequest request) {
         request.responder().respond(PermissionOutcome.DENY);
@@ -91,6 +126,9 @@ public interface AgentListener {
      * <b>不得调 {@code super}</b>（默认实现会立刻应答，一次性口被消费掉，用户随后的真实选择被丢弃）、
      * <b>不得在本回调里阻塞</b>（{@code ConversationState} 的 listener 方法是 {@code synchronized}，
      * 阻塞会冻住整个 TUI）。
+     *
+     * @param turnId  所属回合，供迟到过滤
+     * @param request 计划审批请求（含计划正文与应答出口）
      */
     default void onPlanSubmitted(long turnId, PlanRequest request) {
         request.responder().respond(PlanOutcome.KEEP_PLANNING, "（当前界面不支持计划审批）");
@@ -106,6 +144,7 @@ public interface AgentListener {
      *
      * <p>四种结果都经这里回报：会话规则、永久写入成功、写盘失败降级、被 deny 规则遮蔽未记录。
      *
+     * @param turnId  所属回合
      * @param ok      是否达成用户选的那个效果（写盘失败 / 被遮蔽都是 false）
      * @param message 给用户看的一句话，已含规则 DSL 与落点；实现方直接下沉即可
      */
@@ -128,6 +167,7 @@ public interface AgentListener {
      * 与 {@code drainPending()} 共用同一把锁，在这里阻塞会冻住<b>整个 TUI</b>。
      * 更不得在这里发起询问：BYPASS 的定义就是不问，问了就是把死锁又请回来。
      *
+     * @param turnId 所属回合
      * @param what 危险理由串（引擎的内置底线原话，形如「写入 .git/ 内部（…）：/p/.git/hooks/pre-commit」）
      */
     default void onGuardrailBypassed(long turnId, String what) { }
@@ -139,6 +179,10 @@ public interface AgentListener {
      * {@code ConversationState} 的迟到过滤丢弃（那正是前台事件想要的行为，对后台却是致命的）。
      *
      * <p>默认空实现，便于回显桩 / 测试桩省略。
+     *
+     * @param taskId      后台任务 id
+     * @param agentName   subagent_type
+     * @param description 委派时给的简述
      */
     default void onBackgroundTaskStarted(String taskId, String agentName, String description) { }
 
@@ -150,6 +194,10 @@ public interface AgentListener {
      * 由 UI 层按 taskId 认出后台任务、写进它自己的镜像状态。多摆一个没有发射点的
      * {@code onBackgroundTaskProgress} 只会立一块「后台进度该从这里报」的假路标，
      * 照着接线的人会发现事件永远不来。
+     *
+     * @param taskId    后台任务 id
+     * @param finalText 结果正文；ok=false 时是摊平后的失败原因
+     * @param ok        true = 正常完成，false = 执行抛错
      */
     default void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) { }
 
@@ -166,10 +214,20 @@ public interface AgentListener {
     default void onMcpReady(int serverCount, int toolCount) { }
 
     // ── 会话压缩（跨回合的横切信号；无 turnId） ──
-    /** 压缩开始。reason: "auto"（阈值触发）| "manual"（/compact）。 */
+    /** 压缩开始。
+     *
+     * @param reason {@code "auto"}（阈值触发）或 {@code "manual"}（/compact）
+     */
     void onCompactionStarted(String reason);
-    /** 压缩完成。eventsRemoved：被归档移除的事件数；tokensSaved：估算节省 token。 */
+    /** 压缩完成。
+     *
+     * @param eventsRemoved 被归档移除的事件数
+     * @param tokensSaved   估算节省的 token 数
+     */
     void onCompactionFinished(int eventsRemoved, int tokensSaved);
-    /** 压缩失败。message：失败原因（已做 null 安全处理的字符串）。 */
+    /** 压缩失败。
+     *
+     * @param message 失败原因（已做 null 安全处理的字符串）
+     */
     void onCompactionFailed(String message);
 }

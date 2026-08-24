@@ -32,7 +32,12 @@ public final class BackgroundTaskRegistry {
         this.idSupplier = () -> "task_" + UUID.randomUUID().toString().substring(0, 8);
     }
 
-    /** 登记一个新任务（RUNNING），返回 taskId。超容量时先淘汰最旧的已完成任务。 */
+    /** 登记一个新任务（RUNNING），返回 taskId。超容量时先淘汰最旧的已完成任务。
+     *
+     * @param agentName   subagent_type
+     * @param description 委派时给的简述
+     * @return 新任务的 taskId
+     */
     public synchronized String register(String agentName, String description) {
         evictIfNeeded();
         String id = idSupplier.get();
@@ -40,14 +45,23 @@ public final class BackgroundTaskRegistry {
         return id;
     }
 
-    /** 标记完成。ok=true → DONE，false → FAILED。未知 id 或已结束的任务静默忽略。 */
+    /** 标记完成。ok=true → DONE，false → FAILED。未知 id 或已结束的任务静默忽略。
+     *
+     * @param taskId 任务 id
+     * @param result 结果正文；失败时是摊平后的原因
+     * @param ok     true → DONE，false → FAILED
+     */
     public synchronized void complete(String taskId, String result, boolean ok) {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return;
         t.finish(ok ? BackgroundTask.Status.DONE : BackgroundTask.Status.FAILED, result);
     }
 
-    /** 终止一个运行中的任务（标记 KILLED）。返回是否真的改变了状态——已结束的返回 false。 */
+    /** 终止一个运行中的任务（标记 KILLED）。
+     *
+     * @param taskId 任务 id
+     * @return 是否真的改变了状态；已结束或未知 id 返回 false
+     */
     public synchronized boolean kill(String taskId) {
         BackgroundTask t = tasks.get(taskId);
         if (t == null || t.finished()) return false;
@@ -69,6 +83,9 @@ public final class BackgroundTaskRegistry {
      *
      * <p>返回值是两条回收路径的<b>互斥闸</b>：TaskOutput 与自动送达都调它，
      * 谁先拿到 true 谁负责送，另一条拿到 false 就跳过。没有这个返回值，同一个结果会被送两遍。
+     *
+     * @param taskId 任务 id
+     * @return 是否<b>本次</b>真的把它从未消费变成已消费
      */
     public synchronized boolean markConsumed(String taskId) {
         BackgroundTask t = tasks.get(taskId);

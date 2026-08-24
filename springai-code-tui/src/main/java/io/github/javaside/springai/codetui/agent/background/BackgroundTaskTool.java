@@ -49,7 +49,11 @@ public final class BackgroundTaskTool {
                 + BackgroundDigest.full(registry.all());
     }
 
-    /** 工具入参。 */
+    /** 工具入参。
+     *
+     * @param task_id 要取回的后台任务 id（{@code Task(run_in_background=true)} 的返回值里带）
+     * @param block   true = 阻塞等到任务结束（有上限，且有未送达插话时提前收工）；null / 缺省 = 立即返回当前状态
+     */
     public record Query(
             @ToolParam(description = "The task id returned by Task(run_in_background=true)") String task_id,
             @ToolParam(required = false, description = "Wait until the task finishes (default false)")
@@ -66,6 +70,9 @@ public final class BackgroundTaskTool {
     private final BooleanSupplier interjectionPending;
 
     /**
+     * @param registry            后台任务注册表
+     * @param results             结果限幅存储
+     * @param timeoutSeconds      {@code block=true} 的等待上限（秒），钳到 [1, 3600]
      * @param interjectionPending 「此刻有没有未送达的用户插话」。<b>必填、不给默认值</b>：
      *                            漏接的后果是阻塞等待重新变回一堵墙，而这是个纯时序问题——
      *                            功能测试全绿、界面看着也正常，只有真人在等的时候才发作。
@@ -79,7 +86,14 @@ public final class BackgroundTaskTool {
         this.interjectionPending = interjectionPending;
     }
 
-    /** 构建名为 "TaskOutput" 的 ToolCallback。 */
+    /** 构建名为 "TaskOutput" 的 ToolCallback。
+     *
+     * @param registry            后台任务注册表
+     * @param results             结果限幅存储
+     * @param timeoutSeconds      {@code block=true} 的等待上限（秒）
+     * @param interjectionPending 「此刻有没有未送达的用户插话」，见构造器说明
+     * @return 可注册进 ChatClient 的工具
+     */
     public static ToolCallback create(BackgroundTaskRegistry registry, TaskResultStore results,
                                       int timeoutSeconds, BooleanSupplier interjectionPending) {
         BackgroundTaskTool tool = new BackgroundTaskTool(registry, results, timeoutSeconds, interjectionPending);

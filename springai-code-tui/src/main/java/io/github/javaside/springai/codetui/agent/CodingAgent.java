@@ -94,7 +94,16 @@ public final class CodingAgent implements SubmitHandler {
     private final long systemPromptTokens;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
-    /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。 */
+    /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。
+     *
+     * @param chatClient          单个 ChatClient（桩路径，无多 provider 路由）
+     * @param listener            UI 接缝
+     * @param sessionId           会话 id
+     * @param activeTurnId        回合计数器，与 UI 共用同一实例
+     * @param sessionService      会话服务
+     * @param manualStrategy      {@code /compact} 用的压缩策略
+     * @param tokenCountEstimator token 估算器
+     */
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator) {
@@ -149,9 +158,22 @@ public final class CodingAgent implements SubmitHandler {
      * 多 provider 生产构造：registry 决定激活 provider 与模型，clientsByProvider 提供各家 ChatClient。
      * submit 按激活 provider 选 ChatClient + 用该家 options 覆盖模型；/model 走 registry 跨家。
      *
+     * <p>本重载<b>无子 agent 执行器</b>（测试桩用），等价 subagentRunner=null：
+     * 取消不拆并行池、busy 闸门恒不含在飞子 agent。
+     *
+     * @param registry           provider 注册表，决定激活 provider 与模型
+     * @param clientsByProvider  各 provider 的 ChatClient，键为 provider id
+     * @param listener           UI 接缝
+     * @param sessionId          会话 id
+     * @param activeTurnId       回合计数器，与 UI 共用同一实例
+     * @param sessionService     会话服务
+     * @param manualStrategy     {@code /compact} 用的压缩策略
+     * @param tokenCountEstimator token 估算器
+     * @param skills             装配期技能快照；{@code reloadableSkill} 非空时以后者为实时数据源
+     * @param skillTool          已装饰的技能工具，{@code /skill} 手动挂载时复用同一实例
+     * @param sessionRepository  会话仓库，出站净化需要它 replaceEvents
      * @param reloadableSkill 可重载技能源（{@code /reload} 触发重扫）；亦作 {@code skills()} 的实时数据源。可空。
      */
-    /** 向后兼容重载（无子 agent 执行器：测试桩用）。等价 subagentRunner=null（取消不拆并行池、busy 闸门恒不含在飞子 agent）。 */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,

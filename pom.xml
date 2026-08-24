@@ -142,6 +142,23 @@
                     <artifactId>spring-boot-maven-plugin</artifactId>
                     <version>${spring-boot.version}</version>
                 </plugin>
+                <!--
+                  javadoc：钉版本（否则解析到「当前最新」，构建不可复现）+ 固定 doclint 档位。
+
+                  doclint 开 all 但去掉 missing：syntax / html / reference 三组是真错——
+                  它们会让 apidocs 整个生成不出来（中文注释里的裸尖括号、未闭合 inline tag 都属此列），
+                  必须拦住。而 missing（缺 @param / @return / 缺注释）只是不完整：本仓大量
+                  向后兼容重载是纯委托的，给它们逐个补 @param 等于把主构造的文档抄 N 份，
+                  参数一改就有 N 处要同步，维护成本高于收益。
+                -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>3.12.0</version>
+                    <configuration>
+                        <doclint>all,-missing</doclint>
+                    </configuration>
+                </plugin>
             </plugins>
         </pluginManagement>
 

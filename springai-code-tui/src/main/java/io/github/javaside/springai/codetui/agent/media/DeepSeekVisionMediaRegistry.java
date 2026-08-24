@@ -21,7 +21,13 @@ public final class DeepSeekVisionMediaRegistry {
     /** 图片在请求体里的呈现通道。 */
     public enum Transport { INLINE, FILES }
 
-    /** INLINE：base64 内联（bytes+mimeType）；FILES：file_id 引用（fileId）。 */
+    /** INLINE：base64 内联（bytes+mimeType）；FILES：file_id 引用（fileId）。
+     *
+     * @param transport 呈现通道，决定下面哪几个字段有值
+     * @param bytes     图片原始字节；仅 INLINE 非空
+     * @param mimeType  图片 MIME；仅 INLINE 非空
+     * @param fileId    Files API 返回的 file_id；仅 FILES 非空
+     */
     public record Entry(Transport transport, byte[] bytes, String mimeType, String fileId) {
         public static Entry inline(byte[] bytes, String mimeType) {
             return new Entry(Transport.INLINE, bytes, mimeType, null);

@@ -82,7 +82,10 @@ public final class PlanApprovalBridge {
         }
     }
 
-    /** {@code ExitPlanMode} 的入参：一份 markdown 计划。 */
+    /** {@code ExitPlanMode} 的入参：一份 markdown 计划。
+     *
+     * @param plan markdown 格式的实施计划正文
+     */
     public record PlanInput(String plan) {
     }
 

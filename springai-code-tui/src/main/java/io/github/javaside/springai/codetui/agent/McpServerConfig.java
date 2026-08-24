@@ -26,6 +26,9 @@ public sealed interface McpServerConfig
     /**
      * stdio 传输配置：以子进程方式启动本地 MCP server。
      *
+     * @param name      server 逻辑名，见 {@link #name()}
+     * @param enabled   是否启用，见 {@link #enabled()}
+     * @param timeoutMs request / initialization 超时，见 {@link #timeoutMs()}
      * @param command 可执行命令（如 {@code npx}），必填
      * @param args    命令参数（可空 → 空列表）
      * @param env     追加环境变量（可空 → 空 map）
@@ -38,6 +41,9 @@ public sealed interface McpServerConfig
     /**
      * Streamable HTTP 传输配置：连接远程 MCP server。
      *
+     * @param name      server 逻辑名，见 {@link #name()}
+     * @param enabled   是否启用，见 {@link #enabled()}
+     * @param timeoutMs request / initialization 超时，见 {@link #timeoutMs()}
      * @param url     完整端点 URL（如 {@code https://mcp.context7.com/mcp}）；
      *                由 {@link McpTransportFactory} 拆成 baseUri + endpoint 两段喂给 SDK
      * @param headers 请求头，值已在 loader 完成 {@code ${ENV_VAR}} 插值；可空 → 空 map

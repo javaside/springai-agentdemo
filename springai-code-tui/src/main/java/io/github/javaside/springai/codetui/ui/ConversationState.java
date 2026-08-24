@@ -65,7 +65,13 @@ public final class ConversationState implements AgentListener {
     /** 子任务（一次子 agent 作业）状态——<b>任务面板</b>显示。 */
     public enum SubtaskStatus { RUNNING, DONE, FAILED }
 
-    /** 子任务只读快照（供渲染线程读，与内部可变状态解耦）。 */
+    /** 子任务只读快照（供渲染线程读，与内部可变状态解耦）。
+     *
+     * @param agentName   subagent_type
+     * @param description 委派时给的简述
+     * @param status      当前状态
+     * @param currentTool 正在跑的工具名；无则为 null
+     */
     public record SubtaskView(String agentName, String description, SubtaskStatus status, String currentTool) {}
 
     /** 内部可变持有者：status/currentTool 就地更新。仅本类访问。 */
@@ -103,6 +109,15 @@ public final class ConversationState implements AgentListener {
      * <p>{@code result} 是子 agent 的<b>完整</b>结果（未结束则为空串），供 {@code /tasks} 面板展开查看。
      * 这是用户能看到全文的<b>唯一</b>途径：后台任务的过程与结果都不进 scrollback，交给模型的那份还会被
      * {@code TaskResultStore} 限幅。多存一份不额外占内存——与注册表里那份是<b>同一个 String 引用</b>。
+     *
+     * @param taskId      后台任务 id（{@code TaskOutput} 取回时用的那个）
+     * @param agentName   subagent_type
+     * @param description 委派时给的简述
+     * @param status      当前状态
+     * @param currentTool 正在跑的工具名；无则为 null
+     * @param startedAt   开始时刻（epoch millis）
+     * @param finishedAt  结束时刻（epoch millis）；未结束为 0，耗时据此定格
+     * @param result      子 agent 的完整结果；未结束为空串
      */
     public record BackgroundView(String taskId, String agentName, String description,
                                  BackgroundStatus status, String currentTool,
@@ -127,7 +142,11 @@ public final class ConversationState implements AgentListener {
 
     private final Deque<OutputLine> pending = new ArrayDeque<>();
 
-    /** 排队的用户消息 + 其挂载技能（可空）。挂载随消息入队，出队时一并带出。 */
+    /** 排队的用户消息 + 其挂载技能（可空）。挂载随消息入队，出队时一并带出。
+     *
+     * @param text  用户输入的原文
+     * @param skill {@code /skill} 挂载的技能名；无则为 null
+     */
     public record Queued(String text, String skill) {}
 
     /**
@@ -247,6 +266,9 @@ public final class ConversationState implements AgentListener {
      *
      * <p>不能在 UI 里先调 {@link #isBusy()}、再调 {@link #isIdle()}：Reactor 线程可能恰好在两次读取之间
      * 结束回合，导致同一次提交先看到「忙」、随后又看到「空闲」，最终把本应插话的消息误塞进普通队列。
+     *
+     * @param busy       是否忙（含压缩中、有模态、有在飞子 agent）
+     * @param activeTurn 是否有活跃回合（决定能否插话）
      */
     public record SubmissionSnapshot(boolean busy, boolean activeTurn) {}
 
