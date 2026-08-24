@@ -22,8 +22,8 @@ import java.io.StringWriter;
  * 调整，又避免把整段几百行堆栈塞进上下文（token 浪费）。完整堆栈仍在日志里。
  * <b>不附加任何引导词</b>：错误原因本身就是信息，模型自会判断下一步。
  *
- * <p><b>实现</b>：{@link #process} 拼出「工具 X 执行出错：<类型>: <消息>」+ cause 链逐层 +
- * 「堆栈：<前 N 帧>」。N 取 6，足够定位到业务代码（如 {@code CodingAgent.handleChunk}、
+ * <p><b>实现</b>：{@link #process} 拼出「工具 X 执行出错：{@code <类型>: <消息>}」+ cause 链逐层 +
+ * 「堆栈：{@code <前 N 帧>}」。N 取 6，足够定位到业务代码（如 {@code CodingAgent.handleChunk}、
  * {@code DefaultToolCallingManager.executeToolCall}），又不过长。
  */
 public final class ResilientToolExecutionExceptionProcessor implements ToolExecutionExceptionProcessor {

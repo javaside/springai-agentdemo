@@ -20,7 +20,7 @@ import java.nio.file.PathMatcher;
  * <p><b>匹配契约（已知边界，调用方必须知道）：</b>
  * <ul>
  *   <li><b>前缀规则只对单段命令生效</b>：目标含 {@code ; | &}、换行（含 {@code \r}），
- *       或 {@link #hasUnsplittableConstruct} 认定的不可拆分构造（{@code ` $( <( >( ${}）
+ *       或 {@link #hasUnsplittableConstruct} 认定的不可拆分构造（<code>` $( &lt;( &gt;( ${</code>）
  *       时一律不命中，
  *       落回 ASK。命令是否需要按段授权由 {@link PermissionEngine} 负责（COMMAND 类别先拆分再逐段判定）。</li>
  *   <li><b>不做空白归一</b>：{@code rm  -rf /}（双空格）、{@code  rm -rf /}（前导空格）

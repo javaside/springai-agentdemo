@@ -21,7 +21,7 @@ import java.util.Set;
  * 实测 {@code bash -c 'echo hi\nrm -rf /'} 会执行第二条命令，若当作单段，
  * 首词 {@code echo} 命中只读白名单就把 {@code rm -rf /} 一起放行了。
  * <b>不可拆分构造的清单只有一份，在 {@code PermissionRule} 那边</b>：本类曾自留一份，
- * 已漂移出 {@code ${} 一处分歧（{@code PredicateConsistencyTest} 是这条契约的钉子）。
+ * 已漂移出 <code>${</code> 一处分歧（{@code PredicateConsistencyTest} 是这条契约的钉子）。
  *
  * <p><b>白名单是「首词能不能定性整段」的判断，不是「这个程序平时危不危险」</b>。
  * 故以下实测有逃逸口的命令<b>不</b>在白名单里：{@code find}（{@code -delete} / {@code -exec}）、

@@ -9,7 +9,7 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Optional;
 
-/** 内容寻址存储：把字节落到 <artifactsDir>/<完整sha>.<ext>。幂等去重、原子写、惰性建目录。
+/** 内容寻址存储：把字节落到 {@code <artifactsDir>/<完整sha>.<ext>}。幂等去重、原子写、惰性建目录。
  *  一切 IO 失败走 slf4j（日志绝不含字节内容），失败时抛 RuntimeException 由上层降级为占位（绝不退回原始字节）。 */
 public final class MediaArtifactStore {
     private static final Logger log = LoggerFactory.getLogger(MediaArtifactStore.class);

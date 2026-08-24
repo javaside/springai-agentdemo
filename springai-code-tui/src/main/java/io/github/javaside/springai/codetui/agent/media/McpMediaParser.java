@@ -10,8 +10,8 @@ import java.util.List;
 
 /** 解析 MCP 工具结果串（内容块 List 的 JSON 顶层数组）。
  *  优先靠 type 判别符（image/audio/resource-blob = 媒体）；但真实 server（如
- *  @modelcontextprotocol/server-filesystem 的 read_media_file）返回的块<b>不带 type</b>，
- *  形如 {"data":"&lt;base64&gt;","mimeType":"image/png"}——对无 type 块用严格
+ *  {@code @modelcontextprotocol/server-filesystem} 的 read_media_file）返回的块<b>不带 type</b>，
+ *  形如 {@code {"data":"<base64>","mimeType":"image/png"}}——对无 type 块用严格
  *  「string data + 非空 mimeType」兜底认作媒体。带 type 时仍以 type 为准（type=text 即便
  *  碰巧含 data/mimeType 也不当媒体），避免误判。 */
 public final class McpMediaParser {

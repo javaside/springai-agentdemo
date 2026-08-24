@@ -213,7 +213,7 @@ public final class SubagentRunner {
     /**
      * 批量并发执行多个子 agent，join 全部后按<b>入参顺序</b>返回各自结果。
      *
-     * <p>失败隔离：单个子 agent 抛错不影响其他，该位置返回「失败：<msg>」文本（子 agent 内 run() 已 emit
+     * <p>失败隔离：单个子 agent 抛错不影响其他，该位置返回「失败：{@code <msg>}」文本（子 agent 内 run() 已 emit
      * onSubagentFinished(ok=false)）。turnId <b>显式</b>传入每个任务闭包——绝不在子线程读 ThreadLocal
      * （否则 turnId 丢失、UI 事件被迟到过滤器丢弃）。
      *

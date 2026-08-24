@@ -359,7 +359,7 @@ public final class PermissionEngine {
      * <p><b>必须同步清掉内存规则表与折叠孪生</b>——只改文件不改内存的话，重启前它还在生效，
      * 而面板已经说删了。<b>面板说删了、实际还拦着，是最坏的一种谎。</b>
      *
-     * <h2>为什么按 {@code equals} 摘是安全的（这一点值得写下来）</h2>
+     * <h4>为什么按 {@code equals} 摘是安全的（这一点值得写下来）</h4>
      * {@link PermissionRule} 是 record，{@code scope} 是它的<b>分量之一</b>，而
      * {@link PermissionConfigLoader} 给每一层的规则打的正是那一层的 scope
      * （用户层 {@link RuleScope#USER}、项目层 {@link RuleScope#PROJECT}）。

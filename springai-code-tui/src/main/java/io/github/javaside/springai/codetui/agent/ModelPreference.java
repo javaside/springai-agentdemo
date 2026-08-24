@@ -88,7 +88,7 @@ public final class ModelPreference {
     /**
      * 读上次用的模型 id。缺失/坏文件/空值一律 {@link Optional#empty()}，绝不抛。
      *
-     * <h2>往 {@link #doRead} 加分支的人请读这段</h2>
+     * <h4>往 {@link #doRead} 加分支的人请读这段</h4>
      * <p>下面那个 catch-all 有代价：它会把 {@code doRead} 内部<b>任何一条「异常 → 降级返回」</b>
      * 的变异检测力吃掉。那条路删掉后异常被它吸收成 {@code empty}，与正确路径输出<b>一模一样</b>，
      * 只断返回值的测试杀不掉——那条分支等于没有保护。
