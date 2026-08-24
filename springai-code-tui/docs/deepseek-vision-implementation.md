@@ -19,56 +19,68 @@ DeepSeek 官方视觉模型支持在一次对话请求中同时接收文本和�
 
 整个视觉实现先只看两条消息流。暂时不用理解所有 Spring AI 类名，只要看清楚“哪条消息在什么时候携带图片”。
 
-### 2.1 用户直接附图：本次请求就发送
+### 2.1 用户直接附图：原 UserMessage 携带图片
 
-用户输入一段文字，并带上一张图片：
+用户在输入框中输入：
 
 ```text
 请分析这个报错界面 docs/bug.png
 ```
 
-这里要区分“项目内部的出站消息”和“最终发出的 HTTP JSON”。图片不是一出现 `media` 就已经完成了 DeepSeek 格式的发送，而是要经过两个转换阶段。
-
-#### 阶段一：项目内部先构造出站 Prompt
+用户图片不经过工具调用，而是在这次用户请求中直接处理。详细过程是：
 
 ```text
-用户输入
-  |
-  v
-用户文本 + 图片引用
-  |
-  v
-本次出站 Prompt 中的 UserMessage
-  ├── text  = 用户原文（图片路径仍在）+ 图片引用
-  └── media = 用户附带的图片（兑现成功时）
+用户提交消息
+  └── 原文中的图片路径保留，并追加 file_reference 图片引用
+
+VisionMaterializer 处理这次请求的 UserMessage
+  ├── text  = 用户原文（包含 docs/bug.png）+ 图片引用
+  └── media = 从 docs/bug.png 读取并准备好的图片
+
+DeepSeekThinkingChatModel 在序列化前登记 media
+  └── media 作为对象层的图片中转载体，不是最终 HTTP 格式
+
+spring-ai-deepseek 序列化 UserMessage
+  └── text 被序列化，media 被遗漏
+
+DeepSeek HTTP 层补图
+  └── 根据序列化前的登记，把图片补成 image_url/file
+
+包含文本和图片的本次请求发送给大模型
 ```
 
-这里的 `media` 只是项目内部的图片载体，供 `DeepSeekThinkingChatModel` 在 Spring AI 序列化前读取；它**不是** DeepSeek HTTP 请求里的最终图片格式。
+把这段过程压缩成一条消息链，就是：
 
-#### 阶段二：如果不做 DeepSeek 专属改写，图片会被丢掉
+```text
+用户输入图片路径
+  -> UserMessage(text = 用户原文 + 图片引用)
+  -> 原 UserMessage 增加 media
+  -> spring-ai-deepseek 序列化时遗漏 media
+  -> HTTP 层补 image_url/file
+  -> 本次请求发给大模型
+```
 
-`spring-ai-deepseek` 原有序列化逻辑主要读取消息文本。因此同一条消息直接序列化后，大致只有：
+这里的关键是：`UserMessage.media` 只是序列化前的图片中转载体。它会被 `DeepSeekThinkingChatModel` 先登记；即使随后被 Spring AI 原有序列化逻辑遗漏，HTTP 层仍能从登记中取回图片。
+
+对比补图前后，同一条 user 消息会从：
 
 ```json
 {
   "role": "user",
-  "content": "请分析这个报错界面 docs/bug.png\\n\\n<file_reference>\\nkind: image\\npath: docs/bug.png\\n...\\n</file_reference>"
+  "content": "请分析这个报错界面 docs/bug.png\n\n<file_reference>图片引用</file_reference>"
 }
 ```
 
-这份 JSON 里保留了用户原文、图片路径和引用文本，但没有图片字节。`UserMessage.media` 在这一步没有被正确转换出来。
-
-#### 阶段三：HTTP 层把刚才暂存的图片补回最终 JSON
-
-在序列化之前，`DeepSeekThinkingChatModel` 已经把 `media` 登记到了视觉注册表；HTTP 改写器再根据这份登记，把图片追加到对应 user 消息的 `content` 数组：
-
-最终发给 DeepSeek 的消息大致是：
+变成：
 
 ```json
 {
   "role": "user",
   "content": [
-    {"type": "text", "text": "请分析这个报错界面 docs/bug.png\n\n<file_reference>\nkind: image\npath: docs/bug.png\n...\n</file_reference>"},
+    {
+      "type": "text",
+      "text": "请分析这个报错界面 docs/bug.png\n\n<file_reference>图片引用</file_reference>"
+    },
     {
       "type": "image_url",
       "image_url": {
@@ -79,22 +91,15 @@ DeepSeek 官方视觉模型支持在一次对话请求中同时接收文本和�
 }
 ```
 
-所以完整过程不是“`media` 已经直接发出，又补了一次图片”，而是：
-
-```text
-UserMessage.text + UserMessage.media
-  -> media 被 DeepSeek 原有序列化逻辑遗漏
-  -> HTTP 改写层依据序列化前登记的信息补回图片块
-  -> 最终 DeepSeek JSON
-```
+用户原文中的 `docs/bug.png` 和追加的图片引用都没有丢；HTTP 层只是在保留原文本的基础上增加图片块。
 
 关键结论：
 
-> 用户第一次发送图片时，图片就在这一次请求中发送给模型；但它先以项目内部的 `Media` 暂存，再由 HTTP 层转换成 DeepSeek 最终认识的图片格式，不需要等模型调用工具。
+> 用户第一次发送图片时，图片就在本次请求中发送给模型；流程中没有模型调用 `Read`，`Read` 只用于以后重新查看历史图片。
 
-### 2.2 工具产生图片：消息链追加一条 UserMessage
+### 2.2 工具读取图片：消息链追加一条 UserMessage
 
-工具图片不是用户第一次发消息时就已经存在的图片，而是工具执行后才产生的。详细过程是：
+这里以 `Read` 读取图片为例；MCP 截图等其他返回图片的工具也走同一条消息链。图片是在工具执行后才进入消息链的，详细过程是：
 
 ```text
 第 1 次请求发送给大模型
@@ -163,7 +168,7 @@ UserMessage
 | 图片来源 | 消息处理方式 | 图片在哪次请求发送 |
 | --- | --- | --- |
 | 用户直接附图 | 原来的 `UserMessage` 增加 `media` | 用户消息对应的本次请求 |
-| 工具产生图片 | 工具循环再次调用 ChatModel 时，保留 `ToolResponseMessage` 并追加带 `media` 的 `UserMessage` | 这次 ChatModel 调用对应的请求 |
+| 工具读取图片 | 工具循环再次调用 ChatModel 时，保留 `ToolResponseMessage` 并追加带 `media` 的 `UserMessage` | 这次 ChatModel 调用对应的请求 |
 | 模型重新读取历史图片 | `Read` 产生工具结果，再按工具图片路径处理 | `Read` 返回后工具循环再次调用 ChatModel 对应的请求 |
 
 这张表是整份文档的主线。
@@ -364,7 +369,7 @@ docs/bug.png -> 仍然指向原文件
 
 引用解析器只允许项目根目录内的路径。项目外文件如果不先复制，引用会被安全边界拒绝，图片无法在出站阶段兑现。
 
-## 5. 工具图片流程：新增一条 UserMessage 携带图片
+## 5. 工具读取图片：新增一条 UserMessage 携带图片
 
 ### 5.1 第一次请求只产生工具调用
 
