@@ -239,11 +239,11 @@ DeepSeekThinkingChatModel
 
 ### 4.3 HTTP 请求体改写
 
-`DeepSeekThinkingBodyCodec` 遍历已经序列化的 JSON，按出现顺序为每条 `role=user` 消息计算 user 序号。遍历所有 user 消息只是为了让序号与对象层保持一致，并不表示所有历史 user 消息都会补图。
+`DeepSeekThinkingBodyCodec` 遍历已经序列化的 JSON，按出现顺序为每条 `role=user` 消息计算 user 序号。每遇到一条 `role=user`，改写器先计算它是第几条 user 消息，再检查注册表中有没有属于这条消息的 `Media` 登记。
 
-每遇到一条 `role=user`，改写器先计算它是第几条 user 消息，再检查注册表中有没有属于这条消息的 `Media` 登记。
+这里不区分历史消息和当前消息。`DeepSeekThinkingChatModel` 会扫描本次出站 Prompt 中的**所有** `UserMessage`：只要某条消息的 `media` 中存在图片字节非空的 `Media`，就会登记；`DeepSeekThinkingBodyCodec` 随后就会给这条消息补图。历史 `UserMessage` 如果仍带有 `Media`，同样会被补进 HTTP 请求。
 
-这里检查的不是消息文本里的图片路径，也不是这条消息历史上是否发送过图片。`DeepSeekThinkingChatModel` 只会登记**本次出站 Prompt** 中图片字节非空的 `UserMessage.media`；历史消息正常情况下只保留图片引用文本，没有 `Media` 登记。
+正常的会话处理流程只把图片引用文本写入历史，不把 `Media` 写回历史，所以历史消息通常不会命中 Registry。这是上游会话和图片处理的结果，不是 Registry 或 HTTP 改写器专门过滤了历史消息。具体的图片处理过程见[图片处理实现原理](image-processing-implementation.md)。
 
 后续只有两个分支：
 
@@ -263,19 +263,20 @@ role=user 消息
 
 注册表使用的是一次性读取：Media 登记被取出后立即删除，避免被第二次改写使用。
 
-因此，历史消息虽然也参与 user 序号计数，但正常情况下没有 `Media` 登记，HTTP 层不会给它补图。只有本次出站 Prompt 中实际带有可登记 `Media` 的 user 消息会被改写：
+是否改写只取决于本次出站 Prompt 里这条消息的 `media`，与它是历史消息还是当前消息无关：
 
 ```text
-历史 UserMessage
-  media = 空
-  -> Registry 无对应 key
-  -> HTTP content 保持字符串
-
-本次出站需要发图的 UserMessage
-  media = 图片字节非空的 Media
-  -> Registry 有对应 key
-  -> HTTP content 改成 [text, image]
+任意 UserMessage（历史或当前）
+  ├── 没有可登记的 Media
+  │     -> Registry 无对应 key
+  │     -> HTTP content 保持字符串
+  │
+  └── 有图片字节非空的 Media
+        -> Registry 有对应 key
+        -> HTTP content 改成 [text, image]
 ```
+
+当前项目正常组装 Prompt 时，历史消息只带引用文本，因此通常走第一个分支；如果其他调用方传入了仍带 `Media` 的历史 `UserMessage`，它会走第二个分支。
 
 默认使用 base64 内联：
 
