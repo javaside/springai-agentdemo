@@ -27,7 +27,9 @@ DeepSeek 官方视觉模型支持在一次对话请求中同时接收文本和�
 请分析这个报错界面 docs/bug.png
 ```
 
-系统处理成：
+这里要区分“项目内部的出站消息”和“最终发出的 HTTP JSON”。图片不是一出现 `media` 就已经完成了 DeepSeek 格式的发送，而是要经过两个转换阶段。
+
+#### 阶段一：项目内部先构造出站 Prompt
 
 ```text
 用户输入
@@ -36,24 +38,37 @@ DeepSeek 官方视觉模型支持在一次对话请求中同时接收文本和�
 用户文本 + 图片引用
   |
   v
-本次请求的 UserMessage
-  ├── text  = 用户原文 + 图片引用
-  └── media = 用户附带的图片
-  |
-  v
-DeepSeek HTTP 层补图
-  |
-  v
-本次请求发送给大模型
+本次出站 Prompt 中的 UserMessage
+  ├── text  = 用户原文（图片路径仍在）+ 图片引用
+  └── media = 用户附带的图片（兑现成功时）
 ```
 
-最后发给 DeepSeek 的消息大致是：
+这里的 `media` 只是项目内部的图片载体，供 `DeepSeekThinkingChatModel` 在 Spring AI 序列化前读取；它**不是** DeepSeek HTTP 请求里的最终图片格式。
+
+#### 阶段二：如果不做 DeepSeek 专属改写，图片会被丢掉
+
+`spring-ai-deepseek` 原有序列化逻辑主要读取消息文本。因此同一条消息直接序列化后，大致只有：
+
+```json
+{
+  "role": "user",
+  "content": "请分析这个报错界面 docs/bug.png\\n\\n<file_reference>\\nkind: image\\npath: docs/bug.png\\n...\\n</file_reference>"
+}
+```
+
+这份 JSON 里保留了用户原文、图片路径和引用文本，但没有图片字节。`UserMessage.media` 在这一步没有被正确转换出来。
+
+#### 阶段三：HTTP 层把刚才暂存的图片补回最终 JSON
+
+在序列化之前，`DeepSeekThinkingChatModel` 已经把 `media` 登记到了视觉注册表；HTTP 改写器再根据这份登记，把图片追加到对应 user 消息的 `content` 数组：
+
+最终发给 DeepSeek 的消息大致是：
 
 ```json
 {
   "role": "user",
   "content": [
-    {"type": "text", "text": "请分析这个报错界面 <file_reference>..."},
+    {"type": "text", "text": "请分析这个报错界面 docs/bug.png\n\n<file_reference>\nkind: image\npath: docs/bug.png\n...\n</file_reference>"},
     {
       "type": "image_url",
       "image_url": {
@@ -64,9 +79,18 @@ DeepSeek HTTP 层补图
 }
 ```
 
+所以完整过程不是“`media` 已经直接发出，又补了一次图片”，而是：
+
+```text
+UserMessage.text + UserMessage.media
+  -> media 被 DeepSeek 原有序列化逻辑遗漏
+  -> HTTP 改写层依据序列化前登记的信息补回图片块
+  -> 最终 DeepSeek JSON
+```
+
 关键结论：
 
-> 用户第一次发送图片时，图片就在这一次请求中发送给模型，不需要等模型调用工具。
+> 用户第一次发送图片时，图片就在这一次请求中发送给模型；但它先以项目内部的 `Media` 暂存，再由 HTTP 层转换成 DeepSeek 最终认识的图片格式，不需要等模型调用工具。
 
 ### 2.2 工具产生图片：下一次请求发送
 
