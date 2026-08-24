@@ -172,398 +172,123 @@ UserMessage
 
 历史图片需要重新查看时，模型调用 `Read`，然后重新走第二条“工具读取图片”消息链。
 
-## 3. 还要区分：会话历史、出站消息和 HTTP 请求
+## 3. 为什么会话只保存图片引用
 
-同一张图片在系统里会有三种表示，不能混在一起。
-
-### 3.1 会话历史：保存文本引用
-
-会话历史保存的是可以恢复的文本消息：
+第 2 节中的 `Media` 和图片 JSON 都只服务于当前请求，不会写回会话历史。会话长期保存的只有文本引用：
 
 ```text
-UserMessage
-  text  = 用户原文 + file_reference
-  media = 不保存图片字节
+用户直接附图：UserMessage.text = 用户原文 + file_reference
+工具读取图片：ToolResponseMessage.responseData = file_reference
 ```
 
-工具图片则保存为：
+这样设计有三个原因：
+
+- 图片字节不会随着历史消息在每次请求中反复累积；
+- 会话恢复和压缩只需处理文本；
+- 模型以后需要重看图片时，仍能根据引用里的路径调用 `Read`，重新进入 2.2 的工具读取图片消息链。
+
+引用路径还承担安全边界：
+
+- **项目内图片**直接引用原文件，文件更新后再次读取能看到新内容；
+- **项目外图片**先复制到 `.codetui/artifacts/`，再引用项目内副本；
+- `FileReferenceParser` 只接受项目根目录内的路径，避免引用文本读取任意系统文件。
+
+因此，会话历史和当前请求的职责不同：
 
 ```text
-AssistantMessage
-  tool_calls = ...
-
-ToolResponseMessage
-  responseData = file_reference
+会话历史：保存图片在哪里
+当前请求：临时读取并发送图片内容
 ```
 
-会话历史里不会保存：
+## 4. DeepSeek 如何把 Media 补回 HTTP 请求
 
-- 图片二进制；
-- 临时生成的 `Media`；
-- DeepSeek 的 `image_url` JSON。
+第 2 节已经说明图片挂在哪条消息上。本节只解释 `UserMessage.media` 如何穿过不支持它的 DeepSeek 序列化层。
 
-### 3.2 出站 Prompt：本次请求临时补上 Media
+### 4.1 序列化前登记图片
 
-真正调用模型前，系统根据消息里的引用读取图片，构造本次请求专用的消息副本：
-
-用户图片：
-
-```text
-UserMessage
-  text  = 用户原文 + file_reference
-  media = 用户图片
-```
-
-工具图片：
-
-```text
-ToolResponseMessage
-  responseData = file_reference
-
-UserMessage（临时新增）
-  text  = 工具图片说明
-  media = 工具图片
-```
-
-这一步只改变本次出站 Prompt，不把图片字节写回会话历史。
-
-### 3.3 DeepSeek HTTP JSON：再把 Media 改成图片块
-
-Spring AI 对象层中的 `Media` 还不是 DeepSeek API 的最终格式。HTTP 层会把它改写成：
-
-```json
-{
-  "role": "user",
-  "content": [
-    {"type": "text", "text": "文字内容"},
-    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
-  ]
-}
-```
-
-所以完整关系是：
-
-```text
-会话历史
-  UserMessage(text = 引用, media = 无)
-        |
-        | 出站前读取引用
-        v
-本次出站 Prompt
-  UserMessage(text = 引用, media = 图片)
-        |
-        | HTTP 层改写
-        v
-DeepSeek 请求
-  content = [文本块, 图片块]
-```
-
-## 4. 用户图片流程：原来的 UserMessage 携带图片
-
-### 4.1 输入框不会删除图片路径
-
-用户输入：
-
-```text
-请分析这个报错界面 docs/bug.png
-```
-
-输入框识别出图片路径后，会把图片信息追加成结构化文本引用，概念上类似：
-
-```text
-请分析这个报错界面 docs/bug.png
-
-<file_reference>
-kind: image
-path: docs/bug.png
-mime_type: image/png
-dimensions: 1440x900
-delivery: not_in_view
-</file_reference>
-```
-
-这里发生的是“增加图片引用”，不是“把路径替换掉”：
-
-- 用户原文中的 `docs/bug.png` 仍然存在；
-- 引用块额外提供了程序需要的路径、类型和尺寸；
-- 图片字节还没有进入消息。
-
-### 4.2 引用文本进入用户消息
-
-提交后，这段文本进入当前回合的用户消息。抽象表示为：
-
-```text
-UserMessage
-  text  = 用户原文 + file_reference
-  media = 空
-```
-
-引用不是放在 `UserMessage.context` 中。当前实现的设计是：
-
-> 让引用作为普通文本进入用户消息；需要发送图片时，再从文本中解析引用。
-
-这样做有一个直接好处：用户看见的内容、会话保存的内容和模型能理解的图片说明，使用的是同一段文本。
-
-### 4.3 本次请求前，把同一条 UserMessage 补上图片
-
-在本次模型请求真正发出前，视觉处理逻辑会：
-
-1. 解析用户消息文本中的 `file_reference`；
-2. 根据引用里的路径找到图片；
-3. 检查模型是否支持视觉；
-4. 检查图片格式、尺寸和本次视觉预算；
-5. 必要时缩放或转码；
-6. 把图片字节生成 `Media`；
-7. 把 `Media` 挂到这条用户消息上。
-
-于是，本次出站消息变成：
-
-```text
-UserMessage
-  text  = 用户原文 + file_reference
-  media = [用户附带的图片]
-```
-
-此时图片已经准备好在本次请求发送给大模型。模型是否随后调用 `Read`，与这次发送无关。
-
-### 4.4 为什么以后还可能调用 Read
-
-用户图片本次请求已经发给模型，但图片不会自动永久留在后续每一轮请求里。历史消息只保存引用文本，后续请求默认不重复兑现历史图片。
-
-如果模型下一轮需要重新查看这张历史图片，它可以调用：
-
-```text
-Read(file_reference.path)
-```
-
-这次 `Read` 是“重新取回历史图片”的行为，不是用户第一次附图的替代步骤。
-
-`Read` 返回后，会按照工具图片流程处理：
-
-```text
-Read 返回图片
-  -> ToolResponseMessage(responseData = 引用)
-  -> Spring AI 工具调用循环再次调用 ChatModel
-  -> VisionMaterializer 追加 UserMessage(media = 图片)
-  -> DeepSeek HTTP 层补图并发送请求
-```
-
-### 4.5 项目内外路径的区别
-
-项目内图片直接引用原文件：
-
-```text
-docs/bug.png -> 仍然指向原文件
-```
-
-这样用户更新文件后，模型下一次重新读取时可以看到新内容。
-
-项目外图片先复制到 artifacts：
-
-```text
-~/Desktop/bug.png
-  -> .codetui/artifacts/<content-hash>.png
-  -> 引用 artifacts 内的副本
-```
-
-引用解析器只允许项目根目录内的路径。项目外文件如果不先复制，引用会被安全边界拒绝，图片无法在出站阶段兑现。
-
-## 5. 工具读取图片：新增一条 UserMessage 携带图片
-
-### 5.1 第一次请求只产生工具调用
-
-模型第一次请求发现需要读取文件时，先返回工具调用：
-
-```text
-AssistantMessage
-  tool_calls = [Read(screenshot.png)]
-```
-
-此时还没有工具结果，也就没有工具产生的图片。
-
-### 5.2 工具返回结果只能先放文本引用
-
-工具执行后可能得到图片。项目不会把图片二进制直接塞进工具消息，而是先外置：
-
-```text
-工具返回图片字节
-  -> MediaExternalizingCallback
-  -> 保存到 .codetui/artifacts/
-  -> 生成 file_reference
-  -> 放入 ToolResponseMessage.responseData
-```
-
-于是消息链变成：
-
-```text
-AssistantMessage
-  tool_calls = [Read(screenshot.png)]
-
-ToolResponseMessage
-  responseData = <file_reference path=".codetui/artifacts/screenshot.png" ...>
-```
-
-`ToolResponseMessage` 里保存的是引用文本，不是 `Media`。这不是图片消失，而是先把图片放到 artifact 文件中，用引用替代消息里的二进制。
-
-### 5.3 为什么不能直接给 ToolResponseMessage 加图片
-
-项目使用的工具结果消息主要包含：
-
-```text
-工具调用 id
-工具名
-工具返回的 responseData 文本
-```
-
-它没有像用户消息那样的 `media` 位置。因此不能简单表示为：
-
-```text
-ToolResponseMessage
-  responseData = 文本
-  media = 图片       // 当前消息结构没有这个位置
-```
-
-同时，原来的 `AssistantMessage(tool_calls)` 和 `ToolResponseMessage` 必须保持合法配对。直接改造工具消息会破坏模型 API 对工具调用结果的要求。
-
-### 5.4 Spring AI 再次调用 ChatModel 时追加 UserMessage
-
-工具执行完成后，Spring AI 的工具调用循环把 `AssistantMessage(tool_calls)` 和 `ToolResponseMessage` 放进本轮消息列表，并再次调用 ChatModel。这个调用进入 provider 前，`VisionMaterializer` 扫描 `responseData` 中的图片引用：
-
-1. 读取引用对应的 artifact 文件；
-2. 检查格式、尺寸和预算；
-3. 生成图片 `Media`；
-4. 新增一条临时 `UserMessage`。
-
-消息链变成：
-
-```text
-AssistantMessage
-  tool_calls = [Read(screenshot.png)]
-
-ToolResponseMessage
-  responseData = 图片引用文本
-
-UserMessage（临时新增）
-  text  = "以下是工具结果中引用的图片：screenshot.png"
-  media = [工具返回的图片]
-```
-
-这条新增的 `UserMessage` 不是用户又发了一条消息，而是给当前出站请求提供一个合法的图片承载位置。
-
-### 5.5 这条临时 UserMessage 是否写入历史
-
-不会把图片字节写回历史。
-
-历史中保留的是：
-
-```text
-AssistantMessage(tool_calls)
-ToolResponseMessage(responseData = 图片引用文本)
-```
-
-临时 `UserMessage` 只用于构造本次出站 Prompt。下一轮如果仍然需要这张图片，系统可以根据历史引用重新决定是否兑现；默认不会把所有历史图片自动重复发送。
-
-## 6. 两条流程最后汇合：DeepSeek HTTP 层统一补图
-
-前面两种来源最后都会形成带 `Media` 的 `UserMessage`：
-
-```text
-用户图片：
-  原来的 UserMessage.media = 用户图片
-
-工具图片：
-  新增的 UserMessage.media = 工具图片
-```
-
-从 DeepSeek HTTP 层看，它不需要区分图片来自用户还是工具。它只需要处理：
-
-```text
-某条 UserMessage 有 text
-某条 UserMessage 有 media
-```
-
-### 6.1 Spring AI 的图片对象为什么还不够
-
-到达 DeepSeek ChatModel 时，Spring AI 对象层已经表达了图片：
-
-```text
-UserMessage
-  text  = 图片说明和引用
-  media = 图片字节
-```
-
-但 `spring-ai-deepseek` 序列化时主要读取文本，得到的 JSON 可能仍然只有：
-
-```json
-{
-  "role": "user",
-  "content": "图片说明和引用"
-}
-```
-
-`Media` 没有自动转换为 DeepSeek 所需的 content 数组，所以还需要 HTTP 层补一次。
-
-### 6.2 对象层和 HTTP 层如何传递图片
-
-`DeepSeekThinkingChatModel` 能看见 `Prompt` 里的 `UserMessage.media`，但 HTTP 改写器拿到的只是已经序列化的 JSON 字节。项目用 `DeepSeekVisionMediaRegistry` 暂存这批图片：
+`DeepSeekThinkingChatModel` 在调用原生 DeepSeek delegate 之前，扫描 `Prompt.messages` 中所有 `UserMessage` 的 `media`，把图片登记到 `DeepSeekVisionMediaRegistry`：
 
 ```text
 DeepSeekThinkingChatModel
-  看到 UserMessage.media
-  -> 登记图片
-
-DeepSeekVisionMediaRegistry
-  -> 保存“第几个 user 消息的第几张图片”
-
-DeepSeekThinkingBodyCodec
-  看到 JSON 的 role=user
-  -> 取出对应图片并补入 content
+  -> 读取 UserMessage.media
+  -> 登记“第几个 user 消息的第几张图片”
+  -> 调用 spring-ai-deepseek 原生模型
 ```
 
-这只是一次请求的临时桥梁：图片被取出后立即消费删除，请求结束后清理剩余记录。
+登记表是对象层到 HTTP 层的一次性旁路。HTTP 改写器取出图片时会立即删除对应记录，请求结束后再清理未消费记录。纯文本请求不接触注册表。
 
-### 6.3 为什么用 user 消息序号
+### 4.2 为什么按 user 消息序号对齐
 
-不能直接使用 `Prompt.messages` 的绝对下标，因为 DeepSeek 序列化时，工具结果的多个响应可能展开成多条 JSON 消息：
+不能使用 `Prompt.messages` 的绝对下标。`spring-ai-deepseek` 会把一条含多项结果的 `ToolResponseMessage` 展开成多条 JSON tool 消息，因此：
 
 ```text
-对象层消息下标 != JSON messages 数组下标
+对象层消息下标 != 序列化后 JSON messages 下标
 ```
 
-两侧使用同一套规则，只统计用户消息：
+但一条 `UserMessage` 始终对应一条 `role=user` JSON 消息，相对顺序不会变化，所以登记和消费两侧都只统计 user 消息：
 
 ```text
 第 N 条 UserMessage + 第 M 个 Media
         <=>
 注册表 key = N:M
-
-第 N 个 role=user JSON 消息
         <=>
-读取 key = N:M
+第 N 个 role=user JSON 消息的第 M 张图片
 ```
 
-每条用户消息都占一个序号，即使它没有图片。这样工具消息如何展开，都不会影响 user 消息的相对顺序。
+没有图片的 user 消息也必须占一个序号，否则后续图片仍会错位。
 
-### 6.4 HTTP 改写后的最终格式
+### 4.3 HTTP 请求体改写
 
-HTTP 层把字符串 `content` 转成数组，并追加图片块：
+`DeepSeekThinkingBodyCodec` 遍历已经序列化的 JSON，按出现顺序为每条 `role=user` 消息计算 user 序号。遍历所有 user 消息只是为了让序号与对象层保持一致，并不表示所有历史 user 消息都会补图。
+
+每遇到一条 `role=user`，改写器先计算它是第几条 user 消息，再检查注册表中有没有属于这条消息的 `Media` 登记。
+
+这里检查的不是消息文本里的图片路径，也不是这条消息历史上是否发送过图片。`DeepSeekThinkingChatModel` 只会登记**本次出站 Prompt** 中图片字节非空的 `UserMessage.media`；历史消息正常情况下只保留图片引用文本，没有 `Media` 登记。
+
+后续只有两个分支：
+
+```text
+role=user 消息
+  -> 计算 user 消息序号
+  -> 检查 Registry 中是否有该 user 的 Media 登记
+      ├── 没有 Media（Registry 未命中）
+      │     -> 不修改这条消息
+      │     -> content 仍是原来的字符串
+      │
+      └── 有 Media（Registry 命中）
+            -> 原 content 放进第一个 text 块
+            -> 后面依次追加 image_url/file 图片块
+            -> 写回 content 数组
+```
+
+注册表使用的是一次性读取：Media 登记被取出后立即删除，避免被第二次改写使用。
+
+因此，历史消息虽然也参与 user 序号计数，但正常情况下没有 `Media` 登记，HTTP 层不会给它补图。只有本次出站 Prompt 中实际带有可登记 `Media` 的 user 消息会被改写：
+
+```text
+历史 UserMessage
+  media = 空
+  -> Registry 无对应 key
+  -> HTTP content 保持字符串
+
+本次出站需要发图的 UserMessage
+  media = 图片字节非空的 Media
+  -> Registry 有对应 key
+  -> HTTP content 改成 [text, image]
+```
+
+默认使用 base64 内联：
 
 ```json
 {
-  "role": "user",
-  "content": [
-    {"type": "text", "text": "图片说明和引用"},
-    {
-      "type": "image_url",
-      "image_url": {
-        "url": "data:image/png;base64,..."
-      }
-    }
-  ]
+  "type": "image_url",
+  "image_url": {
+    "url": "data:image/png;base64,..."
+  }
 }
 ```
 
-默认使用内联 base64，也可以通过 `DEEPSEEK_VISION_TRANSPORT=files` 使用：
+设置 `DEEPSEEK_VISION_TRANSPORT=files` 后，可以改用 Files API：
 
 ```json
 {
@@ -572,82 +297,40 @@ HTTP 层把字符串 `content` 转成数组，并追加图片块：
 }
 ```
 
-Files API 是传输优化，不是视觉功能的前提；上传失败会退回内联图片。
+Files API 只优化重复传输的带宽和延迟，不改变消息链，也不节省图片 token。上传失败时自动退回内联格式。
 
-## 7. 信息流总结
+流式请求由 `DeepSeekThinkingClientHttpConnector` 在发送前收集并改写请求体；非流式请求走对应的 request interceptor。两条路径只改请求 JSON，不改变响应处理。
 
-### 用户图片
+## 5. 关键类索引
 
-```text
-用户输入路径
-  -> 用户原文 + 图片引用
-  -> 原来的 UserMessage
-       text  = 原文 + 引用
-       media = 用户图片
-  -> HTTP 补 image_url/file
-  -> 本次请求发送给模型
-```
-
-### 工具图片
-
-```text
-AssistantMessage(tool_calls)
-  -> 工具执行
-  -> ToolResponseMessage(responseData = 图片引用)
-  -> Spring AI 工具调用循环再次调用 ChatModel
-  -> VisionMaterializer 追加 UserMessage
-       text  = 工具图片说明
-       media = 工具图片
-  -> DeepSeek HTTP 层补 image_url/file
-  -> 请求发送给模型
-```
-
-### 历史图片重新查看
-
-```text
-历史中保存的图片引用
-  -> 模型调用 Read
-  -> ToolResponseMessage(responseData = 图片引用)
-  -> Spring AI 工具调用循环再次调用 ChatModel
-  -> VisionMaterializer 追加 UserMessage(media = 图片)
-  -> DeepSeek HTTP 层补图并发送请求
-```
-
-最终只需要记住一句话：
-
-> 用户图片挂到原来的 `UserMessage`，随本次请求发送；工具图片先进入 `ToolResponseMessage` 的文本引用，Spring AI 工具调用循环再次调用 ChatModel 时，`VisionMaterializer` 再追加一条带 `Media` 的 `UserMessage`；两条路径最后统一由 DeepSeek HTTP 层把 `Media` 补成图片 JSON。
-
-## 8. 关键类索引
-
-理解主流程后，再按下面的顺序看代码：
+理解第 2 节的消息链后，按下面顺序看代码即可：
 
 | 类 | 作用 |
 | --- | --- |
-| `ui.CodeTuiView.injectAttachments` | 把用户输入的图片路径变成文本引用 |
-| `agent.CodingAgent` | 提交用户文本、维护回合和会话 |
-| `agent.media.MediaExternalizingCallback` | 把工具返回的图片保存并替换成引用 |
-| `agent.media.VisionMaterializer` | 出站时从引用读取图片，给消息增加 `Media` |
-| `agent.media.VisionMaterializingChatModel` | 在 provider 发出前触发图片处理 |
-| `agent.DeepSeekThinkingChatModel` | 登记出站 `UserMessage.media` |
-| `agent.media.DeepSeekVisionMediaRegistry` | 临时保存图片与 user 消息位置的映射 |
-| `agent.DeepSeekThinkingBodyCodec` | 把图片补成 DeepSeek JSON |
-| `agent.DeepSeekThinkingClientHttpConnector` | 改写流式请求体 |
+| `ui.CodeTuiView.injectAttachments` | 把用户输入的图片路径追加成文本引用 |
+| `agent.media.MediaExternalizingCallback` | 把工具读取到的图片保存并替换成工具结果引用 |
+| `agent.media.VisionMaterializer` | 从引用读取图片；用户图改原 `UserMessage`，工具图追加新 `UserMessage` |
+| `agent.media.VisionMaterializingChatModel` | 在 Prompt 进入 provider 前触发图片兑现 |
+| `agent.DeepSeekThinkingChatModel` | 序列化前登记所有 `UserMessage.media` |
+| `agent.media.DeepSeekVisionMediaRegistry` | 在对象层和 HTTP 层之间临时传递图片 |
+| `agent.DeepSeekThinkingBodyCodec` | 把登记的图片补进 DeepSeek JSON |
+| `agent.DeepSeekThinkingClientHttpConnector` | 拦截并改写流式请求体 |
+| `agent.media.DeepSeekFileStore` | Files API 模式下上传图片并复用 `file_id` |
 
-## 9. 验证范围与已知边界
+## 6. 验证范围与已知边界
 
 当前实现和测试覆盖：
 
 - 用户直接附图，并在本次请求中发送；
-- 工具返回图片后转成引用；
-- 工具循环再次调用 ChatModel 时，由 `VisionMaterializer` 追加工具图片 `UserMessage`；
-- DeepSeek 内联 base64 视觉通道；
-- 流式和非流式请求体改写；
+- 工具读取图片后生成引用并追加图片 `UserMessage`；
+- DeepSeek 内联 base64 请求体改写；
+- 流式和非流式请求体处理；
 - user 消息序号和 media 序号对齐；
-- Files API 的单测路径和失败降级路径。
+- Files API 的单测路径和上传失败降级。
 
 需要注意：
 
 - DeepSeek 内联通道已做真机视觉验证；
 - Files API 通道目前主要由单测覆盖；
 - 同一回合多次工具迭代可能重复发送当轮图片，这是无状态请求的固有成本；
-- `CODETUI_VISION=off` 会关闭图片兑现，但不会删除消息中的引用文本。
+- `CODETUI_VISION=off` 会关闭图片兑现，但不会删除会话中的图片引用。
