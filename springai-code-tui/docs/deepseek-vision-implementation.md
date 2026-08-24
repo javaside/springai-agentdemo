@@ -92,67 +92,79 @@ UserMessage.text + UserMessage.media
 
 > 用户第一次发送图片时，图片就在这一次请求中发送给模型；但它先以项目内部的 `Media` 暂存，再由 HTTP 层转换成 DeepSeek 最终认识的图片格式，不需要等模型调用工具。
 
-### 2.2 工具产生图片：下一次请求发送
+### 2.2 工具产生图片：消息链追加一条 UserMessage
 
-工具图片必须先经过一次工具调用：
+工具图片不是用户第一次发消息时就已经存在的图片，而是工具执行后才产生的。详细过程是：
 
 ```text
-第一次模型请求
-  |
-  v
-AssistantMessage
-  └── tool_calls：调用 Read 或其他工具
-  |
-  v
-工具执行并产生图片
-  |
-  v
-ToolResponseMessage
-  └── responseData = 图片引用文本
-  |
-  v
-下一次模型请求发出前
-  |
-  v
-新增一条临时 UserMessage
-  ├── text  = 工具图片说明
-  └── media = 工具产生的图片
-  |
-  v
+第 1 次请求发送给大模型
+  └── UserMessage：用户最初的问题
+
+大模型返回工具调用
+  └── AssistantMessage：tool_calls = Read(screenshot.png)
+
+项目执行 Read
+  └── ToolResponseMessage：responseData = 图片引用文本
+
+Spring AI 工具调用循环再次调用 ChatModel
+  └── VisionMaterializer 在进入 provider 前追加 UserMessage
+      ├── text  = 工具图片说明
+      └── media = 工具产生的图片
+
 DeepSeek HTTP 层补图
-  |
-  v
-下一次请求发送给大模型
+  └── 把新增 UserMessage.media 改写成 image_url/file
+
+包含上述全部消息的请求发送给大模型
 ```
 
-工具图片对应的最终消息大致是：
+把这段过程压缩成一条消息链，就是：
+
+```text
+UserMessage
+  -> AssistantMessage(tool_calls)
+  -> ToolResponseMessage(responseData = 图片引用)
+  -> 新增 UserMessage(media = 工具图片)
+  -> HTTP 层补 image_url/file
+  -> 完整 messages 发给大模型
+```
+
+新增的 `UserMessage` 不会替换 `ToolResponseMessage`；原用户消息、assistant 工具调用、tool 结果和新增的图片 user 消息都会保留。省略工具协议中与视觉无关的 id、参数等字段后，发送给 DeepSeek 的 `messages` 可以看成：
 
 ```json
 {
-  "role": "user",
-  "content": [
-    {"type": "text", "text": "以下是工具结果中引用的图片：screenshot.png"},
+  "messages": [
+    {"role": "user",      "content": "用户最初的问题"},
+    {"role": "assistant", "tool_calls": "Read(screenshot.png)"},
+    {"role": "tool",      "content": "<file_reference>图片引用</file_reference>"},
+
     {
-      "type": "image_url",
-      "image_url": {
-        "url": "data:image/png;base64,..."
-      }
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "以下是工具结果中引用的图片：screenshot.png"
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,..."
+          }
+        }
+      ]
     }
   ]
 }
 ```
 
-关键结论：
-
-> 工具图片不是挂到 `ToolResponseMessage` 上，而是在下一次模型请求前新增一条 `UserMessage` 来承载图片。
+前三条消息对应 `UserMessage -> AssistantMessage(tool_calls) -> ToolResponseMessage`，只保留在这里是为了维持完整的工具调用上下文。视觉处理的重点是最后一条新增的 user 消息：它把工具图片说明放进文本块，把真正的图片放进 `image_url` 块。
 
 ### 2.3 两条路径放在一起看
 
 | 图片来源 | 消息处理方式 | 图片在哪次请求发送 |
 | --- | --- | --- |
 | 用户直接附图 | 原来的 `UserMessage` 增加 `media` | 用户消息对应的本次请求 |
-| 工具产生图片 | 保留 `ToolResponseMessage`，另外新增一条 `UserMessage` 增加 `media` | 工具执行完成后的下一次请求 |
-| 模型重新读取历史图片 | `Read` 产生工具结果，再按工具图片路径处理 | `Read` 完成后的下一次请求 |
+| 工具产生图片 | 工具循环再次调用 ChatModel 时，保留 `ToolResponseMessage` 并追加带 `media` 的 `UserMessage` | 这次 ChatModel 调用对应的请求 |
+| 模型重新读取历史图片 | `Read` 产生工具结果，再按工具图片路径处理 | `Read` 返回后工具循环再次调用 ChatModel 对应的请求 |
 
 这张表是整份文档的主线。
 
@@ -327,8 +339,9 @@ Read(file_reference.path)
 ```text
 Read 返回图片
   -> ToolResponseMessage(responseData = 引用)
-  -> 下一次出站时新增 UserMessage(media = 图片)
-  -> HTTP 层补图
+  -> Spring AI 工具调用循环再次调用 ChatModel
+  -> VisionMaterializer 追加 UserMessage(media = 图片)
+  -> DeepSeek HTTP 层补图并发送请求
 ```
 
 ### 4.5 项目内外路径的区别
@@ -408,9 +421,9 @@ ToolResponseMessage
 
 同时，原来的 `AssistantMessage(tool_calls)` 和 `ToolResponseMessage` 必须保持合法配对。直接改造工具消息会破坏模型 API 对工具调用结果的要求。
 
-### 5.4 下一次请求前新增 UserMessage
+### 5.4 Spring AI 再次调用 ChatModel 时追加 UserMessage
 
-下一次模型请求开始前，系统扫描当前回合的工具结果，找到 `responseData` 中的图片引用：
+工具执行完成后，Spring AI 的工具调用循环把 `AssistantMessage(tool_calls)` 和 `ToolResponseMessage` 放进本轮消息列表，并再次调用 ChatModel。这个调用进入 provider 前，`VisionMaterializer` 扫描 `responseData` 中的图片引用：
 
 1. 读取引用对应的 artifact 文件；
 2. 检查格式、尺寸和预算；
@@ -577,11 +590,12 @@ Files API 是传输优化，不是视觉功能的前提；上传失败会退回�
 AssistantMessage(tool_calls)
   -> 工具执行
   -> ToolResponseMessage(responseData = 图片引用)
-  -> 下一次出站前新增 UserMessage
+  -> Spring AI 工具调用循环再次调用 ChatModel
+  -> VisionMaterializer 追加 UserMessage
        text  = 工具图片说明
        media = 工具图片
-  -> HTTP 补 image_url/file
-  -> 下一次请求发送给模型
+  -> DeepSeek HTTP 层补 image_url/file
+  -> 请求发送给模型
 ```
 
 ### 历史图片重新查看
@@ -590,14 +604,14 @@ AssistantMessage(tool_calls)
 历史中保存的图片引用
   -> 模型调用 Read
   -> ToolResponseMessage(responseData = 图片引用)
-  -> 新增 UserMessage(media = 图片)
-  -> HTTP 补图
-  -> 下一次请求发送给模型
+  -> Spring AI 工具调用循环再次调用 ChatModel
+  -> VisionMaterializer 追加 UserMessage(media = 图片)
+  -> DeepSeek HTTP 层补图并发送请求
 ```
 
 最终只需要记住一句话：
 
-> 用户图片挂到原来的 `UserMessage`，本次请求直接发送；工具图片先进入 `ToolResponseMessage` 的文本引用，下一次请求前再新增一条带 `Media` 的 `UserMessage`；两条路径最后统一由 DeepSeek HTTP 层把 `Media` 补成图片 JSON。
+> 用户图片挂到原来的 `UserMessage`，随本次请求发送；工具图片先进入 `ToolResponseMessage` 的文本引用，Spring AI 工具调用循环再次调用 ChatModel 时，`VisionMaterializer` 再追加一条带 `Media` 的 `UserMessage`；两条路径最后统一由 DeepSeek HTTP 层把 `Media` 补成图片 JSON。
 
 ## 8. 关键类索引
 
@@ -621,7 +635,7 @@ AssistantMessage(tool_calls)
 
 - 用户直接附图，并在本次请求中发送；
 - 工具返回图片后转成引用；
-- 工具图片在下一次出站时新增 `UserMessage`；
+- 工具循环再次调用 ChatModel 时，由 `VisionMaterializer` 追加工具图片 `UserMessage`；
 - DeepSeek 内联 base64 视觉通道；
 - 流式和非流式请求体改写；
 - user 消息序号和 media 序号对齐；
