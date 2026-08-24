@@ -163,15 +163,14 @@ UserMessage
 
 前三条消息对应 `UserMessage -> AssistantMessage(tool_calls) -> ToolResponseMessage`，只保留在这里是为了维持完整的工具调用上下文。视觉处理的重点是最后一条新增的 user 消息：它把工具图片说明放进文本块，把真正的图片放进 `image_url` 块。
 
-### 2.3 两条路径放在一起看
+### 2.3 两条图片消息链的区别
 
-| 图片来源 | 消息处理方式 | 图片在哪次请求发送 |
-| --- | --- | --- |
-| 用户直接附图 | 原来的 `UserMessage` 增加 `media` | 用户消息对应的本次请求 |
-| 工具读取图片 | 工具循环再次调用 ChatModel 时，保留 `ToolResponseMessage` 并追加带 `media` 的 `UserMessage` | 这次 ChatModel 调用对应的请求 |
-| 模型重新读取历史图片 | `Read` 产生工具结果，再按工具图片路径处理 | `Read` 返回后工具循环再次调用 ChatModel 对应的请求 |
+| 图片来源 | 图片挂到哪条消息 | 是否新增消息 | 何时发送 |
+| --- | --- | --- | --- |
+| 用户直接附图 | 原来的 `UserMessage` | 否，只给原消息增加 `media` | 随用户提交的本次请求发送 |
+| 工具读取图片 | 工具结果后新增的 `UserMessage` | 是，`ToolResponseMessage` 保留不变 | 随工具执行结束后的模型请求发送 |
 
-这张表是整份文档的主线。
+历史图片需要重新查看时，模型调用 `Read`，然后重新走第二条“工具读取图片”消息链。
 
 ## 3. 还要区分：会话历史、出站消息和 HTTP 请求
 
