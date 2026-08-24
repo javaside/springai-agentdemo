@@ -205,3 +205,6 @@ mvn -pl springai-code-tui -am clean package -Pdist
 | [skills.md](docs/guide/skills.md) | 技能目录、`SKILL.md` 格式和热加载 |
 | [interjection.md](docs/guide/interjection.md) | 回合中插话的用法和消息位置 |
 | [reference.md](docs/guide/reference.md) | 按键、斜杠命令和已知限制 |
+
+面向改代码的读者另有一份 [implementation-map.md](docs/implementation-map.md)：按功能列出「入口 → 关键类 → 实现要点」，
+以及各处顺序约束和设计取舍的来由。
