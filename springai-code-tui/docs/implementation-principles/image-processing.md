@@ -33,92 +33,122 @@
 
 ## 2. 一页看懂：图片处理消息链
 
+`VisionMaterializer` 位于会话消息组装之后、provider 调用之前。它不会修改会话历史，而是根据已经组装好的消息创建本次出站 `Prompt` 副本，再在副本中增加 `Media`。
+
 ### 2.1 用户直接附图
 
-用户在输入框中输入图片路径，或把文件拖进终端。终端拖拽并没有上传文件，只是把路径粘贴到输入框。
+用户在输入框中输入图片路径，或把文件拖进终端。终端拖拽没有上传文件，只是把路径粘贴到输入框。
 
-详细过程：
-
-```text
-用户输入图片路径
-  └── ImageAttachmentDetector 按文件内容确认它是图片
-
-提交用户消息
-  └── 原路径仍在用户原文中，正文末尾追加 file_reference
-
-会话保存 UserMessage
-  └── text = 用户原文 + file_reference
-
-VisionMaterializer 处理当前出站 Prompt
-  └── 从引用读取图片，给原 UserMessage 增加 Media
-
-带图片的 UserMessage 交给 provider
-```
-
-压缩成消息链：
+提交后，会话保存的是文本消息：
 
 ```text
-输入框图片路径
-  -> UserMessage(text = 原文 + file_reference)
-  -> 原 UserMessage 增加 media
-  -> provider
+会话中的 UserMessage
+  text  = 用户原文 + file_reference
+  media = 空
 ```
 
-用户图片随本次请求发送，不需要先由模型调用 `Read`。
+本次请求进入 provider 前，`VisionMaterializer` 处理出站副本：
+
+```text
+ImageAttachmentDetector
+  -> 按文件内容确认输入路径是图片
+
+CodeTuiView.injectAttachments
+  -> 保留用户原文中的路径
+  -> 在正文末尾追加 file_reference
+
+会话层
+  -> 保存 UserMessage(text = 用户原文 + file_reference, media = 空)
+
+VisionMaterializer
+  -> 找到本回合最后一条非 synthetic UserMessage
+  -> 从该消息的 file_reference 读取并准备图片
+  -> 在出站 Prompt 副本中，用带 Media 的 UserMessage 替换锚点消息
+
+本次出站 UserMessage
+  text  = 用户原文 + file_reference
+  media = 用户图片
+```
+
+处理前后对照：
+
+```text
+会话消息：UserMessage(text = 原文 + file_reference, media = 空)
+  -> VisionMaterializer 创建出站副本
+出站消息：UserMessage(text = 原文 + file_reference, media = 用户图片)
+```
+
+用户图片随用户提交的本次请求发送，不需要先由模型调用 `Read`。会话中的原 `UserMessage` 没有被加上 `Media`。
 
 ### 2.2 工具读取图片
 
-工具结果消息不能直接承载 `Media`，因此工具图片需要追加一条临时 `UserMessage`。
+`ToolResponseMessage` 不能承载 `Media`，因此工具图片需要在本次出站 Prompt 中追加一条 synthetic `UserMessage`。
 
-详细过程：
+工具执行后，会话消息是：
 
 ```text
 UserMessage
-  └── 用户要求读取或分析文件
-
-AssistantMessage
-  └── tool_calls = Read(image.png)
-
-项目执行 Read
-  └── 图片保存或引用到磁盘，ToolResponseMessage 只返回 file_reference
-
-Spring AI 工具循环再次调用 ChatModel
-  └── VisionMaterializer 在工具结果后追加 UserMessage
-      ├── text  = 工具图片名称说明
-      └── media = 工具读取的图片
-
-完整 messages 交给 provider
+  -> AssistantMessage(tool_calls = Read(image.png))
+  -> ToolResponseMessage(responseData = file_reference)
 ```
 
-压缩成消息链：
+工具结果中的图片由 `MediaExternalizingCallback` 处理：
 
 ```text
-UserMessage
+项目内图片
+  -> 不复制，file_reference 指向原项目文件
+
+项目外图片或 MCP 内联图片
+  -> 写入 .codetui/artifacts/
+  -> file_reference 指向项目内 artifact
+
+ToolResponseMessage.responseData
+  -> 只保留文本和 file_reference，不保存图片字节
+```
+
+Spring AI 工具循环再次调用 ChatModel 时，`VisionMaterializer` 创建出站副本并追加图片消息：
+
+```text
+本次出站 Prompt.messages
+  -> UserMessage
   -> AssistantMessage(tool_calls)
   -> ToolResponseMessage(responseData = file_reference)
-  -> 新增 UserMessage(media = 工具图片)
-  -> provider
+  -> 新增 synthetic UserMessage
+       text  = 工具图片名称说明
+       media = 工具读取的图片
 ```
 
-原来的 `ToolResponseMessage` 不会被替换。新增消息只负责承载工具结果消息无法承载的图片。
-
-### 2.3 会话消息和出站消息
-
-会话长期保存：
+原来的 `ToolResponseMessage` 不会被替换或改写。新增消息只负责承载工具结果消息无法承载的图片，并写入：
 
 ```text
-用户图片：UserMessage.text 中的 file_reference
-工具图片：ToolResponseMessage.responseData 中的 file_reference
+metadata["codetui.synthetic"] = true
 ```
 
-当前请求临时增加：
+### 2.3 当前回合边界和消息生命周期
+
+`VisionMaterializer` 只处理：
 
 ```text
-用户图片：原 UserMessage.media
-工具图片：新增 UserMessage.media
+最后一条非 synthetic UserMessage 中的图片引用
+  +
+该消息之后 ToolResponseMessage 中的图片引用
 ```
 
-请求结束后，`Media` 不写回历史。历史图片需要重新查看时，模型调用 `Read`，重新走工具读取图片消息链。
+锚点之前的历史图片不会自动兑现；模型需要重看时调用 `Read`，重新走 2.2 的工具图片消息链。当前回合的完整判断和去重规则见第 7 节。
+
+会话和出站 Prompt 的职责是：
+
+```text
+会话长期保存
+  用户图片：UserMessage.text 中的 file_reference
+  工具图片：ToolResponseMessage.responseData 中的 file_reference
+
+本次出站 Prompt 临时增加
+  用户图片：锚点 UserMessage 副本中的 Media
+  工具图片：新增 synthetic UserMessage 中的 Media
+```
+
+不存在“请求结束后再清空会话历史中的 `Media`”这一步：`Media` 从未写入会话历史，只存在于本次出站 Prompt 中。
 
 ## 3. 三种图片表示各自解决什么问题
 
@@ -130,7 +160,7 @@ UserMessage
 
 ### 3.1 图片文件和 artifact
 
-图片真实字节始终在磁盘文件中。
+跨请求保存的图片字节位于磁盘原文件或 artifact 中。构造本次出站 `Media` 时，`VisionMaterializer` 才把需要发送的图片字节临时读入内存。
 
 项目内图片通常直接指向原文件。项目外图片、MCP 内联图片等没有受信任项目路径的内容，会进入：
 
@@ -147,7 +177,7 @@ UserMessage
 `FileReference.render` 把图片元数据渲染为结构化文本，概念上是：
 
 ```text
-<file_reference>
+[file reference]
 id: sha256:...
 kind: image
 mime_type: image/png
@@ -157,13 +187,13 @@ name: bug.png
 path: docs/bug.png
 delivery: not_in_view
 reason: ...
-</file_reference>
+[/file reference]
 ```
 
 引用承担两个职责：
 
-1. 让模型知道消息提到了哪张图片；
-2. 让程序以后能安全地根据 `path` 重新读取图片。
+1. 对模型提供图片名称、路径、尺寸和 `delivery` 状态，让模型知道当前是否已经收到图片、是否需要调用 `Read`；
+2. 对程序提供以后可安全解析并重新读取的项目内路径。
 
 它不是图片内容，也不放在 `UserMessage.context` 中，而是普通消息文本的一部分。
 
@@ -178,7 +208,7 @@ Media
   name     = 清洗后的文件名
 ```
 
-`Media.data` 必须使用 `byte[]`。实际 provider 请求组装对 `URI`、`String` 和 `byte[]` 之外的类型支持不一致，错误类型可能被静默跳过。
+当前项目固定使用 `byte[]` 作为 `Media.data`，因为这是已接入 provider 都能稳定消费的共同图片载体。各 provider 如何把这些字节写入自己的请求格式，见[其他 Provider 视觉能力实现原理](native-vision-providers.md)和 [DeepSeek 视觉能力实现原理](deepseek-vision.md)。
 
 ## 4. 用户图片为什么这样处理
 
@@ -334,17 +364,21 @@ MCP 工具可能在 JSON 内容块中直接返回 base64 图片。若原样进�
 
 文本累积交给会话压缩解决，不由媒体层激进删除。
 
-### 5.5 为什么已确认的媒体外置失败必须 fail-closed
+### 5.5 已确认的媒体外置失败为什么应该 fail-closed
 
-如果已经确认返回内容是图片或二进制，外置失败时不能退回原始内容。否则“容错”会重新把 base64 或 hexdump 泄漏进会话。
-
-正确降级是返回说明性占位：
+如果已经确认返回内容是图片或二进制，外置失败时退回原始内容，会重新把 base64 或 hexdump 泄漏进会话。因此已确认媒体的正确降级方向是返回说明性占位，而不是返回原始字节：
 
 ```text
 工具返回二进制文件，外置失败后内容已从会话移除
 ```
 
-普通文本检测失败可以保守保留原文；已确认媒体的失败方向必须相反。
+当前实现已经覆盖：
+
+- MCP 图片块写入 artifact 失败；
+- 项目外已确认二进制复制失败；
+- 无来源的疑似二进制内容。
+
+当前仍有一个实现缺口：项目内非文本文件已经被确认，但生成 `file_reference` 失败时，个别异常路径仍可能回退原工具结果。这里记录的是应遵守的安全原则和现有覆盖范围，不把它误写成已经全链路满足的不变式。
 
 ### 5.6 为什么还需要回合间兜底
 
@@ -472,7 +506,8 @@ metadata["codetui.synthetic"] = true
 
 | 实际格式 | 处理方式 | 原因 |
 | --- | --- | --- |
-| PNG / JPEG / GIF | 小图原样；长边超过 1568 时等比缩放 | Provider 支持，缩放可降低字节和视觉 token |
+| PNG / JPEG | 小图原样；长边超过 1568 时等比缩放 | Provider 支持，缩放可降低字节和视觉 token |
+| GIF | 小图原样；需要缩放或压缩时解码后转 PNG/JPEG | 转码后只保留解码出的画面，不保留动画 |
 | BMP / TIFF | 解码后转 PNG | JDK 能解码，但多数模型 API 不直接接受 |
 | WebP | 原样透传 | Provider 接受，但 JDK 默认无法稳定解码缩放 |
 | HEIC / AVIF | 当前不兑现 | JDK 默认解码能力不足，Provider 支持也不一致 |
@@ -515,7 +550,7 @@ CPU 和内存分配会成倍增长。
 
 缓存键包含绝对路径、mtime 和最大边长，文件更新后通常会重新准备。缓存只保存成功结果。
 
-当前实现没有显式缓存容量和过期清理，这是后续需要关注的内存边界。
+当前实现没有显式缓存容量和过期清理；缓存键也不包含文件大小或内容哈希，在 mtime 精度不足的文件系统上，极短时间内覆盖同一路径可能命中旧结果。这些是后续需要关注的缓存边界。
 
 ## 9. 为什么需要视觉预算
 
@@ -570,7 +605,7 @@ CPU 和内存分配会成倍增长。
 | `delivered` | 图片已随当前请求发送 | 直接分析图片 |
 | `reference_only` | 当前模型不支持图片 | 不要重复 Read，需换视觉模型 |
 | `not_in_view` | 当前未发送，但可通过 Read 带回 | 需要时调用 Read |
-| `budget_exceeded` | 本请求张数或 token 预算不足 | 减少图片或单独读取 |
+| `budget_exceeded` | 本请求张数或 token 预算不足 | 减少本次图片数量，或在后续请求中单独查看 |
 | `turn_budget_exhausted` | 本回合累计额度耗尽 | 结束本回合，下一回合再看 |
 
 为什么必须改写状态：
@@ -590,7 +625,9 @@ HEIC、读取失败、超像素等“无法准备”的情况目前没有精确�
 普通 LLM 摘要可能把：
 
 ```text
-<file_reference path="docs/bug.png">
+[file reference]
+path: docs/bug.png
+[/file reference]
 ```
 
 概括成：
@@ -646,31 +683,15 @@ PNG 经 `Read` 后可能成为带行号 hexdump，看起来不像典型二进制
 
 ### 12.4 外置失败不能退回原媒体
 
-对已确认媒体返回 `raw`，会重新泄漏 base64 或 hexdump。已确认媒体必须 fail-closed，返回占位；普通文本才可以保守放行。
+对已确认媒体返回 `raw`，会重新泄漏 base64 或 hexdump。安全目标必须是 fail-closed：返回占位，只有普通文本才可以保守放行。当前尚未完全覆盖的异常路径见第 5.5 节。
 
 ### 12.5 路径边界必须解符号链接
 
 词法 `startsWith` 既可能被符号链接绕过，也会在 macOS 路径映射上误判。路径判断、相对路径生成和引用解析必须使用同一套真实路径口径。
 
-### 12.6 文件名本身可以注入引用字段
+### 12.6 单请求预算挡不住工具循环
 
-Unix 文件名允许换行。生成端必须清洗控制字符，解析端必须拒绝重复字段，避免不同消费者对同一歧义引用作不同解释。
-
-### 12.7 消息绝对下标不能跨序列化层使用
-
-Spring AI 可能把一个 `ToolResponseMessage` 的多个结果展开成多个 HTTP tool 消息。对象层下标因此和 JSON 下标不同。DeepSeek 图片关联最终改成 user 消息序号，避免有工具历史时图片静默错位。
-
-### 12.8 单请求预算挡不住工具循环
-
-每次请求都满足限制，不代表整个回合成本可控。必须增加单回合累计上限，并让统计也使用同一回合口径。
-
-### 12.9 “上一请求”的视觉统计几乎总是零
-
-回合额度耗尽后，后续工具迭代通常兑现 0 张。若 `/context` 只显示最后一次请求，用户看到的几乎总是零。统计改为本回合累计，0 张请求不清空已有数据。
-
-### 12.10 PTY 测试不能覆盖 OS 全局热键
-
-附件撤销最初使用 `Ctrl+G`，PTY 测试可以注入该字节，但真实 macOS 上按键被浏览器扩展注册为全局热键，终端根本收不到。最终改用 `Ctrl+X`。关键终端 UX 需要真人实机验证，PTY 只能证明字节到达应用后的行为。
+每次请求都满足限制，不代表整个回合成本可控。必须增加单回合累计上限，限制同一回合多次模型调用造成的图片重传成本。
 
 ## 13. 关键类与测试索引
 
