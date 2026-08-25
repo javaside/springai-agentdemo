@@ -8,70 +8,172 @@
 
 > 已经带有 `Media` 的 `UserMessage` 进入 provider 后，OpenAI、Anthropic、Qwen 和智谱如何把图片写入 HTTP 请求？
 
-本文不再解释图片路径、artifact、`file_reference`、预算和会话生命周期，也不展开 DeepSeek 的补图实现。DeepSeek 因 Spring AI 原生序列化遗漏 `Media`，需要单独处理，见 [DeepSeek 视觉能力实现原理](deepseek-vision.md)。
+本文不再解释图片路径、artifact、`file_reference`、预算和会话生命周期。它们属于前一阶段，由[图片处理实现原理](image-processing.md)负责。
 
-## 2. 一页看懂：同一条消息如何进入不同 Provider
+## 2. 一页看懂：Prompt.messages 如何进入 Provider
 
-进入 provider 前，各家的对象层消息相同：
+进入 provider 前，各家的 `Prompt.messages` 完全相同。图片来自用户还是工具，只决定 `Media` 挂在哪条 `UserMessage`；provider 看到的都是普通的 Spring AI 消息列表。
+
+### 2.1 用户直接附图：原 UserMessage 携带 Media
+
+用户图片随用户提交的本次请求发送。进入 provider 前，消息是：
 
 ```text
 Prompt.messages
-  -> UserMessage
-       text  = 图片说明
-       media = [Media(data = 图片字节, mimeType = image/png)]
+  └── UserMessage
+        text  = 用户原文 + 图片引用
+        media = 用户图片
 ```
 
-进入 provider 后开始分流：
+provider 读取这条消息后，按各自协议生成图片内容块：
 
 ```text
 UserMessage(text, media)
-  |
-  ├── OpenAI
-  |     -> OpenAiChatModel 读取 text 和 media
-  |     -> 生成 text + image_url 内容块
-  |
-  ├── Anthropic
-  |     -> AnthropicChatModel 读取 text 和 media
-  |     -> 生成 text + image 内容块
-  |
-  ├── Qwen / 智谱
-  |     -> 本项目复用 OpenAiChatModel
-  |     -> 生成 OpenAI 兼容的 text + image_url 内容块
-  |
-  └── DeepSeek
-        -> DeepSeekChatModel 原生序列化遗漏 media
-        -> 由项目 HTTP 层补图
+  ├── OpenAiChatModel
+  │     -> text 块 + image_url 块
+  │
+  ├── AnthropicChatModel
+  │     -> text 块 + image 块
+  │
+  └── Qwen / 智谱
+        -> 复用 OpenAiChatModel
+        -> text 块 + image_url 块
 ```
 
-因此，“其他 provider 不需要特殊处理”的准确含义是：
+这里没有新增消息，也不需要模型先调用 `Read`。原 `UserMessage` 中的文本和 `Media` 一起交给 provider。
 
-> 本项目不需要再写 Registry 或 HTTP 请求体改写器；Spring AI 的 `OpenAiChatModel` 和 `AnthropicChatModel` 已经负责把 `UserMessage.media` 转成各自协议的图片内容块。
+### 2.2 工具读取图片：新增 UserMessage 携带 Media
 
-这不代表所有模型都支持图片，也不代表所有 OpenAI 兼容端点都一定支持图片透传。
+工具图片是在工具执行后进入消息链的。进入 provider 前，完整消息列表是：
 
-## 3. OpenAI：Spring AI 原生转换 Media
+```text
+Prompt.messages
+  ├── UserMessage
+  │     text = 用户最初的问题
+  │
+  ├── AssistantMessage
+  │     tool_calls = Read(screenshot.png)
+  │
+  ├── ToolResponseMessage
+  │     responseData = 图片引用文本
+  │
+  └── 新增 UserMessage
+        text  = 工具图片说明
+        media = 工具读取的图片
+```
 
-### 3.1 消息如何变化
-
-对象层消息：
+provider 会遍历并转换全部消息：
 
 ```text
 UserMessage
-  text  = "分析这张截图"
-  media = [Media(image/png, byte[])]
+  -> 正常转换为 user 消息
+
+AssistantMessage(tool_calls)
+  -> 正常转换为 assistant 工具调用消息
+
+ToolResponseMessage
+  -> 正常转换为 tool 结果消息
+
+新增 UserMessage(media = 工具图片)
+  -> 转换为包含文本块和图片块的 user 消息
 ```
 
-`OpenAiChatModel` 创建请求时会同时读取文本和 `media`：
+原来的 `ToolResponseMessage` 不会被图片消息替换。工具调用、工具结果和新增的图片 `UserMessage` 都会保留，以维持完整的工具调用上下文。
+
+以 OpenAI 格式为例，省略与视觉无关的工具参数后，最终 `messages` 可以看成：
+
+```json
+{
+  "messages": [
+    {"role": "user",      "content": "用户最初的问题"},
+    {"role": "assistant", "tool_calls": "Read(screenshot.png)"},
+    {"role": "tool",      "content": "<file_reference>图片引用</file_reference>"},
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "以下是工具结果中引用的图片：screenshot.png"},
+        {
+          "type": "image_url",
+          "image_url": {"url": "data:image/png;base64,..."}
+        }
+      ]
+    }
+  ]
+}
+```
+
+Anthropic 同样保留完整的用户提问、工具调用、工具结果和图片消息语义，但会按 Anthropic Messages API 重新表示这些消息；其中带 `Media` 的 user 消息会使用 Anthropic `image` 内容块。上面的 `role=tool` JSON 只用于展示 OpenAI 通路，不能直接当作 Anthropic 的最终 wire 格式。
+
+### 2.3 Provider 处理所有带 Media 的 UserMessage
+
+`OpenAiChatModel` 和 `AnthropicChatModel` 都会遍历本次 `Prompt.messages`。它们不是只看最后一条 user 消息，也不判断一条消息属于历史还是当前回合：
 
 ```text
-UserMessage.text
-  -> text 内容块
-
-UserMessage.media
-  -> image_url 内容块
+遍历 Prompt.messages
+  ├── system / assistant / tool
+  │     -> 按各自消息类型转换
+  │
+  └── UserMessage
+        ├── 没有 Media -> 普通文本 user 消息
+        └── 带有 Media -> 文本块 + 图片块
 ```
 
-概念上的 HTTP 内容是：
+因此，如果本次出站 Prompt 中有多条 `UserMessage` 带 `Media`，provider 会分别转换这些消息。哪些消息会在本次 Prompt 中带 `Media`，由上游图片处理层决定，不属于本文范围。
+
+### 2.4 两条图片消息链的区别
+
+| 图片来源 | 带 `Media` 的消息 | 是否新增消息 | provider 如何处理 |
+| --- | --- | --- | --- |
+| 用户直接附图 | 原来的 `UserMessage` | 否 | 把原消息转成文本块和图片块 |
+| 工具读取图片 | 工具结果后新增的 `UserMessage` | 是，原 `ToolResponseMessage` 保留 | 把新增消息转成文本块和图片块 |
+
+从 provider 适配层看，两条路径最终没有区别：
+
+> provider 不关心图片来自用户还是工具，只转换本次 `Prompt.messages` 中实际带 `Media` 的 `UserMessage`。
+
+## 3. OpenAI 如何把 Media 转成 image_url
+
+### 3.1 从 Spring AI 消息到 OpenAI 请求消息
+
+`OpenAiChatModel` 创建请求时遍历 `Prompt.messages`。遇到带 `Media` 的 `UserMessage` 后，它会新建 OpenAI SDK 请求对象：
+
+```text
+Spring AI UserMessage
+  text  = "分析这张截图"
+  media = [Media(image/png, byte[])]
+        |
+        | OpenAiChatModel.createRequest(...)
+        v
+OpenAI user 请求消息
+  content = [text 块, image_url 块]
+```
+
+转换只发生在 provider 请求对象中，不会把 Spring AI 的 `UserMessage` 原地改成 JSON，也不会把 `content` 数组写回 `Prompt.messages`。
+
+### 3.2 图片字节如何写入 OpenAI 请求
+
+当前项目交给 `OpenAiChatModel` 的 `Media` 包含两项数据：
+
+```text
+mimeType = image/png
+数据      = PNG 文件的 byte[]
+```
+
+HTTP JSON 不能直接放 Java 的 `byte[]`。`OpenAiChatModel` 创建 OpenAI 请求对象时，会把图片字节编码成 Base64 字符串，再与 MIME 类型拼成 data URL：
+
+```text
+data:image/png;base64,<图片字节的 Base64 字符串>
+```
+
+然后把整个 data URL 写入图片内容块的 `image_url.url` 字段。也就是：
+
+```text
+Media 中的 mimeType + byte[]
+  -> OpenAiChatModel 编码并拼成 data URL
+  -> 写入 OpenAI 请求的 image_url.url
+```
+
+最终消息是：
 
 ```json
 {
@@ -88,56 +190,51 @@ UserMessage.media
 }
 ```
 
-### 3.2 byte[] 为什么可以直接使用
+如果 `Media.data` 本身是 `URI` 或 URL 字符串，OpenAI 转换层也可以直接把它作为图片 URL。当前项目使用 `byte[]`，是因为图片已经由上游完成读取和准备。
 
-当前项目创建的 `Media.data` 是 `byte[]`。`OpenAiChatModel` 会：
+## 4. Anthropic 如何把 Media 转成 image block
 
-```text
-图片 byte[]
-  -> Base64
-  -> data:<mime>;base64,...
-  -> image_url.url
-```
+### 4.1 从 Spring AI 消息到 Anthropic 请求消息
 
-如果 `Media.data` 本身是 `URI` 或 URL 字符串，OpenAI 转换层也可以直接把它作为图片 URL。当前项目选择 `byte[]`，是因为图片已经在上游完成读取、格式处理和预算控制。
-
-### 3.3 为什么本项目不需要再改 HTTP
-
-OpenAI 的转换发生在 Spring AI provider 内部：
+`AnthropicChatModel` 同样遍历 `Prompt.messages`。遇到带 `Media` 的 `UserMessage` 后，它会新建 Anthropic Messages API 的内容块：
 
 ```text
-Prompt
-  -> OpenAiChatModel.createRequest(...)
-  -> OpenAI SDK 请求对象
-  -> HTTP JSON
-```
-
-`Media` 没有在序列化过程中丢失，所以本项目只需正常构造 `UserMessage.media`，不需要增加注册表、拦截器或请求体改写器。
-
-## 4. Anthropic：Spring AI 原生转换为图片块
-
-### 4.1 消息如何变化
-
-对象层仍是同一条消息：
-
-```text
-UserMessage
+Spring AI UserMessage
   text  = "分析这张截图"
   media = [Media(image/png, byte[])]
+        |
+        | AnthropicChatModel.createRequest(...)
+        v
+Anthropic user 请求消息
+  content = [text block, image block]
 ```
 
-`AnthropicChatModel` 创建请求时会构造 Anthropic Messages API 的内容块：
+这里同样只是创建 provider 请求对象，不修改原来的 `Prompt.messages`。
+
+### 4.2 图片字节如何写入 Anthropic 请求
+
+`AnthropicChatModel` 收到的 `Media` 同样包含 MIME 类型和图片字节：
 
 ```text
-UserMessage.text
-  -> text block
-
-UserMessage.media
-  -> image block
-       source = base64 图片或 HTTPS URL
+mimeType = image/png
+数据      = PNG 文件的 byte[]
 ```
 
-概念上的请求内容是：
+它也会把 `byte[]` 编码成 Base64 字符串，但 Anthropic 请求不使用 data URL，而是把信息拆开放入 `image` 内容块的 `source`：
+
+```text
+Media.mimeType
+  -> source.media_type = image/png
+
+Media 中的 byte[]
+  -> AnthropicChatModel 做 Base64 编码
+  -> source.data = <图片字节的 Base64 字符串>
+
+source.type = base64
+  -> 告诉 Anthropic source.data 使用的是 Base64 数据
+```
+
+最终消息可以看成：
 
 ```json
 {
@@ -156,9 +253,11 @@ UserMessage.media
 }
 ```
 
-### 4.2 与 OpenAI 的区别在哪里
+Anthropic 转换层也支持 HTTPS 图片 URL，此时会生成 URL image source，而不是 base64 source。
 
-两家看到的 Spring AI 消息相同，区别只在 provider 适配层：
+### 4.3 与 OpenAI 的区别
+
+两家接收的 Spring AI 消息相同，只是 provider 请求格式不同：
 
 | Spring AI 输入 | OpenAI 请求 | Anthropic 请求 |
 | --- | --- | --- |
@@ -166,11 +265,9 @@ UserMessage.media
 | `Media(image/*, byte[])` | `image_url` + data URL | `image` + base64 source |
 | `Media(image/*, URL)` | 图片 URL | URL image source |
 
-因此项目上层不需要按 provider 改造 `Prompt.messages`。切换模型后，仍然发送同一种 `UserMessage(text, media)`，由对应 `ChatModel` 转成自己的协议。
+因此项目上层不需要按 provider 改造 `Prompt.messages`。切换 provider 后，仍然发送相同的 `UserMessage(text, media)`，由对应 `ChatModel` 转成自己的协议。
 
-## 5. Qwen 和智谱：复用 OpenAI 视觉通路
-
-### 5.1 为什么它们也走 OpenAiChatModel
+## 5. Qwen 和智谱为什么复用 OpenAI 通路
 
 本项目没有使用独立的 Qwen 或智谱 ChatModel：
 
@@ -184,129 +281,64 @@ ZhipuProvider
   -> 智谱 OpenAI 兼容端点
 ```
 
-因此它们接收 `UserMessage.media` 后，Spring AI 仍按 OpenAI 格式生成：
+所以两家使用的对象和消息转换过程都与第 3 节一致：
 
 ```text
-text + image_url
+Prompt.messages
+  -> OpenAiChatModel 遍历全部消息
+  -> 带 Media 的 UserMessage 转成 text + image_url
+  -> SDK 请求发往对应的 OpenAI 兼容端点
 ```
 
-本项目不需要为 Qwen、智谱再写一套图片序列化代码。
+本项目不需要为 Qwen、智谱再写图片序列化代码。但 `OpenAiChatModel` 能生成 `image_url`，只说明客户端能表达图片请求；远端兼容端点和所选模型仍必须真正接受这种格式。
 
-### 5.2 协议兼容不等于模型支持视觉
+## 6. 协议支持、端点支持和模型支持
 
-`OpenAiChatModel` 能生成 `image_url`，只说明客户端具备这种请求表达能力。请求最终能否成功，还取决于：
+图片能否最终到达模型，需要同时满足三层条件：
 
 ```text
-兼容端点是否接受 image_url
+客户端能够生成图片请求格式
   +
-所选模型是否支持图片输入
+远端端点接受该图片请求格式
+  +
+所选模型支持图片输入
 ```
 
-所以项目仍由 `VisionModels` 按模型 ID 判断视觉能力：
+三层含义不同：
 
-- Qwen 视觉模型使用 `qwen-vl`、`qwen2-vl`、`qwen2.5-vl`、`qwen3-vl` 等前缀；
-- 智谱视觉模型使用 `glm-4v`、`glm-4.1v`、`glm-4.5v` 等前缀；
-- 不在名单中的未知模型默认按不支持图片处理。
+- **客户端支持**：`OpenAiChatModel` 或 `AnthropicChatModel` 能把 `Media` 转成请求内容块；
+- **端点支持**：OpenAI 兼容网关实际接受并转发 `image_url`；
+- **模型支持**：当前模型本身具备视觉能力。
 
-当前内置的 Qwen 和智谱模型清单主要是文本或编码模型。用户即使通过环境变量加入其他模型 ID，也只有命中视觉名单时，项目才会把 `Media` 交给 provider。
-
-## 6. 为什么 DeepSeek 不能走同一条路
-
-OpenAI 和 Anthropic 的 Spring AI provider 都会主动读取 `UserMessage.media`：
-
-```text
-UserMessage.media
-  -> provider 请求内容块
-```
-
-本项目使用的 `spring-ai-deepseek 2.0.0` 在消息序列化时主要读取文本，`Media` 不会自动进入请求：
-
-```text
-UserMessage(text, media)
-  -> DeepSeek 原生序列化
-  -> role=user + 字符串 content
-  -> media 丢失
-```
-
-所以 DeepSeek 才需要：
-
-```text
-序列化前登记 Media
-  -> 原生序列化
-  -> HTTP 层把登记的 Media 补回 content
-```
-
-这不是项目对所有 provider 的通用视觉方案，而是 DeepSeek 适配层的例外。具体实现见 [DeepSeek 视觉能力实现原理](deepseek-vision.md)。
-
-## 7. 模型能力闸门解决什么问题
-
-所有可用 provider 都会被 `VisionMaterializingChatModel` 包装，但只有 `VisionModels.supportsImage(modelId)` 返回 `true` 时，图片引用才会兑现为 `Media`。
-
-```text
-当前模型 id
-  -> VisionModels.supportsImage(...)
-      ├── false：保留引用，不增加 Media
-      └── true ：增加 Media，交给 provider
-```
-
-能力按模型判断，不按 provider 判断，因为同一家通常同时提供文本模型和视觉模型。
-
-未知模型默认不支持图片，是为了避免错误方向更昂贵：
-
-- 误判为不支持：用户看到拦截提示，可以换模型；
-- 误判为支持：图片完成读取和上传后，provider 可能返回 400。
-
-`CODETUI_VISION=off` 会让所有模型暂时判定为不支持图片，作为关闭视觉上传和费用的全局开关。
+图片处理层通过 `VisionModels` 决定是否给本次 Prompt 增加 `Media`。具体能力闸门、全局开关和未知模型策略见[图片处理实现原理](image-processing.md)。
 
 ### OpenCode Go 为什么仍是纯文本
 
-OpenCode Go 也复用 `OpenAiChatModel`，客户端技术上能够生成 `image_url`。但该聚合网关是否对不同上游稳定透传图片尚未验证，因此 `OpencodeGoProvider` 沿用默认 `TEXT_ONLY`，不会开放视觉兑现。
+OpenCode Go 也复用 `OpenAiChatModel`，客户端能够生成 `image_url`。但该聚合网关是否对不同上游稳定透传图片尚未验证，因此 `OpencodeGoProvider` 沿用默认 `TEXT_ONLY`，不会开放视觉兑现。
 
-这再次说明：
-
-```text
-客户端能生成图片格式
-  != 端点已验证支持图片
-  != 当前模型支持图片
-```
-
-## 8. 当前验证范围与边界
+## 7. 当前验证范围与已知边界
 
 当前可以确认：
 
-- Spring AI 2.0.0 的 `OpenAiChatModel` 原生读取图片 `Media`，生成 OpenAI 图片内容块；
-- Spring AI 2.0.0 的 `AnthropicChatModel` 原生读取图片 `Media`，生成 Anthropic 图片内容块；
+- Spring AI 2.0.0 的 `OpenAiChatModel` 原生遍历消息并把图片 `Media` 转成 OpenAI 图片内容块；
+- Spring AI 2.0.0 的 `AnthropicChatModel` 原生遍历消息并把图片 `Media` 转成 Anthropic 图片内容块；
 - 本项目 Qwen、智谱复用 `OpenAiChatModel`，不需要额外图片请求体改写；
 - OpenAI 已有真实模型端到端视觉探针；
-- DeepSeek 的内联视觉通道已做真机验证；
-- Anthropic、Qwen 视觉模型和智谱视觉模型当前主要依据 Spring AI 原生实现、协议兼容性和单元测试边界，未在本项目中逐家完成真机视觉验证；
-- OpenCode Go 未验证图片透传，因此明确保持纯文本能力。
+- Anthropic、Qwen 视觉模型和智谱视觉模型尚未在本项目中逐家完成真机视觉验证；
+- OpenCode Go 未验证图片透传，因此保持纯文本能力。
 
-还要注意：Qwen、智谱或自定义 OpenAI 兼容地址是否接受图片，最终由实际端点决定。复用 `OpenAiChatModel` 只能证明请求能按 OpenAI 图片格式组装，不能替远端服务作能力保证。
+复用 `OpenAiChatModel` 只能证明请求能够按 OpenAI 图片格式组装，不能替远端兼容端点和具体模型作能力保证。
 
-## 9. 关键类索引
+## 8. 关键类索引
 
 | 类 | 作用 |
 | --- | --- |
-| `agent.media.VisionModels` | 按模型 ID 和全局开关决定是否兑现图片 |
-| `agent.media.VisionMaterializingChatModel` | 在 Prompt 进入 provider 前触发图片兑现 |
-| `agent.OpenAiProvider` | 使用原生 `OpenAiChatModel` 发送 OpenAI 请求 |
-| `agent.AnthropicProvider` | 使用原生 `AnthropicChatModel` 发送 Anthropic 请求 |
+| `agent.OpenAiProvider` | 使用 Spring AI `OpenAiChatModel` 发送 OpenAI 请求 |
+| `agent.AnthropicProvider` | 使用 Spring AI `AnthropicChatModel` 发送 Anthropic 请求 |
 | `agent.QwenProvider` | 使用 `OpenAiChatModel` 访问百炼兼容端点 |
 | `agent.ZhipuProvider` | 使用 `OpenAiChatModel` 访问智谱兼容端点 |
 | `agent.OpencodeGoProvider` | 使用 OpenAI 兼容通路，但当前不开放视觉能力 |
-| `agent.DeepSeekThinkingChatModel` | DeepSeek 序列化前登记 `Media` |
-| `agent.DeepSeekThinkingBodyCodec` | DeepSeek HTTP 层补回图片内容块 |
+| `org.springframework.ai.openai.OpenAiChatModel.createRequest` | 遍历 Spring AI 消息并生成 OpenAI SDK 请求对象 |
+| `org.springframework.ai.anthropic.AnthropicChatModel.createRequest` | 遍历 Spring AI 消息并生成 Anthropic SDK 请求对象 |
 
-三篇文档的阅读顺序是：
-
-```text
-图片处理实现原理
-  -> 图片如何变成 UserMessage.media
-
-其他 Provider 视觉能力实现原理（本文）
-  -> OpenAI / Anthropic / 兼容端点如何原生序列化 Media
-
-DeepSeek 视觉能力实现原理
-  -> DeepSeek 为什么需要额外补图，以及如何补图
-```
+本文从 `UserMessage.media` 开始，到 OpenAI、Anthropic 和 OpenAI 兼容端点的请求内容块结束。前一阶段见[图片处理实现原理](image-processing.md)。
