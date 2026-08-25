@@ -1,158 +1,148 @@
 # 图片处理实现原理
 
-## 1. 背景：为什么会话只保存图片引用
+## 1. 图片处理要解决什么问题
 
-模型每次回答问题时，code-tui 都需要把相关的聊天记录重新发给模型。
+code-tui 处理图片，是为了同时达到三个目标：
 
-如果聊天记录中直接保存图片内容，那么以后的请求会再次发送这些图片。图片越多，需要发送的数据就越大，响应也可能越慢、费用越高。一个回合中如果多次调用模型，同一张图片还可能被重复发送多次。
+1. **让大模型看到图片。** 只发送文件名或路径，大模型无法分析图片内容；
+2. **不让会话保存图片数据。** 会话会被后续请求反复携带，如果保存图片字节、Base64 或 hexdump，上下文会迅速膨胀；
+3. **让图片以后还能重新查看。** 完全删除图片信息后，大模型将无法再次定位原文件。
 
-MCP 返回的图片 Base64，或者 `Read` 读取图片后产生的大段文本，也属于图片内容。如果原样写入聊天记录，同样会让聊天记录迅速变大。
-
-但 code-tui 也不能完全忘记图片，否则模型以后无法找到并重新查看它。
-
-因此，code-tui 采用下面的方式：
+为此，code-tui 把一张图片分成三种表示：
 
 ```text
-聊天记录长期保存：图片文件的引用
-模型本次需要看图：根据引用读取图片并临时发送
+磁盘文件或 artifact
+  -> 保存图片数据
+
+会话消息中的 file_reference
+  -> 记录重新读取图片所需的文件信息
+
+本次请求中的 Media
+  -> 把图片数据交给大模型
 ```
 
-可以简单理解为：聊天记录保存的是“照片地址”，不是“照片副本”。
-
-一张图片在系统中有三种表示：
+它们组成一条完整链路：
 
 ```text
-磁盘上的图片文件
-  -> 聊天记录中的 file_reference
-  -> 本次请求中的 Media
+图片进入 Agent
+  -> 图片数据保存在磁盘
+  -> 会话消息只保存 file_reference
+  -> 调用大模型前，根据 file_reference 读取图片
+  -> 图片作为 Media 加入本次请求消息
+  -> 请求结束后，不把 Media 写回会话
 ```
 
-它们分别用于：
+因此，图片处理的核心原则是：
 
-- 图片文件：保存图片内容；
-- `file_reference`：记录图片在哪里；
-- `Media`：在本次请求中把图片发送给模型。
+> **会话用引用记住图片，本次请求用 Media 发送图片。**
 
-请求结束后，`Media` 不会写入聊天记录。
+下面从消息列表的变化说明这条原则如何实现。
 
-## 2. 一页看懂：图片处理消息链
+## 2. 图片处理流程
 
-`VisionMaterializer` 位于会话消息组装之后、provider 调用之前。它不会修改会话历史，而是根据已经组装好的消息创建本次出站 `Prompt` 副本，再在副本中增加 `Media`。
+理解图片处理流程，首先要区分两份消息列表。为便于说明，本文分别称为“会话消息列表”和“本次请求消息列表”。
 
-### 2.1 用户直接附图
+| 消息列表 | 用途 | 生命周期 | 如何表示图片 |
+| --- | --- | --- | --- |
+| **会话消息列表** | 记录用户消息、大模型回复和工具结果 | 跨请求长期保存 | 只在消息文本中保存 `file_reference`，不保存 `Media` |
+| **本次请求消息列表** | 作为本次提示词发送给大模型 | 只用于一次模型调用 | 根据 `file_reference` 读取图片，并在 `UserMessage.media` 中加入图片数据 |
 
-用户在输入框中输入图片路径，或把文件拖进终端。终端拖拽没有上传文件，只是把路径粘贴到输入框。
-
-提交后，会话保存的是文本消息：
+两者的关系是：
 
 ```text
-会话中的 UserMessage
+会话消息列表
+  -> 组装本次请求消息列表
+  -> 根据本次需要处理的 file_reference 读取图片
+  -> 在本次请求消息列表中加入 Media
+  -> 发给大模型
+  -> 请求结束后丢弃，不写回会话消息列表
+```
+
+因此，code-tui 不是先把图片写进会话、发送后再删除，而是从一开始就不让 `Media` 进入会话。图片处理发生在本次请求消息列表上：会话负责长期保存引用，本次请求负责临时携带图片数据。
+
+### 2.1 用户直接提交图片
+
+用户提交图片后，code-tui 先把图片引用写入当前 `UserMessage.text`。这条消息随后进入会话，`media` 保持为空：
+
+```text
+用户提交图片
+  -> 会话消息列表追加 UserMessage
+       text  = 用户原文 + file_reference
+       media = 空
+```
+
+这里不写 `media`，是为了避免图片数据随 `UserMessage` 一起保存到会话。
+
+调用大模型前，code-tui 根据会话消息列表生成本次请求消息列表，只处理当前用户刚提交的 `UserMessage`：
+
+```text
+会话消息列表中的当前 UserMessage
   text  = 用户原文 + file_reference
   media = 空
-```
 
-本次请求进入 provider 前，`VisionMaterializer` 处理出站副本：
+  -> 根据 file_reference 读取图片
+  -> 在本次请求的消息副本中写入 media
 
-```text
-ImageAttachmentDetector
-  -> 按文件内容确认输入路径是图片
-
-CodeTuiView.injectAttachments
-  -> 保留用户原文中的路径
-  -> 在正文末尾追加 file_reference
-
-会话层
-  -> 保存 UserMessage(text = 用户原文 + file_reference, media = 空)
-
-VisionMaterializer
-  -> 找到本回合最后一条非 synthetic UserMessage
-  -> 从该消息的 file_reference 读取并准备图片
-  -> 在出站 Prompt 副本中，用带 Media 的 UserMessage 替换锚点消息
-
-本次出站 UserMessage
+本次请求消息列表中的当前 UserMessage
   text  = 用户原文 + file_reference
   media = 用户图片
+
+  -> 发给大模型
 ```
 
-处理前后对照：
+这里补上 `media`，是为了让大模型真正收到图片。处理只改变本次请求中的消息副本，会话中的 `UserMessage` 仍然是 `media = 空`。
+
+### 2.2 工具返回图片
+
+大模型调用 `Read`、MCP 截图等工具得到图片时，图片数据也不能直接进入会话。code-tui 先把图片保存到磁盘或引用已有文件，再让工具结果只返回 `file_reference`：
 
 ```text
-会话消息：UserMessage(text = 原文 + file_reference, media = 空)
-  -> VisionMaterializer 创建出站副本
-出站消息：UserMessage(text = 原文 + file_reference, media = 用户图片)
+大模型返回工具调用
+  -> 会话消息列表追加 AssistantMessage(tool_calls)
+
+工具返回图片
+  -> 图片数据保存到磁盘，或引用已有文件
+  -> 会话消息列表追加 ToolResponseMessage
+       responseData = file_reference
 ```
 
-用户图片随用户提交的本次请求发送，不需要先由模型调用 `Read`。会话中的原 `UserMessage` 没有被加上 `Media`。
-
-### 2.2 工具读取图片
-
-`ToolResponseMessage` 不能承载 `Media`，因此工具图片需要在本次出站 Prompt 中追加一条 synthetic `UserMessage`。
-
-工具执行后，会话消息是：
+此时会话中的消息链是：
 
 ```text
-UserMessage
-  -> AssistantMessage(tool_calls = Read(image.png))
-  -> ToolResponseMessage(responseData = file_reference)
+UserMessage：用户的问题
+  -> AssistantMessage：工具调用
+  -> ToolResponseMessage：图片引用
 ```
 
-工具结果中的图片由 `MediaExternalizingCallback` 处理：
+再次调用大模型前，code-tui 根据工具结果中的 `file_reference` 读取图片。由于 `ToolResponseMessage` 不能携带 `Media`，本次请求消息列表会在末尾临时增加一条 `UserMessage`：
 
 ```text
-项目内图片
-  -> 不复制，file_reference 指向原项目文件
+本次请求消息列表
+  -> UserMessage：用户的问题
+  -> AssistantMessage：工具调用
+  -> ToolResponseMessage：图片引用
+  -> 新增 UserMessage
+       text  = 工具图片说明
+       media = 工具图片
 
-项目外图片或 MCP 内联图片
-  -> 写入 .codetui/artifacts/
-  -> file_reference 指向项目内 artifact
-
-ToolResponseMessage.responseData
-  -> 只保留文本和 file_reference，不保存图片字节
+  -> 发给大模型
 ```
 
-Spring AI 工具循环再次调用 ChatModel 时，`VisionMaterializer` 创建出站副本并追加图片消息：
+这样，大模型收到了工具图片；会话中仍然只有原来的 `ToolResponseMessage(file_reference)`。新增的图片 `UserMessage` 只属于本次请求，不会写回会话。
+
+### 2.3 工具循环中的图片
+
+大模型看到工具图片后，可能继续调用其他工具。每次再次调用大模型，code-tui 都从不含 `Media` 的会话消息列表重新生成本次请求消息列表：
 
 ```text
-本次出站 Prompt.messages
-  -> UserMessage
-  -> AssistantMessage(tool_calls)
-  -> ToolResponseMessage(responseData = file_reference)
-  -> 新增 synthetic UserMessage
-       text  = 工具图片名称说明
-       media = 工具读取的图片
+会话消息列表中的 file_reference
+  -> 重新读取图片
+  -> 重新生成本次请求使用的图片 UserMessage
 ```
 
-原来的 `ToolResponseMessage` 不会被替换或改写。新增消息只负责承载工具结果消息无法承载的图片，并写入：
+因此，上一次临时增加的图片消息不需要保留。没有新的工具图片时，在额度允许的情况下继续发送上一张；出现新的工具图片时，只发送最新一张。
 
-```text
-metadata["codetui.synthetic"] = true
-```
-
-### 2.3 当前回合边界和消息生命周期
-
-`VisionMaterializer` 只处理：
-
-```text
-最后一条非 synthetic UserMessage 中的图片引用
-  +
-该消息之后 ToolResponseMessage 中的图片引用
-```
-
-锚点之前的历史图片不会自动兑现；模型需要重看时调用 `Read`，重新走 2.2 的工具图片消息链。当前回合的完整判断和去重规则见第 7 节。
-
-会话和出站 Prompt 的职责是：
-
-```text
-会话长期保存
-  用户图片：UserMessage.text 中的 file_reference
-  工具图片：ToolResponseMessage.responseData 中的 file_reference
-
-本次出站 Prompt 临时增加
-  用户图片：锚点 UserMessage 副本中的 Media
-  工具图片：新增 synthetic UserMessage 中的 Media
-```
-
-不存在“请求结束后再清空会话历史中的 `Media`”这一步：`Media` 从未写入会话历史，只存在于本次出站 Prompt 中。
+无论工具循环多少次，都保持同一个结果：大模型在需要时收到图片，会话始终不保存图片数据。
 
 ## 3. 三种图片表示各自解决什么问题
 
