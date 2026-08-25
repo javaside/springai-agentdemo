@@ -708,4 +708,4 @@ Spring AI 可能把一个 `ToolResponseMessage` 的多个结果展开成多个 H
 | `VisionBudgetTest` | token、回合上限和并发分桶 |
 | `VisionMaterializingChatModelTest` | 出站接线、call/stream 和 options 转发 |
 
-图片处理文档到 `UserMessage.media` 为止。不同 provider 如何把 `Media` 转成自己的 HTTP 格式属于 provider 适配层；DeepSeek 的特殊补图过程见 [DeepSeek 视觉能力实现原理](deepseek-vision-implementation.md)。
+图片处理文档到 `UserMessage.media` 为止。之后分成两条 provider 适配路径：OpenAI、Anthropic、Qwen 和智谱如何使用 Spring AI 原生转换，见[其他 Provider 视觉能力实现原理](native-vision-providers.md)；DeepSeek 的特殊补图过程见 [DeepSeek 视觉能力实现原理](deepseek-vision.md)。

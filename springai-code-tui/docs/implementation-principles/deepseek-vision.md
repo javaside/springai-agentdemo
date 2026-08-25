@@ -15,6 +15,8 @@ DeepSeek 官方视觉模型支持在一次对话请求中同时接收文本和�
 
 项目没有重新实现一套 ChatModel，而是保留 Spring AI 原有的消息处理流程，在 HTTP 请求真正发出前补齐图片。
 
+本文只解释 DeepSeek 的特殊适配。图片如何生成 `UserMessage.media`，见[图片处理实现原理](image-processing.md)；其他 provider 如何原生转换同一个 `Media`，见[其他 Provider 视觉能力实现原理](native-vision-providers.md)。
+
 ## 2. 一页看懂：图片如何进入 DeepSeek 请求
 
 整个视觉实现先只看两条消息流。暂时不用理解所有 Spring AI 类名，只要看清楚“哪条消息在什么时候携带图片”。
@@ -243,7 +245,7 @@ DeepSeekThinkingChatModel
 
 这里不区分历史消息和当前消息。`DeepSeekThinkingChatModel` 会扫描本次出站 Prompt 中的**所有** `UserMessage`：只要某条消息的 `media` 中存在图片字节非空的 `Media`，就会登记；`DeepSeekThinkingBodyCodec` 随后就会给这条消息补图。历史 `UserMessage` 如果仍带有 `Media`，同样会被补进 HTTP 请求。
 
-正常的会话处理流程只把图片引用文本写入历史，不把 `Media` 写回历史，所以历史消息通常不会命中 Registry。这是上游会话和图片处理的结果，不是 Registry 或 HTTP 改写器专门过滤了历史消息。具体的图片处理过程见[图片处理实现原理](image-processing-implementation.md)。
+正常的会话处理流程只把图片引用文本写入历史，不把 `Media` 写回历史，所以历史消息通常不会命中 Registry。这是上游会话和图片处理的结果，不是 Registry 或 HTTP 改写器专门过滤了历史消息。具体的图片处理过程见[图片处理实现原理](image-processing.md)。
 
 后续只有两个分支：
 
