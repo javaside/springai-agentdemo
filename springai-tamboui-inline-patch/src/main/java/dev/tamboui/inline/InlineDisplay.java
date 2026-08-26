@@ -55,7 +55,13 @@ public final class InlineDisplay implements AutoCloseable {
      * 窗口内每帧把光标行 ±1 整行无擦除重写——覆写相同字形不可见，带外行仍严格差分。
      */
     private int cursorBandRepairFramesLeft;
-    /** 编辑活动后连续重申光标带的帧数（约 8 × 40ms），覆盖 IME 预编辑异步、可能滞后的清理。 */
+    /**
+     * 编辑活动后连续重申光标带的帧数，覆盖 IME 预编辑异步、可能滞后的清理。
+     *
+     * <p>换算成时长要乘调用方的 tickRate，<b>不是固定毫秒数</b>：code-tui 现在跑 100ms/帧
+     * （见其 {@code configure} 的降频注释），窗口即 ~800ms。任何按写死毫秒等窗口耗尽的验证
+     * （如 pty 冒烟的 pump 时长）都必须按「帧数 × 当前帧长」重算，否则会随帧率调整静默错位。
+     */
     private static final int CURSOR_BAND_REPAIR_FRAMES = 8;
     /** 光标带半径：光标行上下各一行（顶边框/底边框正好落在此带内）。 */
     private static final int CURSOR_BAND_RADIUS = 1;

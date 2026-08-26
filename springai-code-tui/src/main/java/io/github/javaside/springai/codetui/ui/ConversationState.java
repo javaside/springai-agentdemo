@@ -356,25 +356,17 @@ public final class ConversationState implements AgentListener {
     }
 
     /**
-     * 渲染线程调用：最多取走 {@code maxLines} 条定稿行，剩余保留到下一帧。
+     * 渲染线程调用：取走<b>一条</b>定稿行（队空返回 null）。
      *
-     * <p>用于限制每帧 pty 写入量（burst 限速），避免向终端短时间写入大量数据引发
-     * Terminal.app 内部 GCD kevent 的 use-after-free 崩溃（工具结果如 BashOutput
-     * 可一次产生几千行，全部在同一帧打出会形成 MB 级 pty 突发流量）。
-     * 剩余行下一帧继续打，内容不丢，只是渐进显示。
+     * <p>限速的计量单位必须是「真实写进终端的物理行」，而一条 {@link OutputLine} 经折行 / diff 展开
+     * 可以变成几十上百个物理行——按条数取就只能<b>估</b>本帧写了多少。故改为单条取：调用方每打完一条
+     * 就核对一次自己的物理行预算，超了立刻收手，剩下的自然留在队列里等下一帧。
+     *
+     * <p>限速的存在理由见 {@code CodeTuiView.MAX_ROWS_PER_DRAIN}：一帧灌几百 KB 会让渲染线程
+     * 长时间占住（按键排队，用户感知「打字卡死」），也会把终端推进它自己的崩溃区。
      */
-    public synchronized List<OutputLine> drainPending(int maxLines) {
-        if (pending.isEmpty()) return List.of();
-        if (pending.size() <= maxLines) {
-            List<OutputLine> out = new ArrayList<>(pending);
-            pending.clear();
-            return out;
-        }
-        List<OutputLine> out = new ArrayList<>(maxLines);
-        for (int i = 0; i < maxLines; i++) {
-            out.add(pending.pollFirst());
-        }
-        return out;
+    public synchronized OutputLine pollPending() {
+        return pending.pollFirst();
     }
 
     /**
@@ -383,17 +375,52 @@ public final class ConversationState implements AgentListener {
      * 从根上避免多行内容 + 预览叠加造成的重复。锁内完成，避免与 {@link #onAssistantToken} 竞争。
      */
     public synchronized List<String> takeCompleteStreamingLines() {
-        int idx = streaming.lastIndexOf("\n");
+        return takeCompleteStreamingLines(Integer.MAX_VALUE);
+    }
+
+    /**
+     * 同上，但本次最多取 {@code maxLines} 个完整逻辑行，其余<b>留在缓冲区</b>等下一帧。
+     *
+     * <p><b>为什么必须能限量</b>：模型一次吐出一个几千行的代码块（或工具结果回显）时，无参版本会把
+     * 全部完整行一次交给渲染线程 println——那是<b>每帧 pty 写入限速唯一漏掉的一条路径</b>，偏偏
+     * 「窗口正在输出」走的就是它。一帧灌几千行 = 几百 KB 突发：渲染线程被占住（按键排队，用户感知
+     * 「打字卡死」），终端也被推进它自己的崩溃区。
+     *
+     * <p>留在缓冲区不影响残行预览语义：预览取的是最后一个 {@code \n} 之后的残段，前面留多少完整行都不参与。
+     *
+     * @param maxLines 本次最多取走的完整逻辑行数；{@code ≤0} 表示一行都不取
+     * @return 取走的完整逻辑行（已去掉行尾 {@code \r}），按原顺序
+     */
+    public synchronized List<String> takeCompleteStreamingLines(int maxLines) {
+        if (maxLines <= 0) return List.of();
+        int idx = -1;                                       // 第 maxLines 个 \n 的下标（不足则为最后一个）
+        int seen = 0;
+        for (int i = 0; i < streaming.length() && seen < maxLines; i++) {
+            if (streaming.charAt(i) == '\n') { idx = i; seen++; }
+        }
         if (idx < 0) return List.of();                      // 还没换行，全留着预览
         String complete = streaming.substring(0, idx);      // 含 idx 之前的若干完整行
-        String partial = streaming.substring(idx + 1);
-        streaming.setLength(0);
-        streaming.append(partial);
+        streaming.delete(0, idx + 1);                       // 只切掉已取走的部分，剩余（含残行）原地保留
         List<String> out = new ArrayList<>();
         for (String l : complete.split("\n", -1)) {
             out.add(l.endsWith("\r") ? l.substring(0, l.length() - 1) : l);
         }
         return out;
+    }
+
+    /**
+     * 把已取走但本帧<b>没来得及打</b>的完整行放回缓冲区头部（配合物理行预算用尽时收手）。
+     *
+     * <p>插在头部而非尾部：这些行在时序上早于缓冲区里现存的内容，顺序错了 scrollback 就乱了。
+     * 「最后一段是残行」的语义不受影响——插进来的每一行后面都跟着 {@code \n}。
+     *
+     * @param rows 待放回的完整逻辑行，按原顺序；空列表为 no-op
+     */
+    public synchronized void unshiftStreamingLines(List<String> rows) {
+        if (rows == null || rows.isEmpty()) return;
+        StringBuilder head = new StringBuilder();
+        for (String r : rows) head.append(r).append('\n');
+        streaming.insert(0, head);
     }
 
     /** live 区显示：在建助手行的当前残行（未换行段）。 */

@@ -88,8 +88,12 @@ def main():
         print("CJK OK: complete glyph patch, band corners and borders reasserted")
 
         # 删空输入后边框与四角必须完好（空框缺角案例），且修复窗口耗尽后恢复静止零输出。
+        # ⚠ pump 时长必须覆盖 CURSOR_BAND_REPAIR_FRAMES(8) × tickRate。tickRate 已从 40ms 降到
+        # 100ms（见 CodeTuiView.configure 的降频注释），窗口因此是 ~800ms 而非 ~320ms：
+        # 沿用旧的 0.6s 会让窗口剩两帧没走完，那两帧的重申被下面「应零输出」的断言算成失败。
+        # 写死的等待时长会随任何一次帧率调整静默错位，故这里按帧数×帧长算，留一倍余量。
         session.write(b"\x15")
-        session.pump(0.6)
+        session.pump(1.2)
         rows = list(session.screen.display)
         box_rows = [i for i, line in enumerate(rows) if line.lstrip().startswith("╭")]
         if not box_rows:

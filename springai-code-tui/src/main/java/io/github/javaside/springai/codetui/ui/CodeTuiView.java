@@ -113,17 +113,23 @@ public final class CodeTuiView extends InlineApp {
     private static final Logger log = LoggerFactory.getLogger(CodeTuiView.class);
 
     /**
-     * 每帧 drain 最多向 pty 写入的行数上限（burst 限速）。
+     * 每帧 drain 最多向 pty 写入的<b>物理行</b>数上限（burst 限速）。
      *
-     * <p>Terminal.app 的 GCD kevent 处理路径存在 use-after-free bug，在短时间内向 pty
-     * 写入大量数据时触发（表现为 EXC_BAD_ACCESS / SIGSEGV，整个 Terminal 崩溃关闭）。
-     * 工具结果（尤其是 BashOutput）可一次产生数千行，全部在同一个 33ms 帧内打出会形成
-     * MB 级突发流量，是已知最常见的触发场景。
+     * <p><b>为什么必须按物理行计</b>：一条 {@link ConversationState.OutputLine} 经折行 / diff 展开
+     * 可以变成十几到上百个物理行，按「条数」限速等于没限——实测限 300 条长正文实际写出 4500 行。
+     * 计数点是 sink 出口（见构造里的 {@code recording}），那里是所有 println 的唯一必经之路，
+     * 数到的就是真实写进终端的行数。预算用尽即收手，剩下的留到下一帧（内容不丢，只是渐进显示）。
      *
-     * <p>限速到每帧 300 行（~10KB/帧，~9000 行/秒），超出的行留到下一帧继续打：内容不丢、
-     * 只是渐进显示，用户体验与流式回复相似。对正常大小的输出（≤300 行）无任何影响。
+     * <p><b>为什么要限</b>：两条独立的后果。① 渲染线程在 drain 里做 markdown/高亮/折行/println，
+     * 一帧几千行会把它占住数百 ms，期间<b>按键事件全部排队</b>——用户感知就是「输出的时候打字卡死」。
+     * ② macOS Terminal.app 在短时间收到大量 pty 数据时会踩到自身的 use-after-free
+     * （EXC_BAD_ACCESS / SIGSEGV，整个 Terminal 崩溃关闭）；输入法预编辑（中文打字）期间屏幕被高速
+     * 滚动尤其危险，崩溃栈落在 {@code setMarkedText:} → {@code selectedRange}。工具结果
+     * （尤其 BashOutput）与模型吐出的大代码块都能一次产生几千行，是最常见的触发场景。
+     *
+     * <p>限速到每帧 300 行（~10KB/帧，~4500 行/秒）：对正常大小的输出（≤300 行）无任何影响。
      */
-    private static final int MAX_LINES_PER_DRAIN = 300;
+    private static final int MAX_ROWS_PER_DRAIN = 300;
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     private static final int SKILL_PICKER_CAP = 10; // 技能选择器可见行上限；避免大量技能撑高 InlineDisplay、触发终端反复重排
@@ -198,6 +204,15 @@ public final class CodeTuiView extends InlineApp {
      */
     private final ArrayDeque<Object> scrollTail = new ArrayDeque<>();
     private static final int SCROLL_TAIL_CAP = 400;
+
+    /**
+     * 本帧已经写进 pty 的物理行数，{@link #MAX_ROWS_PER_DRAIN} 的计数器。
+     *
+     * <p>在 sink 出口（构造里的 {@code recording}）自增——那是所有 println 的唯一必经之路，也是
+     * 折行发生的地方，所以数到的是真实行数而不是估算。{@link #drain} 开头归零。
+     * 只在渲染线程读写（sink 打印与 drain 都在渲染线程）。
+     */
+    private int rowsThisFrame;
 
     /**
      * 刹车期间探明的「确有结果被扣住」。状态栏那句提示读它，<b>不</b>每帧去取列表。
@@ -318,11 +333,11 @@ public final class CodeTuiView extends InlineApp {
         ScrollbackPrinter.Sink recording = new ScrollbackPrinter.Sink() {
             @Override public void println(Text t) {
                 record(t);
-                for (Text piece : TextWrap.wrap(t, sinkWidth())) inner.println(piece);
+                for (Text piece : TextWrap.wrap(t, sinkWidth())) { inner.println(piece); rowsThisFrame++; }
             }
             @Override public void println(String s) {
                 record(s);
-                for (String seg : wrapSegments(s, sinkWidth())) inner.println(seg);
+                for (String seg : wrapSegments(s, sinkWidth())) { inner.println(seg); rowsThisFrame++; }
             }
         };
         this.printer = new ScrollbackPrinter(recording, root, this::terminalWidth, CodeTuiView::wrapSegments);
@@ -464,7 +479,8 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private void drainInsideBatch() {
-        animTick++;                                            // 推进状态栏波光动画帧（~33ms/帧）
+        rowsThisFrame = 0;                                     // 本帧 pty 写入预算归零（见 MAX_ROWS_PER_DRAIN）
+        animTick++;                                            // 推进状态栏波光动画帧（~66ms/帧）
         // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）。
         // ⚠ 必须在独立线程跑：大会话下 token 估算耗时数百 ms，直接在渲染线程调会周期性冻结
         // 输入与渲染（用户感知为"code-tui 卡死"）。cached 是 volatile，后台刷新、渲染线程读快照安全。
@@ -483,7 +499,7 @@ public final class CodeTuiView extends InlineApp {
                 parkCursorAtTop = false;       // 即使重放降级或异常，也必须把 IME 锚点放回文本行
             }
         }
-        for (OutputLine ol : state.drainPending(MAX_LINES_PER_DRAIN)) {
+        for (OutputLine ol; rowsThisFrame < MAX_ROWS_PER_DRAIN && (ol = state.pollPending()) != null; ) {
             switch (ol.kind()) {
                 case USER       -> printer.userBlock(ol.text());   // 灰底白字块，仿 Claude Code
                 case ASSISTANT  -> printer.assistant(ol.text());   // AI 正文：markdown/语法高亮 + 缩进
@@ -491,8 +507,19 @@ public final class CodeTuiView extends InlineApp {
                 default         -> printer.line(ol);               // 工具/Todo/错误：单色贴左
             }
         }
-        for (String row : state.takeCompleteStreamingLines()) {    // 流式完整行：markdown/语法高亮 + 缩进
-            printer.streamingLine(row);
+        // 流式完整行：markdown/语法高亮 + 缩进。这条路径此前<b>不受限速</b>——而「窗口正在输出」走的
+        // 正是它，一次几千行的代码块会整帧灌进 pty（见 MAX_ROWS_PER_DRAIN）。按剩余预算取，
+        // 打不完的原样退回缓冲区头部等下一帧。
+        int budget = MAX_ROWS_PER_DRAIN - rowsThisFrame;
+        if (budget > 0) {
+            List<String> rows = state.takeCompleteStreamingLines(budget);
+            for (int i = 0; i < rows.size(); i++) {
+                if (rowsThisFrame >= MAX_ROWS_PER_DRAIN) {         // 预算被折行吃光：剩下的退回，顺序不乱
+                    state.unshiftStreamingLines(rows.subList(i, rows.size()));
+                    break;
+                }
+                printer.streamingLine(rows.get(i));
+            }
         }
         ModalRequest head = state.peekModal();
         // 正在审批的请求已不在队首 → 它被别的线程摘走了（cancelCurrent/clearModals 已给它的线程投过 CANCEL，
