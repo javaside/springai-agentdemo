@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
+import io.github.javaside.springai.codetui.agent.media.VisionModels;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
@@ -33,8 +35,10 @@ import java.util.Map;
  * （合法值 none / minimal / low / medium / high / xhigh / max）。各家上游对档位的接受度不一致，
  * 故按 modelId 返回各自真实支持的档位（见 {@link #EFFORT_CAPS}），未收录的模型回退到保守的
  * low / medium / high 三档；关闭思考映射为 {@code none}（仅 supportsDisable=true 的模型）。
- * <p>图片输入仍保守：网关是否透传图片未经验证，视觉能力沿用默认 TEXT_ONLY（未知即不支持，见
- * {@code media.VisionModels} 注释）。要用视觉请直接走对应的原生 provider。
+ * <p><b>图片输入只开放官方声明的模型</b>：OpenCode Go 文档目前仅确认
+ * {@code deepseek-v4-flash-vision-exp} 支持图片，因此只为该模型开放视觉兑现；其他内置模型和
+ * {@code OPENCODE_GO_MODELS} 自定义模型仍保持 TEXT_ONLY，避免把全局视觉前缀名单误套到未经 Go 网关
+ * 验证的上游。图片沿用 {@link OpenAiChatModel} 的 OpenAI 兼容 {@code image_url} 通路。
  */
 public final class OpencodeGoProvider implements LlmProvider {
 
@@ -42,9 +46,10 @@ public final class OpencodeGoProvider implements LlmProvider {
     // 首项即默认模型（OPENCODE_GO_MODELS 未配置时的回退清单，约定第一项为默认）。
     // 收录网关 /models 中当前可用的模型；坏模型（mimo-v2-pro/omni、hy3-preview、grok-4.5）不下发，见类注释。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("deepseek-v4-pro",   "deepseek-v4-pro",   "强推理 · 复杂编码"),
-            new ModelOption("deepseek-v4-flash", "deepseek-v4-flash", "非思考 · 快 · 便宜"),
-            new ModelOption("glm-5.2",           "glm-5.2",           "Agentic 编码 · 长上下文"),
+            new ModelOption("deepseek-v4-pro",              "deepseek-v4-pro",              "强推理 · 复杂编码"),
+            new ModelOption("deepseek-v4-flash",            "deepseek-v4-flash",            "非思考 · 快 · 便宜"),
+            new ModelOption("deepseek-v4-flash-vision-exp", "deepseek-v4-flash-vision-exp", "视觉实验 · 图片理解"),
+            new ModelOption("glm-5.2",                      "glm-5.2",                      "Agentic 编码 · 长上下文"),
             new ModelOption("glm-5.3",           "glm-5.3",           "GLM 新旗舰 · 低/高/最大档"),
             new ModelOption("glm-5.1",           "glm-5.1",           "长任务 · 自规划"),
             new ModelOption("glm-5",             "glm-5",             "GLM 上代"),
@@ -171,4 +176,11 @@ public final class OpencodeGoProvider implements LlmProvider {
     @Override public List<ModelOption> models() { return models; }
 
     @Override public String defaultModel() { return models.get(0).id(); }
+
+    @Override
+    public ModelCapabilities capabilities(String modelId) {
+        boolean officialVisionModel = "deepseek-v4-flash-vision-exp".equalsIgnoreCase(
+                modelId == null ? "" : modelId.trim());
+        return new ModelCapabilities(officialVisionModel && VisionModels.enabled(), false);
+    }
 }

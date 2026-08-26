@@ -7,6 +7,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
 import java.nio.file.Path;
+import java.util.function.Predicate;
 
 /**
  * 视觉兑现的<b>唯一接线点</b>：在 {@link Prompt} 真正交给 provider 之前，把当轮的图片引用兑现成
@@ -28,15 +29,23 @@ public final class VisionMaterializingChatModel implements ChatModel {
 
     private final ChatModel delegate;
     private final VisionMaterializer materializer;
+    private final Predicate<String> supportsImage;
 
-    private VisionMaterializingChatModel(ChatModel delegate, VisionMaterializer materializer) {
+    private VisionMaterializingChatModel(ChatModel delegate, VisionMaterializer materializer,
+                                         Predicate<String> supportsImage) {
         this.delegate = delegate;
         this.materializer = materializer;
+        this.supportsImage = supportsImage;
     }
 
     public static VisionMaterializingChatModel wrap(ChatModel delegate, Path root) {
+        return wrap(delegate, root, VisionModels::supportsImage);
+    }
+
+    public static VisionMaterializingChatModel wrap(ChatModel delegate, Path root,
+                                                     Predicate<String> supportsImage) {
         return new VisionMaterializingChatModel(
-                delegate, new VisionMaterializer(root, new ImagePreparer(), new VisionBudget()));
+                delegate, new VisionMaterializer(root, new ImagePreparer(), new VisionBudget()), supportsImage);
     }
 
     /** 上次兑现的统计（供 {@code /context} 单列视觉占用）。 */
@@ -54,15 +63,12 @@ public final class VisionMaterializingChatModel implements ChatModel {
         return delegate.stream(materialize(prompt));
     }
 
-    /**
-     * 兑现一次。{@link VisionModels#supportsImage} <b>已经包含了全局开关</b> {@code CODETUI_VISION}
-     * （见其 javadoc），故这里不再判一次 {@code enabled()}——那是重复判断。
-     */
+    /** 兑现一次。能力谓词由对应 provider 注入，避免兼容网关的同名模型串用全局能力。 */
     private Prompt materialize(Prompt prompt) {
         String modelId = prompt == null || prompt.getOptions() == null
                 ? null
                 : prompt.getOptions().getModel();
-        return materializer.materialize(prompt, VisionModels.supportsImage(modelId));
+        return materializer.materialize(prompt, supportsImage.test(modelId));
     }
 
     /**

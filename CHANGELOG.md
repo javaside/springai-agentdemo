@@ -8,6 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
+| [v1.18.2](docs/release-notes/v1.18.2.md) | 修订版 | **OpenCode Go 官方视觉模型 + Provider 能力隔离**：内置 `deepseek-v4-flash-vision-exp`，只为网关已确认的模型开放图片；UI 附件闸门与请求兑现统一按 provider+model 判定，避免聚合网关同名模型串用视觉能力；消息在飞、排队或待送达插话期间禁止切模型，避免图片静默降级；补齐图片处理实现原理与公共 API 文档 |
 | [v1.18.1](docs/release-notes/v1.18.1.md) | 修订版 | **DeepSeek 视觉图片可靠送达 + 二进制外置 fail-closed**：修复工具多响应被 Spring AI 展开后图片注册表按绝对下标错位、模型只看到引用而看不到图；项目外图片 Read 会复制进 artifacts 再引用，PNG/PDF hexdump 不再进入模型上下文；外置失败时 fail-closed 移除二进制内容；artifacts 副本 Read 与用户附件统一内容哈希 id，避免同一张图被当作两张 |
 | [v1.18.0](docs/release-notes/v1.18.0.md) | 功能版 | **`/context` 上下文占用透明化 + 工具调用报错不再毁掉回合**：报告升级为分类明细（事件按用户/助手/工具分桶，token 统一为「上下文占用」口径=系统提示词+会话消息，构成逐行占比、总和恒 100%）；工具名拼错/工具执行异常改为把错误原因回给模型自纠（不新增别名工具），MCP 工具为空不再覆盖 defaultTools；长期记忆系统提示精简省 34% token，系统提示词补「动手前查技能清单、需求未定须提问」；并入 v1.17.2 的「输出中打字」卡死/终端崩溃修复（token 估算移出渲染线程、残行 20 万上限、渲染降频、预览节流） |
 | [v1.17.1](docs/release-notes/v1.17.1.md) | 修订版 | **根治行内 TUI 卡死**：`/model` 切换模型长时间不选择再回车、对话输入后「思考中」界面永久定格、任何按键失效——根因是依赖库 `tamboui-tui` 的 `InlineTuiRunner.run()` 事件循环对 `handler.handle`/`UiRunnable.run` 零 try-catch（全屏版 `TuiRunner` 有），异常逃出循环即杀死渲染线程；现以同包同名 shadow 类给事件循环包 `try(Throwable)`（记录日志并 continue），渲染线程永不因 handler 异常死亡 |

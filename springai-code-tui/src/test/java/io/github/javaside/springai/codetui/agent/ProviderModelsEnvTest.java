@@ -3,6 +3,8 @@ package io.github.javaside.springai.codetui.agent;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 各 Provider 的 *_MODELS 环境变量接入：配置来的清单生效且首项为默认；不配置回退内置清单。 */
 class ProviderModelsEnvTest {
@@ -78,6 +80,21 @@ class ProviderModelsEnvTest {
 
     @Test
     void opencodeGo_noEnv_builtInDefault() {
-        assertEquals("deepseek-v4-pro", new OpencodeGoProvider("key", null, null).defaultModel());
+        OpencodeGoProvider provider = new OpencodeGoProvider("key", null, null);
+        assertEquals("deepseek-v4-pro", provider.defaultModel());
+        assertTrue(provider.models().stream()
+                .anyMatch(model -> model.id().equals("deepseek-v4-flash-vision-exp")),
+                "OpenCode Go 官方视觉模型应出现在内置清单");
+    }
+
+    @Test
+    void opencodeGo_onlyOfficialVisionModel_acceptsImages() {
+        OpencodeGoProvider provider = new OpencodeGoProvider("key");
+
+        assertTrue(provider.capabilities("deepseek-v4-flash-vision-exp").supportsImageInput());
+        assertFalse(provider.capabilities("deepseek-v4-flash").supportsImageInput());
+        assertFalse(provider.capabilities("gpt-5.6-luna").supportsImageInput(),
+                "Go 网关未声明支持视觉的模型不能沿用全局前缀名单");
+        assertFalse(provider.capabilities("custom-vision-model").supportsImageInput());
     }
 }

@@ -169,6 +169,21 @@ class VisionMaterializingChatModelTest {
         assertTrue(m.lastSnapshot().tokens() > 0, "兑现了图却没记 token");
     }
 
+    /** provider 专属能力判定优先于全局模型名单，防止兼容网关的同名模型串用能力。 */
+    @Test
+    void providerCapabilityCanRejectGloballyKnownVisionModel() throws Exception {
+        png("docs/bug.png");
+        Spy spy = new Spy(optionsFor("gpt-5.6-sol"));
+        Prompt p = new Prompt(
+                List.of(new UserMessage("看这个\n" + ref("bug.png", "docs/bug.png"))),
+                optionsFor("gpt-5.6-sol"));
+
+        VisionMaterializingChatModel.wrap(spy, root, ignored -> false).call(p);
+
+        assertSame(p, spy.seen.get(), "provider 已判为纯文本，却仍按全局模型名单兑现了图片");
+        assertFalse(hasMedia(spy.seen.get()));
+    }
+
     /** 纯文本模型下引用块一个字都不该动——图不能兑现给一个收不了图的模型。 */
     @Test
     void textOnlyModelDoesNotMaterializeEvenWithValidReference() throws Exception {

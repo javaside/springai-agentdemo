@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
@@ -34,6 +35,9 @@ public interface SubmitHandler {
      * @return 模型 id
      */
     default String currentModel() { return ""; }
+
+    /** 当前模型的 provider 专属输入能力；附件闸门必须用它，不能仅凭裸 modelId 判断。 */
+    default ModelCapabilities currentModelCapabilities() { return ModelCapabilities.TEXT_ONLY; }
 
     /** 当前使用模型的 provider id（模型选择器/思考强度显示需要精确区分同名模型）。
      *

@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.ui;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.agent.media.FileReferenceParser;
+import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionModels;
 import dev.tamboui.text.Text;
 import dev.tamboui.tui.event.KeyCode;
@@ -125,9 +126,16 @@ class AttachmentInjectionTest {
 
     /** 造 view：{@code model} 决定闸门放不放行（SubmitHandler 默认 currentModel() 是空串＝无视觉）。 */
     private static CodeTuiView view(ConversationState state, Path root, String model) {
+        return view(state, root, model,
+                new ModelCapabilities(VisionModels.supportsImage(model), false));
+    }
+
+    private static CodeTuiView view(ConversationState state, Path root, String model,
+                                    ModelCapabilities capabilities) {
         return new CodeTuiView(state, new SubmitHandler() {
             @Override public reactor.core.Disposable submit(String text) { return null; }
             @Override public String currentModel() { return model; }
+            @Override public ModelCapabilities currentModelCapabilities() { return capabilities; }
         }, root, NULL_SINK);
     }
 
@@ -174,6 +182,20 @@ class AttachmentInjectionTest {
         submit(v);
 
         assertEquals("", v.inputTextForTest(), "有视觉能力却被闸门拦下了：" + state.notice());
+    }
+
+    @Test
+    @DisplayName("provider 判为纯文本时，不得因同名模型命中全局视觉名单而放行")
+    void providerCapabilityOverridesGlobalVisionModelName() throws Exception {
+        png(root, "docs/bug.png");
+        ConversationState state = new ConversationState();
+        CodeTuiView v = view(state, root, "gpt-5.6-sol", ModelCapabilities.TEXT_ONLY);
+        v.setInputForTest("看下 docs/bug.png");
+
+        submit(v);
+
+        assertEquals("看下 docs/bug.png", v.inputTextForTest());
+        assertTrue(state.notice().contains("不支持图片输入"));
     }
 
     /** Ctrl+X 取消后没有附件，闸门无从触发——文本模型照样能发一条含图片路径的普通消息。 */

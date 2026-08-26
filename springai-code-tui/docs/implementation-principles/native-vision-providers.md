@@ -310,11 +310,13 @@ Prompt.messages
 - **端点支持**：OpenAI 兼容网关实际接受并转发 `image_url`；
 - **模型支持**：当前模型本身具备视觉能力。
 
-图片处理层通过 `VisionModels` 决定是否给本次 Prompt 增加 `Media`。具体能力闸门、全局开关和未知模型策略见[图片处理实现原理](image-processing.md)。
+图片处理层通过当前 provider 的 `capabilities(modelId)` 决定是否给本次 Prompt 增加 `Media`；原生 provider 的默认实现名单来自 `VisionModels`，聚合网关可以收紧为网关实测子集。具体能力闸门、全局开关和未知模型策略见[图片处理实现原理](image-processing.md)。
 
-### OpenCode Go 为什么仍是纯文本
+### OpenCode Go 只开放官方视觉模型
 
-OpenCode Go 也复用 `OpenAiChatModel`，客户端能够生成 `image_url`。但该聚合网关是否对不同上游稳定透传图片尚未验证，因此 `OpencodeGoProvider` 沿用默认 `TEXT_ONLY`，不会开放视觉兑现。
+OpenCode Go 也复用 `OpenAiChatModel`，客户端能够生成 `image_url`。OpenCode Go 官方文档目前明确列出 `deepseek-v4-flash-vision-exp`，并说明图片会按尺寸折算为输入 token，因此 `OpencodeGoProvider` 只为这个模型开放视觉兑现。
+
+其他 OpenCode Go 内置模型及通过 `OPENCODE_GO_MODELS` 配置的自定义模型仍保持 `TEXT_ONLY`。这里不直接复用完整的全局视觉前缀名单，因为“模型本身支持图片”不等于“Go 网关已验证并稳定透传该模型的图片请求”。
 
 ## 7. 当前验证范围与已知边界
 
@@ -325,7 +327,7 @@ OpenCode Go 也复用 `OpenAiChatModel`，客户端能够生成 `image_url`。�
 - 本项目 Qwen、智谱复用 `OpenAiChatModel`，不需要额外图片请求体改写；
 - OpenAI 已有真实模型端到端视觉探针；
 - Anthropic、Qwen 视觉模型和智谱视觉模型尚未在本项目中逐家完成真机视觉验证；
-- OpenCode Go 未验证图片透传，因此保持纯文本能力。
+- OpenCode Go 官方声明 `deepseek-v4-flash-vision-exp` 支持图片，本项目据此开放该模型；当前改动未使用真实 Go key 执行端到端探针。
 
 复用 `OpenAiChatModel` 只能证明请求能够按 OpenAI 图片格式组装，不能替远端兼容端点和具体模型作能力保证。
 
@@ -337,7 +339,7 @@ OpenCode Go 也复用 `OpenAiChatModel`，客户端能够生成 `image_url`。�
 | `agent.AnthropicProvider` | 使用 Spring AI `AnthropicChatModel` 发送 Anthropic 请求 |
 | `agent.QwenProvider` | 使用 `OpenAiChatModel` 访问百炼兼容端点 |
 | `agent.ZhipuProvider` | 使用 `OpenAiChatModel` 访问智谱兼容端点 |
-| `agent.OpencodeGoProvider` | 使用 OpenAI 兼容通路，但当前不开放视觉能力 |
+| `agent.OpencodeGoProvider` | 使用 OpenAI 兼容通路，仅为官方声明的 `deepseek-v4-flash-vision-exp` 开放视觉能力 |
 | `org.springframework.ai.openai.OpenAiChatModel.createRequest` | 遍历 Spring AI 消息并生成 OpenAI SDK 请求对象 |
 | `org.springframework.ai.anthropic.AnthropicChatModel.createRequest` | 遍历 Spring AI 消息并生成 Anthropic SDK 请求对象 |
 

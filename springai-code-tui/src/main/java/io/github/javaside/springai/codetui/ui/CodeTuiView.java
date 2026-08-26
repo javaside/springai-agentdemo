@@ -26,7 +26,6 @@ import io.github.javaside.springai.codetui.agent.media.MagicSniffer;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifact;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.PathContainment;
-import io.github.javaside.springai.codetui.agent.media.VisionModels;
 import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
@@ -1550,10 +1549,10 @@ public final class CodeTuiView extends InlineApp {
         // 位置也必须在全部斜杠命令分支<b>之后</b>：否则 "/help docs/bug.png" 这类文本也会被识别、
         // 甚至把图注进一条根本不会发给模型的命令里。
         List<DetectedImage> attached = attachmentsCancelled ? List.of() : attachments().images();
-        if (!attached.isEmpty() && !VisionModels.supportsImage(onSubmit.currentModel())) {
+        if (!attached.isEmpty() && !onSubmit.currentModelCapabilities().supportsImageInput()) {
             // 拦住不发，且<b>绝不 clearInput()</b>：切完模型直接回车重发即可。不保留的话用户得把
             // 那段话连同路径重贴一遍，这功能不会有人用。
-            // supportsImage 内部已含全局开关 CODETUI_VISION，这里不再判一次 enabled()。
+            // 能力必须由当前 provider 给出，不能只按裸 modelId 判定（聚合网关存在同名模型）。
             state.setNotice("当前模型 " + onSubmit.currentModel()
                     + " 不支持图片输入，用 /model 换一个（输入已保留）");
             return;
@@ -1667,6 +1666,10 @@ public final class CodeTuiView extends InlineApp {
             if (k.isChar((char) ('1' + i))) { pickIndex = i; return EventResult.HANDLED; }
         }
         if (k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n')) {
+            if (busy() || state.queuedCount() > 0 || !onSubmit.pendingInterjectionTexts().isEmpty()) {
+                state.setNotice("仍有消息待处理，处理完成后再切换模型");
+                return EventResult.HANDLED;
+            }
             ProviderModel chosen = models.get(pickIndex);
             onSubmit.selectModel(chosen.providerId(), chosen.id());
             pickingModel = false;
@@ -3101,7 +3104,12 @@ public final class CodeTuiView extends InlineApp {
         if (pickingPerms) return text(permsStatusText()).style(THINK);
         if (pickingTasks) return text(tasksStatusText()).style(THINK);
         if (configuringThinking) return text("↑↓/kj 选择 · ←→/hl 调整 · Enter 保存 · Esc 放弃").style(THINK);
-        if (pickingModel) return text("↑↓/kj 选择 · 1-9 快选 · Enter 确认 · → 思考设置 · Esc 取消").style(THINK);
+        if (pickingModel) {
+            String notice = state.notice();
+            return text(notice.isEmpty()
+                    ? "↑↓/kj 选择 · 1-9 快选 · Enter 确认 · → 思考设置 · Esc 取消"
+                    : notice + " · Esc 取消").style(THINK);
+        }
         if (pickingSkill) return text("↑↓/kj 选择 · 1-9 快选 · Enter 挂载 · Esc 取消").style(THINK);
         if (slashMenuActive()) return text("↑↓ 选择 · Tab 补全 · Enter 运行 · Esc 关闭").style(THINK);
         if (state.isCompacting()) return richText(statusBar.compacting(state.compactElapsedNanos(), animTick));   // 压缩指示器优先于普通思考/工具状态

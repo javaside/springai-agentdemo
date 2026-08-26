@@ -592,8 +592,9 @@ public final class AgentTools {
             }
             // 视觉兑现的唯一接线点：包在 provider 的 ChatModel 外，位于整条 advisor 链<b>下游</b>，
             // 故兑现结果绝不会回流进会话存储（见 VisionMaterializingChatModel 类注释）。
-            VisionMaterializingChatModel visionModel =
-                    VisionMaterializingChatModel.wrap(provider.chatModel(), root);
+            VisionMaterializingChatModel visionModel = VisionMaterializingChatModel.wrap(
+                    provider.chatModel(), root,
+                    modelId -> provider.capabilities(modelId).supportsImageInput());
             visionModels.put(provider.id(), visionModel);
             // 插话注入包在<b>最外层</b>：位置必须在整条 advisor 链下游，才拿得到已配平的完整消息表
             // （工具结果落库与「构建下一次 prompt」是同一步，会话存储层看不到这个位置）。

@@ -104,4 +104,34 @@ class CodeTuiViewModelMemoryTest {
         assertFalse(Files.exists(ModelPreference.fileFor(root)),
                 "没生效的选择不该留下记录，否则下次启动会白白触发一次「用不了，已回退」");
     }
+
+    @Test
+    @DisplayName("回合进行中：不得确认切换模型")
+    void activeTurnBlocksModelSelection(@TempDir Path root) {
+        ConversationState state = new ConversationState();
+        state.onTurnStarted(1L);
+        Handler handler = new Handler();
+        CodeTuiView v = new CodeTuiView(state, handler, root);
+
+        pickSecondModel(v);
+
+        assertEquals("alpha", handler.current, "在飞回合必须继续绑定发起时的模型");
+        assertTrue(ViewScreen.of(v).contains("处理完成后再切换"), "拒绝原因必须在选择器中对用户可见");
+        assertFalse(Files.exists(ModelPreference.fileFor(root)), "被拒绝的切换不得落盘");
+    }
+
+    @Test
+    @DisplayName("存在排队消息：不得确认切换模型")
+    void queuedMessageBlocksModelSelection(@TempDir Path root) {
+        ConversationState state = new ConversationState();
+        state.enqueue("看图继续", null);
+        Handler handler = new Handler();
+        CodeTuiView v = new CodeTuiView(state, handler, root);
+
+        pickSecondModel(v);
+
+        assertEquals("alpha", handler.current, "排队消息应沿用入队时的模型能力");
+        assertTrue(state.notice().contains("处理完成后再切换"));
+        assertFalse(Files.exists(ModelPreference.fileFor(root)), "被拒绝的切换不得落盘");
+    }
 }

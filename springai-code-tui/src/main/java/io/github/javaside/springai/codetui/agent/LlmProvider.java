@@ -68,7 +68,8 @@ public interface LlmProvider {
      */
     String defaultModel();
 
-    /** 该模型的能力（视觉等）。判定统一委托 {@code VisionModels}，未知模型一律判不支持。
+    /** 该模型的 provider 专属能力（视觉等）；安全默认值为纯文本。
+     * 支持图片的 provider 必须显式覆写，未知模型应判为不支持。
      *
      * @param modelId 目标模型 id
      * @return 该模型的输入能力

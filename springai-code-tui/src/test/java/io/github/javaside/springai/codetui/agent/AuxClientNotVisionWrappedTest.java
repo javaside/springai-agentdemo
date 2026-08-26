@@ -159,5 +159,8 @@ class AuxClientNotVisionWrappedTest {
             return List.of(new ModelOption(VISION_MODEL, VISION_MODEL, "test"));
         }
         @Override public String defaultModel() { return VISION_MODEL; }
+        @Override public io.github.javaside.springai.codetui.agent.media.ModelCapabilities capabilities(String modelId) {
+            return new io.github.javaside.springai.codetui.agent.media.ModelCapabilities(true, false);
+        }
     }
 }

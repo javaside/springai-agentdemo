@@ -709,6 +709,11 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     @Override
+    public ModelCapabilities currentModelCapabilities() {
+        return capabilitiesSnapshot();
+    }
+
+    @Override
     public String currentProviderId() {
         return registry != null ? registry.active().id() : "deepseek";
     }
