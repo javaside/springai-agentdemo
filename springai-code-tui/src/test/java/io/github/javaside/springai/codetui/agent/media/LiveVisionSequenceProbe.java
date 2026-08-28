@@ -40,7 +40,7 @@ class LiveVisionSequenceProbe {
     @Test
     @EnabledIfEnvironmentVariable(named = "OPENAI_API_KEY", matches = ".+")
     void openAiAcceptsUserMessageAfterToolResponse() {
-        var provider = new io.github.javaside.springai.codetui.agent.OpenAiProvider(
+        var provider = new io.github.javaside.springai.codetui.agent.llm.OpenAiProvider(
                 System.getenv("OPENAI_API_KEY"), System.getenv("OPENAI_BASE_URL"), null);
         ChatResponse r = provider.chatModel().call(sequence(provider.defaultModel()));
         String text = r.getResult().getOutput().getText();

@@ -1,8 +1,8 @@
 package io.github.javaside.springai.codetui.agent.subagent;
 
 import io.github.javaside.springai.codetui.agent.AgentListener;
-import io.github.javaside.springai.codetui.agent.ProviderRegistry;
-import io.github.javaside.springai.codetui.agent.RetryingChatModel;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.RetryingChatModel;
 import io.github.javaside.springai.codetui.agent.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;

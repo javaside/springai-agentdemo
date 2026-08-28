@@ -1,7 +1,7 @@
 package io.github.javaside.springai.codetui.agent.subagent;
 
-import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
-import io.github.javaside.springai.codetui.agent.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.StubListener;
 import org.junit.jupiter.api.Test;
 

@@ -2,8 +2,8 @@ package io.github.javaside.springai.codetui;
 
 import io.github.javaside.springai.codetui.agent.AgentTools;
 import io.github.javaside.springai.codetui.agent.CodingAgent;
-import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
-import io.github.javaside.springai.codetui.agent.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;

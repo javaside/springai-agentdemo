@@ -1,4 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.OpenAiProvider;
 
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore;

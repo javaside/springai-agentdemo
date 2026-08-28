@@ -2,8 +2,8 @@ package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
-import io.github.javaside.springai.codetui.agent.ProviderModel;
-import io.github.javaside.springai.codetui.agent.ModelPreference;
+import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
+import io.github.javaside.springai.codetui.agent.llm.ModelPreference;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

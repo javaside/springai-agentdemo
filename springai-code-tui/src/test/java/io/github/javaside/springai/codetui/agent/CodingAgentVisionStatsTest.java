@@ -1,4 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.ModelOption;
+import io.github.javaside.springai.codetui.agent.llm.LlmProvider;
 
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionMaterializingChatModel;

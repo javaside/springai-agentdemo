@@ -2,7 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
-import io.github.javaside.springai.codetui.agent.ProviderModel;
+import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;

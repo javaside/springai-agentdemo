@@ -2,8 +2,8 @@ package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.AskRequest;
 import io.github.javaside.springai.codetui.agent.ModalRequest;
-import io.github.javaside.springai.codetui.agent.ProviderModel;
-import io.github.javaside.springai.codetui.agent.ModelPreference;
+import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
+import io.github.javaside.springai.codetui.agent.llm.ModelPreference;
 import io.github.javaside.springai.codetui.agent.OptionSpec;
 import io.github.javaside.springai.codetui.agent.PermissionOutcome;
 import io.github.javaside.springai.codetui.agent.PermissionRequest;
