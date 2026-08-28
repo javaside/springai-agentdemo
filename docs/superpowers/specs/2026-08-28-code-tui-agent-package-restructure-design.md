@@ -160,7 +160,7 @@
 ## 测试迁移
 
 121 个顶层测试文件按被测主类镜像移动，落点分布：
-root 32、llm 29、tools 12、subagent 11、mcp 9、seam 9、compaction 6、session 5、interjection 3、prompt 3、skill 2。
+root 31、llm 30、tools 12、subagent 11、mcp 9、seam 9、compaction 6、session 5、interjection 3、prompt 3、skill 2。
 （4 个既有子包下的 54 个测试文件原地不动。）
 
 多数测试按类名前缀即可判定归属。以下 28 个名字不直接对应某个主类，按引用密度判定，
@@ -179,11 +179,12 @@ root 32、llm 29、tools 12、subagent 11、mcp 9、seam 9、compaction 6、sess
 - `QwenChunkMergerHypothesisTest`、`ToolNameProbeTest`、`PermissionTestSupport` 不引用任何被移动的主类，
   按语义分别归 llm、root、tools
 
-6 个共享测试辅助类按被引用面归包，跨包引用的升 public：
-`StubListener`（seam，被 22 个测试引用，须 public）、
-`AgentListenerAdapter`（seam，仅被 seam 内两个测试引用，保持包私有）、
-`RuntimeToolSet`（root，被 `permission/ToolRegistryCompletenessTest` 引用，须 public）、
-`McpWiringTestSupport`（llm）、`PermissionTestSupport`（tools，仅被 tools 内测试引用，保持包私有）、
+6 个共享测试辅助类按被引用面归包：
+`StubListener`（seam，被 22 个测试引用，**须升 public**）、
+`McpWiringTestSupport`（llm，被 root 与 subagent 的测试引用，**须升 public**）、
+`AgentListenerAdapter`（seam，是个包私有 interface，仅被 seam 内两个测试引用，保持包私有）、
+`PermissionTestSupport`（tools，仅被 tools 内测试引用，保持包私有）、
+`RuntimeToolSet`（root，已是 public，被 `permission/ToolRegistryCompletenessTest` 引用）、
 `CodingAgentBackgroundTestSupport`（root，已是 public，被 `ui/` 测试引用）。
 
 121 个测试文件逐个的落点清单，随实施计划给出（每步只列该步涉及的那几个）。
