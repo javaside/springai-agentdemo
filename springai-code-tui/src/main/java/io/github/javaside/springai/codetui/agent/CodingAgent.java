@@ -35,6 +35,11 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.prompt.PermissionModePrompt;
 import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+import io.github.javaside.springai.codetui.agent.session.ContextStats;
+import io.github.javaside.springai.codetui.agent.session.SessionEvents;
+import io.github.javaside.springai.codetui.agent.session.SessionIds;
+import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
+import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 

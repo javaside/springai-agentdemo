@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.media.VisionMaterializingChatModel;
 import io.github.javaside.springai.codetui.agent.media.VisionSnapshot;
+import io.github.javaside.springai.codetui.agent.session.ContextStats;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.chat.messages.AssistantMessage;

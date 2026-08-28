@@ -5,6 +5,7 @@ import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+import io.github.javaside.springai.codetui.agent.session.ContextStats;
 import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 import reactor.core.Disposable;

@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.session;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,7 +53,8 @@ public final class FileSessionRepository implements SessionRepository {
     private final Path baseDir;
     private final Map<String, SessionData> store = new ConcurrentHashMap<>();
 
-    FileSessionRepository(Path baseDir) {
+    /** <b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public FileSessionRepository(Path baseDir) {
         this.baseDir = baseDir;
     }
 

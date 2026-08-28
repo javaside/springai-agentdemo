@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
 import org.springframework.ai.session.compaction.CompactionRequest;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.ai.tokenizer.TokenCountEstimator;

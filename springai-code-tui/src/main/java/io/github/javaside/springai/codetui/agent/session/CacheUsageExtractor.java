@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.session;
 
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.deepseek.api.DeepSeekApi;

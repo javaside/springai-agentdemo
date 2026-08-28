@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;

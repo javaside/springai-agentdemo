@@ -1,6 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
+import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingCapabilities;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 import org.springframework.ai.chat.model.ChatModel;

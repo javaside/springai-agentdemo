@@ -22,6 +22,7 @@ import io.github.javaside.springai.codetui.agent.prompt.MemoryPrompt;
 import io.github.javaside.springai.codetui.agent.prompt.ProjectInstructions;
 import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
 import org.springaicommunity.agent.tools.AutoMemoryTools;
 import org.springaicommunity.agent.tools.FileSystemTools;

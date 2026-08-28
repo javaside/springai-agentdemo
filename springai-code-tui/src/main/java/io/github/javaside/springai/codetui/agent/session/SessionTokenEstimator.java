@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.session;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -10,8 +10,12 @@ import org.springframework.ai.tokenizer.TokenCountEstimator;
 import java.util.List;
 import java.util.function.ToIntFunction;
 
-/** Token accounting shared by context display, compaction triggers, and preflight budgeting. */
-final class SessionTokenEstimator {
+/**
+ * Token accounting shared by context display, compaction triggers, and preflight budgeting.
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+ */
+public final class SessionTokenEstimator {
 
     private SessionTokenEstimator() {}
 
@@ -19,7 +23,7 @@ final class SessionTokenEstimator {
         return estimateEvents(events, estimator::estimate);
     }
 
-    static long estimateEvents(List<SessionEvent> events, ToIntFunction<String> estimator) {
+    public static long estimateEvents(List<SessionEvent> events, ToIntFunction<String> estimator) {
         long total = 0L;
         for (SessionEvent event : events) {
             total += estimateMessage(event.getMessage(), estimator);
@@ -31,8 +35,12 @@ final class SessionTokenEstimator {
         return estimateMessages(messages, estimator::estimate);
     }
 
-    /** {@link #estimateMessages(List, TokenCountEstimator)} 的函数式重载（测试用 String::length 等）。 */
-    static long estimateMessages(List<Message> messages, ToIntFunction<String> estimator) {
+    /**
+     * {@link #estimateMessages(List, TokenCountEstimator)} 的函数式重载（测试用 String::length 等）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static long estimateMessages(List<Message> messages, ToIntFunction<String> estimator) {
         long total = 0L;
         for (Message message : messages) total += estimateMessage(message, estimator);
         return total;
@@ -41,13 +49,19 @@ final class SessionTokenEstimator {
     /**
      * 按消息类型分桶估算会话消息 token（供 {@code /context} 分类展示）。
      * 与 {@link #estimateMessages} 同口径（含 tool 结果与 tool-call 参数），四桶之和 == 总数。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static Buckets estimateMessagesByType(List<Message> messages, TokenCountEstimator estimator) {
+    public static Buckets estimateMessagesByType(List<Message> messages, TokenCountEstimator estimator) {
         return estimateMessagesByType(messages, estimator::estimate);
     }
 
-    /** {@link #estimateMessagesByType(List, TokenCountEstimator)} 的函数式重载（测试用 String::length 等）。 */
-    static Buckets estimateMessagesByType(List<Message> messages, ToIntFunction<String> estimator) {
+    /**
+     * {@link #estimateMessagesByType(List, TokenCountEstimator)} 的函数式重载（测试用 String::length 等）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static Buckets estimateMessagesByType(List<Message> messages, ToIntFunction<String> estimator) {
         long system = 0L, user = 0L, assistant = 0L, tool = 0L;
         for (Message message : messages) {
             long n = estimateMessage(message, estimator);
@@ -65,9 +79,15 @@ final class SessionTokenEstimator {
         return new Buckets(system, user, assistant, tool);
     }
 
-    /** 会话消息 token 的按类型分桶（纯数据，供 ContextStats 拷贝）。 */
-    record Buckets(long systemTokens, long userTokens, long assistantTokens, long toolTokens) {
-        long total() {
+    /**
+     * 会话消息 token 的按类型分桶（纯数据，供 ContextStats 拷贝）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public record Buckets(long systemTokens, long userTokens, long assistantTokens, long toolTokens) {
+
+        /** <b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+        public long total() {
             return systemTokens + userTokens + assistantTokens + toolTokens;
         }
     }

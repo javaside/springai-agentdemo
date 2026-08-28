@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.session;
 
 import java.time.Instant;
 import java.time.ZoneOffset;

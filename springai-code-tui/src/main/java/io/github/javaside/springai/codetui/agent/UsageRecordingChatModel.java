@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;

@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.session;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -14,8 +14,10 @@ import java.util.Set;
 /**
  * 会话事件的纯逻辑工具（无状态）。供 {@link CodingAgent}（中断裁剪）与 {@link FileSessionRepository}（加载裁剪）共用，
  * 避免仓库反向依赖 CodingAgent。
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
  */
-final class SessionEvents {
+public final class SessionEvents {
 
     private SessionEvents() {
     }
@@ -25,8 +27,10 @@ final class SessionEvents {
      * （pending 为空）——该处即可安全截断。按 id <b>集合</b>配平：一条 {@link ToolResponseMessage} 可含多个
      * 结果，一次多 tool_call 也可由多条结果覆盖。正常完成的回合以「无 tool_calls 的助手终答」结尾，pending 恒空，
      * 返回等于 {@code events.size()}（裁剪成 no-op）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static int cleanPrefixLength(List<SessionEvent> events) {
+    public static int cleanPrefixLength(List<SessionEvent> events) {
         Set<String> pending = new HashSet<>();
         int cleanLen = 0;
         for (int i = 0; i < events.size(); i++) {
@@ -58,8 +62,10 @@ final class SessionEvents {
      *       排在删孤儿<b>之后</b>，因删掉夹在两 user 间的孤儿 tool 会新暴露出连续 user；</li>
      *   <li>{@link #trimToCleanPrefix}：{@link #cleanPrefixLength} 裁尾部悬空 tool_calls（折叠只动纯文本、不碰 tool 配对，故不影响此步）。</li>
      * </ol>
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static List<SessionEvent> sanitize(List<SessionEvent> events) {
+    public static List<SessionEvent> sanitize(List<SessionEvent> events) {
         List<SessionEvent> a = removeOrphanToolResults(events);
         List<SessionEvent> b = collapseConsecutiveSameRole(a);
         return trimToCleanPrefix(b);
