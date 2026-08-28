@@ -23,6 +23,11 @@ public final class SessionTokenEstimator {
         return estimateEvents(events, estimator::estimate);
     }
 
+    /**
+     * {@link #estimateEvents(List, TokenCountEstimator)} 的函数式重载（测试用 String::length 等）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
     public static long estimateEvents(List<SessionEvent> events, ToIntFunction<String> estimator) {
         long total = 0L;
         for (SessionEvent event : events) {
