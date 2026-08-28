@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.interjection.Interjections;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

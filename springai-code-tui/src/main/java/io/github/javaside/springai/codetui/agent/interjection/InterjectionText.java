@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.interjection;
 
 /**
  * 插话落库文本的格式：{@code [interjection]} 包裹 + 给模型的行为指引 + {@code ---} + 用户原话。

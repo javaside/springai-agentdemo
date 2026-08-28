@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.interjection;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,8 +38,10 @@ import java.util.Optional;
  * RetryingChatModel（只有子 agent 用），故实际不相邻——但这条约束随时可能因接线变动而变得相关。
  *
  * <p><b>不改变回合语义</b>：插话只是多一条 user 消息，不打断工具循环、不取消回合。
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
  */
-final class InterjectingChatModel implements ChatModel {
+public final class InterjectingChatModel implements ChatModel {
 
     private static final Logger log = LoggerFactory.getLogger(InterjectingChatModel.class);
 
@@ -51,8 +53,10 @@ final class InterjectingChatModel implements ChatModel {
      *
      * <p>格式本身连同<b>拆包裹</b>一起住在 {@link InterjectionText}——包裹与拆包裹错开时不会报错，
      * 只会在 {@code -c} 回放里把给模型的指引显示成用户原话（已经发生过一次）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static String wrapText(String raw) {
+    public static String wrapText(String raw) {
         return InterjectionText.wrap(raw);
     }
 
@@ -64,7 +68,10 @@ final class InterjectingChatModel implements ChatModel {
         this.interjections = interjections;
     }
 
-    static ChatModel wrap(ChatModel delegate, Interjections interjections) {
+    /**
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static ChatModel wrap(ChatModel delegate, Interjections interjections) {
         return interjections == null ? delegate : new InterjectingChatModel(delegate, interjections);
     }
 

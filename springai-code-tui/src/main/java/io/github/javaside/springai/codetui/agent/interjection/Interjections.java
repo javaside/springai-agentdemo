@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.interjection;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -84,8 +84,10 @@ public final class Interjections {
      * 而那边的方法全是 synchronized——在本对象的锁里回调进去就形成了两把锁的交叉持有，
      * 而 UI 线程渲染时正好按相反顺序摸这两把锁（先 {@code queuedSnapshot} 后
      * {@link #pendingSnapshot}）。故调用方须在 {@code drainForInjection} 返回<b>之后</b>再调本方法。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    void fireDelivered(String rawText) {
+    public void fireDelivered(String rawText) {
         java.util.function.Consumer<String> l = onDelivered;
         if (l != null) {
             l.accept(rawText);
@@ -137,9 +139,11 @@ public final class Interjections {
      * <p>合并而不是逐条追加：多条连续同角色消息在部分 provider 上会被折叠或报错，
      * 这个项目为此已经吃过一次亏（会话记忆里有专门的「折叠连续同角色」处理）。
      *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     *
      * @param anchor 当前 prompt 末尾 tool 消息的 id；无则传 null
      */
-    synchronized Optional<String> drainForInjection(String anchor) {
+    public synchronized Optional<String> drainForInjection(String anchor) {
         if (pending.isEmpty()) {
             return Optional.empty();
         }
@@ -151,8 +155,12 @@ public final class Interjections {
         return Optional.of(merged);
     }
 
-    /** 回合末取走「已送达但未入历史」的文本与锚；取走后清空。无则返回 empty。 */
-    synchronized Optional<Delivered> takeForHistory() {
+    /**
+     * 回合末取走「已送达但未入历史」的文本与锚；取走后清空。无则返回 empty。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public synchronized Optional<Delivered> takeForHistory() {
         if (delivered == null) {
             return Optional.empty();
         }
@@ -162,6 +170,10 @@ public final class Interjections {
         return Optional.of(d);
     }
 
-    /** 待补进历史的一条插话：文本 + 它当时跟在哪条 tool 消息后面（anchor 可为 null）。 */
-    record Delivered(String text, String anchorToolCallId) { }
+    /**
+     * 待补进历史的一条插话：文本 + 它当时跟在哪条 tool 消息后面（anchor 可为 null）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public record Delivered(String text, String anchorToolCallId) { }
 }

@@ -4,6 +4,8 @@ import io.github.javaside.springai.codetui.agent.background.BackgroundTaskListTo
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskTool;
 import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
+import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
+import io.github.javaside.springai.codetui.agent.interjection.Interjections;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;

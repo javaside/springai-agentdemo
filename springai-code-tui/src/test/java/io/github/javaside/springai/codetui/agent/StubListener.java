@@ -2,8 +2,12 @@ package io.github.javaside.springai.codetui.agent;
 
 import java.util.List;
 
-/** AgentListener 的空实现基类：测试只覆写关心的方法。 */
-class StubListener implements AgentListener {
+/**
+ * AgentListener 的空实现基类：测试只覆写关心的方法。
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+ */
+public class StubListener implements AgentListener {
     @Override public void onTurnStarted(long turnId) {}
     @Override public void onUserMessage(long turnId, String text) {}
     @Override public void onAssistantToken(long turnId, String token) {}
