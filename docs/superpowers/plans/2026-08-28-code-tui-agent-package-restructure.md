@@ -826,6 +826,22 @@ done
 
 预期：`.` 2、llm 26、mcp 7、subagent 5、skill 3、session 7、compaction 7、seam 17、tools 8、prompt 3、interjection 3，以及未动的 media 28、permission 15、background 7、thinking 6。
 
+- [ ] **Step 6.5: 提权回退复查（只记录，不改动）**
+
+Task 1–9 的执行中出现过 brief 未预料的提权。逐项核对它们当前的跨包调用方，把「仅由留在 root 的测试驱动、未来可回退」的记入报告（本任务不改代码，为后续清理窗口留清单）：
+
+- `Interjections.drainForInjection` / `fireDelivered`：Task 4 审查确认仅 `CodingAgentInterjectionFacadeTest`（root）驱动，若把该测试搬进 `agent.interjection` 即可回退提权
+- `McpRegistry.initForTest(3参)` / `addConnectedForTest` / `decorate`：由留在 root 的 `PermissionWiringTest`/`AgentToolsMcpWiringTest`/`CodingAgentMcpInjectionTest`/`SubagentRunnerMcpToolsTest` 驱动
+- `AgentTools.testEngine`：撤销了 `4cb2c50` 的封装决定，且造成 `agent ↔ agent.mcp` 包循环——重构收尾后建议挪到中立位置（permission 侧测试支撑类）以断循环并收回可见性
+- 本任务执行中新发现的其他「仅测试驱动」提权，一并记入
+
+```bash
+grep -rn "内部类型" springai-code-tui/src/main/java --include=*.java | grep -v "^Binary"
+```
+
+预期输出即全部提权处的标注行，逐行回查其调用方。
+
+
 - [ ] **Step 7: 全量核对 diff 无方法体改动**
 
 对整个重构区间跑一次（`<BASE>` 为 Task 1 之前的提交）：
