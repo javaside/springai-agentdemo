@@ -29,6 +29,7 @@ import io.github.javaside.springai.codetui.agent.media.VisionSnapshot;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
+import io.github.javaside.springai.codetui.agent.prompt.PermissionModePrompt;
 import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
 import tools.jackson.core.JacksonException;

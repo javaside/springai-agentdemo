@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.prompt;
 
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import org.junit.jupiter.api.DisplayName;

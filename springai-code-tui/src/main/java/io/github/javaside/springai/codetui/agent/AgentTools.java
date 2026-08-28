@@ -15,6 +15,8 @@ import io.github.javaside.springai.codetui.agent.media.VisionMaterializingChatMo
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.prompt.MemoryPrompt;
+import io.github.javaside.springai.codetui.agent.prompt.ProjectInstructions;
 import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
