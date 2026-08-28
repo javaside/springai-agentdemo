@@ -3,6 +3,10 @@ package io.github.javaside.springai.codetui.agent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
+import io.github.javaside.springai.codetui.agent.skill.SkillCatalog;
+import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

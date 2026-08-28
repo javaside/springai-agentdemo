@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.skill;
 
 /**
  * SkillInfo —— 一个技能的 UI 友好元数据（name + description + 来源层标签）。

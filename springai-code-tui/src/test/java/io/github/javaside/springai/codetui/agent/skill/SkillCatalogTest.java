@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.skill;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

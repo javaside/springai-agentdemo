@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.skill;
 
 import org.springaicommunity.agent.tools.SkillsTool;
 import org.springaicommunity.agent.utils.Skills;

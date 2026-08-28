@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.skill;
 
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
@@ -46,8 +46,12 @@ public final class ReloadableSkillTool implements ToolCallback {
         this(() -> SkillCatalog.load(projectRoot));
     }
 
-    /** 测试构造：显式两层临时目录，隔离真实 {@code ~}。 */
-    static ReloadableSkillTool forTest(Path projectRoot, Path userDir) {
+    /**
+     * 测试构造：显式两层临时目录，隔离真实 {@code ~}。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static ReloadableSkillTool forTest(Path projectRoot, Path userDir) {
         return new ReloadableSkillTool(() -> SkillCatalog.load(projectRoot, userDir));
     }
 
