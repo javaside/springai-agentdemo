@@ -1,5 +1,6 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.subagent;
 
+import io.github.javaside.springai.codetui.agent.McpWiringTestSupport;
 import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.mcp.McpServerConfig;

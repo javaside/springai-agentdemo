@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.subagent;
 
 /**
  * 子 agent 执行失败。message 是已摊平的 cause 链诊断文本（见 {@code SubagentRunner.describe}）——

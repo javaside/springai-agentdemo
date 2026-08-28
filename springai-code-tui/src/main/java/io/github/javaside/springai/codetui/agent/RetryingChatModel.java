@@ -38,8 +38,10 @@ import java.util.function.LongConsumer;
  * <p><b>退避</b>：指数 500ms×2^n 封顶 4s，总尝试 5 次。瞬态判据见 {@link #shouldRetry}（2026-08-17
  * 生产日志实测扩容）。休眠可注入（{@link RetryingChatModel#RetryingChatModel(ChatModel, LongConsumer)}），
  * 测试不必真实等待。
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
  */
-final class RetryingChatModel implements ChatModel {
+public final class RetryingChatModel implements ChatModel {
 
     private static final Logger log = LoggerFactory.getLogger(RetryingChatModel.class);
 
@@ -71,7 +73,12 @@ final class RetryingChatModel implements ChatModel {
         this.sleeper = sleeper;
     }
 
-    static ChatModel wrap(ChatModel delegate) {
+    /**
+     * 包裹一个 ChatModel 为重试装饰器（生产装配入口）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static ChatModel wrap(ChatModel delegate) {
         return new RetryingChatModel(delegate);
     }
 

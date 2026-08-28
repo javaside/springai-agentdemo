@@ -8,8 +8,10 @@ import org.springframework.ai.tool.definition.ToolDefinition;
  *  另用 ThreadLocal 把「正在执行的工具」的 turnId 暴露给同线程同步触发的 TodoWriteTool.todoEventHandler，
  *  使 Todo 事件与其它工具事件同源（不读实时 activeTurnId，取消/并发下不串轮）。 */
 public final class ToolEventCallback implements ToolCallback {
-    static final String TURN_ID_KEY = "turnId";
-    static final String TASK_ID_KEY = "taskId";
+    /** <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public static final String TURN_ID_KEY = "turnId";
+    /** <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public static final String TASK_ID_KEY = "taskId";
 
     /**
      * 后台任务标记：值为 taskId，仅后台派发时存在。
@@ -17,8 +19,10 @@ public final class ToolEventCallback implements ToolCallback {
      * <p><b>与 {@link #TASK_ID_KEY} 分开而不是复用</b>：taskId 对前台子 agent 也有值，
      * 用它判「是不是后台」会把前台子 agent 一并误判成后台，于是前台子 agent 的审批面板不再弹出——
      * 一个只在「派了子 agent 且需要审批」时才出现的静默降级。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static final String BACKGROUND_TASK_ID_KEY = "backgroundTaskId";
+    public static final String BACKGROUND_TASK_ID_KEY = "backgroundTaskId";
 
     /** TodoWriteTool 的 todoEventHandler 只收 Todos、拿不到 turnId；用 ThreadLocal 把当前执行回合的
      *  turnId 传给同线程同步触发的 handler。 */

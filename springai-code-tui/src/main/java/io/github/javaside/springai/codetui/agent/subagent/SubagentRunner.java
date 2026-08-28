@@ -1,5 +1,9 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.subagent;
 
+import io.github.javaside.springai.codetui.agent.AgentListener;
+import io.github.javaside.springai.codetui.agent.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.RetryingChatModel;
+import io.github.javaside.springai.codetui.agent.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
@@ -489,8 +493,10 @@ public final class SubagentRunner {
      * {@code .system(String)} 不带任何 param，故 Spring 的模板引擎不会去解析它——
      * 正文里就算有花括号也炸不了（项目在 AGENTS.md 与长期记忆两处踩过的是<b>带 param</b> 的那条路）。
      * 即便如此，{@link PermissionModePrompt} 仍有单测钉死「正文无花括号」，双保险。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    String effectiveSystemPrompt(SubagentSpec spec) {
+    public String effectiveSystemPrompt(SubagentSpec spec) {
         StringBuilder sb = new StringBuilder(spec.systemPrompt());
         if (!projectInstructions.isEmpty()) {
             sb.append("\n\n").append(projectInstructions);
@@ -528,8 +534,11 @@ public final class SubagentRunner {
         return sb.toString();
     }
 
-    /** 测试钩子：子 agent 可见工具（未经 spec 过滤）的注册名——校验主 agent 独有工具（如记忆工具）不泄漏给子 agent。 */
-    List<String> toolNamesForTest() {
+    /** 测试钩子：子 agent 可见工具（未经 spec 过滤）的注册名——校验主 agent 独有工具（如记忆工具）不泄漏给子 agent。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public List<String> toolNamesForTest() {
         return tools.stream().map(t -> t.getToolDefinition().name()).toList();
     }
 
@@ -545,8 +554,11 @@ public final class SubagentRunner {
         return registry.requestSelection(modelId);
     }
 
-    /** 子 agent 有效工具 = 内置装饰工具 + MCP 实时工具（registry 快照），再按 spec allow/deny 过滤（注册名精确匹配）。 */
-    List<ToolCallback> effectiveTools(SubagentSpec spec) {
+    /** 子 agent 有效工具 = 内置装饰工具 + MCP 实时工具（registry 快照），再按 spec allow/deny 过滤（注册名精确匹配）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public List<ToolCallback> effectiveTools(SubagentSpec spec) {
         List<ToolCallback> all = new ArrayList<>(tools);
         if (mcpRegistry != null) {
             all.addAll(mcpRegistry.activeTools());
