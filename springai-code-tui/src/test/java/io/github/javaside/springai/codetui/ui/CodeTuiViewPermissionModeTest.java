@@ -154,11 +154,11 @@ class CodeTuiViewPermissionModeTest {
     void mcpPickerTabGuard(@TempDir Path root) {
         ConversationState state = new ConversationState();
         ModeStub stub = new ModeStub() {
-            @Override public List<io.github.javaside.springai.codetui.agent.McpRegistry.ServerView> mcpServers() {
-                return List.of(new io.github.javaside.springai.codetui.agent.McpRegistry.ServerView(
+            @Override public List<io.github.javaside.springai.codetui.agent.mcp.McpRegistry.ServerView> mcpServers() {
+                return List.of(new io.github.javaside.springai.codetui.agent.mcp.McpRegistry.ServerView(
                         "demo",
-                        io.github.javaside.springai.codetui.agent.McpConfigLoader.ConfigSource.PROJECT,
-                        io.github.javaside.springai.codetui.agent.McpRegistry.Status.DISABLED,
+                        io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader.ConfigSource.PROJECT,
+                        io.github.javaside.springai.codetui.agent.mcp.McpRegistry.Status.DISABLED,
                         0, List.of(), null));
             }
         };

@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.mcp;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -1,5 +1,9 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.mcp;
 
+import io.github.javaside.springai.codetui.agent.AgentListener;
+import io.github.javaside.springai.codetui.agent.AgentTools;
+import io.github.javaside.springai.codetui.agent.PermissionCallback;
+import io.github.javaside.springai.codetui.agent.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
 import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;
@@ -130,8 +134,11 @@ public final class McpRegistry {
         return reg;
     }
 
-    /** 测试入口：不做启动期连接（条目按 enabled=false 或经 addConnectedForTest 塞假工具驱动）。 */
-    static McpRegistry initForTest(Path root, AgentListener listener,
+    /** 测试入口：不做启动期连接（条目按 enabled=false 或经 addConnectedForTest 塞假工具驱动）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static McpRegistry initForTest(Path root, AgentListener listener,
                                    List<McpConfigLoader.LoadedServer> loaded,
                                    PermissionEngine permissionEngine) {
         McpRegistry reg = new McpRegistry(root, listener, permissionEngine);
@@ -141,14 +148,20 @@ public final class McpRegistry {
         return reg;
     }
 
-    /** 测试入口（向后兼容）：自建一个隔离的默认引擎，见 {@link AgentTools#testEngine}。 */
-    static McpRegistry initForTest(Path root, AgentListener listener,
+    /** 测试入口（向后兼容）：自建一个隔离的默认引擎，见 {@link AgentTools#testEngine}。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static McpRegistry initForTest(Path root, AgentListener listener,
                                    List<McpConfigLoader.LoadedServer> loaded) {
         return initForTest(root, listener, loaded, AgentTools.testEngine(root));
     }
 
-    /** 测试钩子：把条目直接置为「已启用、已连接、给定工具」（client 仍 null，close 时自然跳过）。 */
-    synchronized void addConnectedForTest(String name, List<ToolCallback> decoratedTools) {
+    /** 测试钩子：把条目直接置为「已启用、已连接、给定工具」（client 仍 null，close 时自然跳过）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public synchronized void addConnectedForTest(String name, List<ToolCallback> decoratedTools) {
         Entry e = Objects.requireNonNull(entries.get(name), name);
         e.enabled = true;
         e.error = null;
@@ -303,8 +316,10 @@ public final class McpRegistry {
      *
      * <p>供 {@code AgentTools.build} 的向后兼容重载取用——让「内置工具与 MCP 工具共用同一个引擎」
      * 由类型保证，而不是靠调用方记得传对同一个对象。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    PermissionEngine permissionEngine() {
+    public PermissionEngine permissionEngine() {
         return permissionEngine;
     }
 
@@ -313,8 +328,10 @@ public final class McpRegistry {
      *
      * <p>运行期 {@code /mcp} 启用的 server 也走这里——故权限层<b>不能</b>改成「装配期一次性包装」，
      * 那会让启动后新启用的 server 漏掉整层。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    ToolCallback decorate(ToolCallback raw) {
+    public ToolCallback decorate(ToolCallback raw) {
         return new PermissionCallback(
                 new ToolEventCallback(
                         new MediaExternalizingCallback(raw, mediaStore, mediaHandler, root), listener),

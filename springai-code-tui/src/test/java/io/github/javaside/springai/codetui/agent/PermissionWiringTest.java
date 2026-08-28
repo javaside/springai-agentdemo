@@ -1,5 +1,8 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
+import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
+import io.github.javaside.springai.codetui.agent.mcp.McpServerConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;

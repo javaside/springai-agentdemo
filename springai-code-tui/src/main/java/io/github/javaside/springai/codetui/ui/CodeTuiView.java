@@ -1,8 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.AskRequest;
-import io.github.javaside.springai.codetui.agent.McpConfigLoader;
-import io.github.javaside.springai.codetui.agent.McpRegistry;
 import io.github.javaside.springai.codetui.agent.ModalRequest;
 import io.github.javaside.springai.codetui.agent.ProviderModel;
 import io.github.javaside.springai.codetui.agent.ModelPreference;
@@ -13,6 +11,8 @@ import io.github.javaside.springai.codetui.agent.PlanOutcome;
 import io.github.javaside.springai.codetui.agent.PlanRequest;
 import io.github.javaside.springai.codetui.agent.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
+import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoader;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
