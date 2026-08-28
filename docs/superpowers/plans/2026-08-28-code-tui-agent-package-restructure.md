@@ -826,7 +826,7 @@ done
 
 预期：`.` 2、llm 26、mcp 7、subagent 5、skill 3、session 7、compaction 7、seam 17、tools 8、prompt 3、interjection 3，以及未动的 media 28、permission 15、background 7、thinking 6。
 
-- [ ] **Step 6.5: 提权回退复查（只记录，不改动）**
+- [ ] **Step 6.5: 提权回退复查 + javadoc 断链修复（收口清理）**
 
 Task 1–9 的执行中出现过 brief 未预料的提权。逐项核对它们当前的跨包调用方，把「仅由留在 root 的测试驱动、未来可回退」的记入报告（本任务不改代码，为后续清理窗口留清单）：
 
@@ -840,6 +840,14 @@ grep -rn "内部类型" springai-code-tui/src/main/java --include=*.java | grep 
 ```
 
 预期输出即全部提权处的标注行，逐行回查其调用方。
+
+同时修复搬迁累积的 javadoc 断链（Task 5 审查发现 4 处，属「import 行/注释行」两类允许改动）。以 doclint 的报告为准，修法二选一：给 javadoc 专用的 import（若代码本体不用该类型，加在 import 块即可）；或把 `{@link X}` 降级为 `{@code X}`（与相邻写法统一）。修完验证：
+
+```bash
+mvn -pl springai-code-tui javadoc:javadoc
+```
+
+预期：0 error（doclint=all,-missing 只拦真错）。
 
 
 - [ ] **Step 7: 全量核对 diff 无方法体改动**
