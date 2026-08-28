@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.seam;
 
 /**
  * 一次需要抢占 UI 焦点的模态请求。

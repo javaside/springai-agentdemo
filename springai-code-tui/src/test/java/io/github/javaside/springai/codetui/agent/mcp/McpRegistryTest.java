@@ -1,7 +1,7 @@
 package io.github.javaside.springai.codetui.agent.mcp;
 
-import io.github.javaside.springai.codetui.agent.AgentListener;
-import io.github.javaside.springai.codetui.agent.AskRequest;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
 import io.github.javaside.springai.codetui.agent.PermissionCallback;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;

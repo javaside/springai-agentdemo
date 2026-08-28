@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
 
 /**
  * 后台任务撞到 ASK 时不弹面板、直接 DENY，且按档位给建议；BYPASS 档零特殊处理。

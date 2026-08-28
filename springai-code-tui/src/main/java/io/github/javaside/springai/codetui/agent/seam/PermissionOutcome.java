@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.seam;
 
 /** 审批面板的五种结果——UI 选完后经 {@link PermissionResponder} 喂回阻塞的工具线程。 */
 public enum PermissionOutcome {

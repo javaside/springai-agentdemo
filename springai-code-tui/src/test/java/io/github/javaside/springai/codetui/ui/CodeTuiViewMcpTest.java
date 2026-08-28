@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import dev.tamboui.tui.event.KeyCode;

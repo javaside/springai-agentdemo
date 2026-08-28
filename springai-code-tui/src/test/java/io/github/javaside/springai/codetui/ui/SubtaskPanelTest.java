@@ -8,6 +8,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 
 /** 任务面板（子 agent 状态）文本组装（计数标题 / 行文本 / 运行行附当前工具 / 超 CAP 窗口）。 */
 class SubtaskPanelTest {
@@ -81,7 +82,7 @@ class SubtaskPanelTest {
         ConversationState s = new ConversationState();
         s.onTurnStarted(1L);
         s.onSubagentStarted(1L, "t1", "explore", "分析认证");
-        CodeTuiView v = new CodeTuiView(s, (io.github.javaside.springai.codetui.agent.SubmitHandler) t -> null,
+        CodeTuiView v = new CodeTuiView(s, (io.github.javaside.springai.codetui.agent.seam.SubmitHandler) t -> null,
                 java.nio.file.Path.of("."));
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(v::renderForTest);
     }

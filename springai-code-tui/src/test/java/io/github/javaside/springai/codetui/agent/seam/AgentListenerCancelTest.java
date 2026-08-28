@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.seam;
 
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;

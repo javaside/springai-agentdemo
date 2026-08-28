@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.seam;
 
 /**
  * 审批 / 计划审批期回合被中断（用户选「拒绝并中断本回合」、Esc，或回合被 dispose 中断了工具线程）。

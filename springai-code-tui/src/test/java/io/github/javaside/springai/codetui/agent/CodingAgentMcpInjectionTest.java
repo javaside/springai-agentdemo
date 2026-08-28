@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 主 agent 每回合 MCP 工具快照注入（{@code submit} 的 {@code .tools(activeTools)}）：

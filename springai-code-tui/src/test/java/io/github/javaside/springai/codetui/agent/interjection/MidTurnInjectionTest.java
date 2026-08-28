@@ -1,10 +1,10 @@
 package io.github.javaside.springai.codetui.agent.interjection;
 
-import io.github.javaside.springai.codetui.agent.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import io.github.javaside.springai.codetui.agent.CodingAgent;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
-import io.github.javaside.springai.codetui.agent.StubListener;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;

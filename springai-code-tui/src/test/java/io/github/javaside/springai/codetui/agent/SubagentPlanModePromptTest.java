@@ -15,6 +15,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 装配层断言：模式提示段真的经 {@code AgentTools.build()} 接进了子 agent 的系统提示。

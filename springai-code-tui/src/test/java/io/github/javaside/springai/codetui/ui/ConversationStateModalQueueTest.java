@@ -1,10 +1,10 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.AskRequest;
-import io.github.javaside.springai.codetui.agent.AskResponder;
-import io.github.javaside.springai.codetui.agent.ModalRequest;
-import io.github.javaside.springai.codetui.agent.PermissionOutcome;
-import io.github.javaside.springai.codetui.agent.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
+import io.github.javaside.springai.codetui.agent.seam.AskResponder;
+import io.github.javaside.springai.codetui.agent.seam.ModalRequest;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.PermissionResponder;
 
 class ConversationStateModalQueueTest {
 
@@ -267,7 +268,7 @@ class ConversationStateModalQueueTest {
         ConversationState s = started(1L);
         List<PermissionOutcome> sink = new CopyOnWriteArrayList<>();
         // 共用同一个 responder 实例 → 两个 record 分量完全相同 → a.equals(b) 为真
-        io.github.javaside.springai.codetui.agent.PermissionResponder shared = sink::add;
+        io.github.javaside.springai.codetui.agent.seam.PermissionResponder shared = sink::add;
         PermissionRequest a = new PermissionRequest(1L, null, "Bash", "same", "{}", "why", null, shared);
         PermissionRequest b = new PermissionRequest(1L, null, "Bash", "same", "{}", "why", null, shared);
         assertEquals(a, b, "前置：两者 equals 相等（record 逐分量）");

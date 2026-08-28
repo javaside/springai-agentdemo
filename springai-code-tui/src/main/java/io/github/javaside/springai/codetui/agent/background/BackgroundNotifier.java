@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.agent.background;
 
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 
 import java.util.List;
 import java.util.Optional;

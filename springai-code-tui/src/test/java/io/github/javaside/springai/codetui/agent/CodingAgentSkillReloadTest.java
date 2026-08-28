@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * CodingAgent 的 {@code /reload} 接线：{@link SubmitHandler#reloadSkills()} 委托给 {@link ReloadableSkillTool}，

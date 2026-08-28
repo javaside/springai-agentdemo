@@ -1,9 +1,9 @@
 package io.github.javaside.springai.codetui.agent.mcp;
 
-import io.github.javaside.springai.codetui.agent.AgentListener;
 import io.github.javaside.springai.codetui.agent.AgentTools;
 import io.github.javaside.springai.codetui.agent.PermissionCallback;
 import io.github.javaside.springai.codetui.agent.ToolEventCallback;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
 import io.github.javaside.springai.codetui.agent.media.TextReferenceMediaHandler;

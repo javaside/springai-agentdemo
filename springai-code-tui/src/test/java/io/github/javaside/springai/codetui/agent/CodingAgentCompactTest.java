@@ -23,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
 
 /** CodingAgent.runCompaction 用「强制触发器 + 手动策略」调 SessionService.compact，并把结果计数经 listener 透出。 */
 class CodingAgentCompactTest {

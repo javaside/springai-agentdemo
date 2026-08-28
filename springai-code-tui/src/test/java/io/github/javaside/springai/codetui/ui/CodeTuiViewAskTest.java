@@ -1,10 +1,10 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.AskRequest;
-import io.github.javaside.springai.codetui.agent.AskResponder;
-import io.github.javaside.springai.codetui.agent.OptionSpec;
-import io.github.javaside.springai.codetui.agent.QuestionSpec;
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
+import io.github.javaside.springai.codetui.agent.seam.AskResponder;
+import io.github.javaside.springai.codetui.agent.seam.OptionSpec;
+import io.github.javaside.springai.codetui.agent.seam.QuestionSpec;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
 import org.junit.jupiter.api.Test;

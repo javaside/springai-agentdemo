@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 
 /**
  * 后台子 agent 子系统的<b>装配</b>契约：TaskOutput 只给主 agent、后台派发器真的被接上、

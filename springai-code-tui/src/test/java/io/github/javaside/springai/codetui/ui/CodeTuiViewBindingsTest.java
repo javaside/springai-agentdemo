@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
 import dev.tamboui.toolkit.element.Element;
 import dev.tamboui.tui.InlineTuiConfig;

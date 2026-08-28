@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.seam;
 
 /**
  * 计划审批的结果。前三项对应面板三个选项，{@link #CANCEL} 对应 Esc / 回合被取消。

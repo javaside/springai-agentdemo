@@ -1,16 +1,16 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.AskRequest;
-import io.github.javaside.springai.codetui.agent.ModalRequest;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
+import io.github.javaside.springai.codetui.agent.seam.ModalRequest;
 import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import io.github.javaside.springai.codetui.agent.llm.ModelPreference;
-import io.github.javaside.springai.codetui.agent.OptionSpec;
-import io.github.javaside.springai.codetui.agent.PermissionOutcome;
-import io.github.javaside.springai.codetui.agent.PermissionRequest;
-import io.github.javaside.springai.codetui.agent.PlanOutcome;
-import io.github.javaside.springai.codetui.agent.PlanRequest;
-import io.github.javaside.springai.codetui.agent.QuestionSpec;
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.OptionSpec;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.seam.PlanOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PlanRequest;
+import io.github.javaside.springai.codetui.agent.seam.QuestionSpec;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;

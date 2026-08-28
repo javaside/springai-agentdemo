@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /** registry 注入后，/model 的三个 SubmitHandler 方法跨家生效。 */
 class CodingAgentModelSwitchTest {

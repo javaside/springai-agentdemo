@@ -7,7 +7,7 @@ import io.github.javaside.springai.codetui.agent.CodingAgent;
 import io.github.javaside.springai.codetui.agent.CodingAgentBackgroundTestSupport;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

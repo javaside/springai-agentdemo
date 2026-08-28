@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 测试专用：枚举<b>本应用真会注册的内置工具</b>，取的是 {@link AgentTools#build} 装配出来的那一份，
