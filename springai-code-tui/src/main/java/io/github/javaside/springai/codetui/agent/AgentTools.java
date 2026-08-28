@@ -39,6 +39,14 @@ import io.github.javaside.springai.codetui.agent.subagent.SubagentLoader;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentTool;
+import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
+import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
+import io.github.javaside.springai.codetui.agent.tools.RenamedToolCallback;
+import io.github.javaside.springai.codetui.agent.tools.ResilientToolCallingManager;
+import io.github.javaside.springai.codetui.agent.tools.ResilientToolExecutionExceptionProcessor;
+import io.github.javaside.springai.codetui.agent.tools.TimeLimitedToolCallback;
+import io.github.javaside.springai.codetui.agent.tools.TodoWriteToolAdapter;
+import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
 import org.springaicommunity.agent.tools.AutoMemoryTools;
 import org.springaicommunity.agent.tools.FileSystemTools;
@@ -861,8 +869,10 @@ public final class AgentTools {
      * <p><b>能力退化</b>：库版 baseUrl 是硬编码常量，无法指向本地 stub，故 Brave 的响应解析
      * <b>无法离线单测</b>——那半边的正确性只能靠 {@code BraveWebSearchSmokeTest} 真机冒烟保证。
      * 我们能离线测的只有自己写的外壳（改名、描述、超时、门控）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static ToolCallback createBraveWebSearchTool(String apiKey, String countEnv) {
+    public static ToolCallback createBraveWebSearchTool(String apiKey, String countEnv) {
         if (apiKey == null || apiKey.isBlank()) {
             return null;
         }

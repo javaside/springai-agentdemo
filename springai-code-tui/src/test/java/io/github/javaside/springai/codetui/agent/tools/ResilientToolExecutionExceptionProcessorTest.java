@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.tools;
 
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;

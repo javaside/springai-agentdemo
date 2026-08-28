@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongConsumer;
 
 /**
- * 子 agent 专用 ChatModel 装饰器（见 {@link SubagentRunner}）：把阻塞式 {@link #call} <b>桥接到流式</b>
+ * 子 agent 专用 ChatModel 装饰器（见 {@code SubagentRunner}）：把阻塞式 {@link #call} <b>桥接到流式</b>
  * {@link ChatModel#stream} 并聚合回单个 {@link ChatResponse}，外加「瞬态坏响应」重试。
  *
  * <p><b>为什么桥接到流式（curl 实测证据，2026-07-15）</b>：代理网关的<b>非流式</b>端点存在长达数分钟的坏窗口，

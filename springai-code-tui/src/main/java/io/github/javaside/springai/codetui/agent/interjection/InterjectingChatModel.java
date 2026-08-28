@@ -31,7 +31,7 @@ import java.util.Optional;
  * 落在 {@code assistant(tool_calls)} 与 {@code tool} 之间就是悬空 tool_calls，下一次请求直接 400。
  * 而会话存储层<b>看不到</b>工具结果何时落库（它与「构建下一次 prompt」是同一步），从那里追加必然错位；
  * 只有本层拿到的 {@link Prompt} 是已经配平的完整消息表。这个项目已有
- * {@link VisionMaterializingChatModel} / {@code RetryingChatModel} 在同一层装饰的先例。
+ * {@code VisionMaterializingChatModel} / {@code RetryingChatModel} 在同一层装饰的先例。
  *
  * <p><b>装饰顺序</b>：本层须在 {@code RetryingChatModel} <b>外层</b>（若两者同时存在）。反了则重试时
  * 队列已被第一次尝试排空，用户的插话会在一次网络抖动后<b>静默消失</b>。当前主 agent 不用

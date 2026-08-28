@@ -1,7 +1,7 @@
 package io.github.javaside.springai.codetui.agent.seam;
 
-import io.github.javaside.springai.codetui.agent.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;

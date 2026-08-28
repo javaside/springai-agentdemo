@@ -22,6 +22,7 @@ import reactor.core.Disposables;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
+import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionStrategy;
 import io.github.javaside.springai.codetui.agent.llm.ModelOption;
 import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;

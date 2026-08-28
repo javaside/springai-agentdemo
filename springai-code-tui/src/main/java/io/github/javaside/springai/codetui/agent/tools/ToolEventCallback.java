@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.tools;
 
 import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import org.springframework.ai.chat.model.ToolContext;

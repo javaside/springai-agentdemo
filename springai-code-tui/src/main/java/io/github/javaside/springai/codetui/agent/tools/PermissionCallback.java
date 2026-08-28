@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.tools;
 
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionDecision;
@@ -11,6 +11,8 @@ import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import io.github.javaside.springai.codetui.agent.seam.PermissionCancelledException;
 import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
 import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.seam.PermissionResponder;
+import io.github.javaside.springai.codetui.agent.seam.UserQuestionBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
@@ -141,8 +143,10 @@ public final class PermissionCallback implements ToolCallback {
      *
      * <p>这不是可有可无的一句断言：各自新建引擎的话，模式切换（Shift+Tab）只影响其中一批工具，
      * 而用户在主 agent 里授过的会话规则对子 agent / MCP 工具无效——两种失效都不报错，只是行为诡异。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    PermissionEngine engine() {
+    public PermissionEngine engine() {
         return engine;
     }
 

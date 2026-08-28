@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent.seam;
 
+import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
+
 import java.util.List;
 
 /**

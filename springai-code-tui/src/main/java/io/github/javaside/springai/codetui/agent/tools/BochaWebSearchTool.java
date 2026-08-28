@@ -1,5 +1,6 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.tools;
 
+import io.github.javaside.springai.codetui.agent.llm.LlmTimeouts;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.core.ParameterizedTypeReference;
@@ -235,8 +236,10 @@ public final class BochaWebSearchTool {
     /**
      * 解析 {@code BOCHA_SEARCH_COUNT}：缺失 / 非数字回退 {@link #DEFAULT_COUNT}，越界钳到 {@code [1, MAX_COUNT]}。
      * 形状照 {@code AgentTools.resolveSubagentConcurrency}。env 由 AgentTools 读取，这里只负责解析语义。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static int resolveResultCount(String raw) {
+    public static int resolveResultCount(String raw) {
         if (raw == null || raw.isBlank()) {
             return DEFAULT_COUNT;
         }

@@ -21,7 +21,7 @@ import java.util.List;
  * 空 {@code HashMap} 起底 context，只从<b>流入元素</b>的 {@code context()} 累加；而底层 {@code MessageAggregator.aggregate}
  * 在 {@code doOnComplete} 里回调完成处理器——<b>空流也会触发</b>。于是当某个迭代的模型流为空（OpenAI 官方 SDK 流式路径下
  * 实测出现），聚合到的 context 恒为空，{@code after()} → {@code getSessionId({})} 抛错，本回合 assistant 遂无法落盘
- * （进而堆出连续 USER、被 DeepSeek 400，见 {@link SessionEvents#collapseConsecutiveSameRole}）。DeepSeek 的 WebClient
+ * （进而堆出连续 USER、被 DeepSeek 400，见 {@code SessionEvents#collapseConsecutiveSameRole}）。DeepSeek 的 WebClient
  * 流式从不为空，故不触发。
  *
  * <p><b>修法</b>：把本守卫装在 {@code SessionMemoryAdvisor} 的<b>正内侧</b>（order {@code +1001}，紧邻其

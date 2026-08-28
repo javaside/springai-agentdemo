@@ -2,9 +2,9 @@ package io.github.javaside.springai.codetui.agent.session;
 
 /**
  * 会话上下文用量快照（{@code /context} 命令用）——<b>纯 Java</b>，不泄漏任何 Spring AI 类型，
- * 与 {@link AgentListener} 同属 CodingAgent→UI 的接缝纪律。
+ * 与 {@code AgentListener} 同属 CodingAgent→UI 的接缝纪律。
  *
- * <p>由 {@link SubmitHandler#contextStats()} 现算返回：读一遍当前会话事件与消息，统计条数与估算 token。
+ * <p>由 {@code SubmitHandler#contextStats()} 现算返回：读一遍当前会话事件与消息，统计条数与估算 token。
  * 全部为「只读快照」，读期间若有回合在写事件，拿到的是尽力而为的一致视图，不加锁。
  *
  * @param events          会话事件总数

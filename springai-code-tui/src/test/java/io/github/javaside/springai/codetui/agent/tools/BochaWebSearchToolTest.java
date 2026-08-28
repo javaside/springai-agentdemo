@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.tools;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;

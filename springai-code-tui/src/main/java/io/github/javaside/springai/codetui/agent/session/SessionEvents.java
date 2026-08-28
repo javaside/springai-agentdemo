@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 会话事件的纯逻辑工具（无状态）。供 {@link CodingAgent}（中断裁剪）与 {@link FileSessionRepository}（加载裁剪）共用，
+ * 会话事件的纯逻辑工具（无状态）。供 {@code CodingAgent}（中断裁剪）与 {@link FileSessionRepository}（加载裁剪）共用，
  * 避免仓库反向依赖 CodingAgent。
  *
  * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
