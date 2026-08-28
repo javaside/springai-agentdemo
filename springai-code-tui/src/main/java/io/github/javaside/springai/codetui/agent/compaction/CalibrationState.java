@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.compaction;
 
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -8,8 +8,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>记录口径:值是<b>用户文本估计量</b>(estimate(text) 或切块 budget),不含 system prompt 与消息封装
  * ——与策略比对时的 E 同口径,自洽。
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
  */
-final class CalibrationState {
+public final class CalibrationState {
 
     /** 保守起点:任何现代模型窗口都装得下,且高于策略的安全阀下限 16k。<b>假设值</b>,非验证值。 */
     static final long SAFE_FALLBACK_BUDGET = 32_000L;

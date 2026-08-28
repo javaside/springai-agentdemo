@@ -4,6 +4,11 @@ import io.github.javaside.springai.codetui.agent.background.BackgroundTaskListTo
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskTool;
 import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
+import io.github.javaside.springai.codetui.agent.compaction.BoundedSummarizationCompactionStrategy;
+import io.github.javaside.springai.codetui.agent.compaction.CalibrationState;
+import io.github.javaside.springai.codetui.agent.compaction.ModelContextWindows;
+import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionStrategy;
+import io.github.javaside.springai.codetui.agent.compaction.PreflightCompactionAdvisor;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
 import io.github.javaside.springai.codetui.agent.interjection.Interjections;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
@@ -160,8 +165,10 @@ public final class AgentTools {
     /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收（压缩为销毁式，见类注释）。须 > overlapSize 且其 token 量远低于阈值。可调。 */
     static final int MAX_EVENTS_TO_KEEP = 120;
 
-    /** 手动 /compact 的保留窗口：比自动的 120 激进得多，让「按需缩小上下文」真正生效。可调。 */
-    static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
+    /** 手动 /compact 的保留窗口：比自动的 120 激进得多，让「按需缩小上下文」真正生效。可调。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
 
     /**
      * <b>自动</b>压缩路径的装配：{@code Notifying( Preserving( base ) )}。

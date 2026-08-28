@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.compaction;
 
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -13,8 +13,10 @@ import reactor.core.publisher.Flux;
 
 import java.util.function.LongSupplier;
 
-/** Compacts persisted history before SessionMemoryAdvisor loads it into the outbound prompt. */
-final class PreflightCompactionAdvisor implements StreamAdvisor {
+/** Compacts persisted history before SessionMemoryAdvisor loads it into the outbound prompt.
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+public final class PreflightCompactionAdvisor implements StreamAdvisor {
 
     static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 999;
 
@@ -28,7 +30,10 @@ final class PreflightCompactionAdvisor implements StreamAdvisor {
         this.strategy = strategy;
     }
 
-    PreflightCompactionAdvisor(SessionService sessions, LongSupplier threshold,
+    /**
+     * <b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public PreflightCompactionAdvisor(SessionService sessions, LongSupplier threshold,
                                TokenCountEstimator estimator, CompactionStrategy strategy) {
         this.sessions = sessions;
         this.trigger = new CompleteTokenCountTrigger(threshold, estimator);

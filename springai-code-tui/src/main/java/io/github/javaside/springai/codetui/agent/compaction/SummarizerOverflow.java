@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.compaction;
 
 import java.util.Locale;
 import java.util.regex.Matcher;

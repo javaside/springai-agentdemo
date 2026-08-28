@@ -1,11 +1,13 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.compaction;
 
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
-/** Resolves context-window sizes from explicit overrides, built-in metadata, then a conservative fallback. */
-final class ModelContextWindows {
+/** Resolves context-window sizes from explicit overrides, built-in metadata, then a conservative fallback.
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+public final class ModelContextWindows {
 
     static final long DEFAULT_UNKNOWN_WINDOW = 128_000L;
 
@@ -30,7 +32,10 @@ final class ModelContextWindows {
         this.unknownWindow = unknownWindow > 0 ? unknownWindow : DEFAULT_UNKNOWN_WINDOW;
     }
 
-    static ModelContextWindows fromEnvironment() {
+    /**
+     * <b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static ModelContextWindows fromEnvironment() {
         return parse(System.getenv("CODETUI_CONTEXT_WINDOWS"),
                 positiveLong(System.getenv("CODETUI_UNKNOWN_CONTEXT_WINDOW"), DEFAULT_UNKNOWN_WINDOW));
     }
@@ -49,7 +54,10 @@ final class ModelContextWindows {
         return new ModelContextWindows(parsed, unknownWindow);
     }
 
-    long resolve(String providerId, String modelId) {
+    /**
+     * <b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public long resolve(String providerId, String modelId) {
         String key = normalize(providerId + ":" + modelId);
         Long override = overrides.get(key);
         if (override != null) return override;

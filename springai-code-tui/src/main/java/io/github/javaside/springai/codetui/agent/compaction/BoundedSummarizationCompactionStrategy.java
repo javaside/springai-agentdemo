@@ -1,4 +1,4 @@
-package io.github.javaside.springai.codetui.agent;
+package io.github.javaside.springai.codetui.agent.compaction;
 
 import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
 import org.slf4j.Logger;
@@ -33,8 +33,10 @@ import java.util.function.ToIntFunction;
  * 逐行一致。
  *
  * <p>The newest complete suffix is kept verbatim; older events are summarized.
+ *
+ * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
  */
-final class BoundedSummarizationCompactionStrategy implements CompactionStrategy {
+public final class BoundedSummarizationCompactionStrategy implements CompactionStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(BoundedSummarizationCompactionStrategy.class);
 
@@ -53,8 +55,10 @@ final class BoundedSummarizationCompactionStrategy implements CompactionStrategy
     /**
      * 一次快照派生的模型身份与窗口:校准 key 与预算必须<b>同源</b>——由装配方在单次
      * {@code ProviderRegistry.activeRequestSelection()} 里派生,防 /model 并发切换在两次读取间交错。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    record ModelSnapshot(String calibrationKey, long windowTokens, long inputReserve) {
+    public record ModelSnapshot(String calibrationKey, long windowTokens, long inputReserve) {
         long fullInputBudget() { return Math.max(1L, windowTokens - inputReserve); }
     }
 
@@ -92,8 +96,10 @@ final class BoundedSummarizationCompactionStrategy implements CompactionStrategy
         this(targetTokens, chunkTokens, estimator, summarizer, null, null, maxEventsToKeep);
     }
 
-    /** 校准模式(生产装配):乐观全量 + 区间学习。auto/manual 两条策略须共享同一个 calibration。 */
-    BoundedSummarizationCompactionStrategy(LongSupplier targetTokens,
+    /** 校准模式(生产装配):乐观全量 + 区间学习。auto/manual 两条策略须共享同一个 calibration。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public BoundedSummarizationCompactionStrategy(LongSupplier targetTokens,
                                            ToIntFunction<String> estimator,
                                            Function<String, String> summarizer,
                                            Supplier<ModelSnapshot> snapshot,
@@ -101,7 +107,12 @@ final class BoundedSummarizationCompactionStrategy implements CompactionStrategy
         this(targetTokens, estimator, summarizer, snapshot, calibration, 0);
     }
 
-    BoundedSummarizationCompactionStrategy(LongSupplier targetTokens,
+    /**
+     * 校准模式(生产装配):乐观全量 + 区间学习,强制保留最近 N 个事件。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public BoundedSummarizationCompactionStrategy(LongSupplier targetTokens,
                                            ToIntFunction<String> estimator,
                                            Function<String, String> summarizer,
                                            Supplier<ModelSnapshot> snapshot,

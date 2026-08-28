@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionStrategy;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.agent.media.MediaReferencePreservingCompactionStrategy;
 import io.github.javaside.springai.codetui.agent.media.VisionMaterializer;
