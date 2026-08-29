@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
 
 /**
  * Shift+Tab 模式循环与 {@code /permissions} 只读报告。
@@ -154,11 +156,11 @@ class CodeTuiViewPermissionModeTest {
     void mcpPickerTabGuard(@TempDir Path root) {
         ConversationState state = new ConversationState();
         ModeStub stub = new ModeStub() {
-            @Override public List<io.github.javaside.springai.codetui.agent.McpRegistry.ServerView> mcpServers() {
-                return List.of(new io.github.javaside.springai.codetui.agent.McpRegistry.ServerView(
+            @Override public List<io.github.javaside.springai.codetui.agent.mcp.McpRegistry.ServerView> mcpServers() {
+                return List.of(new io.github.javaside.springai.codetui.agent.mcp.McpRegistry.ServerView(
                         "demo",
-                        io.github.javaside.springai.codetui.agent.McpConfigLoader.ConfigSource.PROJECT,
-                        io.github.javaside.springai.codetui.agent.McpRegistry.Status.DISABLED,
+                        io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader.ConfigSource.PROJECT,
+                        io.github.javaside.springai.codetui.agent.mcp.McpRegistry.Status.DISABLED,
                         0, List.of(), null));
             }
         };
@@ -178,9 +180,9 @@ class CodeTuiViewPermissionModeTest {
         ConversationState state = new ConversationState();
         ModeStub stub = new ModeStub();
         state.onTurnStarted(1L);
-        java.util.List<io.github.javaside.springai.codetui.agent.PermissionOutcome> sink =
+        java.util.List<io.github.javaside.springai.codetui.agent.seam.PermissionOutcome> sink =
                 new java.util.concurrent.CopyOnWriteArrayList<>();
-        state.onPermissionRequested(1L, new io.github.javaside.springai.codetui.agent.PermissionRequest(
+        state.onPermissionRequested(1L, new io.github.javaside.springai.codetui.agent.seam.PermissionRequest(
                 1L, null, "Bash", "git push", "{}", "未获授权", null, sink::add));
         CodeTuiView v = new CodeTuiView(state, stub, root);
         v.tickForTest();

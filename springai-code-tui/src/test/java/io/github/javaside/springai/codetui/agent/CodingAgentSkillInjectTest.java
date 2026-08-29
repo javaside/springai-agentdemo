@@ -14,6 +14,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
+import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 
 /**
  * CodingAgent 手动 /skill 注入：发送前真正调用（被装饰的）Skill 工具，

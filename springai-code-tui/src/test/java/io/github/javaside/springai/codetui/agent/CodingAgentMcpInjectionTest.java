@@ -1,5 +1,10 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
+import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
+import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
+import io.github.javaside.springai.codetui.agent.mcp.McpServerConfig;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -26,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 主 agent 每回合 MCP 工具快照注入（{@code submit} 的 {@code .tools(activeTools)}）：

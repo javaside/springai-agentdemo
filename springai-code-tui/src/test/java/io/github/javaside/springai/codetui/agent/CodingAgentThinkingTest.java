@@ -1,4 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.OpenAiProvider;
 
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore;
@@ -19,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 class CodingAgentThinkingTest {
 

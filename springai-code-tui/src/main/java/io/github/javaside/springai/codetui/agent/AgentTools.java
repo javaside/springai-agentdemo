@@ -1,9 +1,21 @@
 package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskListTool;
+import io.github.javaside.springai.codetui.agent.llm.DynamicAuxChatModel;
+import io.github.javaside.springai.codetui.agent.llm.LlmProvider;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.SessionIdStreamGuardAdvisor;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskTool;
 import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
+import io.github.javaside.springai.codetui.agent.compaction.BoundedSummarizationCompactionStrategy;
+import io.github.javaside.springai.codetui.agent.compaction.CalibrationState;
+import io.github.javaside.springai.codetui.agent.compaction.ModelContextWindows;
+import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionStrategy;
+import io.github.javaside.springai.codetui.agent.compaction.PreflightCompactionAdvisor;
+import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
+import io.github.javaside.springai.codetui.agent.interjection.Interjections;
+import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
 import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
@@ -15,6 +27,26 @@ import io.github.javaside.springai.codetui.agent.media.VisionMaterializingChatMo
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.prompt.MemoryPrompt;
+import io.github.javaside.springai.codetui.agent.prompt.ProjectInstructions;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.PlanApprovalBridge;
+import io.github.javaside.springai.codetui.agent.seam.UserQuestionBridge;
+import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
+import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentLoader;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentTool;
+import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
+import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
+import io.github.javaside.springai.codetui.agent.tools.RenamedToolCallback;
+import io.github.javaside.springai.codetui.agent.tools.ResilientToolCallingManager;
+import io.github.javaside.springai.codetui.agent.tools.ResilientToolExecutionExceptionProcessor;
+import io.github.javaside.springai.codetui.agent.tools.TimeLimitedToolCallback;
+import io.github.javaside.springai.codetui.agent.tools.TodoWriteToolAdapter;
+import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
 import org.springaicommunity.agent.tools.AutoMemoryTools;
 import org.springaicommunity.agent.tools.FileSystemTools;
@@ -152,8 +184,10 @@ public final class AgentTools {
     /** 压缩时保持逐字原样的最近事件数（约最近 30 轮）；更早的被 LLM 滚动摘要吸收（压缩为销毁式，见类注释）。须 > overlapSize 且其 token 量远低于阈值。可调。 */
     static final int MAX_EVENTS_TO_KEEP = 120;
 
-    /** 手动 /compact 的保留窗口：比自动的 120 激进得多，让「按需缩小上下文」真正生效。可调。 */
-    static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
+    /** 手动 /compact 的保留窗口：比自动的 120 激进得多，让「按需缩小上下文」真正生效。可调。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public static final int MANUAL_MAX_EVENTS_TO_KEEP = 20;
 
     /**
      * <b>自动</b>压缩路径的装配：{@code Notifying( Preserving( base ) )}。
@@ -679,8 +713,10 @@ public final class AgentTools {
      * <p><b>刻意不读两层 {@code permissions.json}</b>：用户层在 {@code ~/.codetui/permissions.json}，
      * 读了就会让测试结果随开发者本机的个人规则漂移（在 CI 上绿、在某人机器上红，或反过来）。
      * 生产的引擎由 {@code CodeTuiApplication} 用 {@code PermissionConfigLoader.load(root)} 建。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static PermissionEngine testEngine(Path root) {
+    public static PermissionEngine testEngine(Path root) {
         return new PermissionEngine(root, PermissionConfig.empty(), PermissionMode.DEFAULT);
     }
 
@@ -833,8 +869,10 @@ public final class AgentTools {
      * <p><b>能力退化</b>：库版 baseUrl 是硬编码常量，无法指向本地 stub，故 Brave 的响应解析
      * <b>无法离线单测</b>——那半边的正确性只能靠 {@code BraveWebSearchSmokeTest} 真机冒烟保证。
      * 我们能离线测的只有自己写的外壳（改名、描述、超时、门控）。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    static ToolCallback createBraveWebSearchTool(String apiKey, String countEnv) {
+    public static ToolCallback createBraveWebSearchTool(String apiKey, String countEnv) {
         if (apiKey == null || apiKey.isBlank()) {
             return null;
         }

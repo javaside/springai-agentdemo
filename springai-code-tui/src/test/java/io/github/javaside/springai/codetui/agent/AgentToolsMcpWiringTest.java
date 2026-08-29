@@ -1,5 +1,9 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.McpWiringTestSupport;
 
+import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
+import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
+import io.github.javaside.springai.codetui.agent.mcp.McpServerConfig;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

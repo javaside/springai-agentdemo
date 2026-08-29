@@ -1,4 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
@@ -27,6 +29,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 钉住 springai-code-tui 的「安全现实」，不是证明系统安全，而是把边界的真实情况写死成测试，

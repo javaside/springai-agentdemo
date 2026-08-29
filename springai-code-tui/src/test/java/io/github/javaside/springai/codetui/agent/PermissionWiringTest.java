@@ -1,11 +1,21 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.ModelOption;
+import io.github.javaside.springai.codetui.agent.llm.LlmProvider;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
+import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
+import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
+import io.github.javaside.springai.codetui.agent.mcp.McpServerConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.permission.RuleScope;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
+import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +47,11 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.ModalRequest;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 三处装配点（{@code AgentTools.build} 装饰循环 / {@code buildMemoryTools} / {@code McpRegistry.decorate}）

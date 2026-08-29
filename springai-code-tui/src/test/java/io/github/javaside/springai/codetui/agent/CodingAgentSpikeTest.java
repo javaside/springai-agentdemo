@@ -1,4 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -18,6 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
 
 /**
  * CodingAgentSpikeTest —— 里程碑2「硬验收」的真实链路 spike。

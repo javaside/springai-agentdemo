@@ -1,9 +1,10 @@
 package io.github.javaside.springai.codetui;
+import io.github.javaside.springai.codetui.agent.llm.UsageRecordingProvider;
 
-import io.github.javaside.springai.codetui.agent.LlmProvider;
-import io.github.javaside.springai.codetui.agent.ModelOption;
-import io.github.javaside.springai.codetui.agent.ProviderRegistry;
-import io.github.javaside.springai.codetui.agent.TokenUsageAccumulator;
+import io.github.javaside.springai.codetui.agent.llm.LlmProvider;
+import io.github.javaside.springai.codetui.agent.llm.ModelOption;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfigStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

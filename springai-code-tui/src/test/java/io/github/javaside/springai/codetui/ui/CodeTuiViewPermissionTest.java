@@ -1,8 +1,8 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.PermissionOutcome;
-import io.github.javaside.springai.codetui.agent.PermissionRequest;
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.permission.RuleScope;

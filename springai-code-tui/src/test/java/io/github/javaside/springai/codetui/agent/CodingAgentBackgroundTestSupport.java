@@ -2,10 +2,12 @@ package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
 
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 测试专用：造一个<b>只装了后台子系统</b>的 {@link CodingAgent}——其余依赖全 null。

@@ -3,6 +3,10 @@ package io.github.javaside.springai.codetui.agent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
+import io.github.javaside.springai.codetui.agent.skill.SkillCatalog;
+import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,6 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * CodingAgent 的 {@code /reload} 接线：{@link SubmitHandler#reloadSkills()} 委托给 {@link ReloadableSkillTool}，

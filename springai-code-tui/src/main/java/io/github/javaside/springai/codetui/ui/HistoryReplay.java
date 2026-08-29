@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.InterjectionText;
+import io.github.javaside.springai.codetui.agent.interjection.InterjectionText;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;

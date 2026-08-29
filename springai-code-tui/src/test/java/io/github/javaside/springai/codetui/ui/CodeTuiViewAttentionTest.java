@@ -1,9 +1,9 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.AskRequest;
-import io.github.javaside.springai.codetui.agent.AskResponder;
-import io.github.javaside.springai.codetui.agent.QuestionSpec;
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
+import io.github.javaside.springai.codetui.agent.seam.AskResponder;
+import io.github.javaside.springai.codetui.agent.seam.QuestionSpec;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import io.github.javaside.springai.codetui.agent.seam.OptionSpec;
 
 /**
  * view 集成：drain 一拍把模态出现 / 回合完成翻译成 {@link AttentionTracker} 的边沿动作。
@@ -33,8 +34,8 @@ class CodeTuiViewAttentionTest {
 
     private static AskRequest ask(long turnId) {
         QuestionSpec q = new QuestionSpec("继续吗？", "确认", List.of(
-                new io.github.javaside.springai.codetui.agent.OptionSpec("是", ""),
-                new io.github.javaside.springai.codetui.agent.OptionSpec("否", "")),
+                new io.github.javaside.springai.codetui.agent.seam.OptionSpec("是", ""),
+                new io.github.javaside.springai.codetui.agent.seam.OptionSpec("否", "")),
                 false);
         return new AskRequest(turnId, List.of(q), new AskResponder() {
             @Override public void answer(java.util.Map<String, String> answers) { }

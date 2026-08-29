@@ -1,7 +1,7 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.ContextStats;
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.session.ContextStats;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

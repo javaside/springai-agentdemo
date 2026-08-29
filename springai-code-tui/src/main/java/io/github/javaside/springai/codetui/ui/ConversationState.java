@@ -1,12 +1,12 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.AgentListener;
-import io.github.javaside.springai.codetui.agent.AskRequest;
-import io.github.javaside.springai.codetui.agent.ModalRequest;
-import io.github.javaside.springai.codetui.agent.PermissionOutcome;
-import io.github.javaside.springai.codetui.agent.PermissionRequest;
-import io.github.javaside.springai.codetui.agent.PlanOutcome;
-import io.github.javaside.springai.codetui.agent.PlanRequest;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
+import io.github.javaside.springai.codetui.agent.seam.AskRequest;
+import io.github.javaside.springai.codetui.agent.seam.ModalRequest;
+import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
+import io.github.javaside.springai.codetui.agent.seam.PlanOutcome;
+import io.github.javaside.springai.codetui.agent.seam.PlanRequest;
 import dev.tamboui.text.CharWidth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

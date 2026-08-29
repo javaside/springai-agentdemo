@@ -1,4 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
 import io.github.javaside.springai.codetui.agent.background.BackgroundTask;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
@@ -6,6 +8,7 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 
 /**
  * 后台子 agent 子系统的<b>装配</b>契约：TaskOutput 只给主 agent、后台派发器真的被接上、

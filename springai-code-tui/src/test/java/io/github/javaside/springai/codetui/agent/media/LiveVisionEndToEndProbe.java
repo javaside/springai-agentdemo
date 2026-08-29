@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.agent.media;
 
-import io.github.javaside.springai.codetui.agent.OpenAiProvider;
+import io.github.javaside.springai.codetui.agent.llm.OpenAiProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;

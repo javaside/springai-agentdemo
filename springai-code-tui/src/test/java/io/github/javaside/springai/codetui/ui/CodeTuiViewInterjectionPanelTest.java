@@ -2,7 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
-import io.github.javaside.springai.codetui.agent.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.Disposable;

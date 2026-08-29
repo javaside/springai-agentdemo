@@ -17,8 +17,9 @@
 - 单类测试须加 `-Dsurefire.failIfNoSpecifiedTests=false`，否则 `-Dtest` 会在兄弟模块上匹配不到而失败
 - 不要用整仓 `mvn test`（仓库里有空 demo 模块会失败）
 - JDK 17 语言级别：不得使用按类型模式 `switch`（JEP 441，需 21）。消费 `ModalRequest` 一律用 `if (r instanceof AskRequest a) … else if …` 链
-- **本次禁止改动任何方法体**。允许的改动只有四类：`package` 行、`import` 行、可见性修饰符（`class` → `public class`）、新增类注释行
+- **本次禁止改动任何方法体**。允许的改动只有四类：`package` 行、`import` 行、可见性修饰符（`class` → `public class`、`static` → `public static`）、新增类注释行
 - 升 `public` 的类，类注释末尾统一加一行：`<p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。`
+- **方法级提权同样合法且同样要标注**：跨包调用方留在别的包时，包级方法（典型是 `forTest(...)` 之类的测试工厂、包级静态工具方法）需升 `public static`，并在该方法的 javadoc 末尾加同一行说明。只提编译器实际报错的那些方法，不要批量提权同类方法
 - 用 `git mv` 移动文件（保留改名历史，让 `git log --follow` 可追溯）
 - 真机冒烟测试无 key 时自动跳过，不算失败。已知 flaky：`CodingAgentSpikeTest.todoTurnIdBinding` 走真实 DeepSeek、单回合 60s 上限，偶发超时，撞上时单跑确认，不要误判为重构改坏
 
@@ -79,10 +80,20 @@ mvn -pl springai-code-tui -am test
 
 ```bash
 git diff --stat
-git diff -- '*.java' | grep -E '^[+-]' | grep -vE '^[+-]{3}' | grep -vE '^[+-]\s*(package|import) ' | grep -vE '^[+-]\s*\*' | grep -vE '^[+-](public )?(final |abstract |sealed )*(class|interface|record|enum) '
+git diff -- '*.java' | grep -E '^[+-]' | grep -vE '^[+-]{3}' | grep -vE '^[+-]\s*(package|import) ' | grep -vE '^[+-]\s*(\*|/\*\*|\*/)' | grep -vE '^[+-]\s*$' | grep -vE '^[+-]\s*(public )?(final |abstract |sealed |static )*(class|interface|record|enum) ' | grep -vE '^[+-]\s*(public |protected )?static .*\(' 
 ```
 
-最后一条命令应**无输出**。有输出说明改到了不该改的地方，逐条核对。
+最后一条命令应**无输出**。白名单已放行：package 行、import 行、注释行（含 `/**`、`*/`）、空行、类型声明行、静态方法签名行。
+
+**有输出不等于违规，但每一行都要人工核对**：真正要查的是「有没有方法体、字段、逻辑被改」。核对方法是对每个可疑文件跑旧新全文比对：
+
+```bash
+git show <BASE>:<旧路径> > /tmp/old.java
+git show HEAD:<新路径> > /tmp/new.java
+diff /tmp/old.java /tmp/new.java
+```
+
+差异应只有 package 行、import 行、可见性修饰符、新增注释行。任何方法体内的改动都是违规，必须还原。
 
 **Step H：提交**
 
@@ -814,6 +825,30 @@ done
 ```
 
 预期：`.` 2、llm 26、mcp 7、subagent 5、skill 3、session 7、compaction 7、seam 17、tools 8、prompt 3、interjection 3，以及未动的 media 28、permission 15、background 7、thinking 6。
+
+- [ ] **Step 6.5: 提权回退复查 + javadoc 断链修复（收口清理）**
+
+Task 1–9 的执行中出现过 brief 未预料的提权。逐项核对它们当前的跨包调用方，把「仅由留在 root 的测试驱动、未来可回退」的记入报告（本任务不改代码，为后续清理窗口留清单）：
+
+- `Interjections.drainForInjection` / `fireDelivered`：Task 4 审查确认仅 `CodingAgentInterjectionFacadeTest`（root）驱动，若把该测试搬进 `agent.interjection` 即可回退提权
+- `McpRegistry.initForTest(3参)` / `addConnectedForTest` / `decorate`：由留在 root 的 `PermissionWiringTest`/`AgentToolsMcpWiringTest`/`CodingAgentMcpInjectionTest`/`SubagentRunnerMcpToolsTest` 驱动
+- `AgentTools.testEngine`：撤销了 `4cb2c50` 的封装决定，且造成 `agent ↔ agent.mcp` 包循环——重构收尾后建议挪到中立位置（permission 侧测试支撑类）以断循环并收回可见性
+- 本任务执行中新发现的其他「仅测试驱动」提权，一并记入
+
+```bash
+grep -rn "内部类型" springai-code-tui/src/main/java --include=*.java | grep -v "^Binary"
+```
+
+预期输出即全部提权处的标注行，逐行回查其调用方。
+
+同时修复搬迁累积的 javadoc 断链（Task 5 审查发现 4 处，属「import 行/注释行」两类允许改动）。以 doclint 的报告为准，修法二选一：给 javadoc 专用的 import（若代码本体不用该类型，加在 import 块即可）；或把 `{@link X}` 降级为 `{@code X}`（与相邻写法统一）。修完验证：
+
+```bash
+mvn -pl springai-code-tui javadoc:javadoc
+```
+
+预期：0 error（doclint=all,-missing 只拦真错）。
+
 
 - [ ] **Step 7: 全量核对 diff 无方法体改动**
 

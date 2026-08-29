@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.agent.ContextStats;
+import io.github.javaside.springai.codetui.agent.session.ContextStats;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

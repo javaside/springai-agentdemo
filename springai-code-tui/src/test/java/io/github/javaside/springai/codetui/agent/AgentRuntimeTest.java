@@ -1,5 +1,9 @@
 package io.github.javaside.springai.codetui.agent;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
+import io.github.javaside.springai.codetui.agent.subagent.SubagentLoader;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentTool;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -10,6 +14,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /** AgentTools.build 只做装配、不发网络请求：用假 key 也能造出完整 AgentRuntime。 */
 class AgentRuntimeTest {

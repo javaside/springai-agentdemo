@@ -1,9 +1,9 @@
 package io.github.javaside.springai.codetui;
 
-import io.github.javaside.springai.codetui.agent.AnthropicProvider;
-import io.github.javaside.springai.codetui.agent.DeepSeekProvider;
-import io.github.javaside.springai.codetui.agent.ModelPreference;
-import io.github.javaside.springai.codetui.agent.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.AnthropicProvider;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
+import io.github.javaside.springai.codetui.agent.llm.ModelPreference;
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

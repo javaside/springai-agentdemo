@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.session.SessionEvents;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
 /**
  * 中断（Esc 取消 / 报错）时把会话裁到「最长干净前缀」：只删末尾悬空的 {@code assistant(tool_calls)}，

@@ -1,6 +1,8 @@
 // AgentToolsMediaWiringTest.java
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
