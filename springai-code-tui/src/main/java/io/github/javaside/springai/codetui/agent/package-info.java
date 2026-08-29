@@ -7,6 +7,7 @@
  *
  * <p><b>依赖方向</b>：单向依赖全部 14 个子包，是依赖图的汇聚点；除 {@code mcp} 经
  * {@code testEngine} 测试工厂存在一条已知回边外（遗留清理项），无子包反向依赖本包的生产代码。
- * 对外只暴露 {@code agent.seam} 的接缝类型。
+ * 对外的实时事件只经 {@code agent.seam} 出去，但 ui 另有对 10 个子包类型的直接引用
+ * （非目标状态，明细见 {@code ui} 的包注释）。
  */
 package io.github.javaside.springai.codetui.agent;

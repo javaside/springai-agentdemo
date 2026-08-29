@@ -7,7 +7,8 @@
  * {@code VisionMaterializingChatModel} 在 ChatModel 层做物化包装）； ③ 预算与保真
  * （{@code VisionBudget} 限流、{@code ImagePreparer} 压缩、magic bytes 嗅探防伪装）。
  *
- * <p><b>依赖方向</b>：叶子级（28 个类，依赖图最大子包），零 agent 内部依赖——
- * 被 llm/tools/seam/subagent 单向消费。
+ * <p><b>依赖方向</b>：叶子级（28 个类，依赖图最大子包），零 agent 内部依赖——被 llm
+ * （视觉包装，引用面最广）、seam、ui（附件探测、产物预览）以及装配层与 mcp（工具装饰链
+ * 拼装处）单向消费。
  */
 package io.github.javaside.springai.codetui.agent.media;

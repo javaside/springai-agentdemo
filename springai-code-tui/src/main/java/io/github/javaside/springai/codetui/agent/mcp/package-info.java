@@ -9,6 +9,8 @@
  *
  * <p><b>依赖方向</b>：依赖 permission（审批规则）/seam（AgentListener）/media/tools
  * （装饰链）以及 agent 装配层的 {@code AgentTools.testEngine} 测试工厂——最后这条是
- * {@code agent ↔ agent.mcp} 已知包循环的成因，列入重构遗留清理项。
+ * {@code agent ↔ agent.mcp} 已知包循环的成因，列入重构遗留清理项。另有
+ * {@code McpClientManager} 取模块根的 {@code AppInfo} 版本号作 MCP 客户端标识，构成
+ * {@code codetui ↔ agent.mcp} 第二条环（同属遗留清理项，改法是由装配层把版本号当参数传入）。
  */
 package io.github.javaside.springai.codetui.agent.mcp;

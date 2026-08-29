@@ -6,6 +6,6 @@
  * （/context 命令的只读快照，纯 Java）。
  *
  * <p><b>依赖方向</b>：叶子级，零 agent 内部依赖——被 compaction（估算共享）、llm（用量
- * 记录）、seam（ContextStats 快照）单向消费。
+ * 记录）、seam（ContextStats 快照）、ui（{@code /context} 展示）与装配层单向消费。
  */
 package io.github.javaside.springai.codetui.agent.session;
