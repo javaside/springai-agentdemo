@@ -8,7 +8,7 @@
 
 | 版本 | 类型 | 摘要 |
 | --- | --- | --- |
-| 未发布 | 重构 | **重构**：`codetui.agent` 顶层 88 个类按功能拆进 10 个子包（`llm`/`mcp`/`subagent`/`skill`/`session`/`compaction`/`seam`/`tools`/`prompt`/`interjection`），顶层只留 `CodingAgent` 与 `AgentTools`。行为无变化。`docs/` 下 2026-08-28 之前的历史文档里的 `codetui.agent.*` 类路径按当时结构书写，未随本次调整更新。 |
+| [v1.18.3](docs/release-notes/v1.18.3.md) | 修订版 | **输出期打字卡死与终端崩溃根治 + agent 包按功能重构**：每帧 pty 写入限速改按物理行计（此前 300 的额度是逻辑 `OutputLine` 条数，一条折行/diff 展开成十几到上百物理行，实测一帧写出 4500 行），并给此前完全没接限速的流式出口补上预算（实测一帧 5000 行）——渲染线程不再被单帧占住数百毫秒，macOS Terminal.app 不再被几百 KB 的 pty 突发推进自身 use-after-free；`codetui.agent` 顶层 88 个类按功能拆进 10 个子包（`llm`/`mcp`/`subagent`/`skill`/`session`/`compaction`/`seam`/`tools`/`prompt`/`interjection`），顶层只留 `CodingAgent` 与 `AgentTools`，无方法体改动、行为无变化；16 个 main 包补齐 `package-info`（写明各包职责、依赖方向与拆包理由，含 2 条已知包循环与提权清单）。`docs/` 下 2026-08-28 之前的历史文档里的 `codetui.agent.*` 类路径按当时结构书写，未随本次调整更新。 |
 | [v1.18.2](docs/release-notes/v1.18.2.md) | 修订版 | **OpenCode Go 官方视觉模型 + Provider 能力隔离**：内置 `deepseek-v4-flash-vision-exp`，只为网关已确认的模型开放图片；UI 附件闸门与请求兑现统一按 provider+model 判定，避免聚合网关同名模型串用视觉能力；消息在飞、排队或待送达插话期间禁止切模型，避免图片静默降级；补齐图片处理实现原理与公共 API 文档 |
 | [v1.18.1](docs/release-notes/v1.18.1.md) | 修订版 | **DeepSeek 视觉图片可靠送达 + 二进制外置 fail-closed**：修复工具多响应被 Spring AI 展开后图片注册表按绝对下标错位、模型只看到引用而看不到图；项目外图片 Read 会复制进 artifacts 再引用，PNG/PDF hexdump 不再进入模型上下文；外置失败时 fail-closed 移除二进制内容；artifacts 副本 Read 与用户附件统一内容哈希 id，避免同一张图被当作两张 |
 | [v1.18.0](docs/release-notes/v1.18.0.md) | 功能版 | **`/context` 上下文占用透明化 + 工具调用报错不再毁掉回合**：报告升级为分类明细（事件按用户/助手/工具分桶，token 统一为「上下文占用」口径=系统提示词+会话消息，构成逐行占比、总和恒 100%）；工具名拼错/工具执行异常改为把错误原因回给模型自纠（不新增别名工具），MCP 工具为空不再覆盖 defaultTools；长期记忆系统提示精简省 34% token，系统提示词补「动手前查技能清单、需求未定须提问」；并入 v1.17.2 的「输出中打字」卡死/终端崩溃修复（token 估算移出渲染线程、残行 20 万上限、渲染降频、预览节流） |
