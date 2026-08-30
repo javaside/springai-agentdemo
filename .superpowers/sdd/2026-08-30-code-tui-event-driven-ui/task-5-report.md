@@ -213,3 +213,165 @@ BUILD SUCCESS
    入队即可。
 5. **PTY 冒烟（§16.1）与真实 Terminal.app（§16.2）未在本任务执行**：代码层回归已全绿；终端层
    验收按设计留给后续任务，本报告不声称已验证终端崩溃根治。
+
+---
+
+# Task 5 fix round 实施报告（审查 I-1 / I-2 / I-3）
+
+## 状态
+
+DONE（提交 `a66b13e`，9 files，+999/−132）
+
+## 修改文件
+
+- Create: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/SegmentedWrap.java`（可续折行）
+- Modify: `ScrollbackPrinter.java`（游标重写为段级推进 + raw 原文；移除死的 wrap 注入接缝）
+- Modify: `output/PhysicalOutputQueue.java`（PhysicalLine.raw、PhysicalSink raw 出口、绝对 deadline、工厂成本契约）
+- Modify: `output/OutputCursor.java`（契约改为段级有界 + 如实标注例外）
+- Modify: `CodeTuiView.java`（留底记原文 + 引用去重；per-tick 共享 deadline；pending 有界转入）
+- Create 测试: `SegmentedWrapTest`、`ScrollTailRecordingTest`、`DrainBudgetSharingTest`
+- Modify 测试: `ScrollbackPrinterTest`（+2 例：lineCursor/assistantCursor 的段级推进与 raw）
+
+## I-1：单条超长无换行逻辑行的「整行段一次物化」突刺
+
+**方案选择：a)（可续折行）——String 与 Text 两条路径都做，不只 String。**
+
+理由：审查给的方向 a 是「彻底消除整行物化」，b 是「如实声明上界」。选 a 的决定性原因是
+方案 b 的「按物理行数设内部上界再分段惰性推进」<b>本身就是方案 a 的实现</b>——一旦要写
+「超过阈值时按宽度分段推进」，段推进器就已经存在了，阈值只是多余的分支。而「Text 渐进折行
+实现代价过高」的前提不成立：TextWrap 的折行本来就是逐 span、逐字符推进的循环，把它从
+「跑完整行返回 List」改成「保存推进状态、每次吐一段」是机械重构（当前 span 引用 + 剩余
+内容 + 后续 span 下标 + 当前行已用宽度，O(1) 状态），不需要触碰渲染语义。
+
+实现：
+
+- **`SegmentedWrap`**（新）：两个段推进器。
+  - `Plain(source, width)`：纯字符串，`nextSegment()` 用 `CharWidth.substringByWidth` 逐段截取
+    （与 `CodeTuiView.wrapSegments` 同一循环），状态只有剩余字符串引用；
+  - `Styled(spans, width)`：span 行，逐 span 推进、样式跨拆分点保留（与 `TextWrap.wrapLine`
+    同一算法），状态 O(1)。
+  - **一致性由 `SegmentedWrapTest` 钉死**：同一输入下逐段产出序列与 `TextWrap.wrap` /
+    `wrapSegments` <b>逐一相等</b>（含空行、宽字符、跨 span 拆分、60k 长行；宽度 1..5000 扫过）。
+    两处分家 = 「打出去的行」与「留底重放的行」对不上，测试会当场红。
+- **`ScrollbackPrinter` 游标重写**：`BlockCursor`（整行段缓冲）→ `PlainLineCursor`（String 路径：
+  userBlock/lineCursor）+ `MdLineCursor`（markdown 路径：assistant/流式）+ diff 游标内联段推进。
+  每次 `next()` 恰好产出<b>一个</b>物理段。staging 上界从「一条逻辑行的全部段」降到
+  「正在产出的那一个段」——与逻辑行长度、整条输出总行数都无关。
+- **`OutputCursor` 契约更新**：staging 上界改为「当前正在产出的一个物理段 + O(1) 推进状态」，
+  并<b>如实标注已知例外</b>——cursor 工厂的一次性成本（diff 读文件+LCS，O(一个工具入参)，
+  受 LCS_MAX/BODY_CAP 封顶）无法按段切片、发生在第一段之前、时间预算之外；每条 diff 输出
+  只付一次（`PhysicalOutputQueue` 类注释同款声明）。
+
+回归钉：`ScrollbackPrinterTest.lineCursor_overlongLine_producesOneSegmentPerNext_andCarriesRawLine`
+（60k INFO：第一次 next() 立即返回首段、751 段拼回一字不差、每段 ≤80）；
+`assistantCursor_overlongLine_producesSegmentsWithPreWrapRawText`（Text 路径同理 + raw 宽度=整行宽）。
+
+## I-2：scrollTail 留底语义恢复「存折行前内容」
+
+**方案选择：恢复原文留底（优先项），不是声明有损。**
+
+实现：
+
+- `PhysicalLine` 增加 `raw` 字段（该段所属<b>逻辑行折行前</b>的原文；同一条逻辑行的所有段共享
+  同一引用；自包含行如欢迎横幅为 null）+ `PhysicalLine.of(plain, styled, raw)`；
+- `PhysicalSink` 两个出口方法都透传 raw；
+- 各 cursor 在逻辑行开始时构造一次 raw：lineCursor=带样式整行 Text（样式保真）、
+  userBlock=整行用户块（缩进+底色+补白）、assistant/流式=整行渲染（含缩进）、
+  diff=整条 diff 行渲染（行号列+底色）、diff 回退=带样式摘要行；
+- `CodeTuiView.queueSink`：`record(raw != null ? raw : line)`——留底记原文；
+- **`record` 按 raw 引用去重**（`==`，非 equals）：一条 60k 长行的 751 个段只占 1 条留底
+  （不去重的话配额照样被 751 条重复原文吃穿——这是实现时当场发现、`ScrollTailRecordingTest`
+  第一轮红灯抓出来的）；/clear 清留底时一并复位去重指针。
+
+语义恢复验证（`ScrollTailRecordingTest`，从视图外部反射读留底）：
+- 60k 无换行 INFO：留底 ≤3 条（逻辑行 1 条 + 回合边界空行），非 ~751 条；
+- 40 条短 INFO 占 40 条留底配额（非被折行段稀释）；
+- 变宽重放回流：5000 列下 60k 长行重折成 ~13 段（非恒 751 段永不合并）；重放到 100_000 列时
+  整条逻辑行回流成 1 个物理行——「内容无损、重排无损」两个维度都钉住。
+
+顺带修正：printer 构造器的 `wrap` 注入参数移除（生产两处调用本就都传同一个静态实现，
+接缝已死；移除后 `ScrollbackPrinterTest` 的注入点同步简化，折行语义由 printer 内部保证）。
+
+## I-3：单 tick 预算共享 + pending 有界转入
+
+- **共享 deadline**：`drainInsideBatch` 开头计算一次 `batchDeadlineNanos = nanoTime()+12ms`，
+  输出段与计划正文段的 `drainQueuedOutput` 都传这同一个<b>绝对</b>时刻；
+  `PhysicalOutputQueue.drain(maxRows, deadlineNanos, sink)` 改收绝对 deadline（≤0=不限时）。
+  单 tick 最坏从 2×12ms 回到 1×12ms。
+- **pending 有界转入**：`MAX_PENDING_INTAKE_PER_TICK = 600`（≈2× 物理行预算），超出留在
+  `state.pending` 等后续 tick——顺序不变（pending 本身有序、队列 FIFO）、不丢内容
+  （消费完队头自然轮到）。20 000 条积压不再一个 tick 里做 20 000 次 pollPending 的同步循环。
+- **12ms 常量**：`MAX_DRAIN_NANOS` javadoc 明确标注「<b>未做实测标定</b>，待 Terminal.app 实机
+  验收（§16）以输出期间按键延迟回标」。
+- **工厂成本契约**：见 I-1 的如实声明（无法分段的一次性成本，写进 `PhysicalOutputQueue` 与
+  `OutputCursor` 的契约注释，不藏）。
+
+回归钉：`DrainBudgetSharingTest`（4 例）——计划模态 tick 内两段的 deadline 必须是同一绝对
+时刻（通过 `drainDeadlinesObservedForTest` 观测点断言）；普通 tick 只有一段（基线）；
+20 000 条 pending 单 tick 转入 ≤600 且最终一行不丢、顺序不乱（5_000 tick 内排空）；
+50 条正常体量不被节流。
+
+## 测试
+
+目标套件（brief Step 4 命令 + 三个新测试类）：
+
+```bash
+mvn -pl springai-code-tui -am \
+  -Dtest=DrainBurstCapTest,StrictOutputFairnessTest,ScrollbackPrinterTest,DiffRendererTest,SegmentedWrapTest,ScrollTailRecordingTest,DrainBudgetSharingTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+```
+Tests run: 9,  Failures: 0, Errors: 0, Skipped: 0 -- ScrollbackPrinterTest（+2 fix round 例）
+Tests run: 4,  Failures: 0, Errors: 0, Skipped: 0 -- DrainBudgetSharingTest（新）
+Tests run: 3,  Failures: 0, Errors: 0, Skipped: 0 -- ScrollTailRecordingTest（新）
+Tests run: 3,  Failures: 0, Errors: 0, Skipped: 0 -- StrictOutputFairnessTest
+Tests run: 7,  Failures: 0, Errors: 0, Skipped: 0 -- SegmentedWrapTest（新）
+Tests run: 9,  Failures: 0, Errors: 0, Skipped: 0 -- DiffRendererTest
+Tests run: 8,  Failures: 0, Errors: 0, Skipped: 0 -- DrainBurstCapTest
+Tests run: 43, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+RED 确认（新测试先于对应实现运行）：
+- `ScrollTailRecordingTest` 两例红：留底 400 条（=折后段，I-2 缺陷的真实形态）；
+- `SegmentedWrap`/一致性、共享 deadline 钉在实现落地后全绿（I-1/I-3 的行为面与实现同轮落地，
+  钉住防回归）。
+
+全模块回归（设计 §15.6）：
+
+```bash
+mvn -pl springai-code-tui -am test
+```
+
+```
+Tests run: 1764, Failures: 0, Errors: 0, Skipped: 10（既有 skip，与本任务无关）
+springai-agentdemo ... SUCCESS / springai-tamboui-inline-patch ... SUCCESS / springai-code-tui ... SUCCESS [01:07 min]
+BUILD SUCCESS
+```
+
+（Task 5 首轮为 1749 例；+15 = 本轮新增测试。既有断言零弱化：`DrainBurstCapTest` 8 例、
+`ScrollbackPrinterTest` 原 7 例、`DiffRendererTest` 9 例、`StrictOutputFairnessTest` 3 例
+全部原样通过。）
+
+## commit
+
+`a66b13e`（worktree `refactor/event-driven-ui`，基于 `f29a40c`）
+
+## fix round concerns
+
+1. **diff 工厂成本仍在预算外（如实声明，未消除）**：读文件 + LCS 是 O(一个工具入参) 的一次性
+   工作，受 DiffRenderer 的 LCS_MAX=800/BODY_CAP=80 封顶、每条 diff 输出只付一次；但它在第一段
+   之前发生，无法按行切片。彻底消除需把 diff 展开本身做成增量游标（LCS 的前缀性质可用），量级
+   明显更大，未在本轮做。已写进 `PhysicalOutputQueue`/`OutputCursor` 契约注释与上方 I-1 节。
+2. **`Styled` 与 `TextWrap` 的一致性靠测试钉而非共享实现**：两处是同一算法的两份代码（一份
+   一次性、一份增量）。`SegmentedWrapTest` 用 60+ 组输入×7 档宽度逐一比对；后续若改
+   `TextWrap` 的折行规则（如引入断词），记得同步 `SegmentedWrap`（或届时把 TextWrap 本身
+   增量化、删掉一份）。
+3. **留底 raw 的内存形态**：一条逻辑行占一条 raw（原文引用或整行 Text）。assistant 的 raw 是
+   新建的 Text（`indented(renderFinalized(...))`），与打出去的段内容同源、不额外复制大字符串；
+   400 条配额下总内存 ≤400 行原文，与旧行为同阶。
+4. **`lastRecordedRaw` 去重只看相邻**：同一 raw 的段在留底里必然相邻（游标按序产出），相邻判等
+   足够；跨逻辑行穿插的场景不存在（一条逻辑行的段连续产出）。
+5. **12ms 仍未标定**（I-3 只是把「单 tick 最坏 2×」修成 1×，量值本身待实机回标，见常量注释）。
+
