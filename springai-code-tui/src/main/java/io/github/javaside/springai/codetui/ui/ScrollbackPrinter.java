@@ -1,6 +1,8 @@
 package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
+import io.github.javaside.springai.codetui.ui.output.OutputCursor;
+import io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine;
 import dev.tamboui.style.Color;
 import dev.tamboui.style.Style;
 import dev.tamboui.text.CharWidth;
@@ -9,7 +11,9 @@ import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
 
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.IntSupplier;
@@ -28,6 +32,14 @@ import static io.github.javaside.springai.codetui.ui.Theme.*;
  *
  * <p><b>{@code md} 归属</b>：markdown 渲染是单一职责，finalized（scrollback 行）与 preview（未完成残行的
  * 实时预览）同源、共享代码围栏状态，故整体归本类；视图 render() 的预览改走 {@link #preview}。
+ *
+ * <p><b>cursor 工厂（严格分批，设计 §9.1）</b>：本类除「一次打完」的旧方法（欢迎横幅等小输出仍走它们）
+ * 外，另提供把逻辑输出展开成 {@link OutputCursor} 的工厂（{@link #assistantCursor(String)}、
+ * {@link #userBlockCursor(String)}、{@link #toolStartCursor(OutputLine)}、{@link #lineCursor(OutputLine)}、
+ * {@link #streamingLinesCursor(List)}）。工厂<b>保留既有渲染状态与样式</b>——markdown 代码围栏/围栏内
+ * 语言/跨行块注释状态存于本类 {@link #md}（游标推进它，跨批次不回退），diff 的 header/hunk/行样式与
+ * 真实行号随 {@link DiffRenderer} 的结果行推进。cursor 每次只物化<b>当前一条逻辑行</b>折行后的物理段
+ * （staging 有界，见 {@link OutputCursor} 契约），消费方逐行预算提交——单个大输出不再能独占 UI 线程。
  */
 final class ScrollbackPrinter {
 
@@ -163,29 +175,21 @@ final class ScrollbackPrinter {
     private static Span key(String s)  { return Span.styled(s, WELCOME_KEY); }
     private static Span hint(String s) { return Span.styled(s, WELCOME_HINT); }
 
-    /** 用户消息：灰底白字块，仿 Claude Code。按终端宽度软折行，每行右侧补白使灰底铺满整行。新回合先重置 md 围栏态。 */
+    /**
+     * 用户消息：灰底白字块，仿 Claude Code。按终端宽度软折行，每行右侧补白使灰底铺满整行。新回合先重置 md 围栏态。
+     *
+     * <p>严格分批版：见 {@link #userBlockCursor(String)}（本方法 = 一次性跑完该游标，小输出用）。
+     */
     void userBlock(String text) {
-        md.reset();   // 新回合：清 markdown 代码围栏状态（原在 drain 的 USER 分支）
-        Sink r = sink;
-        int width = terminalWidth.getAsInt();
-        int inner = Math.max(1, width - displayWidth(INDENT));
-        for (String logical : text.split("\n", -1)) {
-            for (String seg : wrap.apply(logical, inner)) {
-                int pad = Math.max(0, inner - displayWidth(seg));
-                r.println(Text.from(Line.from(
-                        Span.styled(INDENT, USER_BLOCK),
-                        Span.styled(seg, USER_BLOCK),
-                        Span.styled(" ".repeat(pad), USER_BLOCK))));
-            }
-        }
+        run(userBlockCursor(text));
     }
 
-    /** AI 正文：markdown/语法高亮 + 缩进 + 按终端宽折行，下沉 scrollback。 */
+    /** AI 正文：markdown/语法高亮 + 缩进 + 按终端宽折行，下沉 scrollback。严格分批版见 {@link #assistantCursor(String)}。 */
     void assistant(String text) {
         printWrapped(md.renderFinalized(text));
     }
 
-    /** 流式完整行：同 assistant。 */
+    /** 流式完整行：同 assistant。严格分批版见 {@link #streamingLinesCursor(List)}。 */
     void streamingLine(String row) {
         printWrapped(md.renderFinalized(row));
     }
@@ -204,33 +208,186 @@ final class ScrollbackPrinter {
         }
     }
 
-    /** 工具开始：edit/write 展开成 diff 块（真实行号、语法高亮 + 增删底色）；其余工具单行摘要。 */
+    /**
+     * 工具开始：edit/write 展开成 diff 块（真实行号、语法高亮 + 增删底色）；其余工具单行摘要。
+     * 严格分批版见 {@link #toolStartCursor(OutputLine)}（本方法 = 一次性跑完该游标）。
+     */
     void toolStart(OutputLine ol) {
-        List<DiffRenderer.DiffLine> lines =
-                (ol.raw() == null) ? List.of() : diff.render(ol.toolName(), ol.raw());
-        if (lines.isEmpty()) {                                      // 非文件写入 / 无法解析：回退单行摘要
-            sink.println(Text.styled(ol.text(), TOOL));
-            return;
-        }
-        int width = terminalWidth.getAsInt();
-        String lang = langOf(lines);        // 从 header 的路径推断语言
-        boolean inBlock = false;            // 跨行块注释状态，按 body 顺序推进
-        for (DiffRenderer.DiffLine dl : lines) {
-            List<Span> hl = null;
-            if (dl.type() != DiffRenderer.Type.HEADER && dl.type() != DiffRenderer.Type.TRUNCATED) {
-                SyntaxHighlighter.Result rr = SyntaxHighlighter.highlight(dl.text(), lang, inBlock);
-                inBlock = rr.stillInBlockComment();
-                hl = rr.spans();
-            }
-            sink.println(diffLine(dl, hl, width));
-        }
+        run(toolStartCursor(ol));
     }
 
     /** drain 的 default 分支：工具/Todo/错误等单色贴左；{@code styleFor} 返回 null（ASSISTANT）则原样。 */
     void line(OutputLine ol) {
-        Style st = styleFor(ol.kind());
-        if (st == null) sink.println(ol.text());
-        else sink.println(Text.styled(ol.text(), st));
+        run(lineCursor(ol));
+    }
+
+    // ── cursor 工厂（严格分批；渲染语义与上面的一次性方法逐字同源） ──────────
+
+    /**
+     * 用户消息 cursor：灰底白字块。每条逻辑行按内宽折行、右侧补白铺满灰底。
+     * 围栏复位（{@code md.reset()}）在<b>工厂调用时</b>发生（drain 轮到这条 USER 输出时），
+     * 与旧实现「drain 的 USER 分支」时机一致。
+     */
+    OutputCursor userBlockCursor(String text) {
+        md.reset();   // 新回合：清 markdown 代码围栏状态（原在 drain 的 USER 分支）
+        return new BlockCursor(text.split("\n", -1)) {
+            @Override void renderInto(String logical, Deque<PhysicalLine> out) {
+                int inner = Math.max(1, terminalWidth.getAsInt() - displayWidth(INDENT));
+                for (String seg : wrap.apply(logical, inner)) {
+                    int pad = Math.max(0, inner - displayWidth(seg));
+                    out.addLast(PhysicalLine.styled(Text.from(Line.from(
+                            Span.styled(INDENT, USER_BLOCK),
+                            Span.styled(seg, USER_BLOCK),
+                            Span.styled(" ".repeat(pad), USER_BLOCK)))));
+                }
+            }
+        };
+    }
+
+    /**
+     * AI 正文 cursor：一条逻辑行 → {@code md.renderFinalized}（推进围栏/高亮状态）→ 折行 → 带缩进物理段。
+     * <b>状态跨批次保持</b>：{@link #md} 是 printer 级单例，游标每次 {@code next()} 渲染下一条逻辑行时
+     * 从上一条结束时的状态继续——把渲染拆进游标而不复制状态，正是为了保证这一点。
+     */
+    OutputCursor assistantCursor(String text) {
+        return new BlockCursor(text.split("\n", -1)) {
+            @Override void renderInto(String logical, Deque<PhysicalLine> out) {
+                appendWrapped(md.renderFinalized(logical), out);
+            }
+        };
+    }
+
+    /** 流式完整行 cursor：一批逻辑行逐条走 assistant 语义（同一条 md 围栏/高亮状态链）。 */
+    OutputCursor streamingLinesCursor(List<String> rows) {
+        return new BlockCursor(rows.toArray(new String[0])) {
+            @Override void renderInto(String logical, Deque<PhysicalLine> out) {
+                appendWrapped(md.renderFinalized(logical), out);
+            }
+        };
+    }
+
+    /**
+     * 工具开始 cursor。diff 展开（读文件 + LCS + 真实行号定位）在<b>工厂调用时</b>做一次——
+     * header/上下文/行号依赖整体 diff，属于「O(一个工具入参)」的一次性工作，不随批次重复
+     * （也不在入队时做：队列里堆着的项不占渲染开销）。之后逐行（含逐行语法高亮 + 跨行块注释
+     * 推进）惰性产出；非文件写入 / 无法解析 → 单行摘要回退，与旧实现一致。
+     */
+    OutputCursor toolStartCursor(OutputLine ol) {
+        return new OutputCursor() {
+            private final List<DiffRenderer.DiffLine> lines =
+                    (ol.raw() == null) ? List.of() : diff.render(ol.toolName(), ol.raw());
+            private final boolean fallback = lines.isEmpty();   // 非文件写入 / 无法解析：单行摘要
+            private final String lang = langOf(lines);          // header 路径推断语言（不变）
+            private final ArrayDeque<PhysicalLine> fallbackPending = new ArrayDeque<>();
+            private int at;
+            private boolean inBlock;                             // diff body 跨行块注释状态：留在游标里跨批次保持
+            private boolean fallbackStarted;
+
+            @Override public boolean hasNext() {
+                if (fallback) return !fallbackStarted || !fallbackPending.isEmpty();
+                return at < lines.size() || !pendingSegs.isEmpty();
+            }
+
+            @Override public PhysicalLine next() {
+                try {
+                    if (fallback) {                              // 摘要行同样按终端宽折行（同 lineCursor）
+                        if (!fallbackStarted) {
+                            fallbackStarted = true;
+                            for (String seg : wrap.apply(ol.text(), terminalWidth.getAsInt())) {
+                                fallbackPending.addLast(PhysicalLine.styled(Text.styled(seg, TOOL)));
+                            }
+                        }
+                        return fallbackPending.pollFirst();
+                    }
+                    // 先排空上一条 diff 行的折行段，再渲染下一条——顺序才不乱、段不丢
+                    PhysicalLine buffered = pendingSegs.pollFirst();
+                    if (buffered != null) return buffered;
+                    if (at >= lines.size()) return null;
+                    DiffRenderer.DiffLine dl = lines.get(at++);
+                    List<Span> hl = null;
+                    if (dl.type() != DiffRenderer.Type.HEADER && dl.type() != DiffRenderer.Type.TRUNCATED) {
+                        SyntaxHighlighter.Result rr = SyntaxHighlighter.highlight(dl.text(), lang, inBlock);
+                        inBlock = rr.stillInBlockComment();
+                        hl = rr.spans();
+                    }
+                    // diff 主体行按终端宽折行（ADD/DEL 底色带铺满每段），段缓冲按需物化（staging 有界）
+                    for (Text piece : TextWrap.wrap(diffLine(dl, hl, terminalWidth.getAsInt()),
+                            terminalWidth.getAsInt())) {
+                        pendingSegs.addLast(PhysicalLine.styled(piece));
+                    }
+                    return pendingSegs.pollFirst();
+                } catch (RuntimeException e) {
+                    return null;   // 渲染降级：单行失败不打断批次（diffLine/高亮对任何输入不抛，此处为契约兜底）
+                }
+            }
+            private final ArrayDeque<PhysicalLine> pendingSegs = new ArrayDeque<>();
+        };
+    }
+
+    /**
+     * 单色行 cursor（TOOL_OK/TODO/ERROR/INFO/SUBAGENT_* 及 styleFor==null 的 ASSISTANT）。
+     * 超宽行按终端宽折行（旧实现在视图出口兜底折；折行移进游标后这里接手，每段沿用同一样式），
+     * 守住「一个 println = 一个物理行」——定宽截断会把右边文字直接吃掉。
+     */
+    OutputCursor lineCursor(OutputLine ol) {
+        return new BlockCursor(new String[]{ol.text()}) {
+            @Override void renderInto(String logical, Deque<PhysicalLine> out) {
+                Style st = styleFor(ol.kind());
+                for (String seg : wrap.apply(logical, terminalWidth.getAsInt())) {
+                    if (st == null) out.addLast(PhysicalLine.plain(seg));
+                    else out.addLast(PhysicalLine.styled(Text.styled(seg, st)));
+                }
+            }
+        };
+    }
+
+    /**
+     * 逻辑行 → 物理行段 的通用游标骨架：每次 {@code next()} 只渲染<b>一条</b>逻辑行，
+     * 其折行段缓存于 {@code pending}（≤ 该逻辑行的物理段数）。staging 有界：任一时刻
+     * 物化的物理行 ≤ 一条逻辑行的展开，与整条输出的总行数无关（见 {@link OutputCursor} 契约）。
+     */
+    private abstract static class BlockCursor implements OutputCursor {
+        private final String[] logicals;
+        private int at;
+        private final ArrayDeque<PhysicalLine> pending = new ArrayDeque<>();
+
+        BlockCursor(String[] logicals) { this.logicals = logicals; }
+
+        /** 渲染一条逻辑行，物理段依次追加到 {@code out}（每段宽度 ≤ 终端宽）。 */
+        abstract void renderInto(String logical, Deque<PhysicalLine> out);
+
+        @Override public final boolean hasNext() {
+            return !pending.isEmpty() || at < logicals.length;
+        }
+
+        @Override public final PhysicalLine next() {
+            try {
+                while (pending.isEmpty() && at < logicals.length) {
+                    renderInto(logicals[at++], pending);
+                }
+                return pending.pollFirst();
+            } catch (RuntimeException e) {
+                return null;   // 渲染降级：一条逻辑行失败不打断批次（渲染器自身「不抛」契约的兜底）
+            }
+        }
+    }
+
+    /** 一条已渲染 span 行：折行（终端宽 − 缩进）+ 悬挂缩进后追加到 out。逻辑与 {@link #printWrapped} 同源。 */
+    private void appendWrapped(List<Span> spans, Deque<PhysicalLine> out) {
+        int inner = Math.max(1, terminalWidth.getAsInt() - displayWidth(INDENT));
+        for (Text piece : TextWrap.wrap(Text.from(Line.from(spans)), inner)) {
+            out.addLast(PhysicalLine.styled(indented(piece.lines().get(0).spans())));
+        }
+    }
+
+    /** 一次性跑完一个游标（旧「打完整条」语义；欢迎横幅/计划正文等小输出与既有测试路径用）。 */
+    private void run(OutputCursor c) {
+        while (c.hasNext()) {
+            PhysicalLine l = c.next();
+            if (l == null) break;
+            if (l.styled() != null) sink.println(l.styled());
+            else sink.println(l.plain() == null ? "" : l.plain());
+        }
     }
 
     // ── 私有渲染细节（原视图私有方法，逐字搬运） ─────────────────────────

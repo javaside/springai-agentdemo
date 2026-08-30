@@ -32,6 +32,9 @@ import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingMode;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingStrengthKind;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
+import io.github.javaside.springai.codetui.ui.output.OutputCursor;
+import io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue;
+import io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine;
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
 import dev.tamboui.layout.Rect;
@@ -206,13 +209,23 @@ public final class CodeTuiView extends InlineApp {
     private static final int SCROLL_TAIL_CAP = 400;
 
     /**
-     * 本帧已经写进 pty 的物理行数，{@link #MAX_ROWS_PER_DRAIN} 的计数器。
+     * 严格分批的物理行输出队列（设计 §9.1/§9.2）：pending / 流式完整行 / 超预算计划正文都先进它，
+     * {@link #drainInsideBatch} 每批按「物理行数 + 时间」双预算从队头游标逐行消费。
      *
-     * <p>在 sink 出口（构造里的 {@code recording}）自增——那是所有 println 的唯一必经之路，也是
-     * 折行发生的地方，所以数到的是真实行数而不是估算。{@link #drain} 开头归零。
-     * 只在渲染线程读写（sink 打印与 drain 都在渲染线程）。
+     * <p><b>为什么换掉旧的 {@code rowsThisFrame} 软上限</b>：旧实现按「条」取，一条 {@link OutputLine}
+     * 经 markdown/diff/折行展开是原子的——单个大输出（长正文 / 大 diff / 无换行超长行）一帧可写
+     * 几百上千行，预算形同虚设（{@code DrainBurstCapTest} 曾靠 SLACK=200 容忍）。队列把逻辑输出
+     * 变成可续消费的 {@link OutputCursor}，在取第 {@code MAX_ROWS_PER_DRAIN+1} 行之前停下，
+     * 上限成为硬上限。活跃游标在队头，耗尽才移除——staging 任意时刻只物化一个逻辑项的当前逻辑行。
      */
-    private int rowsThisFrame;
+    private final PhysicalOutputQueue outputQueue;
+
+    /**
+     * 本批 drain 的时间预算（纳秒）。行数预算（{@link #MAX_ROWS_PER_DRAIN}）之外的第二道闸：
+     * 一行渲染即使很便宜，几千行叠起来也占 UI 线程数十 ms——期间按键全部排队。
+     * 行间检查 {@code System.nanoTime()}（见 {@link PhysicalOutputQueue#drain}）。
+     */
+    private static final long MAX_DRAIN_NANOS = 12_000_000L;
 
     /**
      * 刹车期间探明的「确有结果被扣住」。状态栏那句提示读它，<b>不</b>每帧去取列表。
@@ -324,24 +337,52 @@ public final class CodeTuiView extends InlineApp {
             @Override public void println(Text t)   { var r = runner(); if (r != null) r.println(t); }
             @Override public void println(String s) { var r = runner(); if (r != null) r.println(s); }
         };
-        // 包一层留底 + 折行安全网：每行进 scrollback 的同时进 scrollTail 环形缓冲（resize 停稳
-        // 重放的素材，见字段注释）；出口处按终端宽兜底折行——InlineDisplay 的 println 定宽截断，
-        // 任何一条超宽行（错误、工具摘要等没自己折行的路径）都会「文字没显示全」。留底存的是
-        // <b>折行前</b>的原始行：重放按当时宽度重新折，拖窄不丢内容。包在最外层，测试注入的
-        // sink 也被记录且经过折行——两段逻辑因此可测。
+        // 包一层留底：每行进 scrollback 的同时进 scrollTail 环形缓冲（resize 停稳重放的素材，
+        // 见字段注释）。留底存的是<b>已按终端宽折好</b>的物理行——严格分批重构后，printer 的 cursor
+        // 出口产出的每条物理行本就 ≤ 终端宽（折行移进了 cursor，见 ScrollbackPrinter.appendWrapped），
+        // 这里不再二次折行；重放按当时宽度重新折（scrollTail 存 Text，宽度信息无损）。
         ScrollbackPrinter.Sink inner = sink;
         ScrollbackPrinter.Sink recording = new ScrollbackPrinter.Sink() {
-            @Override public void println(Text t) {
-                record(t);
-                for (Text piece : TextWrap.wrap(t, sinkWidth())) { inner.println(piece); rowsThisFrame++; }
-            }
-            @Override public void println(String s) {
-                record(s);
-                for (String seg : wrapSegments(s, sinkWidth())) { inner.println(seg); rowsThisFrame++; }
-            }
+            @Override public void println(Text t)   { record(t); inner.println(t); }
+            @Override public void println(String s) { record(s); inner.println(s); }
         };
         this.printer = new ScrollbackPrinter(recording, root, this::terminalWidth, CodeTuiView::wrapSegments);
+        this.outputQueue = new PhysicalOutputQueue(printer::streamingLinesCursor);
+        this.queueSink = new PhysicalOutputQueue.PhysicalSink() {
+            @Override public void printlnPlain(String line) { recording.println(line); }
+            @Override public void printlnStyled(Text line)  { recording.println(line); }
+        };
         this.ctxUsage = new ContextUsage(onSubmit::contextStats, state::pushInfo);
+    }
+
+    /** 队列出口 → 留底 sink（构造时固定；物理行已折好，直进 scrollTail + 终端）。 */
+    private final PhysicalOutputQueue.PhysicalSink queueSink;
+
+    /** 本批 drain 已写出的物理行数（drainInsideBatch 内跨段共享 MAX_ROWS_PER_DRAIN 预算）。 */
+    private int batchRowsUsed;
+
+    /**
+     * 消费一批输出队列：行预算 {@code budget}（≤0 直接 no-op）+ 时间预算 MAX_DRAIN_NANOS。
+     *
+     * @return 本段实际写出的物理行数（供后续段从同一预算里扣）
+     */
+    private int drainQueuedOutput(int budget) {
+        if (budget <= 0 || outputQueue.isEmpty()) return 0;
+        return outputQueue.drain(budget, MAX_DRAIN_NANOS, queueSink).rowsWritten();
+    }
+
+    /**
+     * 一条定稿 {@link OutputLine} 入输出队列：按 kind 选 printer 的 cursor 工厂（保持既有
+     * markdown/diff/用户块样式语义），工厂惰性调用（drain 轮到它时才展开，diff 的读文件+LCS
+     * 只做一次）。drain 输出段的 kind 分派与旧实现逐字对应。
+     */
+    private void enqueueOutputLine(OutputLine ol) {
+        switch (ol.kind()) {
+            case USER       -> outputQueue.enqueue(v -> printer.userBlockCursor(ol.text()));   // 灰底白字块
+            case ASSISTANT  -> outputQueue.enqueue(v -> printer.assistantCursor(ol.text()));   // markdown + 缩进
+            case TOOL_START -> outputQueue.enqueue(v -> printer.toolStartCursor(ol));          // edit/write diff
+            default         -> outputQueue.enqueue(v -> printer.lineCursor(ol));               // 单色贴左
+        }
     }
 
     /** 初始高度：圆角输入框(空态 3=边框2+1 行) + 状态行(1)；输入换行后 textArea 的 preferredSize 随行数增高，运行器逐帧跟随。 */
@@ -479,7 +520,6 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private void drainInsideBatch() {
-        rowsThisFrame = 0;                                     // 本帧 pty 写入预算归零（见 MAX_ROWS_PER_DRAIN）
         animTick++;                                            // 推进状态栏波光动画帧（~66ms/帧）
         // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）。
         // ⚠ 必须在独立线程跑：大会话下 token 估算耗时数百 ms，直接在渲染线程调会周期性冻结
@@ -499,28 +539,23 @@ public final class CodeTuiView extends InlineApp {
                 parkCursorAtTop = false;       // 即使重放降级或异常，也必须把 IME 锚点放回文本行
             }
         }
-        for (OutputLine ol; rowsThisFrame < MAX_ROWS_PER_DRAIN && (ol = state.pollPending()) != null; ) {
-            switch (ol.kind()) {
-                case USER       -> printer.userBlock(ol.text());   // 灰底白字块，仿 Claude Code
-                case ASSISTANT  -> printer.assistant(ol.text());   // AI 正文：markdown/语法高亮 + 缩进
-                case TOOL_START -> printer.toolStart(ol);          // edit/write：展开成 diff 块；其余单行摘要
-                default         -> printer.line(ol);               // 工具/Todo/错误：单色贴左
+        // ── 输出：pending → 流式完整行 →（同一队列）超预算计划正文，严格分批消费（设计 §9.1）──
+        // 上限从此是硬上限：队列逐行预算，在取第 MAX_ROWS_PER_DRAIN+1 行之前停下；行间还检查
+        // 时间预算（MAX_DRAIN_NANOS）。旧的「单条 OutputLine 原子展开」路径已不存在——单个大输出
+        // （长正文 / 大 diff / 无换行超长行）与 5000 行流式突发同样受限，剩余留在队头游标里等下一批。
+        for (OutputLine ol; (ol = state.pollPending()) != null; ) {
+            enqueueOutputLine(ol);
+        }
+        // 流式完整行按「批预算条数」取（渲染仍是逐行惰性，见 PhysicalOutputQueue 的流式项）；
+        // 剩余行原样退回缓冲区头部，顺序不乱。只在本批输出队列已排空时才取——上一批没打完的
+        // 输出在时序上更早，不该被新流式行插队。
+        if (outputQueue.isEmpty()) {
+            List<String> rows = state.takeCompleteStreamingLines(MAX_ROWS_PER_DRAIN);
+            if (!rows.isEmpty()) {
+                outputQueue.enqueueStreamingLines(rows);
             }
         }
-        // 流式完整行：markdown/语法高亮 + 缩进。这条路径此前<b>不受限速</b>——而「窗口正在输出」走的
-        // 正是它，一次几千行的代码块会整帧灌进 pty（见 MAX_ROWS_PER_DRAIN）。按剩余预算取，
-        // 打不完的原样退回缓冲区头部等下一帧。
-        int budget = MAX_ROWS_PER_DRAIN - rowsThisFrame;
-        if (budget > 0) {
-            List<String> rows = state.takeCompleteStreamingLines(budget);
-            for (int i = 0; i < rows.size(); i++) {
-                if (rowsThisFrame >= MAX_ROWS_PER_DRAIN) {         // 预算被折行吃光：剩下的退回，顺序不乱
-                    state.unshiftStreamingLines(rows.subList(i, rows.size()));
-                    break;
-                }
-                printer.streamingLine(rows.get(i));
-            }
-        }
+        batchRowsUsed = drainQueuedOutput(MAX_ROWS_PER_DRAIN);
         ModalRequest head = state.peekModal();
         // 正在审批的请求已不在队首 → 它被别的线程摘走了（cancelCurrent/clearModals 已给它的线程投过 CANCEL，
         // 线程醒了、回合也结束了）。面板不能继续挂着一个没人在等的请求，就地退出模态；本 tick 可直接接上新队首。
@@ -558,6 +593,9 @@ public final class CodeTuiView extends InlineApp {
                 planFeedback = false;
                 planInput.clear();
                 printPlan(pl.plan());   // 正文进 scrollback（几十行塞进行内面板会把输入框顶出屏幕）
+                // 计划正文在侦测到模态的<b>同一批</b>里开始下沉（旧语义：本 tick 打印）；
+                // 与本批前段共用 MAX_ROWS_PER_DRAIN 预算——剩余行留在队列里等下一批，单批上限仍是硬上限。
+                drainQueuedOutput(MAX_ROWS_PER_DRAIN - batchRowsUsed);
             }
         }
         // ── 终端注意提示（tab 标题 + BEL，仿 Claude Code）──
@@ -1468,6 +1506,7 @@ public final class CodeTuiView extends InlineApp {
             onSubmit.killAllBackgroundTasks();       // 新会话不该有旧会话的任务在跑
             onSubmit.clearContext();                 // (A) 换 sessionId
             state.resetForNewSession();              // 复位面板/排队/提示
+            outputQueue.clear();                     // 严格分批后大输出可能还压在队列里没打完：与 pending 同语义一并丢弃
             lastShownModel = "";                     // 新会话首个回合重新打「⚙ 使用模型 X」
             pendingSkill = null;                      // 清掉未发送的技能挂载：新会话不继承
             var r = runner();
@@ -2528,14 +2567,19 @@ public final class CodeTuiView extends InlineApp {
     }
 
     /**
-     * 计划正文下沉 scrollback：走<b>既有</b>助手 markdown 路径（{@link ScrollbackPrinter#assistant}）。
+     * 计划正文下沉 scrollback：走<b>既有</b>助手 markdown 路径（{@link ScrollbackPrinter}）。
      *
      * <p><b>必须按 {@code \n} 逐行拆</b>：一个 println = 一个物理行，整块多行字符串会被塌成一行截断
      * （同 {@code ConversationState.flushStreaming}）。md 渲染器逐行推进代码围栏状态，正是按行喂的。
+     *
+     * <p><b>严格分批</b>：正文经 {@link #outputQueue} 逐行预算提交（计划可达几十行，与其它大输出
+     * 一样不允许独占 UI 线程）；拆行后的逻辑行顺序入队，与本批其它输出依次消费。
      */
     private void printPlan(String plan) {
-        printer.assistant("");                       // 与上文留白分隔
-        for (String line : plan.split("\n", -1)) printer.assistant(line);
+        outputQueue.enqueue(v -> printer.assistantCursor(""));   // 与上文留白分隔
+        for (String line : plan.split("\n", -1)) {
+            outputQueue.enqueue(v -> printer.assistantCursor(line));
+        }
     }
 
     /**
