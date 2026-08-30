@@ -11,13 +11,21 @@ package io.github.javaside.springai.codetui.ui.output;
  *
  * <p><b>staging 有界性</b>（本接口的契约，实现必须遵守）：
  * <ul>
- *   <li>{@link #hasNext()} 与 {@link #next()} 都以<b>摊还 O(当前逻辑行)</b>物化下一段物理行，
- *       绝不一次物化整条大输出的全部物理行——否则只是把 PTY 限流修好，UI 线程仍在 staging
- *       阶段被独占（正是本次重构要消除的形态）。实现的常驻状态与整条输出的总行数无关；</li>
- *   <li>允许的上界是「<b>当前这一条逻辑行</b>折行后的全部物理段」（该逻辑行本身已在内存里，
- *       其折行展开与它同阶），以及 O(1) 渲染器推进状态；</li>
+ *   <li>{@link #hasNext()} 与 {@link #next()} 都以<b>摊还 O(一个物理段)</b>物化下一段物理行，
+ *       绝不一次物化整条大输出的全部物理行——也<b>不一次物化单条逻辑行折行的全部段</b>
+ *       （fix round I-1：60k 无换行长逻辑行第一次 {@code next()} 只折一段 80 列的内容，
+ *       不再整行建 ~770 段；段级推进见 {@code SegmentedWrap}）；</li>
+ *   <li>允许的上界是「<b>当前正在产出的那一个物理段</b>」（含其 O(1) 推进状态：剩余偏移 /
+ *       当前 span 引用 / 渲染器跨行状态），与逻辑行长度、整条输出的总行数都无关；</li>
+ *   <li><b>已知例外（如实声明）</b>：cursor 工厂的一次性成本（diff 的读文件 + LCS，
+ *       O(一个工具入参)，受 DiffRenderer 的 LCS_MAX/BODY_CAP 上限约束）无法按段切片，发生在
+ *       第一段之前、时间预算之外——每条 diff 输出只付一次。详见
+ *       {@code PhysicalOutputQueue} 类注释；</li>
  *   <li>每条物化出的物理行宽度 ≤ 终端宽（消费方出口处另有兜底折行，但游标必须保证它退化为
  *       no-op，否则行数记账在两处会对不上）；</li>
+ *   <li>{@code next()} 返回的 {@code PhysicalLine.raw} 是该段所属<b>逻辑行的折行前原文</b>
+ *       （String 或 Text；同一条逻辑行的所有段共享同一引用），留底方据此记录原文；
+ *       无折行来源的自包含行 raw 为 null；</li>
  *   <li>游标内部异常由实现自兜（渲染降级），绝不把异常抛进 drain 循环。</li>
  * </ul>
  *
@@ -28,8 +36,8 @@ package io.github.javaside.springai.codetui.ui.output;
 public interface OutputCursor {
 
     /**
-     * 是否还有未提交的物理行。实现只允许为回答这个问题物化「下一条逻辑行」级别的状态
-     * （见类注释的 staging 契约），不得借机展开整条输出。
+     * 是否还有未提交的物理行。实现只允许为回答这个问题物化「推进状态」（见类注释的 staging
+     * 契约），不得借机展开整条输出或整条逻辑行的折行。
      */
     boolean hasNext();
 

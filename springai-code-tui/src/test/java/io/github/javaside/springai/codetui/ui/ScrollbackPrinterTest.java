@@ -9,6 +9,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** ScrollbackPrinter：喂输入，断言下沉到 scrollback 的行（经 Sink 接缝捕获，不经 InlineDisplay 的 ANSI 裁剪）。 */
@@ -21,9 +24,9 @@ class ScrollbackPrinterTest {
         @Override public void println(String line) { lines.add(line); }
     }
 
-    /** 造一个 printer：固定 80 列，不折行（wrap 返回原行），root=/work。 */
+    /** 造一个 printer：固定 80 列，root=/work（折行由 printer 内部完成，无需注入）。 */
     private static ScrollbackPrinter printerOver(RecordingSink sink) {
-        return new ScrollbackPrinter(sink, Path.of("/work"), () -> 80, (s, w) -> List.of(s));
+        return new ScrollbackPrinter(sink, Path.of("/work"), () -> 80);
     }
 
     @Test
@@ -112,5 +115,73 @@ class ScrollbackPrinterTest {
         assertTrue(sink.lines.get(0).contains("Task(explore)"));
         assertTrue(sink.lines.get(1).contains("⎿ Grep"));
         assertTrue(sink.lines.get(2).contains("认证走 JWT"));
+    }
+
+    // ── fix round I-1 / I-2：cursor 的段级推进与留底原文 ──────────────────
+
+    @Test
+    void lineCursor_overlongLine_producesOneSegmentPerNext_andCarriesRawLine() {
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = printerOver(sink);
+        String longInfo = "info " + "x".repeat(60_000);          // 80 列下 ~750 段
+
+        io.github.javaside.springai.codetui.ui.output.OutputCursor c =
+                p.lineCursor(new OutputLine(longInfo, OutputLine.Kind.INFO));
+
+        // 每次 next() 只折一段：第一次调用立即返回第一段（不先把 750 段全建出来），
+        // hasNext 无需消费后续内容即可回答。这是「可续折行」的可观测行为面。
+        // INFO 走带样式路径（styleFor(INFO)=INFO_LINE），纯文本从 styled().rawContent() 取。
+        assertTrue(c.hasNext());
+        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine first = c.next();
+        assertNotNull(first.styled(), "INFO 有样式（styleFor 非 null），走 styled 路径");
+        assertTrue(dev.tamboui.text.CharWidth.of(first.styled().rawContent()) <= 80, "首段宽度 ≤ 终端宽");
+        assertTrue(first.styled().rawContent().startsWith("info "));
+        assertTrue(c.hasNext(), "还有 ~749 段");
+
+        // 留底原文（I-2）：每个物理段携带其所属逻辑行的原文（带样式的整行 Text），且各段共享同一引用
+        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine second = c.next();
+        assertTrue(first.raw() instanceof dev.tamboui.text.Text,
+                "INFO 的留底原文应为带样式整行 Text（重放时样式不丢），实际 " + first.raw().getClass());
+        assertEquals(longInfo, ((dev.tamboui.text.Text) first.raw()).rawContent(),
+                "raw 应为折行前的逻辑行原文");
+        assertSame(first.raw(), second.raw(), "同一逻辑行的各段共享同一 raw 引用（留底据此去重）");
+
+        // 跑完全部段：内容无损 + 每段 ≤ 80 + raw 恒为原文
+        StringBuilder joined = new StringBuilder(first.styled().rawContent()).append(second.styled().rawContent());
+        int segments = 2;
+        while (c.hasNext()) {
+            io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine l = c.next();
+            assertNotNull(l, "hasNext 为 true 时 next 不得返回 null");
+            joined.append(l.styled().rawContent());
+            assertTrue(dev.tamboui.text.CharWidth.of(l.styled().rawContent()) <= 80, "每段宽度 ≤ 终端宽");
+            assertSame(first.raw(), l.raw(), "所有段共享同一 raw 引用");
+            segments++;
+        }
+        assertEquals(longInfo, joined.toString(), "全部段拼回必须一字不差（内容无损）");
+        assertEquals(751, segments, "80 列下 60k+5 列应折出 751 段（(60005+79)/80）");
+    }
+
+    @Test
+    void assistantCursor_overlongLine_producesSegmentsWithPreWrapRawText() {
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = printerOver(sink);
+        String longBody = "字".repeat(30) + "y".repeat(60);      // 120 列 → 内宽 78 下 2 段
+
+        io.github.javaside.springai.codetui.ui.output.OutputCursor c = p.assistantCursor(longBody);
+
+        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine s1 = c.next();
+        assertNotNull(s1.styled(), "assistant 走带样式路径");
+        assertTrue(s1.styled().rawContent().startsWith("  "), "悬挂缩进");
+        assertTrue(dev.tamboui.text.CharWidth.of(s1.styled().rawContent()) <= 78);
+        assertNotNull(s1.raw(), "留底原文（Text）必须挂上（I-2）");
+        // 原文是折行前的整行（120 列，含缩进 122 列）：宽度信息无损，重放才能按新宽度回流
+        assertEquals(122, dev.tamboui.text.CharWidth.of(
+                ((dev.tamboui.text.Text) s1.raw()).rawContent()), "raw 宽度 = 整行渲染宽（缩进+120）");
+
+        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine s2 = c.next();
+        assertTrue(!c.hasNext(), "120 列在内宽 78 下应折成 2 段");
+        assertSame(s1.raw(), s2.raw(), "两段共享同一 raw 引用");
+        String joined = s1.styled().rawContent() + s2.styled().rawContent();
+        assertTrue(joined.contains("字".repeat(30)) && joined.contains("y".repeat(60)), "拼回不丢内容");
     }
 }

@@ -201,8 +201,10 @@ public final class CodeTuiView extends InlineApp {
     boolean parkCursorAtTop;
     /**
      * scrollback 输出留底（{@link Text} 或纯 {@link String}，与 Sink 两个重载一一对应）：
-     * resize 停稳后清可见屏、从这里按新宽度重放最近一屏，救回被终端重排顶走的信息流。
-     * 上限见 {@link #SCROLL_TAIL_CAP}（重放最多用到一屏行数，400 是宽裕量，防长会话无界增长）。
+     * <b>存折行前的原始逻辑行</b>（fix round I-2 恢复的语义——严格分批第一版曾误存折行后物理段，
+     * 变宽重放无法回流合并、配额被物理段稀释）。resize 停稳后清可见屏、从这里按新宽度重放最近
+     * 一屏，救回被终端重排顶走的信息流。上限见 {@link #SCROLL_TAIL_CAP}（重放最多用到一屏行数，
+     * 400 是宽裕量，防长会话无界增长；按<b>逻辑行</b>计——长逻辑行折出几百段也只占一条配额）。
      * 只在渲染线程读写（sink 打印与重放都在 drain/渲染线程）。
      */
     private final ArrayDeque<Object> scrollTail = new ArrayDeque<>();
@@ -221,11 +223,30 @@ public final class CodeTuiView extends InlineApp {
     private final PhysicalOutputQueue outputQueue;
 
     /**
-     * 本批 drain 的时间预算（纳秒）。行数预算（{@link #MAX_ROWS_PER_DRAIN}）之外的第二道闸：
-     * 一行渲染即使很便宜，几千行叠起来也占 UI 线程数十 ms——期间按键全部排队。
-     * 行间检查 {@code System.nanoTime()}（见 {@link PhysicalOutputQueue#drain}）。
+     * 单个 drain tick 的时间预算（纳秒）——<b>全 tick 共享一个 deadline</b>（fix round I-3）。
+     * 行数预算（{@link #MAX_ROWS_PER_DRAIN}）之外的第二道闸：一行渲染即使很便宜，几千行叠起来
+     * 也占 UI 线程数十 ms——期间按键全部排队。deadline 在 tick 开始时计算一次，贯穿该 tick 的
+     * <b>所有</b>输出段（输出段 + 计划正文段），段与段之间不重开窗口——否则单 tick 最坏 2×预算。
+     *
+     * <p>⚠ <b>12ms 未做实测标定</b>：取值依据是「66ms tick 内留足按键/渲染余量」的工程判断，
+     * 待 Terminal.app 实机验收（设计 §16）时以「输出期间按键延迟」为准回标。
      */
     private static final long MAX_DRAIN_NANOS = 12_000_000L;
+
+    /**
+     * 单个 tick 从 {@code state.pending} 转入输出队列的 entry 数上限（fix round I-3）。
+     *
+     * <p><b>为什么要限</b>：极端积压（如 20 000 条 INFO 未消费）下，旧实现一个 tick 把全部
+     * pending 转成 entry lambda——内存虽是 O(1)/条，但 20 000 次 {@code state.pollPending()}
+     * 是一坨完全在时间预算之外的同步循环（渲染线程被白占，且不受任何 drain 预算约束）。
+     * 有界转入把这笔开销摊到多个 tick；超出部分留在 {@code state.pending} 里，顺序不变、不丢内容
+     * （消费完队头自然轮到它们）。
+     *
+     * <p><b>量级依据</b>：入队 entry 本身零渲染（cursor 工厂惰性），上限只防「积压瞬间转移」的
+     * 突刺；600 ≈ 2× 物理行预算，正常体量（几十条）一个 tick 转完、无感。
+     */
+    private static final int MAX_PENDING_INTAKE_PER_TICK = 600;
+
 
     /**
      * 刹车期间探明的「确有结果被扣住」。状态栏那句提示读它，<b>不</b>每帧去取列表。
@@ -338,37 +359,51 @@ public final class CodeTuiView extends InlineApp {
             @Override public void println(String s) { var r = runner(); if (r != null) r.println(s); }
         };
         // 包一层留底：每行进 scrollback 的同时进 scrollTail 环形缓冲（resize 停稳重放的素材，
-        // 见字段注释）。留底存的是<b>已按终端宽折好</b>的物理行——严格分批重构后，printer 的 cursor
-        // 出口产出的每条物理行本就 ≤ 终端宽（折行移进了 cursor，见 ScrollbackPrinter.appendWrapped），
-        // 这里不再二次折行；重放按当时宽度重新折（scrollTail 存 Text，宽度信息无损）。
+        // 见字段注释）。⚠ 留底存<b>折行前</b>的原始逻辑行（fix round I-2，恢复 Task 5 之前的语义）：
+        // 队列出口的每条物理行带 raw（其所属逻辑行原文），record(raw) 优先——变宽重放按新宽度
+        // 重新折行时折行段能回流合并、400 条配额按逻辑行而不是物理段计。raw 为 null（欢迎横幅等
+        // 自包含行）退回记录物理行本身。
         ScrollbackPrinter.Sink inner = sink;
         ScrollbackPrinter.Sink recording = new ScrollbackPrinter.Sink() {
             @Override public void println(Text t)   { record(t); inner.println(t); }
             @Override public void println(String s) { record(s); inner.println(s); }
         };
-        this.printer = new ScrollbackPrinter(recording, root, this::terminalWidth, CodeTuiView::wrapSegments);
+        this.printer = new ScrollbackPrinter(recording, root, this::terminalWidth);
         this.outputQueue = new PhysicalOutputQueue(printer::streamingLinesCursor);
         this.queueSink = new PhysicalOutputQueue.PhysicalSink() {
-            @Override public void printlnPlain(String line) { recording.println(line); }
-            @Override public void printlnStyled(Text line)  { recording.println(line); }
+            @Override public void printlnPlain(String line, Object raw) {
+                record(raw != null ? raw : line);
+                inner.println(line);
+            }
+            @Override public void printlnStyled(Text line, Object raw) {
+                record(raw != null ? raw : line);
+                inner.println(line);
+            }
         };
         this.ctxUsage = new ContextUsage(onSubmit::contextStats, state::pushInfo);
     }
 
-    /** 队列出口 → 留底 sink（构造时固定；物理行已折好，直进 scrollTail + 终端）。 */
+    /** 队列出口 → 留底 sink + 终端（构造时固定；物理行已折好；留底记录折行前原文，见构造器注释）。 */
     private final PhysicalOutputQueue.PhysicalSink queueSink;
 
     /** 本批 drain 已写出的物理行数（drainInsideBatch 内跨段共享 MAX_ROWS_PER_DRAIN 预算）。 */
     private int batchRowsUsed;
 
     /**
-     * 消费一批输出队列：行预算 {@code budget}（≤0 直接 no-op）+ 时间预算 MAX_DRAIN_NANOS。
+     * 本 tick 的共享 drain deadline（绝对 nanoTime；{@code Long.MAX_VALUE}=测试态无预算）。
+     * 在 drainInsideBatch 开头计算一次，本 tick 的所有输出段共用（见 MAX_DRAIN_NANOS 注释）。
+     */
+    private long batchDeadlineNanos;
+
+    /**
+     * 消费一批输出队列：行预算 {@code budget}（≤0 直接 no-op）+ 本 tick 的共享时间预算。
      *
      * @return 本段实际写出的物理行数（供后续段从同一预算里扣）
      */
     private int drainQueuedOutput(int budget) {
         if (budget <= 0 || outputQueue.isEmpty()) return 0;
-        return outputQueue.drain(budget, MAX_DRAIN_NANOS, queueSink).rowsWritten();
+        drainDeadlinesObserved.add(batchDeadlineNanos);   // 测试观测点：所有段必须是同一个绝对时刻
+        return outputQueue.drain(budget, batchDeadlineNanos, queueSink).rowsWritten();
     }
 
     /**
@@ -521,6 +556,13 @@ public final class CodeTuiView extends InlineApp {
 
     private void drainInsideBatch() {
         animTick++;                                            // 推进状态栏波光动画帧（~66ms/帧）
+        // ── 本 tick 共享预算（fix round I-3）：deadline 只算一次，贯穿下方所有输出段 ──
+        // 行预算 batchRowsUsed 与时间预算 batchDeadlineNanos 都是 per-tick 的：任何一段消耗
+        // 都从同一份扣，段与段之间不重开窗口（否则单 tick 最坏 2×12ms，输出期间的按键空隙减半）。
+        batchDeadlineNanos = System.nanoTime() + MAX_DRAIN_NANOS;
+        batchRowsUsed = 0;
+        drainDeadlinesObserved.clear();
+        pendingIntakeCount = 0;
         // ~1s 刷一次状态栏上下文用量（节流：重算需遍历全部消息 + 估算 token）。
         // ⚠ 必须在独立线程跑：大会话下 token 估算耗时数百 ms，直接在渲染线程调会周期性冻结
         // 输入与渲染（用户感知为"code-tui 卡死"）。cached 是 volatile，后台刷新、渲染线程读快照安全。
@@ -541,10 +583,15 @@ public final class CodeTuiView extends InlineApp {
         }
         // ── 输出：pending → 流式完整行 →（同一队列）超预算计划正文，严格分批消费（设计 §9.1）──
         // 上限从此是硬上限：队列逐行预算，在取第 MAX_ROWS_PER_DRAIN+1 行之前停下；行间还检查
-        // 时间预算（MAX_DRAIN_NANOS）。旧的「单条 OutputLine 原子展开」路径已不存在——单个大输出
+        // 本 tick 的共享时间预算。旧的「单条 OutputLine 原子展开」路径已不存在——单个大输出
         // （长正文 / 大 diff / 无换行超长行）与 5000 行流式突发同样受限，剩余留在队头游标里等下一批。
-        for (OutputLine ol; (ol = state.pollPending()) != null; ) {
+        // ⚠ pending 转入有界（fix round I-3）：每 tick 最多 MAX_PENDING_INTAKE_PER_TICK 条，
+        // 剩余留在 state.pending 等后续 tick（顺序不变、不丢内容）——极端积压下 20 000 次
+        // pollPending 的同步循环不再一坨发生在一个 tick 里、且完全游离于任何预算之外。
+        for (OutputLine ol; pendingIntakeCount < MAX_PENDING_INTAKE_PER_TICK
+                && (ol = state.pollPending()) != null; ) {
             enqueueOutputLine(ol);
+            pendingIntakeCount++;
         }
         // 流式完整行按「批预算条数」取（渲染仍是逐行惰性，见 PhysicalOutputQueue 的流式项）；
         // 剩余行原样退回缓冲区头部，顺序不乱。只在本批输出队列已排空时才取——上一批没打完的
@@ -555,7 +602,7 @@ public final class CodeTuiView extends InlineApp {
                 outputQueue.enqueueStreamingLines(rows);
             }
         }
-        batchRowsUsed = drainQueuedOutput(MAX_ROWS_PER_DRAIN);
+        batchRowsUsed = drainQueuedOutput(MAX_ROWS_PER_DRAIN);   // 与计划正文段共用本 tick 预算
         ModalRequest head = state.peekModal();
         // 正在审批的请求已不在队首 → 它被别的线程摘走了（cancelCurrent/clearModals 已给它的线程投过 CANCEL，
         // 线程醒了、回合也结束了）。面板不能继续挂着一个没人在等的请求，就地退出模态；本 tick 可直接接上新队首。
@@ -593,8 +640,10 @@ public final class CodeTuiView extends InlineApp {
                 planFeedback = false;
                 planInput.clear();
                 printPlan(pl.plan());   // 正文进 scrollback（几十行塞进行内面板会把输入框顶出屏幕）
-                // 计划正文在侦测到模态的<b>同一批</b>里开始下沉（旧语义：本 tick 打印）；
-                // 与本批前段共用 MAX_ROWS_PER_DRAIN 预算——剩余行留在队列里等下一批，单批上限仍是硬上限。
+                // 计划正文在侦测到模态的<b>同一批</b>里开始下沉（旧语义：本 tick 打印）；行预算
+                // 与本 tick 前段共用（MAX_ROWS_PER_DRAIN），<b>时间预算也共用同一个 deadline</b>
+                // （fix round I-3：此前这里各起新 12ms 窗口，单 tick 最坏 2×12ms）——剩余行留在
+                // 队列里等下一批，单批上限仍是硬上限。
                 drainQueuedOutput(MAX_ROWS_PER_DRAIN - batchRowsUsed);
             }
         }
@@ -712,6 +761,17 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：跑一次 drain（侦测队首模态并进入作答/审批态）。 */
     void tickForTest() { drain(); }
 
+    // ── 测试专用观测点（fix round I-3：单 tick 共享预算 / 有界入队的回归钉） ──
+    /** 最近一次 tick 内各输出段实际使用的 deadline（纳秒绝对时刻）；每 tick 开始时清空。 */
+    private final List<Long> drainDeadlinesObserved = new ArrayList<>();
+    /** 最近一次 tick 从 state.pending 转入输出队列的 entry 数。 */
+    private int pendingIntakeCount;
+
+    List<Long> drainDeadlinesObservedForTest() { return drainDeadlinesObserved; }
+    int pendingIntakeCountForTest() { return pendingIntakeCount; }
+    int pendingIntakeCapForTest() { return MAX_PENDING_INTAKE_PER_TICK; }
+
+
     /** 测试专用：终端注意提示状态机（断言 drain 接线的边沿落点；IO 已静默降级）。 */
     AttentionTracker attentionForTest() { return attention; }
     PermissionRequest activePermissionForTest() { return activePermission; }
@@ -751,13 +811,29 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：当前正在设置的模型 id。 */
     String thinkingTargetForTest() { return thinkingTarget; }
 
-    /** scrollback 留底（见 {@link #scrollTail} 字段注释）。只在渲染线程调用。 */
+    /**
+     * scrollback 留底（见 {@link #scrollTail} 字段注释）。只在渲染线程调用。
+     *
+     * <p><b>按 raw 引用去重（fix round I-2）</b>：严格分批下一条逻辑行折出的多个物理段会
+     * <b>逐段</b>经过这里（同一批或跨批），各段携带同一 raw 引用——不去重的话一条 60k 长行
+     * 会记 751 条重复原文，留底配额（{@value #SCROLL_TAIL_CAP}）被立刻吃穿、语义照样缩水。
+     * 故：与上一条已记录的 raw 是<b>同一引用</b>（{@code ==}，非 equals——只合并同一逻辑行的段，
+     * 两条内容相同的独立行仍各占一条）则跳过；留底因此恢复「一条逻辑行一条配额」的旧语义。
+     */
     private void record(Object line) {
+        if (line == lastRecordedRaw) return;                 // 同一逻辑行的后续折行段：不重复记
+        lastRecordedRaw = line;
         scrollTail.addLast(line);
         if (scrollTail.size() > SCROLL_TAIL_CAP) {
             scrollTail.removeFirst();
         }
     }
+
+    /** 上一次已进留底的对象引用（折行段去重用，见 {@link #record}）。 */
+    private Object lastRecordedRaw;
+
+    /** 复位折行段去重指针（/clear 清空留底时一并复位）。 */
+    private void resetTailDedup() { lastRecordedRaw = null; }
 
     /**
      * resize 停稳后的全量重建：整屏<b>连回滚缓冲一起</b>抹掉（与 /clear 同一条 {@link ScreenCleaner#clear}
@@ -950,6 +1026,9 @@ public final class CodeTuiView extends InlineApp {
         }
         return segs;
     }
+
+    /** 测试专用：暴露 wrapSegments（{@code SegmentedWrapTest} 断言「可续折行与一次性折行一致」用）。 */
+    static List<String> wrapSegmentsForTest(String line, int width) { return wrapSegments(line, width); }
 
     // ── 附件行（输入框下方那一行）────────────────────────────────────────
     /**
@@ -1515,6 +1594,7 @@ public final class CodeTuiView extends InlineApp {
                     boolean ok = ScreenCleaner.clear(r);
                     if (ok) {
                         scrollTail.clear();   // 留底同步清空：resize 重放不该复活上一个会话的画面
+                        resetTailDedup();      // 去重指针一并复位（防同引用对象跨会话误判，见 record）
                         printer.welcome(onSubmit.currentModel(),
                                 io.github.javaside.springai.codetui.AppInfo.versionLabel());
                     } else {
