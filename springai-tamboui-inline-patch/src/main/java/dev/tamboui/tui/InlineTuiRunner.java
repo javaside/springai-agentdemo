@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -64,6 +65,10 @@ public final class InlineTuiRunner implements AutoCloseable {
     private final BlockingQueue<Event> eventQueue;
     private final AtomicBoolean running;
     private final AtomicBoolean cleanedUp;
+    private final ConcurrentLinkedQueue<Runnable> uiActions = new ConcurrentLinkedQueue<>();
+    private final AtomicBoolean uiUpdateQueued = new AtomicBoolean();
+    private final AtomicBoolean renderRequested = new AtomicBoolean();
+    private volatile Renderer activeRenderer;
     private final ScheduledExecutorService scheduler;
     private final boolean schedulerOwned;
     private final AtomicLong frameCount;
@@ -183,6 +188,7 @@ public final class InlineTuiRunner implements AutoCloseable {
         // Mark this thread as the render thread
         RenderThread.markAsRenderThread();
 
+        activeRenderer = renderer;
         try {
             // Initial draw
             viewport.draw(renderer::render);
@@ -225,6 +231,7 @@ public final class InlineTuiRunner implements AutoCloseable {
                 }
             }
         } finally {
+            activeRenderer = null;
             RenderThread.clearRenderThread();
         }
     }
@@ -352,10 +359,70 @@ public final class InlineTuiRunner implements AutoCloseable {
     }
 
     /**
+     * Queues an action for the render thread and requests one coalesced draw after it runs.
+     *
+     * @param action the UI action; null actions are ignored
+     */
+    public void requestUiUpdate(Runnable action) {
+        if (action == null || !running.get()) {
+            return;
+        }
+        uiActions.offer(action);
+        renderRequested.set(true);
+        enqueueUiWake();
+    }
+
+    /**
+     * Requests one coalesced draw on the render thread.
+     */
+    public void requestRender() {
+        if (!running.get()) {
+            return;
+        }
+        renderRequested.set(true);
+        enqueueUiWake();
+    }
+
+    private void enqueueUiWake() {
+        if (running.get() && uiUpdateQueued.compareAndSet(false, true)) {
+            eventQueue.offer(new UiRunnable(this::processUiWake));
+        }
+    }
+
+    private void processUiWake() {
+        int actionCount = uiActions.size();
+        boolean shouldRender = renderRequested.getAndSet(false);
+        try {
+            for (int i = 0; i < actionCount; i++) {
+                Runnable action = uiActions.poll();
+                if (action == null) {
+                    break;
+                }
+                try {
+                    action.run();
+                } catch (Throwable t) {
+                    handleThrowable(t);
+                }
+            }
+
+            Renderer renderer = activeRenderer;
+            if (shouldRender && running.get() && renderer != null) {
+                viewport.draw(renderer::render);
+            }
+        } finally {
+            uiUpdateQueued.set(false);
+            if (running.get() && (!uiActions.isEmpty() || renderRequested.get())) {
+                enqueueUiWake();
+            }
+        }
+    }
+
+    /**
      * Signals the runner to stop.
      */
     public void quit() {
         running.set(false);
+        eventQueue.offer(new UiRunnable(() -> { }));
     }
 
     /**
