@@ -23,8 +23,9 @@ import java.util.function.Supplier;
  * <p><b>不落盘</b>：后台任务的价值在于"这一次会话里派出去的活"。跨进程恢复一个
  * 已经没有线程在跑的任务只会制造"它还在跑吗"的误解。
  *
- * <p>并发：全部方法 {@code synchronized}。持锁时间都是 O(n) 的 map 遍历，n ≤ capacity（默认 64），
- * 不会有长持锁——注册表里绝不做 IO 或调用外部代码。
+ * <p>并发：改表方法走 {@code synchronized(this)} 块（持锁时间 O(n) 的 map 遍历，n ≤ capacity 默认 64，
+ * 不会有长持锁——注册表里绝不做 IO 或调用外部代码）；UI 变化通知一律在<b>锁外</b> publish
+ * （见下方「变化通知纪律」）。只读快照方法仍为整体 {@code synchronized} 方法。
  *
  * <p><b>变化通知纪律（事件驱动 UI，Task 4）</b>：本类同时是 {@link UiChangeSource}——
  * <ul>

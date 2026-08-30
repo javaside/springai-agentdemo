@@ -27,8 +27,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * 合法位置只有「所有工具结果之后」，而只有 {@link InterjectingChatModel} 所在的 ChatModel 层
  * 看得到那张已经配平的完整消息表。
  *
- * <p><b>并发</b>：UI 线程 {@link #offer}，模型线程 {@link #drainForInjection}，
- * 回合结束线程 {@link #takeForHistory}——全部 synchronized，锁粒度是整个对象（操作都是纳秒级）。
+ * <p><b>并发</b>：状态访问走 {@code synchronized} 块 / 方法（锁粒度是整个对象，操作都是纳秒级）——
+ * UI 线程 {@link #offer}，模型线程 {@link #drainForInjection}，回合结束线程 {@link #takeForHistory}；
+ * UI 变化通知一律在<b>锁外</b> publish，业务回调 {@link #fireDelivered} 刻意不进锁（见其 javadoc）。
  *
  * <p><b>变化通知纪律（事件驱动 UI，Task 4）</b>：本类同时是 {@link UiChangeSource}——
  * <ul>

@@ -236,12 +236,14 @@ public final class McpRegistry implements UiChangeSource {
         if (toConnect.isEmpty()) {
             return;
         }
-        // connecting 进入：UI 通知在 this 锁外（此处本来就在锁外——entries 直改是 init 的单线程前提）。
-        publish(changed());
         for (Entry e : toConnect) {
             e.connecting = true;
         }
         connecting.set(toConnect.size());
+        // connecting 进入的通知在状态置位<b>之后</b>（此处本来就在 this 锁外——entries 直改是 init 的单线程前提）：
+        // listener 醒来回读的就是「已经是 CONNECTING」的面板快照，而不是先被唤醒再看到状态翻转。
+        // 顺序反过来的话，Task 7 的接线会复刻出「先唤醒、后改状态」的一帧闪烁，这里把它钉死。
+        publish(changed());
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(toConnect.size(), 8), r -> {
             Thread t = new Thread(r, "mcp-connect");
             t.setDaemon(true);

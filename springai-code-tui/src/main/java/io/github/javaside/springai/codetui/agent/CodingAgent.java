@@ -47,6 +47,7 @@ import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
+import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -385,7 +386,7 @@ public final class CodingAgent implements SubmitHandler {
      * 可重复调用：后一次整体替换前一次（每个源各自替换，无残留路由）。
      */
     @Override
-    public void setUiChangeListener(io.github.javaside.springai.codetui.ui.update.UiChangeListener listener) {
+    public void setUiChangeListener(UiChangeListener listener) {
         if (interjections != null) {
             interjections.setUiChangeListener(listener);
         }

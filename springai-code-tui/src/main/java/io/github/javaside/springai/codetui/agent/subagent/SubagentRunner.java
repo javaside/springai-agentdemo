@@ -55,8 +55,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>后台 {@link #backgroundInFlight} 计数变化只发 {@code VIEW}——<b>绝不</b>含 CONTROL
  *       （后台任务不进 busy 闸门，这正是两个计数分开的全部理由，混了等于后台化失效）；</li>
  *   <li>通知在<b>原子计数变化之后</b>、任何业务锁<b>外</b>调用（本类没有业务监视器，listener 也不得
- *       反向持有计数语义）；listener 抛出的 {@link RuntimeException} 被隔离成日志，
- *       不得打断 try/finally 的计数收尾；</li>
+ *       反向持有计数语义），且必须是 increment 后紧邻的 <b>try 块首语句</b>——listener 抛出的
+ *       {@link RuntimeException} 被隔离成日志；即便抛 {@link Error}，计数递减也在同一 try 的
+ *       finally 里，不会泄漏打断 busy 闸门的生命线；</li>
  *   <li>计数本身不经过 listener 路径变更：listener 只是「计数变了」的回声。</li>
  * </ul>
  */
@@ -222,11 +223,14 @@ public final class SubagentRunner implements UiChangeSource {
     public String run(SubagentSpec spec, String prompt, String description, long parentTurnId) {
         String taskId = taskIdSupplier.get();
         listener.onSubagentStarted(parentTurnId, taskId, spec.name(), description);
-        // 增计数须紧贴 try（其间不得有可抛异常的语句）——否则 onSubagentStarted 抛出会漏掉 finally 的递减，
-        // 计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。故放在 onSubagentStarted 之后、try 之前。
+        // increment 必须是 try 前的最后一条语句、publish 必须是 try 内的首语句——否则 onSubagentStarted 抛出
+        // 会漏掉 finally 的递减，计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。publish 只隔 RuntimeException，
+        // 放 try 外的话 listener 抛 Error（SOE/OOM/NoClassDefFoundError）同样会漏减（错误在这里不是「不该发生」，
+        // 而是发生后 finally 必须仍然跑——这正是 try 存在的意义）。故 increment 紧贴 onSubagentStarted 之后、
+        // 通知挪进 try 作为首语句（通知仍在计数变化之后，语义不变）。
         inFlight.incrementAndGet();   // 进入在飞（finally 递减）——喂给 UI busy 闸门，取消后仍未清的旧子 agent 会挡住 /continue
-        publish(changed());           // 计数变化之后、锁外；异常隔离（不打断下面的 try/finally）
         try {
+            publish(changed());       // 计数变化之后、锁外；异常隔离（不打断下面的执行与 finally 收尾）
             // 子 agent 内部工具事件带上 parentTurnId + taskId（供 TUI 缩进）
             String finalText = execute(spec, prompt,
                     Map.of(ToolEventCallback.TURN_ID_KEY, parentTurnId,
@@ -431,15 +435,20 @@ public final class SubagentRunner implements UiChangeSource {
         }
         String taskId = backgroundRegistry.register(spec.name(), description);
         listener.onBackgroundTaskStarted(taskId, spec.name(), description);
+        // 与前台 run() 同一条纪律：increment 是 try 前的最后一条语句、publishBackground 是 try 内的首语句。
+        // 同步窗口（increment → execute 成功）内的任何异常——包括 listener 抛的 Error（publishBackground
+        // 只隔 RuntimeException）——都由下面的 finally 收尾递减，backgroundInFlight 才不会永久挂 1；
+        // execute 成功后计数所有权移交 runBackgroundBody 的 finally（handedOff 必须紧贴 execute 置位，
+        // 晚一步的话，其后任何异常都会被错当成「未派发」而双重递减）。
         backgroundInFlight.incrementAndGet();
-        publishBackground(changed());   // 只发 VIEW：后台计数不进 busy 闸门（见类注释）
+        boolean handedOff = false;
         try {
+            publishBackground(changed());   // 只发 VIEW：后台计数不进 busy 闸门（见类注释）
             pool.execute(() -> runBackgroundBody(spec, prompt, taskId));
+            handedOff = true;               // 已交给池线程：本方法不得再动这个计数
             log.info("后台子 agent 已提交：spec={} taskId={} description={}",
                     spec.name(), taskId, description);
         } catch (RejectedExecutionException rejected) {
-            backgroundInFlight.decrementAndGet();
-            publishBackground(changed());   // 被拒也要让 ⏱ 面板把这条幽灵刷掉
             // 标记 KILLED 而不是 FAILED：KILLED 不可送达，绝不会被自动送给模型。
             // 送一条「它失败了」给模型，读起来像它真的跑过——而它根本没启动。
             backgroundRegistry.kill(taskId);
@@ -456,7 +465,14 @@ public final class SubagentRunner implements UiChangeSource {
             // ok=false（UI 记 FAILED）与注册表的 KILLED 刻意不一致：前者是给人看的「这条没跑成」，
             // 后者是给模型的「不可送达」，两个受众要的语义本就不同。
             listener.onBackgroundTaskFinished(taskId, reason, false);
-            return reason;
+            return reason;   // 返回前 finally 先收尾递减 + 通知（⏱ 面板把这条幽灵刷掉）
+        } finally {
+            if (!handedOff) {
+                // 被拒 / listener 抛 Error / execute 抛其他异常：同步窗口内收回计数并通知。
+                // 递减在最前——即便这次通知再抛 Error，计数也已经收回。
+                backgroundInFlight.decrementAndGet();
+                publishBackground(changed());
+            }
         }
         return "已在后台启动：" + taskId + "（" + spec.name() + " · " + description + "）。"
                 + "用 TaskOutput 取结果，或等待完成通知。";

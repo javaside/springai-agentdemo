@@ -220,6 +220,110 @@ class SubagentRunnerNotificationTest {
         assertEquals(0, runner.inFlightCount());
     }
 
+    /** 专供回归测试的 Error 子类：真实类型而非裸 AssertionError，防测试框架劫持。 */
+    @SuppressWarnings("serial")
+    private static final class ListenerFatalError extends Error {
+        ListenerFatalError() { super("listener fatal (SOE/OOM/NoClassDefFoundError 的替身)"); }
+    }
+
+    /**
+     * 回归（fix round I-1）：进场通知曾在 increment 与 try <b>之间</b>调用，publish 只隔离
+     * RuntimeException——listener 抛 Error 会带着尚未进 try 的计数逃逸，finally 递减永不执行，
+     * inFlight 永久泄漏、busy 闸门永久卡死。修复后通知是 try 首语句：Error 逃逸但 finally 仍递减
+     * （且 finally 自己的通知也照常到达，读到收尾后的 0）。
+     */
+    @Test
+    @DisplayName("listener 抛 Error：finally 仍递减 inFlight（计数从 1 回 0），后续 run 正常")
+    void throwingErrorListenerStillDecrementsInFlight() {
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel("done"))));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), new StubListener(), "");
+        java.util.List<Integer> observed = new java.util.concurrent.CopyOnWriteArrayList<>();
+        // 只让「进场」那次抛 Error；finally 的「收尾」那次只记账——Error 仍按原语义向上传播
+        runner.setUiChangeListener(bits -> {
+            observed.add(runner.inFlightCount());
+            if (observed.size() == 1) {
+                throw new ListenerFatalError();
+            }
+        });
+        long before = runner.uiVersion();
+
+        try {
+            runner.run(spec(), "hi", "desc", 1L);
+        } catch (ListenerFatalError expected) {
+            // Error 向上传播——原语义（不吞 Error）
+        }
+
+        assertEquals(List.of(1, 0), observed,
+                "进场通知读到新值 1；Error 逃逸后 finally 递减 + 收尾通知读到 0");
+        assertEquals(0, runner.inFlightCount(), "Error 逃逸也必须递减：inFlight 从 1 回 0，busy 闸门不得卡死");
+        assertEquals(before + 2, runner.uiVersion(), "进场 + finally 收尾各记账一次");
+
+        // 后续 run 正常：换回正常 listener，进/出两次通知、计数照常归零
+        BitsRecorder rec = new BitsRecorder();
+        runner.setUiChangeListener(rec.bits::add);
+        assertDoesNotThrow(() -> runner.run(spec(), "again", "d", 2L));
+        assertEquals(List.of(VIEW_CONTROL, VIEW_CONTROL), rec.bits, "泄漏修复后后续 run 照常通知");
+        assertEquals(0, runner.inFlightCount());
+    }
+
+    /**
+     * 回归（fix round I-1）的后台腿：runInBackground 的同步窗口（increment → execute 成功）
+     * 内任何异常（含 listener 的 Error）都由 finally 收尾递减，backgroundInFlight 不再永久挂 1。
+     * Error 逃逸时 execute 尚未执行，注册表条目停在 RUNNING（与修复前同语义，本测试 kill 掉以免干扰）。
+     */
+    @Test
+    @DisplayName("后台派发 listener 抛 Error：backgroundInFlight 仍被递减，后续派发正常")
+    void throwingErrorListenerStillDecrementsBackgroundInFlight() throws Exception {
+        BackgroundTaskRegistry taskReg = new BackgroundTaskRegistry(64);
+        ProviderRegistry reg = new ProviderRegistry(List.of(provider(chatModel("结论"))));
+        SubagentRunner runner = new SubagentRunner(reg, List.of(), new StubListener(), "");
+        runner.enableBackground(taskReg, 1, 1);
+        try {
+            java.util.List<Integer> observed = new java.util.concurrent.CopyOnWriteArrayList<>();
+            runner.setUiChangeListener(bits -> {
+                observed.add(runner.backgroundInFlightCount());
+                if (observed.size() == 1) {
+                    throw new ListenerFatalError();
+                }
+            });
+            long before = runner.uiVersion();
+
+            try {
+                runner.runInBackground(spec(), "hi", "调查");
+            } catch (ListenerFatalError expected) {
+                // Error 向上传播——原语义
+            }
+
+            assertEquals(List.of(1, 0), observed,
+                    "进场通知读到新值 1；Error 逃逸后 finally 收尾递减 + 通知读到 0");
+            assertEquals(0, runner.backgroundInFlightCount(),
+                    "Error 逃逸也必须递减：后台计数不得永久挂 1（⏱ 面板幽灵）");
+            assertEquals(before + 2, runner.uiVersion());
+
+            // 前置确认 + 清障：派发在 Error 处被打断、execute 未跑，注册表条目停在 RUNNING（原语义），
+            // kill 掉它，让后续断言只看第二次派发
+            assertEquals(1, taskReg.runningCount(), "前置：那次派发确未 execute（条目停在 RUNNING）");
+            taskReg.kill(taskReg.all().get(0).taskId());
+
+            // 后续派发正常：进/出通知照常、计数照常归零
+            BitsRecorder rec = new BitsRecorder();
+            runner.setUiChangeListener(rec.bits::add);
+            String secondId = assertDoesNotThrow(() -> runner.runInBackground(spec(), "again", "d"))
+                    .contains("task_") ? taskReg.all().get(1).taskId() : null;
+            for (int i = 0; i < 500 && (secondId == null || taskReg.find(secondId) == null
+                    || !taskReg.find(secondId).finished()); i++) {
+                Thread.sleep(20);
+            }
+            for (int i = 0; i < 250 && runner.backgroundInFlightCount() > 0; i++) {
+                Thread.sleep(20);
+            }
+            assertEquals(0, runner.backgroundInFlightCount(), "第二次派发收尾后计数归零");
+            assertTrue(!rec.bits.isEmpty(), "后续后台派发照常通知");
+        } finally {
+            runner.shutdownBackground();
+        }
+    }
+
     /** 通知在计数变化之后：listener 里读到的 inFlightCount 已是新值（VERSION 与计数同序）。 */
     @Test
     @DisplayName("通知在原子计数变化之后：listener 内读 inFlightCount 已是新值")
