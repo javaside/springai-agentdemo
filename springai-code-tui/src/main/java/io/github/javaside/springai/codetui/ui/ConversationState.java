@@ -7,6 +7,9 @@ import io.github.javaside.springai.codetui.agent.seam.PermissionOutcome;
 import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
 import io.github.javaside.springai.codetui.agent.seam.PlanOutcome;
 import io.github.javaside.springai.codetui.agent.seam.PlanRequest;
+import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
+import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
+import io.github.javaside.springai.codetui.ui.update.UiDirty;
 import dev.tamboui.text.CharWidth;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,8 +32,19 @@ import java.util.Set;
  *       下沉 scrollback，只把最后残段留在底部 live 区预览。</li>
  * </ul>
  *
- * 并发：写在 Reactor 线程、读/drain 在渲染线程；复合操作 {@code synchronized}、标志 {@code volatile}；
- * 每个带 turnId 的写入先做迟到过滤（{@link #onTurnStarted} 例外——它设定 acceptingTurnId）。
+ * 并发：写在 Reactor 线程、读/drain 在渲染线程；复合操作在 {@code synchronized} 块内完成、标志
+ * {@code volatile}；每个带 turnId 的写入先做迟到过滤（{@link #onTurnStarted} 例外——它设定 acceptingTurnId）。
+ *
+ * <p><b>变化通知纪律（事件驱动 UI）</b>：本类同时是 {@link UiChangeSource}——
+ * 状态真相源依然是这里的字段与队列，通知只表示「某类状态可能已变化」，不携带业务数据：
+ * <ul>
+ *   <li>锁内只改数据、递增 {@link #uiVersion} 并归类 dirty bits；<b>锁外</b>才调 listener
+ *       （UI 醒来要回读本类，锁内通知等于邀请死锁）；</li>
+ *   <li>一次复合 mutation（如 {@link #cancelCurrent()}）把各子步骤的 bits <b>合并成一次</b>通知，
+ *       嵌套 helper 只返回 bits、绝不各自 publish；</li>
+ *   <li>被迟到过滤 / no-op 的写入既不递增版本也不通知；</li>
+ *   <li>listener 抛出的 {@link RuntimeException} 被隔离成日志，不得回传 Agent/Reactor/工具线程。</li>
+ * </ul>
  *
  * <p><b>活性责任（本类是别人的逃生口）</b>：模态请求队列里每一个元素背后都<b>阻塞着一个工具线程</b>，
  * 而那个线程持着回合。故凡是让请求离队的路径都必须应答它一次：入队失败（迟到 / 队满）由入队方法当场应答，
@@ -38,7 +52,7 @@ import java.util.Set;
  * 正常处理完的由 UI 应答后调 {@link #removeModal}。漏任一条就是工具线程永久 park ——
  * 整个 agent 静默挂死，无报错也无出口（见 {@code ModalRequest#cancel()} 的活性纪律）。
  */
-public final class ConversationState implements AgentListener {
+public final class ConversationState implements AgentListener, UiChangeSource {
     /** 日志只落文件（logback 无 CONSOLE appender）——任何 stdout 输出都会撕裂内联 TUI 画面。 */
     private static final Logger log = LoggerFactory.getLogger(ConversationState.class);
 
@@ -179,6 +193,43 @@ public final class ConversationState implements AgentListener {
     private volatile String activeToolSummary = "";
     private volatile long acceptingTurnId = -1L;
 
+    // ── 变化通知（事件驱动 UI；见类注释「变化通知纪律」） ──────────────────
+    private volatile UiChangeListener uiChangeListener = UiChangeListener.noop();
+    private volatile long uiVersion;
+
+    /** 一次待发布的变化：锁内生成（版本随之递增），锁外发布。 */
+    private record Change(long version, int bits) {}
+
+    @Override
+    public void setUiChangeListener(UiChangeListener listener) {
+        uiChangeListener = listener == null ? UiChangeListener.noop() : listener;
+    }
+
+    /** 单调递增的状态版本。仅诊断用，不参与任何跨 source 比较。 */
+    @Override
+    public long uiVersion() {
+        return uiVersion;
+    }
+
+    /** 记录一次有效变化并推进版本。<b>必须在持有本类监视器时调用</b>（版本与状态同序）。 */
+    private Change changed(int bits) {
+        return new Change(++uiVersion, bits);
+    }
+
+    /**
+     * 锁外发布变化：null / 空 bits 直接丢弃（no-op 路径根本不生成 Change）；
+     * listener 抛 {@link RuntimeException} 只记日志——通知方是 Agent/Reactor/工具线程，
+     * 异常回传会把它们的正常写入路径炸掉。
+     */
+    private void publish(Change change) {
+        if (change == null || change.bits() == UiDirty.NONE) return;
+        try {
+            uiChangeListener.onUiChanged(change.bits());
+        } catch (RuntimeException e) {
+            log.warn("UI change listener failed at state version {}", change.version(), e);
+        }
+    }
+
     // ── 会话压缩瞬态状态（供状态行显示；独立于 Status，自动/手动共用） ──
     private volatile boolean compacting = false;
     private volatile long compactStartNanos = 0L;
@@ -208,14 +259,21 @@ public final class ConversationState implements AgentListener {
     public synchronized String currentInput() { return input.toString(); }
 
     /** 追加一条信息行（灰色，进 scrollback）。用于「本回合实际使用的模型」等确定性提示。 */
-    public synchronized void pushInfo(String text) { pending.add(new OutputLine(text, OutputLine.Kind.INFO)); }
+    public void pushInfo(String text) {
+        Change change;
+        synchronized (this) {
+            pending.add(new OutputLine(text, OutputLine.Kind.INFO));
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
+        }
+        publish(change);
+    }
 
     /**
      * MCP 后台连接全部结束。零工具时<b>一个字都不说</b>——没配 MCP 的用户占多数，
      * 给他们每次启动看一行「已发现 0 个工具」纯属噪声。连接失败的详情在 {@code /mcp} 面板里。
      */
     @Override
-    public synchronized void onMcpReady(int serverCount, int toolCount) {
+    public void onMcpReady(int serverCount, int toolCount) {
         if (toolCount > 0) {
             pushInfo("（MCP：已发现 " + toolCount + " 个工具。）");
         }
@@ -226,35 +284,90 @@ public final class ConversationState implements AgentListener {
      * 而非只提示「已恢复 N 条」。转换出的定稿行走正常 drain 通道下沉，故排在欢迎横幅之后、首条新输入之前。
      * 空历史则什么都不做。
      */
-    public synchronized void replayHistory(List<Message> messages) {
+    public void replayHistory(List<Message> messages) {
         List<OutputLine> body = HistoryReplay.toReplayLines(messages);
         if (body.isEmpty()) return;
-        pending.add(new OutputLine("↺ 已恢复上次会话（" + HistoryReplay.userTurns(messages) + " 轮对话）",
-                OutputLine.Kind.INFO));
-        pending.addAll(body);
-        pending.add(new OutputLine("──── 以上为历史 · 可继续对话，或 /continue 续跑未完成的计划 ────",
-                OutputLine.Kind.INFO));
+        Change change;
+        synchronized (this) {
+            pending.add(new OutputLine("↺ 已恢复上次会话（" + HistoryReplay.userTurns(messages) + " 轮对话）",
+                    OutputLine.Kind.INFO));
+            pending.addAll(body);
+            pending.add(new OutputLine("──── 以上为历史 · 可继续对话，或 /continue 续跑未完成的计划 ────",
+                    OutputLine.Kind.INFO));
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
+        }
+        publish(change);
     }
 
     // ── 消息队列（忙时排队，回合结束自动出队） ───────────────────────────
-    public synchronized void enqueue(String msg, String skill) { queued.add(new Queued(msg, skill)); }
-    public synchronized Queued pollQueued() { return queued.poll(); }
+    public void enqueue(String msg, String skill) {
+        Change change;
+        synchronized (this) {
+            queued.add(new Queued(msg, skill));
+            change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+        }
+        publish(change);
+    }
+
+    public Queued pollQueued() {
+        Queued value;
+        Change change = null;
+        synchronized (this) {
+            value = queued.poll();
+            if (value != null) change = changed(UiDirty.VIEW | UiDirty.CONTROL);   // 空队列 poll 是 no-op
+        }
+        publish(change);
+        return value;
+    }
+
     public synchronized int queuedCount() { return queued.size(); }
-    public synchronized void clearQueued() { queued.clear(); }
+
+    public void clearQueued() {
+        Change change = null;
+        synchronized (this) {
+            if (!queued.isEmpty()) {
+                queued.clear();
+                change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+            }
+        }
+        publish(change);
+    }
+
     public synchronized List<String> queuedSnapshot() { return queued.stream().map(Queued::text).toList(); }
 
     /**
      * {@code /clear}：把面板与状态复位到「刚启动」——清 todo 面板、子 agent 任务面板、未定稿输出、排队消息、状态提示。
      * 不动会话事件（那是 {@link io.github.javaside.springai.codetui.agent.CodingAgent#clearContext()} 的职责）。
+     *
+     * <p>与 {@link #cancelCurrent()} 同构：全部子变化在<b>一个</b>锁窗口内完成、合并成<b>一次</b>通知；
+     * pending 模态先在锁内离队、锁外逐个唤醒（哪怕复位途中抛错也要唤醒——见 finally）。
      */
-    public synchronized void resetForNewSession() {
-        clearModals();      // 别把待处理模态留给新会话：它们背后各有一个 park 着的工具线程
-        todo.clear();
-        subtasks.clear();
-        backgroundTasks.clear();     // /clear：⏱ 面板一并清空（任务本身的终止由 CodeTuiView 调注册表完成）
-        pending.clear();
-        queued.clear();
-        notice = "";
+    public void resetForNewSession() {
+        List<ModalRequest> doomed = null;
+        Change change = null;
+        try {
+            synchronized (this) {
+                if (!modals.isEmpty()) {              // 别把待处理模态留给新会话：它们背后各有一个 park 着的工具线程
+                    doomed = new ArrayList<>(modals);
+                    modals.clear();
+                }
+                int bits = UiDirty.NONE;
+                if (doomed != null) bits |= UiDirty.VIEW | UiDirty.CONTROL;
+                if (!todo.isEmpty()) { todo.clear(); bits |= UiDirty.VIEW; }
+                if (!subtasks.isEmpty()) { subtasks.clear(); bits |= UiDirty.VIEW; }
+                if (!backgroundTasks.isEmpty()) {     // /clear：⏱ 面板一并清空（任务本身的终止由 CodeTuiView 调注册表完成）
+                    backgroundTasks.clear();
+                    bits |= UiDirty.VIEW;
+                }
+                if (!pending.isEmpty()) { pending.clear(); bits |= UiDirty.OUTPUT | UiDirty.VIEW; }
+                if (!queued.isEmpty()) { queued.clear(); bits |= UiDirty.VIEW | UiDirty.CONTROL; }
+                if (!notice.isEmpty()) { notice = ""; bits |= UiDirty.VIEW; }
+                if (bits != UiDirty.NONE) change = changed(bits);
+            }
+        } finally {
+            if (doomed != null) cancelModals(doomed);  // 无条件唤醒：漏了就是工具线程永久 park
+        }
+        publish(change);
     }
 
     // ── 单飞 / 状态 ─────────────────────────────────────────────────────
@@ -276,7 +389,19 @@ public final class ConversationState implements AgentListener {
         boolean activeTurn = status != Status.IDLE;
         return new SubmissionSnapshot(activeTurn || compacting || !modals.isEmpty(), activeTurn);
     }
-    public void setNotice(String n) { this.notice = n; }
+
+    public void setNotice(String n) {
+        String value = n == null ? "" : n;
+        Change change = null;
+        synchronized (this) {
+            if (!notice.equals(value)) {              // 同值重复设置是 no-op：不推进版本、不通知
+                notice = value;
+                change = changed(UiDirty.VIEW);
+            }
+        }
+        publish(change);
+    }
+
     public String notice() { return notice; }
     public String activeTool() { return activeTool; }
     public String activeToolSummary() { return activeToolSummary; }
@@ -294,8 +419,12 @@ public final class ConversationState implements AgentListener {
      *
      * <p>不负责应答：调用方（UI）已经应答过了。要「移除并唤醒」用 {@link #clearModals()}。
      */
-    public synchronized void removeModal(ModalRequest r) {
-        modals.removeIf(m -> m == r);
+    public void removeModal(ModalRequest r) {
+        Change change = null;
+        synchronized (this) {
+            if (modals.removeIf(m -> m == r)) change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+        }
+        publish(change);
     }
 
     /** 是否有待处理模态（计入 {@link #isBusy()}）。 */
@@ -303,6 +432,7 @@ public final class ConversationState implements AgentListener {
 
     /**
      * 入队；队列已满返回 false（调用方负责应答，绝不能静默丢弃——丢了就是永久 park）。
+     * <b>仅在持有本类监视器时调用</b>。
      */
     private boolean offerModal(ModalRequest r) {
         if (modals.size() >= MODAL_QUEUE_CAP) return false;
@@ -313,21 +443,33 @@ public final class ConversationState implements AgentListener {
     /**
      * 唤醒并清空全部待处理模态（取消回合 / 开新会话）。
      *
-     * <p>先清队列再逐个 {@code cancel()}：① 应答口可能回调进本类（{@code synchronized} 可重入），
-     * 边遍历边改会 {@code ConcurrentModificationException}；② 万一某个 {@code cancel()} 抛异常，
+     * <p>先在锁内清空队列，再在<b>锁外</b>逐个 {@code cancel()}：
+     * ① 应答口可能回调进本类（{@code synchronized} 可重入，但锁内调外部代码会让通知纪律失效，
+     * 且边遍历边改会 {@code ConcurrentModificationException}）；② 万一某个 {@code cancel()} 抛异常，
      * 队列也已经是干净的，不会把剩下的请求留在里面反复重试。
-     * 被唤醒的工具线程随后要抢本类的锁写迟到事件——它们会等到本方法所在的 {@code synchronized}
-     * 块（{@link #cancelCurrent()} / {@link #resetForNewSession()}）走完，那时 acceptingTurnId 已复位，迟到写入自然被过滤。
+     * 被唤醒的工具线程随后要抢本类的锁写迟到事件——它们只能等到状态全部复位之后，
+     * 那时 acceptingTurnId 已复位，迟到写入自然被过滤。
      *
      * <p><b>逐个 try/catch 是契约兜底，不是防御性编程</b>：{@code ModalRequest.cancel()} 明文规定
      * 实现不得抛异常。但队列 {@code [A, B]} 里若 A 违约抛了，不兜底就会：① B 的工具线程<b>永不被唤醒</b>
      * ——正是本类要防的那种挂死；② 异常沿 {@code synchronized} 的 {@link #cancelCurrent()} 传到 UI 线程的
      * Esc 处理器。一个坏元素不得殃及它后面的每一个。故记日志后继续排空。
      */
-    public synchronized void clearModals() {
-        if (modals.isEmpty()) return;
-        List<ModalRequest> doomed = new ArrayList<>(modals);
-        modals.clear();
+    public void clearModals() {
+        List<ModalRequest> doomed;
+        Change change;
+        synchronized (this) {
+            if (modals.isEmpty()) return;
+            doomed = new ArrayList<>(modals);
+            modals.clear();
+            change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+        }
+        cancelModals(doomed);                          // 锁外：外部应答
+        publish(change);                               // 锁外：通知
+    }
+
+    /** 逐个唤醒离队请求；单个违约异常只记日志，不得中断排空（见 {@link #clearModals()}）。 */
+    private void cancelModals(List<ModalRequest> doomed) {
         for (ModalRequest r : doomed) {
             try {
                 r.cancel();
@@ -367,6 +509,16 @@ public final class ConversationState implements AgentListener {
      */
     public synchronized OutputLine pollPending() {
         return pending.pollFirst();
+    }
+
+    /** 是否还有未消费的定稿行（非破坏性；供 UI 判断是否需要 continuation）。 */
+    public synchronized boolean hasPendingOutput() {
+        return !pending.isEmpty();
+    }
+
+    /** 在建行里是否已有完整逻辑行（非破坏性；供 UI 判断是否需要 continuation）。 */
+    public synchronized boolean hasCompleteStreamingLine() {
+        return streaming.indexOf("\n") >= 0;
     }
 
     /**
@@ -429,135 +581,197 @@ public final class ConversationState implements AgentListener {
     /**
      * Esc 取消当前回合：唤醒全部待处理模态、定稿在建行、acceptingTurnId=-1、状态回 IDLE。
      *
-     * <p>{@link #clearModals()} 放在最前：它是本方法里唯一会调用外部代码的一步，
-     * 排在前面保证后续任何一步抛异常都不会把请求连同其阻塞的工具线程留在队列里（漏了就是永久 park）。
+     * <p>全部子变化在<b>一个</b>锁窗口内完成并合并成<b>一次</b>通知（嵌套步骤只归类 bits，不各自 publish）；
+     * 离队的模态在锁外唤醒——被唤醒的工具线程要写迟到事件就得重新抢锁，那时本方法的状态复位已全部生效。
+     * {@code finally} 保证：哪怕复位途中抛错，已离队的请求也照样被唤醒（漏了就是永久 park）。
      */
-    public synchronized void cancelCurrent() {
-        clearModals();                 // 必须最先做：漏了这步，阻塞中的工具线程永久 park
-        flushStreaming();
-        acceptingTurnId = -1L;
-        activeTool = "";
-        activeToolSummary = "";
-        status = Status.IDLE;
+    public void cancelCurrent() {
+        List<ModalRequest> doomed = null;
+        Change change = null;
+        try {
+            synchronized (this) {
+                if (!modals.isEmpty()) {              // 最先做：漏了这步，阻塞中的工具线程永久 park
+                    doomed = new ArrayList<>(modals);
+                    modals.clear();
+                }
+                int bits = UiDirty.NONE;
+                if (doomed != null) bits |= UiDirty.VIEW | UiDirty.CONTROL;
+                bits |= flushStreaming();             // 取消把在建残行定稿进 pending
+                acceptingTurnId = -1L;
+                activeTool = "";
+                activeToolSummary = "";
+                status = Status.IDLE;
+                bits |= UiDirty.VIEW | UiDirty.CONTROL;   // 回合终止本身就要重估控制流
+                change = changed(bits);
+            }
+        } finally {
+            if (doomed != null) cancelModals(doomed);
+        }
+        publish(change);
     }
 
     // ── AgentListener 落地端 ────────────────────────────────────────────
     @Override
-    public synchronized void onTurnStarted(long turnId) {
-        acceptingTurnId = turnId;
-        status = Status.THINKING;
-        streaming.setLength(0);
-        // 新回合清空上一份计划：面板内容变空（用完即走）。这只是清内容、不改 live 高度，
-        // 不触发 InlineDisplay 收缩(deleteLines)的漂移，因此不会复现「面板消失」。
-        todo.clear();
-        subtasks.clear();                 // 新回合清空任务面板（子 agent 状态），与 todo 同生命周期
+    public void onTurnStarted(long turnId) {
+        Change change;
+        synchronized (this) {
+            acceptingTurnId = turnId;
+            status = Status.THINKING;
+            streaming.setLength(0);
+            // 新回合清空上一份计划：面板内容变空（用完即走）。这只是清内容、不改 live 高度，
+            // 不触发 InlineDisplay 收缩(deleteLines)的漂移，因此不会复现「面板消失」。
+            todo.clear();
+            subtasks.clear();                 // 新回合清空任务面板（子 agent 状态），与 todo 同生命周期
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
     }
 
     @Override
-    public synchronized void onUserMessage(long turnId, String text) {
-        if (turnId != acceptingTurnId) return;
-        pending.add(new OutputLine("", OutputLine.Kind.ASSISTANT));   // 回合间留白，分隔更清晰
-        pending.add(new OutputLine("› " + text, OutputLine.Kind.USER));   // 保留 › 提示符，去掉「你」
+    public void onUserMessage(long turnId, String text) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            pending.add(new OutputLine("", OutputLine.Kind.ASSISTANT));   // 回合间留白，分隔更清晰
+            pending.add(new OutputLine("› " + text, OutputLine.Kind.USER));   // 保留 › 提示符，去掉「你」
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
+        }
+        publish(change);
     }
 
     @Override
-    public synchronized void onAssistantToken(long turnId, String token) {
-        if (turnId != acceptingTurnId) return;
-        streaming.append(token);
-        if (streaming.length() > MAX_STREAMING_PREVIEW) {
-            // 残行超上限：把超出部分切行下沉（一次性定稿），残行预览回到上限内。
-            // 只在当前残行<b>包含换行</b>时切：此刻能按 \n 把整段拆干净，不破坏仍在同一逻辑行的内容。
-            // 若这一行真的就是超长单行，它最终会随 turn 结束/取消经 flushStreaming 定稿。
-            int idx = streaming.lastIndexOf("\n");
-            if (idx > 0) {
-                String complete = streaming.substring(0, idx);
-                String partial = streaming.substring(idx + 1);
-                streaming.setLength(0);
-                streaming.append(partial);
-                for (String l : complete.split("\n", -1)) {
-                    pending.add(new OutputLine(l.endsWith("\r") ? l.substring(0, l.length() - 1) : l,
-                            OutputLine.Kind.ASSISTANT));
+    public void onAssistantToken(long turnId, String token) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            streaming.append(token);
+            if (streaming.length() > MAX_STREAMING_PREVIEW) {
+                // 残行超上限：把超出部分切行下沉（一次性定稿），残行预览回到上限内。
+                // 只在当前残行<b>包含换行</b>时切：此刻能按 \n 把整段拆干净，不破坏仍在同一逻辑行的内容。
+                // 若这一行真的就是超长单行，它最终会随 turn 结束/取消经 flushStreaming 定稿。
+                int idx = streaming.lastIndexOf("\n");
+                if (idx > 0) {
+                    String complete = streaming.substring(0, idx);
+                    String partial = streaming.substring(idx + 1);
+                    streaming.setLength(0);
+                    streaming.append(partial);
+                    for (String l : complete.split("\n", -1)) {
+                        pending.add(new OutputLine(l.endsWith("\r") ? l.substring(0, l.length() - 1) : l,
+                                OutputLine.Kind.ASSISTANT));
+                    }
                 }
             }
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
         }
+        publish(change);
     }
 
     @Override
-    public synchronized void onToolStarted(long turnId, String toolName, String toolInput) {
-        if (turnId != acceptingTurnId) return;
-        flushStreaming();
-        status = Status.RUNNING_TOOL;
-        activeTool = toolName;
-        activeToolSummary = summarize(toolInput);
-        String line = "⏺ " + toolName + (activeToolSummary.isEmpty() ? "" : "  " + activeToolSummary);
-        // 文件写入工具（edit/write）额外携带原始 JSON 入参：渲染线程据此读原文件、生成带真实行号的 diff。
-        String raw = DiffRenderer.isFileWrite(toolName) ? toolInput : null;
-        pending.add(new OutputLine(line, OutputLine.Kind.TOOL_START, toolName, raw));
+    public void onToolStarted(long turnId, String toolName, String toolInput) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            flushStreaming();
+            status = Status.RUNNING_TOOL;
+            activeTool = toolName;
+            activeToolSummary = summarize(toolInput);
+            String line = "⏺ " + toolName + (activeToolSummary.isEmpty() ? "" : "  " + activeToolSummary);
+            // 文件写入工具（edit/write）额外携带原始 JSON 入参：渲染线程据此读原文件、生成带真实行号的 diff。
+            String raw = DiffRenderer.isFileWrite(toolName) ? toolInput : null;
+            pending.add(new OutputLine(line, OutputLine.Kind.TOOL_START, toolName, raw));
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
     }
 
     @Override
-    public synchronized void onToolFinished(long turnId, String toolName, String output, boolean ok) {
-        if (turnId != acceptingTurnId) return;
-        status = Status.THINKING;
-        activeTool = "";
-        activeToolSummary = "";
-        pending.add(new OutputLine("  ⎿ " + toolName + (ok ? " ✓" : " ✗"),
-                ok ? OutputLine.Kind.TOOL_OK : OutputLine.Kind.TOOL_FAIL));
+    public void onToolFinished(long turnId, String toolName, String output, boolean ok) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            status = Status.THINKING;
+            activeTool = "";
+            activeToolSummary = "";
+            pending.add(new OutputLine("  ⎿ " + toolName + (ok ? " ✓" : " ✗"),
+                    ok ? OutputLine.Kind.TOOL_OK : OutputLine.Kind.TOOL_FAIL));
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
     }
 
     @Override
-    public synchronized void onSubagentStarted(long turnId, String taskId, String agentName, String description) {
-        if (turnId != acceptingTurnId) return;           // 迟到过滤，与其它事件一致
-        flushStreaming();                                // 把在建助手残行定稿，子 agent 块另起
-        String d = summarize(description);               // 折叠空白/换行，守住「一 OutputLine=一物理行」不变量
-        pending.add(new OutputLine("▸ Task(" + agentName + ")" + (d.isEmpty() ? "" : " " + d),
-                OutputLine.Kind.SUBAGENT_START));
-        subtasks.add(new Subtask(taskId, agentName, d));   // 任务面板追加一条运行中子 agent（d 已 summarize=一物理行）
+    public void onSubagentStarted(long turnId, String taskId, String agentName, String description) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;    // 迟到过滤，与其它事件一致
+            flushStreaming();                          // 把在建助手残行定稿，子 agent 块另起
+            String d = summarize(description);         // 折叠空白/换行，守住「一 OutputLine=一物理行」不变量
+            pending.add(new OutputLine("▸ Task(" + agentName + ")" + (d.isEmpty() ? "" : " " + d),
+                    OutputLine.Kind.SUBAGENT_START));
+            subtasks.add(new Subtask(taskId, agentName, d));   // 任务面板追加一条运行中子 agent（d 已 summarize=一物理行）
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
+        }
+        publish(change);
     }
 
     @Override
-    public synchronized void onSubagentFinished(long turnId, String taskId, String finalText) {
+    public void onSubagentFinished(long turnId, String taskId, String finalText) {
         onSubagentFinished(turnId, taskId, finalText, true);
     }
 
     @Override
-    public synchronized void onSubagentFinished(long turnId, String taskId, String finalText, boolean ok) {
-        if (turnId != acceptingTurnId) return;
-        String prefix = ok ? "  ⎿ " : "  ⎿ ✗ ";
-        pending.add(new OutputLine(prefix + firstLine(finalText), OutputLine.Kind.SUBAGENT_END));   // 保留 scrollback 结论行
-        Subtask st = findSubtask(taskId);
-        if (st != null) {
-            st.status = ok ? SubtaskStatus.DONE : SubtaskStatus.FAILED;
-            st.currentTool = "";
+    public void onSubagentFinished(long turnId, String taskId, String finalText, boolean ok) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            String prefix = ok ? "  ⎿ " : "  ⎿ ✗ ";
+            pending.add(new OutputLine(prefix + firstLine(finalText), OutputLine.Kind.SUBAGENT_END));   // 保留 scrollback 结论行
+            Subtask st = findSubtask(taskId);
+            if (st != null) {
+                st.status = ok ? SubtaskStatus.DONE : SubtaskStatus.FAILED;
+                st.currentTool = "";
+            }
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
         }
+        publish(change);
     }
 
     // ── 后台子 agent（不带 turnId，故<b>不做迟到过滤</b>，也不被 onTurnStarted 清空） ──
 
     @Override
-    public synchronized void onBackgroundTaskStarted(String taskId, String agentName, String description) {
-        String d = summarize(description);      // 折叠换行：守住「一 OutputLine = 一物理行」
-        backgroundTasks.add(new BackgroundEntry(taskId, agentName, d));
-        pending.add(new OutputLine("⏱ 后台任务已启动  " + taskId + " · " + agentName
-                + (d.isEmpty() ? "" : " · " + d), OutputLine.Kind.INFO));
+    public void onBackgroundTaskStarted(String taskId, String agentName, String description) {
+        Change change;
+        synchronized (this) {
+            String d = summarize(description);      // 折叠换行：守住「一 OutputLine = 一物理行」
+            backgroundTasks.add(new BackgroundEntry(taskId, agentName, d));
+            pending.add(new OutputLine("⏱ 后台任务已启动  " + taskId + " · " + agentName
+                    + (d.isEmpty() ? "" : " · " + d), OutputLine.Kind.INFO));
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
     }
 
     @Override
-    public synchronized void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) {
-        BackgroundEntry e = findBackground(taskId);
-        // 已被用户终止的任务<b>不再接受完成事件</b>：注册表的 kill 只改状态、并不打断那条线程
-        // （见 SubagentRunner.runBackgroundBody——它跑完照样发完成事件），不挡住就会把用户亲手终止的
-        // 任务翻回「✓ 已完成」，面板对着他撒谎；那份迟到结果也不该再进 scrollback。
-        if (e != null && e.status == BackgroundStatus.KILLED) return;
-        if (e != null) {
-            e.status = ok ? BackgroundStatus.DONE : BackgroundStatus.FAILED;
-            e.currentTool = "";
-            e.result = finalText == null ? "" : finalText;   // 完整正文留给 /tasks 面板展开
-            e.finishedAt = System.currentTimeMillis();   // 钉住耗时，见 BackgroundView
+    public void onBackgroundTaskFinished(String taskId, String finalText, boolean ok) {
+        Change change = null;
+        synchronized (this) {
+            BackgroundEntry e = findBackground(taskId);
+            // 已被用户终止的任务<b>不再接受完成事件</b>：注册表的 kill 只改状态、并不打断那条线程
+            // （见 SubagentRunner.runBackgroundBody——它跑完照样发完成事件），不挡住就会把用户亲手终止的
+            // 任务翻回「✓ 已完成」，面板对着他撒谎；那份迟到结果也不该再进 scrollback。
+            if (e != null && e.status == BackgroundStatus.KILLED) return;
+            if (e != null) {
+                e.status = ok ? BackgroundStatus.DONE : BackgroundStatus.FAILED;
+                e.currentTool = "";
+                e.result = finalText == null ? "" : finalText;   // 完整正文留给 /tasks 面板展开
+                e.finishedAt = System.currentTimeMillis();   // 钉住耗时，见 BackgroundView
+            }
+            pending.add(new OutputLine((ok ? "✓ 后台任务完成  " : "✗ 后台任务失败  ") + taskId
+                    + (e == null ? "" : " · " + e.description)
+                    + (ok ? "" : " · " + summarize(firstLine(finalText))), OutputLine.Kind.INFO));
+            change = changed(UiDirty.ALL);
         }
-        pending.add(new OutputLine((ok ? "✓ 后台任务完成  " : "✗ 后台任务失败  ") + taskId
-                + (e == null ? "" : " · " + e.description)
-                + (ok ? "" : " · " + summarize(firstLine(finalText))), OutputLine.Kind.INFO));
+        publish(change);
     }
 
     /**
@@ -566,12 +780,17 @@ public final class ConversationState implements AgentListener {
      * <p><b>UI 镜像必须自己记这一笔</b>：真正的终止发生在注册表里，而注册表不发事件——不补这一下，
      * 用户按完 k 面板上那条会一直转到天荒地老（那条线程确实还在跑，但结果已经不会被送达了）。
      */
-    public synchronized boolean markBackgroundKilled(String taskId) {
-        BackgroundEntry e = findBackground(taskId);
-        if (e == null || e.status != BackgroundStatus.RUNNING) return false;
-        e.status = BackgroundStatus.KILLED;
-        e.currentTool = "";
-        e.finishedAt = System.currentTimeMillis();
+    public boolean markBackgroundKilled(String taskId) {
+        Change change = null;
+        synchronized (this) {
+            BackgroundEntry e = findBackground(taskId);
+            if (e == null || e.status != BackgroundStatus.RUNNING) return false;
+            e.status = BackgroundStatus.KILLED;
+            e.currentTool = "";
+            e.finishedAt = System.currentTimeMillis();
+            change = changed(UiDirty.VIEW);
+        }
+        publish(change);
         return true;
     }
 
@@ -603,19 +822,30 @@ public final class ConversationState implements AgentListener {
 
     /** 子 agent 内部工具（taskId 非空）：缩进一级挂在当前 Task 块下；taskId 为空则走主流工具路径。 */
     @Override
-    public synchronized void onToolStarted(long turnId, String taskId, String toolName, String input) {
+    public void onToolStarted(long turnId, String taskId, String toolName, String input) {
         if (taskId == null) { onToolStarted(turnId, toolName, input); return; }
-        // 后台任务：只更新 ⏱ 面板的「当前工具」，绝不进 scrollback（否则会插进你与主 agent 的对话里），
-        // 也绝不做 turnId 迟到过滤（后台任务的 turnId 恒为 -1，过滤会把它全丢掉）。
-        BackgroundEntry bg = findBackground(taskId);
-        if (bg != null) { bg.currentTool = toolName; return; }
-        Subtask st = findSubtask(taskId);
-        if (st == null) return;      // 见下：两份镜像都没有 ⇒ 丢弃，绝不退回 turnId 迟到过滤
-        if (turnId != acceptingTurnId) return;
-        String s = summarize(input);
-        pending.add(new OutputLine("    ⎿ " + toolName + (s.isEmpty() ? "" : " " + s),
-                OutputLine.Kind.SUBAGENT_TOOL));
-        st.currentTool = toolName;   // 任务面板：更新该子 agent 的当前工具
+        Change change = null;
+        synchronized (this) {
+            // 后台任务：只更新 ⏱ 面板的「当前工具」，绝不进 scrollback（否则会插进你与主 agent 的对话里），
+            // 也绝不做 turnId 迟到过滤（后台任务的 turnId 恒为 -1，过滤会把它全丢掉）。
+            BackgroundEntry bg = findBackground(taskId);
+            if (bg != null) {
+                if (!toolName.equals(bg.currentTool)) {       // 同名工具连续跑：面板无变化，no-op
+                    bg.currentTool = toolName;
+                    change = changed(UiDirty.VIEW);
+                }
+            } else {
+                Subtask st = findSubtask(taskId);
+                if (st == null) return;      // 见下：两份镜像都没有 ⇒ 丢弃，绝不退回 turnId 迟到过滤
+                if (turnId != acceptingTurnId) return;
+                String s = summarize(input);
+                pending.add(new OutputLine("    ⎿ " + toolName + (s.isEmpty() ? "" : " " + s),
+                        OutputLine.Kind.SUBAGENT_TOOL));
+                st.currentTool = toolName;   // 任务面板：更新该子 agent 的当前工具
+                change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
+            }
+        }
+        publish(change);
     }
 
     /**
@@ -630,17 +860,22 @@ public final class ConversationState implements AgentListener {
      * 工具事件，故"找不到"只可能是迟到或已被清空，两种都不该显示。
      */
     @Override
-    public synchronized void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
+    public void onToolFinished(long turnId, String taskId, String toolName, String output, boolean ok) {
         if (taskId == null) { onToolFinished(turnId, toolName, output, ok); return; }
-        if (findBackground(taskId) != null) return;   // 后台任务的工具结束不出行
-        if (findSubtask(taskId) == null) return;      // 来路不明的 taskId：见方法注释
-        // 子 agent 内部工具：仅在失败时补一行更深缩进的告警，成功时静默（起始行已展示活动）。
-        if (turnId != acceptingTurnId || ok) return;
-        pending.add(new OutputLine("      ✗ " + toolName, OutputLine.Kind.SUBAGENT_TOOL));
+        Change change = null;
+        synchronized (this) {
+            if (findBackground(taskId) != null) return;   // 后台任务的工具结束不出行、不改面板
+            if (findSubtask(taskId) == null) return;      // 来路不明的 taskId：见方法注释
+            // 子 agent 内部工具：仅在失败时补一行更深缩进的告警，成功时静默（起始行已展示活动）。
+            if (turnId != acceptingTurnId || ok) return;
+            pending.add(new OutputLine("      ✗ " + toolName, OutputLine.Kind.SUBAGENT_TOOL));
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
+        }
+        publish(change);
     }
 
     @Override
-    public synchronized void onTodoUpdated(long turnId, List<String> todoLines) {
+    public void onTodoUpdated(long turnId, List<String> todoLines) {
         onTodoUpdated(turnId, null, todoLines);   // 无 taskId：视为控制器计划（任务面板）
     }
 
@@ -649,11 +884,17 @@ public final class ConversationState implements AgentListener {
      * taskId!=null 是子 agent 内部 todo → 丢弃（不进任何面板，仅 scrollback 有其工具活动行）。
      */
     @Override
-    public synchronized void onTodoUpdated(long turnId, String taskId, List<String> todoLines) {
-        if (turnId != acceptingTurnId) return;
-        if (taskId != null) return;       // 子 agent 内部 todo 不上面板
-        todo.clear();                     // todo 面板原地替换：不进 scrollback
-        todo.addAll(todoLines);
+    public void onTodoUpdated(long turnId, String taskId, List<String> todoLines) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            if (taskId != null) return;       // 子 agent 内部 todo 不上面板
+            if (todo.equals(todoLines)) return;   // 内容未变：no-op
+            todo.clear();                     // todo 面板原地替换：不进 scrollback
+            todo.addAll(todoLines);
+            change = changed(UiDirty.VIEW);
+        }
+        publish(change);
     }
 
     /** todo 面板快照（主 agent 的 todo/计划）。 */
@@ -683,14 +924,19 @@ public final class ConversationState implements AgentListener {
      * <p>不阻塞、不弹窗：BYPASS 的定义就是不问，在这里问就是把它要解决的死锁请回来。
      */
     @Override
-    public synchronized void onGuardrailBypassed(long turnId, String what) {
-        String reason = what == null ? "（未给出理由）" : what;
-        if (turnId != bypassTurnId) {
-            bypassed.clear();                 // 换回合：上一回合没 flush 掉的残留不带进来
-            bypassTurnId = turnId;
+    public void onGuardrailBypassed(long turnId, String what) {
+        Change change;
+        synchronized (this) {
+            String reason = what == null ? "（未给出理由）" : what;
+            if (turnId != bypassTurnId) {
+                bypassed.clear();                 // 换回合：上一回合没 flush 掉的残留不带进来
+                bypassTurnId = turnId;
+            }
+            bypassed.add(reason);
+            pending.add(new OutputLine("⚠ BYPASS 放行：" + reason + "（通常需要确认）", OutputLine.Kind.INFO));
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
         }
-        bypassed.add(reason);
-        pending.add(new OutputLine("⚠ BYPASS 放行：" + reason + "（通常需要确认）", OutputLine.Kind.INFO));
+        publish(change);
     }
 
     /**
@@ -702,46 +948,75 @@ public final class ConversationState implements AgentListener {
      * <p><b>为什么排在 {@link #onTurnComplete} 的迟到过滤之前</b>：回合被 Esc 取消后
      * acceptingTurnId 已复位成 -1，跟着一起被过滤的话这批记录既不显示、也不清空，
      * 会一直挂到下一次有放行时才被顶掉——静默丢账，正是本功能要防的。
+     *
+     * <p>嵌套 helper：<b>不发布</b>，返回产生的 bits 交给调用方合并（见类注释「变化通知纪律」）。
+     *
+     * @return 产生了汇总行则 {@code OUTPUT|VIEW}，无账可汇则为 {@link UiDirty#NONE}
      */
-    private void flushGuardrailBypasses(long turnId) {
-        if (turnId != bypassTurnId || bypassed.isEmpty()) return;
+    private int flushGuardrailBypasses(long turnId) {
+        if (turnId != bypassTurnId || bypassed.isEmpty()) return UiDirty.NONE;
         pending.add(new OutputLine("⚠ 本回合 BYPASS 放行了 " + bypassed.size() + " 个通常需要确认的操作：",
                 OutputLine.Kind.INFO));
         for (String w : bypassed) {
             // ⚠ 一个 OutputLine = 一个物理行：多行分多次 push，绝不在一个字符串里塞 \n
+
             // （scrollback 用 println 下沉，\n 会被塌成一行并截断，人看到的是半句话）
             pending.add(new OutputLine("   · " + w, OutputLine.Kind.INFO));
         }
         bypassed.clear();
         bypassTurnId = -1L;
+        return UiDirty.OUTPUT | UiDirty.VIEW;
     }
 
     @Override
-    public synchronized void onTurnComplete(long turnId) {
-        flushGuardrailBypasses(turnId);        // 必须在迟到过滤之前，见方法注释
-        if (turnId != acceptingTurnId) return;
-        flushStreaming();
-        activeTool = "";
-        activeToolSummary = "";
-        status = Status.IDLE;
-    }
-
-    @Override
-    public synchronized void onError(long turnId, Throwable error) {
-        if (turnId != acceptingTurnId) return;
-        flushStreaming();
-        pending.add(new OutputLine("⚠ 出错：" + formatError(error), OutputLine.Kind.ERROR));
-        activeTool = "";
-        activeToolSummary = "";
-        status = Status.IDLE;
-    }
-
-    @Override
-    public synchronized void onQuestionAsked(long turnId, AskRequest request) {
-        if (turnId != acceptingTurnId || !offerModal(request)) {
-            // 迟到（回合已取消/切换）或队列已满：桥侧的 take() 靠取消路径唤醒，这里直接取消不弹面板。
-            request.cancel();
+    public void onTurnComplete(long turnId) {
+        Change change = null;
+        synchronized (this) {
+            int bits = flushGuardrailBypasses(turnId);        // 必须在迟到过滤之前，见方法注释
+            if (turnId == acceptingTurnId) {
+                flushStreaming();
+                activeTool = "";
+                activeToolSummary = "";
+                status = Status.IDLE;
+                bits |= UiDirty.ALL;   // 回合终止：状态、控制流、可送达输出都要重估（bits 是提示，宁多勿漏）
+            }
+            if (bits != UiDirty.NONE) change = changed(bits);  // 迟到且无账可汇：no-op
         }
+        publish(change);
+    }
+
+    @Override
+    public void onError(long turnId, Throwable error) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            flushStreaming();
+            pending.add(new OutputLine("⚠ 出错：" + formatError(error), OutputLine.Kind.ERROR));
+            activeTool = "";
+            activeToolSummary = "";
+            status = Status.IDLE;
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
+    }
+
+    /**
+     * 问询请求入队。迟到 / 队满当场 {@code cancel()}（锁外），<b>不发通知</b>——状态没变。
+     */
+    @Override
+    public void onQuestionAsked(long turnId, AskRequest request) {
+        boolean cancel = false;
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId || !offerModal(request)) {
+                // 迟到（回合已取消/切换）或队列已满：桥侧的 take() 靠取消路径唤醒，这里直接取消不弹面板。
+                cancel = true;
+            } else {
+                change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+            }
+        }
+        if (cancel) request.cancel();                // 锁外应答：一次性、非阻塞
+        publish(change);
     }
 
     /**
@@ -758,16 +1033,23 @@ public final class ConversationState implements AgentListener {
      * 再打一行只是噪音。
      */
     @Override
-    public synchronized void onPermissionRequested(long turnId, PermissionRequest request) {
-        if (turnId != acceptingTurnId) {
-            request.responder().respond(PermissionOutcome.DENY);
-            return;
+    public void onPermissionRequested(long turnId, PermissionRequest request) {
+        Change change = null;
+        boolean deny = false;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) {
+                deny = true;                             // 迟到：无状态变化、无通知
+            } else if (!offerModal(request)) {
+                pending.add(new OutputLine("⚠ 待审批请求过多（已达上限 " + MODAL_QUEUE_CAP + "），已自动拒绝 "
+                        + request.toolName() + "：请先处理面板里的请求", OutputLine.Kind.ERROR));
+                change = changed(UiDirty.ALL);
+                deny = true;
+            } else {
+                change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+            }
         }
-        if (!offerModal(request)) {
-            pending.add(new OutputLine("⚠ 待审批请求过多（已达上限 " + MODAL_QUEUE_CAP + "），已自动拒绝 "
-                    + request.toolName() + "：请先处理面板里的请求", OutputLine.Kind.ERROR));
-            request.responder().respond(PermissionOutcome.DENY);
-        }
+        if (deny) request.responder().respond(PermissionOutcome.DENY);   // 锁外应答
+        publish(change);
     }
 
     /**
@@ -782,69 +1064,113 @@ public final class ConversationState implements AgentListener {
      * 共用同一把监视器锁，这里一旦阻塞冻住的是<b>整个 TUI</b>而不只是一个工具线程。
      */
     @Override
-    public synchronized void onPlanSubmitted(long turnId, PlanRequest request) {
-        if (turnId != acceptingTurnId) {
-            request.responder().respond(PlanOutcome.CANCEL, "");
-            return;
+    public void onPlanSubmitted(long turnId, PlanRequest request) {
+        Change change = null;
+        boolean late = false;
+        boolean overflow = false;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) {
+                late = true;                             // 迟到：无状态变化、无通知
+            } else if (!offerModal(request)) {
+                pending.add(new OutputLine("⚠ 待处理的模态请求过多（已达上限 " + MODAL_QUEUE_CAP
+                        + "），本次计划未能展示：请先处理面板里的请求", OutputLine.Kind.ERROR));
+                change = changed(UiDirty.ALL);
+                overflow = true;
+            } else {
+                change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+            }
         }
-        if (!offerModal(request)) {
-            pending.add(new OutputLine("⚠ 待处理的模态请求过多（已达上限 " + MODAL_QUEUE_CAP
-                    + "），本次计划未能展示：请先处理面板里的请求", OutputLine.Kind.ERROR));
+        if (late) {
+            request.responder().respond(PlanOutcome.CANCEL, "");          // 锁外应答
+        } else if (overflow) {
             request.responder().respond(PlanOutcome.KEEP_PLANNING,
                     "（界面繁忙，未能展示计划，请稍后重新提交）");
         }
+        publish(change);
     }
 
     /**
      * 规则记录结果（工具线程写完后回报，见 {@link AgentListener#onRuleRecorded}）。
      *
      * <p>失败走 {@code ERROR} 行而不是普通信息行：写盘失败与「被 deny 遮蔽」都意味着
-     * <b>用户以为记下了、其实没有</b>，那必须显眼。
+     * <b>用户以为记下了、其实没有</b>，那必须显眼。空消息（实现方约定「无事可报」）为 no-op。
      */
     @Override
-    public synchronized void onRuleRecorded(long turnId, boolean ok, String message) {
+    public void onRuleRecorded(long turnId, boolean ok, String message) {
         if (message == null || message.isEmpty()) {
             return;
         }
-        pending.add(new OutputLine(message, ok ? OutputLine.Kind.INFO : OutputLine.Kind.ERROR));
-    }
-
-    @Override
-    public synchronized void onCompactionStarted(String reason) {
-        compactStartNanos = System.nanoTime();
-        compactReason = reason == null ? "" : reason;
-        compacting = true;   // 最后写：作为安全发布标志，读者见到 true 即保证看到上面两个字段的新值
-    }
-
-    @Override
-    public synchronized void onCompactionFinished(int eventsRemoved, int tokensSaved) {
-        compacting = false;
-        compactReason = "";
-        if (eventsRemoved <= 0) {
-            pending.add(new OutputLine("• 无可压缩内容（历史尚短）", OutputLine.Kind.INFO));
-        } else {
-            pending.add(new OutputLine(
-                    "✓ 已压缩会话：移除 " + eventsRemoved + " 个事件，约省 " + tokensSaved + " tokens",
-                    OutputLine.Kind.INFO));
+        Change change;
+        synchronized (this) {
+            pending.add(new OutputLine(message, ok ? OutputLine.Kind.INFO : OutputLine.Kind.ERROR));
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
         }
+        publish(change);
     }
 
+    /** 压缩开始：状态行要显示、{@link #isBusy()} 闸门要重估（VIEW|CONTROL）。 */
     @Override
-    public synchronized void onCompactionFailed(String message) {
-        compacting = false;
-        compactReason = "";
-        pending.add(new OutputLine("✗ 压缩失败：" + (message == null ? "unknown" : message),
-                OutputLine.Kind.ERROR));
+    public void onCompactionStarted(String reason) {
+        Change change;
+        synchronized (this) {
+            compactStartNanos = System.nanoTime();
+            compactReason = reason == null ? "" : reason;
+            compacting = true;   // 最后写：作为安全发布标志，读者见到 true 即保证看到上面两个字段的新值
+            change = changed(UiDirty.VIEW | UiDirty.CONTROL);
+        }
+        publish(change);
+    }
+
+    /** 压缩完成：退出压缩态（CONTROL）+ 一行汇总进 scrollback（OUTPUT|VIEW）。 */
+    @Override
+    public void onCompactionFinished(int eventsRemoved, int tokensSaved) {
+        Change change;
+        synchronized (this) {
+            compacting = false;
+            compactReason = "";
+            if (eventsRemoved <= 0) {
+                pending.add(new OutputLine("• 无可压缩内容（历史尚短）", OutputLine.Kind.INFO));
+            } else {
+                pending.add(new OutputLine(
+                        "✓ 已压缩会话：移除 " + eventsRemoved + " 个事件，约省 " + tokensSaved + " tokens",
+                        OutputLine.Kind.INFO));
+            }
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
+    }
+
+    /** 压缩失败：退出压缩态（CONTROL）+ 一行 ERROR 进 scrollback（OUTPUT|VIEW）。 */
+    @Override
+    public void onCompactionFailed(String message) {
+        Change change;
+        synchronized (this) {
+            compacting = false;
+            compactReason = "";
+            pending.add(new OutputLine("✗ 压缩失败：" + (message == null ? "unknown" : message),
+                    OutputLine.Kind.ERROR));
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
     }
 
     // ── 内部 ────────────────────────────────────────────────────────────
-    private void flushStreaming() {
-        if (streaming.length() == 0) return;
+
+    /**
+     * 把在建助手残行定稿进 pending。<b>仅在持有本类监视器时调用</b>。
+     *
+     * <p>嵌套 helper：<b>不发布</b>，返回产生的 bits 交给调用方合并（见类注释「变化通知纪律」）。
+     *
+     * @return 定稿了内容则 {@code OUTPUT|VIEW}，缓冲为空则为 {@link UiDirty#NONE}
+     */
+    private int flushStreaming() {
+        if (streaming.length() == 0) return UiDirty.NONE;
         for (String l : streaming.toString().split("\n", -1)) {   // 残段也按真实换行拆，避免嵌入 \n 的整块
             pending.add(new OutputLine(l.endsWith("\r") ? l.substring(0, l.length() - 1) : l,
                     OutputLine.Kind.ASSISTANT));
         }
         streaming.setLength(0);
+        return UiDirty.OUTPUT | UiDirty.VIEW;
     }
 
     private static String summarize(String toolInput) {
