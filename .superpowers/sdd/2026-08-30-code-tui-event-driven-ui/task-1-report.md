@@ -135,7 +135,7 @@ git -C "/Users/zxh/IdeaProjects/springai-agentdemo/.worktrees/event-driven-ui" d
 
 ### 提交
 
-- Commit: `COMMIT_HASH_PENDING`
+- Commit: `5f6bccc`
 - Message: `fix(tamboui): enforce strict UI wake batches`
 
 ### Concerns
