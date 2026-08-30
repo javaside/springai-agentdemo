@@ -200,6 +200,7 @@ mvn -pl springai-code-tui -am clean package -Pdist
 | [security.md](docs/guide/security.md) | 安全边界、权限层已知限制和使用建议 |
 | [permissions.md](docs/guide/permissions.md) | 审批面板、规则 DSL、权限模式和内置底线 |
 | [background-agent.md](docs/guide/background-agent.md) | 后台子 agent、结果回收、面板和权限矩阵 |
+| [subagent.md](docs/guide/subagent.md) | 子 agent 实现原理：三种执行模式、结果回收与取消语义 |
 | [vision.md](docs/guide/vision.md) | 视觉输入、模型支持、限制和图片处理 |
 | [mcp.md](docs/guide/mcp.md) | MCP 的 stdio / Streamable HTTP 配置和运行期管理 |
 | [skills.md](docs/guide/skills.md) | 技能目录、`SKILL.md` 格式和热加载 |
