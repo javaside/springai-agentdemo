@@ -374,6 +374,32 @@ public final class CodingAgent implements SubmitHandler {
         return submit(text, null);
     }
 
+    /**
+     * 把同一个 UI 变化监听 fan-out 到四个 Agent 侧外部状态源（事件驱动 UI 的 Task 4）：
+     * {@code Interjections}、{@code SubagentRunner}、{@code BackgroundTaskRegistry}、{@code McpRegistry}。
+     *
+     * <p><b>刻意不绑 {@code ConversationState}</b>（本类手里也根本没有它）：View 直接绑它。
+     * 在这里代绑一次 + View 再绑一次 = 同一通知进 coordinator 两次，批次翻倍。
+     *
+     * <p>各源自己把 null 归一成 no-op；缺件（桩路径的 null 子系统）静默跳过。
+     * 可重复调用：后一次整体替换前一次（每个源各自替换，无残留路由）。
+     */
+    @Override
+    public void setUiChangeListener(io.github.javaside.springai.codetui.ui.update.UiChangeListener listener) {
+        if (interjections != null) {
+            interjections.setUiChangeListener(listener);
+        }
+        if (subagentRunner != null) {
+            subagentRunner.setUiChangeListener(listener);
+        }
+        if (backgroundRegistry != null) {
+            backgroundRegistry.setUiChangeListener(listener);
+        }
+        if (mcpRegistry != null) {
+            mcpRegistry.setUiChangeListener(listener);
+        }
+    }
+
     @Override
     public Disposable submit(String text, String skillName) {
         long turnId = activeTurnId.incrementAndGet();

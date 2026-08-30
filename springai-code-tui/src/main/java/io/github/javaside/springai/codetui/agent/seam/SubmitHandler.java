@@ -9,6 +9,7 @@ import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
 import io.github.javaside.springai.codetui.agent.session.ContextStats;
 import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
+import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
 import reactor.core.Disposable;
 
 import java.util.List;
@@ -16,6 +17,20 @@ import java.util.List;
 /** 提交一次对话，返回可取消句柄。CodingAgent 实现它；骨架期用回显桩实现（返回 null）。 */
 public interface SubmitHandler {
     Disposable submit(String text);
+
+    /**
+     * 接上 Agent 侧外部状态源的 UI 变化监听（事件驱动 UI 的 Task 4）。
+     *
+     * <p>{@code CodingAgent} 把同一 listener fan-out 到 {@code Interjections}、
+     * {@code SubagentRunner}、{@code BackgroundTaskRegistry}、{@code McpRegistry}。
+     * <b>刻意不含 {@code ConversationState}</b>——View 直接绑它，门面不得代绑
+     * （绑两次等于同一通知进 coordinator 两次，批次翻倍）。
+     *
+     * <p>默认 no-op：既有匿名桩 / 回显桩 / 测试桩不破坏。
+     *
+     * @param listener dirty-bit 监听；null 由落地端归一成 no-op
+     */
+    default void setUiChangeListener(UiChangeListener listener) { }
 
     /**
      * 带指定技能提交：发送前先调用该技能工具、把正文注入到 text 前。

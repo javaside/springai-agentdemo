@@ -1,10 +1,17 @@
 package io.github.javaside.springai.codetui.agent.interjection;
 
+import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
+import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
+import io.github.javaside.springai.codetui.ui.update.UiDirty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 「插话」队列：用户在回合<b>进行中</b>输入的消息，等下一次模型调用时随 prompt 送达。
@@ -22,14 +29,60 @@ import java.util.Optional;
  *
  * <p><b>并发</b>：UI 线程 {@link #offer}，模型线程 {@link #drainForInjection}，
  * 回合结束线程 {@link #takeForHistory}——全部 synchronized，锁粒度是整个对象（操作都是纳秒级）。
+ *
+ * <p><b>变化通知纪律（事件驱动 UI，Task 4）</b>：本类同时是 {@link UiChangeSource}——
+ * <ul>
+ *   <li>锁内只改数据、递增 {@link #uiVersion}；<b>锁外</b>才调 listener（UI 醒来要回读本队列的
+ *       synchronized 快照，锁内通知等于邀请死锁——与 {@code ConversationState} 同一条纪律，
+ *       本类与它还早已存在双锁交叉持有的访问顺序）；</li>
+ *   <li>真实变化（入队、pending→delivered、任何真实移除）→ 恰好一次 {@code VIEW|CONTROL}
+ *       （插话面板 + 状态栏 pending 计数 / Esc 回填都要重估）；空操作不通知、不推进版本；</li>
+ *   <li>{@link #fireDelivered} 是<b>业务</b>回调（scrollback 行）、不改任何状态：
+ *       <b>不</b>发 UI 通知——业务回调与 UI wake 刻意不合并，各自走各自的路；</li>
+ *   <li>listener 抛出的 {@link RuntimeException} 被隔离成日志，不得回传 UI / 模型线程。</li>
+ * </ul>
  */
-public final class Interjections {
+public final class Interjections implements UiChangeSource {
+
+    private static final Logger log = LoggerFactory.getLogger(Interjections.class);
 
     /** 尚未送达模型的插话，按输入顺序。 */
     private final Deque<String> pending = new ArrayDeque<>();
 
     /** 已随 prompt 送达、但尚未补进会话历史的文本（回合末由 {@link #takeForHistory} 取走）。 */
     private String delivered;
+
+    // ── 变化通知（事件驱动 UI；见类注释「变化通知纪律」） ──────────────────
+    private volatile UiChangeListener uiChangeListener = UiChangeListener.noop();
+
+    /** 单调递增的状态版本。仅诊断用，不参与任何跨 source 比较。 */
+    private final AtomicLong uiVersion = new AtomicLong();
+
+    /** 记录一次有效变化并推进版本。<b>必须在持有本类监视器时调用</b>（版本与状态同序）。 */
+    private long changed() {
+        return uiVersion.incrementAndGet();
+    }
+
+    /** 锁外发布变化：0 直接丢弃（no-op 路径根本不记账）；listener 异常只记日志。 */
+    private void publish(long version) {
+        if (version <= 0) return;
+        try {
+            uiChangeListener.onUiChanged(UiDirty.VIEW | UiDirty.CONTROL);
+        } catch (RuntimeException e) {
+            log.warn("UI change listener failed at interjections version {}", version, e);
+        }
+    }
+
+    @Override
+    public void setUiChangeListener(UiChangeListener listener) {
+        uiChangeListener = listener == null ? UiChangeListener.noop() : listener;
+    }
+
+    @Override
+    public long uiVersion() {
+        return uiVersion.get();
+    }
+
 
     /**
      * 送达时 prompt 末尾那条 tool 消息的 id，作为「补历史时插在谁后面」的锚。
@@ -41,11 +94,15 @@ public final class Interjections {
      */
     private String anchorToolCallId;
 
-    /** 用户输入了一条插话。 */
-    public synchronized void offer(String text) {
-        if (text != null && !text.isBlank()) {
+    /** 用户输入了一条插话。空白 / null 不入队、不通知（no-op）。 */
+    public void offer(String text) {
+        if (text == null || text.isBlank()) return;
+        long version;
+        synchronized (this) {
             pending.add(text);
+            version = changed();
         }
+        publish(version);
     }
 
     /** 还有几条没送到模型手里（状态栏用）。 */
@@ -101,9 +158,17 @@ public final class Interjections {
      * 方法，回合末谁先跑到谁拿走——UI 先拿走的话，已送达的插话既没进历史，又被当成新回合再发一遍，
      * 模型会看到同一句话两次。
      */
-    public synchronized List<String> takePendingOnly() {
-        List<String> out = new ArrayList<>(pending);
-        pending.clear();
+    public List<String> takePendingOnly() {
+        List<String> out;
+        long version = 0L;
+        synchronized (this) {
+            out = new ArrayList<>(pending);
+            if (!out.isEmpty()) {                 // 空队列取走是 no-op：不通知
+                pending.clear();
+                version = changed();
+            }
+        }
+        publish(version);
         return out;
     }
 
@@ -121,15 +186,23 @@ public final class Interjections {
      * <p>已送达的排在前面，因为它时序上更早（先说的先送达）。交还的是<b>原文</b>，不是
      * {@link InterjectingChatModel} 包裹后的文本——用户要拿回的是自己那句话，好改一改重发。
      */
-    public synchronized List<String> drainForRefill() {
-        List<String> out = new ArrayList<>();
-        if (delivered != null) {
-            out.add(delivered);
+    public List<String> drainForRefill() {
+        List<String> out;
+        long version = 0L;
+        synchronized (this) {
+            out = new ArrayList<>();
+            if (delivered != null) {
+                out.add(delivered);
+            }
+            out.addAll(pending);
+            if (!out.isEmpty()) {                 // 两边都空是 no-op：不通知
+                pending.clear();
+                delivered = null;
+                anchorToolCallId = null;
+                version = changed();
+            }
         }
-        out.addAll(pending);
-        pending.clear();
-        delivered = null;
-        anchorToolCallId = null;
+        publish(version);
         return out;
     }
 
@@ -143,15 +216,22 @@ public final class Interjections {
      *
      * @param anchor 当前 prompt 末尾 tool 消息的 id；无则传 null
      */
-    public synchronized Optional<String> drainForInjection(String anchor) {
-        if (pending.isEmpty()) {
-            return Optional.empty();
+    public Optional<String> drainForInjection(String anchor) {
+        String merged;
+        long version = 0L;
+        // 锁内只做状态迁移（pending→delivered）+ 记账；publish 在锁外（见类注释）。
+        synchronized (this) {
+            if (pending.isEmpty()) {
+                return Optional.empty();          // no-op：不通知、不推进版本
+            }
+            merged = String.join("\n", pending);
+            pending.clear();
+            // 同回合内第二次插话：把两次合并，锚取最新的一次（更靠后，位置仍合法）。
+            delivered = delivered == null ? merged : delivered + "\n" + merged;
+            anchorToolCallId = anchor;
+            version = changed();
         }
-        String merged = String.join("\n", pending);
-        pending.clear();
-        // 同回合内第二次插话：把两次合并，锚取最新的一次（更靠后，位置仍合法）。
-        delivered = delivered == null ? merged : delivered + "\n" + merged;
-        anchorToolCallId = anchor;
+        publish(version);
         return Optional.of(merged);
     }
 
@@ -160,13 +240,19 @@ public final class Interjections {
      *
      * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    public synchronized Optional<Delivered> takeForHistory() {
-        if (delivered == null) {
-            return Optional.empty();
+    public Optional<Delivered> takeForHistory() {
+        Delivered d;
+        long version = 0L;
+        synchronized (this) {
+            if (delivered == null) {
+                return Optional.empty();          // 无可取：no-op
+            }
+            d = new Delivered(delivered, anchorToolCallId);
+            delivered = null;
+            anchorToolCallId = null;
+            version = changed();
         }
-        Delivered d = new Delivered(delivered, anchorToolCallId);
-        delivered = null;
-        anchorToolCallId = null;
+        publish(version);
         return Optional.of(d);
     }
 

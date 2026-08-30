@@ -9,6 +9,9 @@ import io.github.javaside.springai.codetui.agent.media.ToolResultMediaHandler;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
+import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
+import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
+import io.github.javaside.springai.codetui.ui.update.UiDirty;
 import io.modelcontextprotocol.client.McpSyncClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +26,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 运行期 MCP 中枢：持有<b>全量</b>条目（含 enabled:false 的），支持 /mcp 的启用/禁用即时生效 + 回写。
@@ -39,8 +43,21 @@ import java.util.concurrent.Executors;
  *
  * <p><b>降级契约</b>：连接失败记入 error 态（enabled 意图仍回写）；回写失败内存态照常生效、
  * ToggleResult.persisted=false 供 UI 提示；一律不抛异常。
+ *
+ * <p><b>变化通知纪律（事件驱动 UI，Task 4）</b>：本类同时是 {@link UiChangeSource}——
+ * <ul>
+ *   <li>connecting 进入（{@link #connectEnabledInParallel} 起跑）与退出
+ *       （{@link #publishStartupResult}，<b>无论结果被写回还是被 close/禁用丢弃</b>）→ VIEW；</li>
+ *   <li>运行期 enable / disable 的真实结果（失败也算——面板要从「禁用」翻到「失败」）→ VIEW；
+ *       未知 server 不通知；</li>
+ *   <li>通知在 synchronized(this) 与 {@code toggleLock} <b>都外</b>（UI 醒来要回读
+ *       {@link #servers()} 这个 synchronized 快照；toggleLock 被占会反过来卡住下一次切换）；</li>
+ *   <li>{@link AgentListener#onMcpReady} 的原有调用<b>保留不动</b>——信息行（scrollback）走它，
+ *       与 UI wake 是两条路；</li>
+ *   <li>listener 抛出的 {@link RuntimeException} 被隔离成日志，不得打断连接收尾。</li>
+ * </ul>
  */
-public final class McpRegistry {
+public final class McpRegistry implements UiChangeSource {
 
     private static final Logger log = LoggerFactory.getLogger(McpRegistry.class);
 
@@ -103,6 +120,40 @@ public final class McpRegistry {
     /** 启动期还在连的条目数（供状态栏「⟳ MCP 连接中 N」）。归零时回调一次 onMcpReady。 */
     private final java.util.concurrent.atomic.AtomicInteger connecting =
             new java.util.concurrent.atomic.AtomicInteger();
+
+    // ── 变化通知（事件驱动 UI；见类注释「变化通知纪律」） ──────────────────
+    private volatile UiChangeListener uiChangeListener = UiChangeListener.noop();
+
+    /** 单调递增的状态版本。仅诊断用，不参与任何跨 source 比较。 */
+    private final AtomicLong uiVersion = new AtomicLong();
+
+    private long changed() {
+        return uiVersion.incrementAndGet();
+    }
+
+    /**
+     * 发布一次 VIEW 变化。调用点必须已在 synchronized(this) 与 toggleLock <b>都外</b>；
+     * listener 异常只记日志——调用方是 mcp-connect / mcp-disable-close / UI 后台线程，
+     * 异常回传会把连接收尾（计数递减、孤儿关闭）炸掉。
+     */
+    private void publish(long version) {
+        if (version <= 0) return;
+        try {
+            uiChangeListener.onUiChanged(UiDirty.VIEW);
+        } catch (RuntimeException e) {
+            log.warn("UI change listener failed at mcp-registry version {}", version, e);
+        }
+    }
+
+    @Override
+    public void setUiChangeListener(UiChangeListener listener) {
+        uiChangeListener = listener == null ? UiChangeListener.noop() : listener;
+    }
+
+    @Override
+    public long uiVersion() {
+        return uiVersion.get();
+    }
 
     private McpRegistry(Path root, AgentListener listener, PermissionEngine permissionEngine) {
         this.root = root;
@@ -185,6 +236,8 @@ public final class McpRegistry {
         if (toConnect.isEmpty()) {
             return;
         }
+        // connecting 进入：UI 通知在 this 锁外（此处本来就在锁外——entries 直改是 init 的单线程前提）。
+        publish(changed());
         for (Entry e : toConnect) {
             e.connecting = true;
         }
@@ -288,6 +341,8 @@ public final class McpRegistry {
                 e.error = c.error();
             }
         }
+        // 通知在 this 锁外（见类注释）：无论写回还是被丢弃，面板都要从「连接中」翻页。
+        publish(changed());
         if (orphan != null) {
             closeQuietly(orphan);
         }
@@ -298,7 +353,7 @@ public final class McpRegistry {
                 tools = entries.values().stream().filter(x -> x.enabled).mapToInt(x -> x.tools.size()).sum();
                 servers = (int) entries.values().stream().filter(x -> x.enabled && x.client != null).count();
             }
-            listener.onMcpReady(servers, tools);
+            listener.onMcpReady(servers, tools);   // 信息行走原通道，与 UI wake 不合并
         }
     }
 
@@ -372,25 +427,30 @@ public final class McpRegistry {
     /**
      * 启用：连接（阻塞，秒级——调用方放后台线程）+ 发现 + 装饰 + 回写 enabled:true。
      * 连接失败也回写（用户意图是启用，下次启动自动重试）；已连接则幂等返回成功。
+     *
+     * <p>UI 通知在 toggleLock <b>外</b>发布（见类注释）：真实结果（含失败）都是面板状态变化。
      */
     public ToggleResult enable(String name) {
+        ToggleResult result;
         synchronized (toggleLock) {
             Entry e;
             synchronized (this) {
                 e = entries.get(name);
                 if (e == null) {
-                    return new ToggleResult(false, false, "未知 server：" + name);
+                    return new ToggleResult(false, false, "未知 server：" + name);   // 未知：不通知
                 }
                 if (e.enabled && (e.client != null || e.connectedForTest)) {
-                    return new ToggleResult(true, true, null);
+                    return new ToggleResult(true, true, null);                      // 幂等命中：不通知
                 }
             }
             connectAndPublish(e);
             boolean persisted = McpConfigWriter.setEnabled(e.loaded.file(), name, true);
             synchronized (this) {
-                return new ToggleResult(e.client != null, persisted, e.error);
+                result = new ToggleResult(e.client != null, persisted, e.error);
             }
         }
+        publish(changed());   // toggleLock 外：真实结果（成功/失败都算）→ VIEW
+        return result;
     }
 
     /** 运行期写回策略：连接在 this 锁外做（阻塞秒级），仅结果发布时短暂持锁（调用方持 toggleLock）。 */
@@ -405,15 +465,18 @@ public final class McpRegistry {
     }
 
     /** 禁用：摘除工具（下回合快照即不含）+ 后台优雅关连接 + 回写 enabled:false。即时完成
-     *（最坏被在飞 enable 的 toggleLock 挡秒级；UI 单飞契约成立时永不发生）。 */
+     *（最坏被在飞 enable 的 toggleLock 挡秒级；UI 单飞契约成立时永不发生）。
+     *
+     * <p>UI 通知在 toggleLock <b>外</b>发布（见类注释）。 */
     public ToggleResult disable(String name) {
+        ToggleResult result;
         synchronized (toggleLock) {
             McpSyncClient toClose;
             Entry e;
             synchronized (this) {
                 e = entries.get(name);
                 if (e == null) {
-                    return new ToggleResult(false, false, "未知 server：" + name);
+                    return new ToggleResult(false, false, "未知 server：" + name);   // 未知：不通知
                 }
                 toClose = e.client;
                 e.client = null;
@@ -434,8 +497,10 @@ public final class McpRegistry {
                 t.start();
             }
             boolean persisted = McpConfigWriter.setEnabled(e.loaded.file(), name, false);
-            return new ToggleResult(true, persisted, null);
+            result = new ToggleResult(true, persisted, null);
         }
+        publish(changed());   // toggleLock 外：摘除结果 → VIEW
+        return result;
     }
 
     /**

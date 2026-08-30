@@ -8,6 +8,9 @@ import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.prompt.PermissionModePrompt;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
+import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
+import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
+import io.github.javaside.springai.codetui.ui.update.UiDirty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -44,8 +47,20 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code ToolCallingManager}），故这里<b>不再</b>显式挂 {@code ToolCallAdvisor}（该类 2.0 起 deprecated 且待删除；
  * 显式挂反而会抑制自动注册、丢掉工具调用可观测性）。与主 agent（{@code AgentTools}）一致：只 {@code defaultTools}，
  * 工具循环交给自动注册的 advisor。
+ *
+ * <p><b>变化通知纪律（事件驱动 UI，Task 4）</b>：本类同时是 {@link UiChangeSource}——
+ * <ul>
+ *   <li>前台 {@link #inFlight} 计数每次<b>真实增 / 减</b> → 恰好一次 {@code VIEW|CONTROL}
+ *       （busy 闸门要重估「取消后是否还有旧子 agent 未清」）；</li>
+ *   <li>后台 {@link #backgroundInFlight} 计数变化只发 {@code VIEW}——<b>绝不</b>含 CONTROL
+ *       （后台任务不进 busy 闸门，这正是两个计数分开的全部理由，混了等于后台化失效）；</li>
+ *   <li>通知在<b>原子计数变化之后</b>、任何业务锁<b>外</b>调用（本类没有业务监视器，listener 也不得
+ *       反向持有计数语义）；listener 抛出的 {@link RuntimeException} 被隔离成日志，
+ *       不得打断 try/finally 的计数收尾；</li>
+ *   <li>计数本身不经过 listener 路径变更：listener 只是「计数变了」的回声。</li>
+ * </ul>
  */
-public final class SubagentRunner {
+public final class SubagentRunner implements UiChangeSource {
 
     private static final Logger log = LoggerFactory.getLogger(SubagentRunner.class);
 
@@ -103,6 +118,50 @@ public final class SubagentRunner {
     private volatile boolean backgroundClosed;
     /** 线程序号跨重建递增：重建后若从 1 重来，jstack 里会出现两个 subagent-background-1，排查时分不清哪个池。 */
     private final AtomicLong backgroundThreadSeq = new AtomicLong();
+
+    // ── 变化通知（事件驱动 UI；见类注释「变化通知纪律」） ──────────────────
+    private volatile UiChangeListener uiChangeListener = UiChangeListener.noop();
+
+    /** 单调递增的状态版本。仅诊断用，不参与任何跨 source 比较。 */
+    private final AtomicLong uiVersion = new AtomicLong();
+
+    /** 记录一次有效变化并推进版本（与原子计数变更同序：先变更、后记账、再通知）。 */
+    private long changed() {
+        return uiVersion.incrementAndGet();
+    }
+
+    /**
+     * 在原子计数变化<b>之后</b>发布通知。listener 异常只记日志——调用方是子 agent 工具 / 池线程，
+     * 异常回传会打断 try/finally 的计数收尾（那正是 busy 闸门防挂死的生命线）。
+     */
+    private void publish(long version) {
+        if (version <= 0) return;
+        try {
+            uiChangeListener.onUiChanged(UiDirty.VIEW | UiDirty.CONTROL);
+        } catch (RuntimeException e) {
+            log.warn("UI change listener failed at subagent-runner version {}", version, e);
+        }
+    }
+
+    /** 后台计数专用发布：只发 VIEW（后台任务绝不进 busy 闸门，见类注释）。 */
+    private void publishBackground(long version) {
+        if (version <= 0) return;
+        try {
+            uiChangeListener.onUiChanged(UiDirty.VIEW);
+        } catch (RuntimeException e) {
+            log.warn("UI change listener failed at subagent-runner version {}", version, e);
+        }
+    }
+
+    @Override
+    public void setUiChangeListener(UiChangeListener listener) {
+        uiChangeListener = listener == null ? UiChangeListener.noop() : listener;
+    }
+
+    @Override
+    public long uiVersion() {
+        return uiVersion.get();
+    }
 
     public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                           String projectInstructions) {
@@ -166,6 +225,7 @@ public final class SubagentRunner {
         // 增计数须紧贴 try（其间不得有可抛异常的语句）——否则 onSubagentStarted 抛出会漏掉 finally 的递减，
         // 计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。故放在 onSubagentStarted 之后、try 之前。
         inFlight.incrementAndGet();   // 进入在飞（finally 递减）——喂给 UI busy 闸门，取消后仍未清的旧子 agent 会挡住 /continue
+        publish(changed());           // 计数变化之后、锁外；异常隔离（不打断下面的 try/finally）
         try {
             // 子 agent 内部工具事件带上 parentTurnId + taskId（供 TUI 缩进）
             String finalText = execute(spec, prompt,
@@ -184,6 +244,7 @@ public final class SubagentRunner {
             throw new SubagentFailedException(detail, ex);
         } finally {
             inFlight.decrementAndGet();   // 无论成功/失败/被中断（shutdownNow → interrupt → 网络调用抛出）都退出在飞
+            publish(changed());           // 锁外发布：闸门解除必须让 UI 看到，否则 /continue 永久排队
         }
     }
 
@@ -371,12 +432,14 @@ public final class SubagentRunner {
         String taskId = backgroundRegistry.register(spec.name(), description);
         listener.onBackgroundTaskStarted(taskId, spec.name(), description);
         backgroundInFlight.incrementAndGet();
+        publishBackground(changed());   // 只发 VIEW：后台计数不进 busy 闸门（见类注释）
         try {
             pool.execute(() -> runBackgroundBody(spec, prompt, taskId));
             log.info("后台子 agent 已提交：spec={} taskId={} description={}",
                     spec.name(), taskId, description);
         } catch (RejectedExecutionException rejected) {
             backgroundInFlight.decrementAndGet();
+            publishBackground(changed());   // 被拒也要让 ⏱ 面板把这条幽灵刷掉
             // 标记 KILLED 而不是 FAILED：KILLED 不可送达，绝不会被自动送给模型。
             // 送一条「它失败了」给模型，读起来像它真的跑过——而它根本没启动。
             backgroundRegistry.kill(taskId);
@@ -425,6 +488,7 @@ public final class SubagentRunner {
             listener.onBackgroundTaskFinished(taskId, String.valueOf(fatal), false);
         } finally {
             backgroundInFlight.decrementAndGet();
+            publishBackground(changed());   // 只发 VIEW：后台收尾不进 busy 闸门
         }
     }
 
