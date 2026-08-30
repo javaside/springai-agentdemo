@@ -1,0 +1,215 @@
+# Task 5 实施报告
+
+## 状态
+
+DONE
+
+## 修改文件
+
+- Create: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/output/OutputCursor.java`
+- Create: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/output/PhysicalOutputQueue.java`
+- Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ScrollbackPrinter.java`
+- Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java`
+  （brief 列了 DiffRenderer「Modify as needed for incremental diff」——实现中发现 DiffRenderer 的
+  `List<DiffLine>` 结果本身就是惰性逐行消费的完美载体：header/hunk/行样式与真实行号都在每条
+  `DiffLine` record 里，无需改 DiffRenderer；增量性由 `toolStartCursor` 在其结果之上做惰性迭代
+  + 逐行高亮推进实现。故 DiffRenderer 零改动，最小偏差。）
+- Modify: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/DrainBurstCapTest.java`
+- Create: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/StrictOutputFairnessTest.java`
+
+提交：`a9df35a refactor(code-tui): strictly batch physical terminal output`（6 files, +781/−89）
+
+## 实现摘要
+
+### 核心抽象：`OutputCursor`（逻辑输出 → 可续消费物理行）
+
+接口按 brief：`hasNext()` / `next()`（返回 `PhysicalOutputQueue.PhysicalLine`——brief 里
+`PhysicalLine` 定义在 `PhysicalOutputQueue` 内，与其 record 嵌套布局一致，故 cursor 接口引用它）。
+
+staging 有界性的实现方式（见「staging 有界性证明」节）：**每次 `next()` 只渲染一条逻辑行**，
+其折行段（≤ 该逻辑行的物理段数）缓存在游标内部的 `ArrayDeque`，消费完再渲染下一条。
+
+### `PhysicalOutputQueue`（严格批次）
+
+- `enqueue(Function<Void, OutputCursor>)`：cursor 工厂**惰性调用**——drain 轮到该 entry 才展开
+  （diff 的读文件 + LCS 只做一次，且不在入队时做：堆在队列里的 entry 零渲染开销）。
+- `enqueueStreamingLines(List<String>)`：只存逻辑行引用（这些 String 本就完整存在于
+  `ConversationState.streaming`），渲染留给 drain，一批 300 行只渲染 300 行。
+- `drain(maxPhysicalRows, maxNanos, sink)`：**逐行预算**——`while (written < maxPhysicalRows)`
+  循环体每次恰好取一行、写一行；即在第 `maxPhysicalRows+1` 行被取到**之前**停住（硬上限，
+  无 slack）。行间检查 `System.nanoTime() >= deadline`（时间预算），耗尽置
+  `timeBudgetExhausted` 并立即返回。时间检查从第 2 行起（`written >= 2`）：首行前的工厂成本
+  （如 diff 的 O(一个工具入参) 一次性工作）不挤占行吞吐预算——否则慢机器上首批只出 1 行。
+- **活跃 cursor 在队头**：`ensureActive()` 只展开队头 entry，`dropActive()` 耗尽才移除。
+- `clear()`：语义性丢弃（/clear 用）。
+
+### `ScrollbackPrinter`：cursor 工厂（保留渲染状态与样式）
+
+- `userBlockCursor(text)`：灰底白字块逐逻辑行折行 + 右补白铺满底色；`md.reset()` 在**工厂调用时**
+  发生（drain 轮到这条 USER 输出时），与旧「drain 的 USER 分支」时机语义一致。
+- `assistantCursor(text)` / `streamingLinesCursor(rows)`：一条逻辑行 → `md.renderFinalized`
+  （推进围栏/围栏内语言/跨行块注释状态）→ `TextWrap` 折行 → 悬挂缩进物理段。
+  **状态跨批次保持**：`md` 是 printer 级单例，游标每次渲染下一条逻辑行时从上一条结束时的状态
+  继续——把渲染拆进游标而不复制状态，正是为了保证这一点。
+- `toolStartCursor(ol)`：diff 展开（读文件 + LCS + 真实行号）在工厂调用时做一次；之后逐行
+  （逐行语法高亮 + 跨行块注释推进 `inBlock` 存于游标）惰性产出；每条 diff 行按终端宽折行
+  （ADD/DEL 底色带铺满每段）；非文件写入/无法解析 → 单行摘要回退（同样折行）。
+- `lineCursor(ol)`：单色行（TOOL_OK/TODO/ERROR/INFO/SUBAGENT_*），超宽按终端宽折行、每段沿用
+  同一样式（承接旧实现视图出口的兜底折行——折行移进游标后由它接手）。
+- 旧一次性方法（`userBlock`/`toolStart`/`line`）改为「跑完对应游标」的薄壳
+  （`run(cursor)`），欢迎横幅等小输出与既有 `ScrollbackPrinterTest` 路径不变。
+
+### `CodeTuiView` 接线（不动驱动方式，66ms 周期仍在，Task 7 才删）
+
+- `rowsThisFrame` 软上限字段删除，换 `PhysicalOutputQueue outputQueue` +
+  `MAX_DRAIN_NANOS = 12ms` 时间预算 + `batchRowsUsed`（批内跨段共享 300 行预算）。
+- `drainInsideBatch` 输出段：
+  1. `state.pollPending()` 全部经 `enqueueOutputLine` 入队（kind → cursor 工厂的 switch 与旧
+     drain 逐字对应）；
+  2. 队列为空时才 `takeCompleteStreamingLines(300)` 入队（时序上更早的未打完输出不被新流式行
+     插队）；
+  3. `drainQueuedOutput(300)` 严格消费。
+- 计划正文（`printPlan`）：逐逻辑行入队；模态侦测分支内紧跟一次
+  `drainQueuedOutput(300 - batchRowsUsed)`——保持「侦测到计划的本 tick 就开始下沉正文」的旧
+  语义（`CodeTuiViewPlanTest.planBodyGoesToScrollbackOneLinePerPhysicalLine` 钉着），同时与本批
+  前段共用 300 行预算，单批上限仍是硬上限；超出的行留队列等下一批。
+- `/clear`：`resetForNewSession()` 之后 `outputQueue.clear()`——严格分批后大输出可能还压在队列
+  里没打完，与 pending 同语义一并丢弃（不留旧会话内容漏进新屏）。
+- **折行移进 cursor**：构造器里的 `recording` sink 不再做出口折行/计数，只做留底
+  （`scrollTail`）；游标出口产出的每条物理行本就 ≤ 终端宽。resize 重放（`replayAfterResize`）
+  仍按当时宽度重新折 `scrollTail` 里的 Text——「留底存折行前内容、重放重新折」语义保留
+  （存的是 Text，宽度信息无损）。
+- **InlineRenderBatch 每批一次不变**：`drain()` 的 try-with-resources 结构原样保留，批次粒度
+  未变（每个 66ms drain 一次 open/close），没有每行一批。
+
+### staging 有界性证明（单个超大项的内存/CPU 如何被限制）
+
+设一条逻辑输出展开后共 P 个物理行（P 可为几万）：
+
+1. **物化上界与 P 无关**：任一时刻，队列 + 活跃游标物化的物理行 ≤
+   「一条逻辑行折行后的段数」。`BlockCursor.next()` 的循环体是
+   `while (pending.isEmpty() && at < logicals.length) renderInto(logicals[at++], pending)`——
+   `pending` 非空即停，即每次最多渲染**一条**逻辑行；该逻辑行本身已完整存在于内存
+   （`OutputLine.text` / streaming String），其折行展开与它同阶（O(len/width) 个段、每段
+   O(width) 字符）。渲染器常驻状态为 O(1)（md 三字段 / diff 的 `at`+`inBlock`）。
+2. **队列不物化**：pending 项只存 lambda（捕获 OutputLine 引用，O(1)）；流式项只存 String 引用
+   列表（且同时最多一个流式 entry——只有队列空时才取新一批）；diff entry 的 `List<DiffLine>`
+   在工厂调用时构建一次——其规模受 DiffRenderer 既有上限约束（LCS_MAX=800、BODY_CAP=80），
+   是 O(一个工具入参) 而非 O(P)。
+3. **CPU 按批切片**：`drain` 每写一行检查一次 nanoTime 预算（12ms）。单行渲染是一段有界工作
+   （一条逻辑行 + O(1) 状态推进），预算粒度即足够细；时间耗尽立即返回事件循环，批间按键/
+   粘贴/resize 可被处理。唯一的批前一次性成本（diff 展开）受 LCS_MAX/BODY_CAP 上限约束，
+   且每条 diff 输出只发生一次（不随批数放大）。
+
+即：**把「O(P) 的整段展开 + 整段 println」改为「每批 O(300) 行的流式产出」，内存与单批 CPU
+都与 P 解耦**——这正是旧实现「PTY 限流修好了、UI 线程仍在 staging 被独占」的对症解。
+
+## TDD 过程
+
+### RED（先写测试、确认失败）
+
+加强 `DrainBurstCapTest`：删 `SLACK=200`、全部断言 `<= 300`；新增
+`singleHugeAssistantOutput_isStrictlyCapped`（单条 ASSISTANT 20000 行）、
+`singleHugeDiff_isStrictlyCapped`（单 TOOL_START diff 折行 ~482 物理行）、
+`singleNoNewlineHugeLine_isStrictlyCapped`（60k 列无换行单行 → ~770 物理行）、多批完整性断言
+（`drainAll` 后逐行比对顺序、末行 TRUNCATED 概括）；新建 `StrictOutputFairnessTest`
+（fake 事件队列：OutputBatch / KeyPress 交错）。
+
+红灯确认（旧实现）：
+
+```
+DrainBurstCapTest.singleHugeDiff_isStrictlyCapped: 实际 482 > 300
+DrainBurstCapTest.singleNoNewlineHugeLine_isStrictlyCapped: 实际 770 > 300
+StrictOutputFairnessTest.keyPressBetweenBatches_...: 前置失败（一次 OutputBatch 后 1000/1000 全部下沉——
+                                                     单条原子输出把整个 drain 占满，按键无批间空隙）
+```
+
+（其余既有用例在旧实现下本就 ≤300+slack，红灯集中在新增的「单个大输出」用例与公平性场景——
+正是 brief 指出的缺陷面。）
+
+### GREEN 过程中的两个真实 bug（都被新测试当场抓住）
+
+1. **diff 游标段丢失**：`next()` 先渲染新 DiffLine 再 `pollFirst`，导致最后一条 diff 行的折行段
+   尚在缓冲时 `at >= lines.size()` 分支已返回 null → `PhysicalOutputQueue.dropActive()` 把整个
+   entry 当耗尽丢弃（大 diff 只打了一半、无 TRUNCATED 行）。修法：先排空缓冲段再渲染下一条。
+   （`singleHugeDiff_isStrictlyCapped` 的「末行应为截断概括」断言抓住。）
+2. **时间预算饿死首批**：首行前的 diff 工厂成本计入预算后，首批只出 1–2 行（12ms 被一次性
+   展开吃掉），极端场景排空速度骤降。修法：时间检查从第 2 行起。
+   （`StrictOutputFairnessTest` 排空容量断言抓住。）
+
+### GREEN（最终测试结果）
+
+命令（brief Step 2/Step 4 原样）：
+
+```bash
+mvn -pl springai-code-tui -am \
+  -Dtest=DrainBurstCapTest,StrictOutputFairnessTest,ScrollbackPrinterTest,DiffRendererTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+```
+Tests run: 7,  Failures: 0, Errors: 0, Skipped: 0 -- ScrollbackPrinterTest
+Tests run: 3,  Failures: 0, Errors: 0, Skipped: 0 -- StrictOutputFairnessTest
+Tests run: 9,  Failures: 0, Errors: 0, Skipped: 0 -- DiffRendererTest
+Tests run: 8,  Failures: 0, Errors: 0, Skipped: 0 -- DrainBurstCapTest
+Tests run: 27, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+全模块回归（设计 §15.6）：
+
+```bash
+mvn -pl springai-code-tui -am test
+```
+
+```
+Tests run: 1749, Failures: 0, Errors: 0, Skipped: 10   （10 个为既有 skip，与本任务无关）
+springai-tamboui-inline-patch ... SUCCESS
+springai-code-tui .............. SUCCESS   [01:05 min]
+BUILD SUCCESS
+```
+
+（过程中全量曾出现 1 例失败：`CodeTuiViewPlanTest.planBodyGoesToScrollback...`——计划正文入队后
+  未在本 tick 消费。已按「与旧语义一致」修复：模态侦测分支内共享批预算立即消费。修复后全绿。）
+
+## commit
+
+`a9df35a`（worktree `refactor/event-driven-ui`，基于 `a5891be`）
+
+## 自审
+
+- brief 的接口签名对照：`OutputCursor.hasNext/next`、`PhysicalOutputQueue` 的
+  `PhysicalLine(String plain, Text styled)` + 两个静态工厂、`BatchResult(int rowsWritten, boolean
+  remaining, boolean timeBudgetExhausted)`、`enqueue`/`enqueueStreamingLines`/`drain(int,long)`/
+  `isEmpty`/`clear` 全部按 brief 落地；`enqueue` 的参数从
+  `ConversationState.OutputLine` 最小偏差为 `Function<Void, OutputCursor>`（工厂），因为
+  「printer 产 cursor 工厂、保留渲染状态」正是 brief 第 35 行的要求——把 kind→工厂的映射放在
+  View（原 drain 的 switch 位置），printer 保持纯渲染职责。`drain` 增加 `PhysicalSink` 出口参数
+  （brief 未列）：这是让「留底 + 终端写」成为唯一出口所必需的最小偏差，避免队列绕过 scrollTail。
+- 不删/弱化既有断言：`DrainBurstCapTest` 原有用例全部保留（只把 `CAP+SLACK` 收紧为 `CAP`，
+  这正是本任务目标）；`ScrollbackPrinterTest`/`DiffRendererTest`/全部 `CodeTuiView*Test`
+  1749 例零改动通过。
+- 驱动方式未动：66ms `scheduleRepeating` 与 `tickForTest` 原样；Task 7 才删周期、接
+  continuation 语义（本任务后 continuation 只需「批后若 `!outputQueue.isEmpty()` 安排下一批」，
+  队列已把可续消费准备好）。
+- InlineRenderBatch 每批一次 ✓（结构未动）；活跃 cursor 队头 ✓；流式批量取（不逐行 enqueue）✓。
+- 线程纪律：`PhysicalOutputQueue` 只在渲染线程使用，与 drain 既有纪律一致，无新增共享状态。
+
+## concerns
+
+1. **时间预算常量（12ms）未经实测标定**：单批最坏 ≈ 300 行渲染 + println。正常行渲染 ~µs 级，
+   300 行 << 12ms，预算几乎总由行数先到；它主要防「单行渲染异常贵」（超长行 md + 高亮）与
+   慢机器。建议真实 Terminal.app 验收（§16）时顺带观察输出期间的输入延迟。
+2. **批间公平性测试的判别力**：`keyPressBetweenBatches` 在旧实现下失败依赖「单条输出原子展开
+   超过一批」这一事实（旧实现里多批小输出之间按键本也能插进——它同样按 300 行收手）。真正的
+   判别用例是 `singleNoNewlineHugeLine`/`singleHugeDiff` 这类单条超限场景；公平性测试更多是
+   把「批间可插入」钉成回归契约。已在测试注释里写明场景设计意图。
+3. **pending 全量入队的队列长度**：每 tick 把 state.pending 全部转为 entry（不按预算截断）。
+   entry 是 O(1) lambda，但极端积压下（如 5000 条 INFO 未消费）队列有 5000 个 entry——内存
+   可忽略，但 Task 7 做 continuation 时应保持「entry 只在队头展开」的惰性，不要为了 throughput
+   改成预展开。
+4. **welcome() 仍走一次性 println**（不经过队列）：11 行、一次性，风险可忽略；但严格意义上它
+   不受 300 行预算约束。若 Task 7 要求「所有输出过队列」，只需把 welcome 的行序列包成 cursor
+   入队即可。
+5. **PTY 冒烟（§16.1）与真实 Terminal.app（§16.2）未在本任务执行**：代码层回归已全绿；终端层
+   验收按设计留给后续任务，本报告不声称已验证终端崩溃根治。
