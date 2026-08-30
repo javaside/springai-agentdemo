@@ -13,8 +13,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntConsumer;
 
 import org.junit.jupiter.api.Test;
 
@@ -43,17 +45,38 @@ class InlineTuiRunnerEventDrivenTest {
     }
 
     @Test
-    void concurrentRenderRequestsAreCoalesced() throws Exception {
-        RecordingBackend backend = new RecordingBackend();
-        InlineTuiRunner runner = InlineTuiRunner.create(backend, config(POLL_TIMEOUT));
+    void concurrentRenderRequestsAreCoalescedAfterRunnerStartsAndActionPrecedesDraw() throws Exception {
         ExecutorService callers = Executors.newFixedThreadPool(32);
-        try {
+        try (RunnerFixture fixture = startRunner(POLL_TIMEOUT)) {
+            assertTrue(fixture.initialDraw.await(1, TimeUnit.SECONDS));
+            AtomicBoolean actionCompleted = new AtomicBoolean();
+            AtomicBoolean actionCompletedAtDraw = new AtomicBoolean();
+            CountDownLatch actionStarted = new CountDownLatch(1);
+            CountDownLatch releaseAction = new CountDownLatch(1);
+            fixture.onDraw = draw -> {
+                if (draw == 2) {
+                    actionCompletedAtDraw.set(actionCompleted.get());
+                }
+            };
+            CountDownLatch requestsDraw = fixture.drawNumber(3);
+            fixture.runner.requestUiUpdate(() -> {
+                actionStarted.countDown();
+                try {
+                    assertTrue(releaseAction.await(1, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(e);
+                }
+                actionCompleted.set(true);
+            });
+            assertTrue(actionStarted.await(1, TimeUnit.SECONDS));
+
             CountDownLatch start = new CountDownLatch(1);
             List<Future<?>> requests = new ArrayList<>();
             for (int i = 0; i < 1_000; i++) {
                 requests.add(callers.submit(() -> {
                     start.await();
-                    runner.requestRender();
+                    fixture.runner.requestRender();
                     return null;
                 }));
             }
@@ -61,14 +84,44 @@ class InlineTuiRunnerEventDrivenTest {
             for (Future<?> request : requests) {
                 request.get(1, TimeUnit.SECONDS);
             }
+            releaseAction.countDown();
 
-            try (RunnerFixture fixture = startRunner(runner, backend)) {
-                assertTrue(fixture.drawNumber(2).await(1, TimeUnit.SECONDS));
-                assertEquals(2, fixture.draws.get());
-            }
+            assertTrue(requestsDraw.await(1, TimeUnit.SECONDS));
+            assertTrue(actionCompletedAtDraw.get());
+            assertEquals(3, fixture.draws.get());
         } finally {
             callers.shutdownNow();
-            runner.close();
+        }
+    }
+
+    @Test
+    void actionSubmittedAfterWakeBoundaryRunsInFollowingBatch() throws Exception {
+        try (RunnerFixture fixture = startRunner(POLL_TIMEOUT)) {
+            assertTrue(fixture.initialDraw.await(1, TimeUnit.SECONDS));
+            AtomicInteger completedActions = new AtomicInteger();
+            List<Integer> actionsSeenByDraw = new ArrayList<>();
+            CountDownLatch firstActionStarted = new CountDownLatch(1);
+            CountDownLatch releaseFirstAction = new CountDownLatch(1);
+            fixture.onDraw = draw -> actionsSeenByDraw.add(completedActions.get());
+            CountDownLatch secondBatchDraw = fixture.drawNumber(3);
+
+            fixture.runner.requestUiUpdate(() -> {
+                firstActionStarted.countDown();
+                try {
+                    assertTrue(releaseFirstAction.await(1, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(e);
+                }
+                completedActions.incrementAndGet();
+            });
+            assertTrue(firstActionStarted.await(1, TimeUnit.SECONDS));
+            fixture.runner.requestUiUpdate(completedActions::incrementAndGet);
+            releaseFirstAction.countDown();
+
+            assertTrue(secondBatchDraw.await(1, TimeUnit.SECONDS));
+            assertEquals(List.of(1, 2), actionsSeenByDraw);
+            assertEquals(3, fixture.draws.get());
         }
     }
 
@@ -154,6 +207,7 @@ class InlineTuiRunnerEventDrivenTest {
         private final AtomicInteger targetDrawNumber = new AtomicInteger(Integer.MAX_VALUE);
         private final CountDownLatch initialDraw = drawNumber(1);
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private volatile IntConsumer onDraw = draw -> { };
         private final Thread thread;
 
         private RunnerFixture(InlineTuiRunner runner, RecordingBackend backend) {
@@ -163,6 +217,7 @@ class InlineTuiRunnerEventDrivenTest {
                 try {
                     runner.run((event, activeRunner) -> false, frame -> {
                         int draw = draws.incrementAndGet();
+                        onDraw.accept(draw);
                         CountDownLatch latch = targetDraw.get();
                         if (draw >= targetDrawNumber.get() && latch != null) {
                             latch.countDown();

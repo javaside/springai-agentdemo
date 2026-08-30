@@ -65,9 +65,10 @@ public final class InlineTuiRunner implements AutoCloseable {
     private final BlockingQueue<Event> eventQueue;
     private final AtomicBoolean running;
     private final AtomicBoolean cleanedUp;
-    private final ConcurrentLinkedQueue<Runnable> uiActions = new ConcurrentLinkedQueue<>();
+    private final Object uiActionsLock = new Object();
+    private ConcurrentLinkedQueue<Runnable> uiActions = new ConcurrentLinkedQueue<>();
+    private boolean renderRequested;
     private final AtomicBoolean uiUpdateQueued = new AtomicBoolean();
-    private final AtomicBoolean renderRequested = new AtomicBoolean();
     private volatile Renderer activeRenderer;
     private final ScheduledExecutorService scheduler;
     private final boolean schedulerOwned;
@@ -367,8 +368,10 @@ public final class InlineTuiRunner implements AutoCloseable {
         if (action == null || !running.get()) {
             return;
         }
-        uiActions.offer(action);
-        renderRequested.set(true);
+        synchronized (uiActionsLock) {
+            uiActions.offer(action);
+            renderRequested = true;
+        }
         enqueueUiWake();
     }
 
@@ -379,7 +382,9 @@ public final class InlineTuiRunner implements AutoCloseable {
         if (!running.get()) {
             return;
         }
-        renderRequested.set(true);
+        synchronized (uiActionsLock) {
+            renderRequested = true;
+        }
         enqueueUiWake();
     }
 
@@ -390,14 +395,17 @@ public final class InlineTuiRunner implements AutoCloseable {
     }
 
     private void processUiWake() {
-        int actionCount = uiActions.size();
-        boolean shouldRender = renderRequested.getAndSet(false);
+        ConcurrentLinkedQueue<Runnable> batch;
+        boolean shouldRender;
+        synchronized (uiActionsLock) {
+            batch = uiActions;
+            uiActions = new ConcurrentLinkedQueue<>();
+            shouldRender = renderRequested;
+            renderRequested = false;
+        }
         try {
-            for (int i = 0; i < actionCount; i++) {
-                Runnable action = uiActions.poll();
-                if (action == null) {
-                    break;
-                }
+            Runnable action;
+            while ((action = batch.poll()) != null) {
                 try {
                     action.run();
                 } catch (Throwable t) {
@@ -411,9 +419,15 @@ public final class InlineTuiRunner implements AutoCloseable {
             }
         } finally {
             uiUpdateQueued.set(false);
-            if (running.get() && (!uiActions.isEmpty() || renderRequested.get())) {
+            if (running.get() && hasPendingUiWork()) {
                 enqueueUiWake();
             }
+        }
+    }
+
+    private boolean hasPendingUiWork() {
+        synchronized (uiActionsLock) {
+            return !uiActions.isEmpty() || renderRequested;
         }
     }
 
