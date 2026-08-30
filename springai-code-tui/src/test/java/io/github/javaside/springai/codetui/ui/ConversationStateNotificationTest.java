@@ -29,6 +29,9 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -39,7 +42,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>迟到 / no-op mutation 不改版本、不通知；</li>
  *   <li>通知发生在 state 监视器<b>外</b>（listener 里可从别的线程回读 state 快照）；</li>
  *   <li>listener 抛异常被隔离，状态与版本照常推进，后续通知照常；</li>
- *   <li>模态离队路径（cancel / reset / 迟到 / 队满）在通知开启时仍<b>恰好唤醒一次</b>。</li>
+ *   <li>模态离队路径（cancel / reset / 迟到 / 队满）在通知开启时仍<b>恰好唤醒一次</b>；</li>
+ *   <li><b>先 publish、后外部应答</b>：入队失败路径在锁内提交的状态变化（队满 ERROR 行 + ALL）
+ *       必须先于 responder / {@code cancel()} 调用发布——违约 responder 抛异常吞不掉通知，
+ *       而异常本身照原语义上抛（生产调用方靠它失败关闭，吞掉 = 工具线程永久 park）。</li>
  * </ul>
  */
 class ConversationStateNotificationTest {
@@ -410,6 +416,177 @@ class ConversationStateNotificationTest {
         assertEquals(1, state.drainPending().size());
     }
 
+    // ── 违约 responder（I-1 回归）：已提交的状态变化必须照常 publish ──────────
+
+    /**
+     * 队满 + responder 违约抛异常：锁内已提交的 ERROR 行 + ALL <b>必须</b>先于 {@code respond} 发布，
+     * 不得被违约实现连同异常一起吞掉；ERROR 行不回滚；异常<b>照原语义</b>向调用方上抛
+     * （生产方 {@code PermissionCallback} 捕获它失败关闭成 DENY——吞掉它会把工具线程 park 在 handoff 上）。
+     */
+    @Test
+    @DisplayName("队满 + 违约 responder：publish 先于 respond，ERROR 行不回滚，异常原样上抛")
+    void permissionOverflowPublishesBeforeRogueResponder() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        List<PermissionOutcome> filler = new CopyOnWriteArrayList<>();
+        for (int i = 0; i < ConversationState.MODAL_QUEUE_CAP; i++) {
+            s.onPermissionRequested(1, permission(1, filler));
+        }
+        assertTrue(filler.isEmpty(), "前置：前 8 个全部入队");
+        List<String> order = new CopyOnWriteArrayList<>();       // 钉死 publish 与 respond 的先后
+        List<Integer> bits = new ArrayList<>();
+        s.setUiChangeListener(b -> { order.add("publish"); bits.add(b); });
+        long before = s.uiVersion();
+        List<PermissionOutcome> sink = new CopyOnWriteArrayList<>();
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> s.onPermissionRequested(1, new PermissionRequest(1, null, "Bash", "boom", "{}",
+                        "why", null, o -> { order.add("respond"); sink.add(o); throw new IllegalStateException("responder 违约抛异常"); })),
+                "异常按原语义向调用方传播（与 cancelModals 的「吞掉继续」不同，此处吞掉=工具线程永久 park）");
+
+        assertEquals("responder 违约抛异常", thrown.getMessage());
+        assertEquals(List.of("publish", "respond"), order, "已提交的变化必须先 publish，再调外部 responder");
+        assertEquals(List.of(UiDirty.ALL), bits, "通知不得被违约 responder 吞掉");
+        assertEquals(before + 1, s.uiVersion(), "版本已记账，不因异常回滚");
+        assertEquals(List.of(PermissionOutcome.DENY), sink, "违约前 DENY 已送达该 responder（异常是它自己抛的）");
+        assertTrue(s.drainPending().stream().anyMatch(l -> l.kind() == ConversationState.OutputLine.Kind.ERROR),
+                "队满的 ERROR 行不被回滚");
+    }
+
+    /**
+     * 迟到路径 + 违约 responder：无状态变化故零通知，异常照原语义上抛——把「迟到不发布」
+     * 与「异常传播」两条语义同时钉死（与上一用例的差异只在 change==null）。
+     */
+    @Test
+    @DisplayName("迟到 + 违约 responder：零通知、零版本，异常原样上抛")
+    void permissionLatePathStaysSilentAndPropagatesRogueResponder() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(2);                                      // 回合已切换，请求 1 迟到
+        List<Integer> bits = new ArrayList<>();
+        s.setUiChangeListener(bits::add);
+        long before = s.uiVersion();
+
+        assertThrows(IllegalStateException.class,
+                () -> s.onPermissionRequested(1, new PermissionRequest(1, null, "Bash", "cmd", "{}",
+                        "why", null, o -> { throw new IllegalStateException("responder 违约抛异常"); })));
+
+        assertEquals(List.of(), bits, "迟到路径无状态变化，本就不该通知");
+        assertEquals(before, s.uiVersion());
+        assertNull(s.peekModal(), "迟到请求不入队");
+    }
+
+    /** 计划审批队满 + 违约 responder：同审批路径——先 publish、ERROR 行不回滚、异常原样上抛。 */
+    @Test
+    @DisplayName("计划队满 + 违约 responder：publish 先于 respond，ERROR 行不回滚，异常原样上抛")
+    void planOverflowPublishesBeforeRogueResponder() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        List<PlanOutcome> filler = new CopyOnWriteArrayList<>();
+        for (int i = 0; i < ConversationState.MODAL_QUEUE_CAP; i++) {
+            s.onPlanSubmitted(1, plan(1, filler));
+        }
+        assertTrue(filler.isEmpty(), "前置：前 8 个全部入队");
+        List<String> order = new CopyOnWriteArrayList<>();
+        List<Integer> bits = new ArrayList<>();
+        s.setUiChangeListener(b -> { order.add("publish"); bits.add(b); });
+        long before = s.uiVersion();
+        List<PlanOutcome> sink = new CopyOnWriteArrayList<>();
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> s.onPlanSubmitted(1, new PlanRequest(1, "# 计划", (o, f) -> {
+                    order.add("respond"); sink.add(o); throw new IllegalStateException("responder 违约抛异常");
+                })));
+
+        assertEquals("responder 违约抛异常", thrown.getMessage());
+        assertEquals(List.of("publish", "respond"), order, "已提交的变化必须先 publish，再调外部 responder");
+        assertEquals(List.of(UiDirty.ALL), bits);
+        assertEquals(before + 1, s.uiVersion());
+        assertEquals(List.of(PlanOutcome.KEEP_PLANNING), sink, "违约前 KEEP_PLANNING 已送达该 responder");
+        assertTrue(s.drainPending().stream().anyMatch(l -> l.kind() == ConversationState.OutputLine.Kind.ERROR),
+                "队满的 ERROR 行不被回滚");
+    }
+
+    /** 计划迟到路径 + 违约 responder：零通知、零版本，异常原样上抛。 */
+    @Test
+    @DisplayName("计划迟到 + 违约 responder：零通知、零版本，异常原样上抛")
+    void planLatePathStaysSilentAndPropagatesRogueResponder() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(2);
+        List<Integer> bits = new ArrayList<>();
+        s.setUiChangeListener(bits::add);
+        long before = s.uiVersion();
+
+        assertThrows(IllegalStateException.class,
+                () -> s.onPlanSubmitted(1, new PlanRequest(1, "# 计划",
+                        (o, f) -> { throw new IllegalStateException("responder 违约抛异常"); })));
+
+        assertEquals(List.of(), bits, "迟到路径无状态变化，本就不该通知");
+        assertEquals(before, s.uiVersion());
+        assertNull(s.peekModal());
+    }
+
+    /**
+     * 问询入队失败（迟到 / 队满共用同一 {@code cancel()} 出口）+ 违约 cancel()：
+     * 该路径无状态变化（零通知），异常照原样上抛——{@code UserQuestionBridge} 靠透传它让工具调用失败，
+     * 吞掉就是让工具线程 park 在 {@code take()} 上。
+     */
+    @Test
+    @DisplayName("问询入队失败 + 违约 cancel()：零通知、零版本，异常原样上抛（迟到与队满两分支）")
+    void askEnqueueFailurePropagatesRogueCancelWithoutPublishing() {
+        AskResponder rogue = new AskResponder() {
+            @Override public void answer(Map<String, String> a) { }
+            @Override public void cancel() { throw new IllegalStateException("responder 违约抛异常"); }
+        };
+
+        // 迟到：回合已切换
+        ConversationState late = new ConversationState();
+        late.onTurnStarted(2);
+        List<Integer> lateBits = new ArrayList<>();
+        late.setUiChangeListener(lateBits::add);
+        long lateBefore = late.uiVersion();
+        assertThrows(IllegalStateException.class, () -> late.onQuestionAsked(1, ask(1, rogue)));
+        assertEquals(List.of(), lateBits, "迟到路径无状态变化，零通知");
+        assertEquals(lateBefore, late.uiVersion());
+        assertNull(late.peekModal());
+
+        // 队满：8 个模态占满后第 9 个问询直接走 cancel()
+        ConversationState full = new ConversationState();
+        full.onTurnStarted(1);
+        List<PermissionOutcome> filler = new CopyOnWriteArrayList<>();
+        for (int i = 0; i < ConversationState.MODAL_QUEUE_CAP; i++) {
+            full.onPermissionRequested(1, permission(1, filler));
+        }
+        List<Integer> fullBits = new ArrayList<>();
+        full.setUiChangeListener(fullBits::add);
+        long fullBefore = full.uiVersion();
+        assertThrows(IllegalStateException.class, () -> full.onQuestionAsked(1, ask(1, rogue)));
+        assertEquals(List.of(), fullBits, "问询队满路径无状态变化，零通知");
+        assertEquals(fullBefore, full.uiVersion());
+        assertTrue(full.hasModal(), "队满的前 8 个模态原封未动（问询未入队）");
+    }
+
+    /** 正常路径钉死（I-1 修复不改变 responder 不抛异常时的行为）：先入队后应答为 no-op，只发一次 VIEW|CONTROL。 */
+    @Test
+    @DisplayName("正常入队路径（responder 不抛）：行为与修复前完全一致")
+    void wellBehavedResponderKeepsOriginalBehaviour() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        List<Integer> bits = new ArrayList<>();
+        s.setUiChangeListener(bits::add);
+        long before = s.uiVersion();
+        List<PermissionOutcome> sink = new CopyOnWriteArrayList<>();
+        List<String> order = new CopyOnWriteArrayList<>();
+
+        s.onPermissionRequested(1, new PermissionRequest(1, null, "Bash", "cmd", "{}", "why", null,
+                o -> { order.add("respond"); sink.add(o); }));
+
+        assertEquals(List.of(UiDirty.VIEW | UiDirty.CONTROL), bits, "正常入队只发一次 VIEW|CONTROL");
+        assertEquals(before + 1, s.uiVersion());
+        assertEquals(List.of(), order, "入队成功不调 responder——应答留给面板");
+        assertEquals(0, sink.size());
+        assertNotNull(s.peekModal());
+    }
+
     // ── 辅助 ────────────────────────────────────────────────────────────
 
     private static List<Message> history() {
@@ -425,6 +602,12 @@ class ConversationStateNotificationTest {
             @Override public void answer(Map<String, String> a) { }
             @Override public void cancel() { cancels.add("cancelled"); }
         };
+        return new AskRequest(turnId, List.of(new QuestionSpec("选哪个?", "选择",
+                List.of(new OptionSpec("A", "第一"), new OptionSpec("B", "第二")), false)), responder);
+    }
+
+    /** 指定 responder 的变体（供违约 responder 用例复用同一份题目）。 */
+    private static AskRequest ask(long turnId, AskResponder responder) {
         return new AskRequest(turnId, List.of(new QuestionSpec("选哪个?", "选择",
                 List.of(new OptionSpec("A", "第一"), new OptionSpec("B", "第二")), false)), responder);
     }

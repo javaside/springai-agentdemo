@@ -40,6 +40,14 @@ import java.util.Set;
  * <ul>
  *   <li>锁内只改数据、递增 {@link #uiVersion} 并归类 dirty bits；<b>锁外</b>才调 listener
  *       （UI 醒来要回读本类，锁内通知等于邀请死锁）；</li>
+ *   <li><b>先 publish、后外部应答</b>：入队失败路径若在锁内已提交状态变化（如队满的 ERROR 行），
+ *       必须先发布再调 responder / {@code cancel()}——已提交的通知不得依赖外部实现的健壮性，
+ *       违约 responder 抛异常也拦不住它。异常本身<b>照原语义上抛</b>而不吞：这与
+ *       {@link #cancelModals} 的「吞掉继续」立场看似相反、实为同一原则（不让一个坏元素
+ *       毁掉已承诺的效果）的两面——排空循环身后还有一整队等待者要救，吞掉才能继续排空；
+ *       而失败路径只有当前这一个等待者，它的活路恰恰是异常上抛：生产调用方
+ *       （{@code PermissionCallback} / {@code UserQuestionBridge} / {@code PlanApprovalBridge}）
+ *       都靠捕获或透传该异常失败关闭，吞掉反而会让工具线程 park 在 handoff {@code take()} 上；</li>
  *   <li>一次复合 mutation（如 {@link #cancelCurrent()}）把各子步骤的 bits <b>合并成一次</b>通知，
  *       嵌套 helper 只返回 bits、绝不各自 publish；</li>
  *   <li>被迟到过滤 / no-op 的写入既不递增版本也不通知；</li>
@@ -1002,6 +1010,9 @@ public final class ConversationState implements AgentListener, UiChangeSource {
 
     /**
      * 问询请求入队。迟到 / 队满当场 {@code cancel()}（锁外），<b>不发通知</b>——状态没变。
+     *
+     * <p>此处两条路径都无状态变化（{@code change} 为 null），publish 只是把该纪律显式写在这里
+     * （「先 publish、后应答」），对实际行为是 no-op。
      */
     @Override
     public void onQuestionAsked(long turnId, AskRequest request) {
@@ -1015,8 +1026,8 @@ public final class ConversationState implements AgentListener, UiChangeSource {
                 change = changed(UiDirty.VIEW | UiDirty.CONTROL);
             }
         }
+        publish(change);                             // 先 publish 再应答（见类注释「先 publish、后外部应答」）
         if (cancel) request.cancel();                // 锁外应答：一次性、非阻塞
-        publish(change);
     }
 
     /**
@@ -1031,6 +1042,11 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      * <p><b>队满溢出必须留下用户看得见的一行</b>：线程一定会醒（活性没问题），但「有个工具被悄悄拒了」
      * 只在日志里就等于没发生——用户会以为模型自己改了主意。迟到请求<b>不</b>提示：那个回合已经取消/切换，
      * 再打一行只是噪音。
+     *
+     * <p><b>先 publish、后应答</b>（见类注释「变化通知纪律」）：队满路径已在锁内提交 ERROR 行 + ALL，
+     * 若 responder 违约抛异常，通知不得随它一起丢——publish 必须先于 {@code respond} 执行。
+     * 异常本身照原语义上抛：生产调用方 {@code PermissionCallback} 靠捕获它失败关闭成 DENY，
+     * 吞掉会让工具线程 park 在 handoff {@code take()} 上（正是本类要防的挂死）。
      */
     @Override
     public void onPermissionRequested(long turnId, PermissionRequest request) {
@@ -1048,8 +1064,8 @@ public final class ConversationState implements AgentListener, UiChangeSource {
                 change = changed(UiDirty.VIEW | UiDirty.CONTROL);
             }
         }
-        if (deny) request.responder().respond(PermissionOutcome.DENY);   // 锁外应答
-        publish(change);
+        publish(change);                                 // 先通知（迟到路径 change=null，纯 no-op）
+        if (deny) request.responder().respond(PermissionOutcome.DENY);   // 锁外应答，异常照原语义上抛
     }
 
     /**
@@ -1062,6 +1078,10 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      *
      * <p><b>不阻塞</b>（契约要求）：本方法与 {@link #drainPending()} / {@link #cancelCurrent()}
      * 共用同一把监视器锁，这里一旦阻塞冻住的是<b>整个 TUI</b>而不只是一个工具线程。
+     *
+     * <p><b>先 publish、后应答</b>（见类注释「变化通知纪律」）：队满路径已在锁内提交 ERROR 行 + ALL，
+     * responder 违约抛异常不得把通知一起带走。异常照原语义上抛（{@code PlanApprovalBridge} 靠透传它
+     * 让工具调用失败，吞掉会让工具线程 park 在 handoff {@code take()} 上）。
      */
     @Override
     public void onPlanSubmitted(long turnId, PlanRequest request) {
@@ -1080,13 +1100,13 @@ public final class ConversationState implements AgentListener, UiChangeSource {
                 change = changed(UiDirty.VIEW | UiDirty.CONTROL);
             }
         }
+        publish(change);                                 // 先通知（迟到路径 change=null，纯 no-op）
         if (late) {
-            request.responder().respond(PlanOutcome.CANCEL, "");          // 锁外应答
+            request.responder().respond(PlanOutcome.CANCEL, "");          // 锁外应答，异常照原语义上抛
         } else if (overflow) {
             request.responder().respond(PlanOutcome.KEEP_PLANNING,
                     "（界面繁忙，未能展示计划，请稍后重新提交）");
         }
-        publish(change);
     }
 
     /**
