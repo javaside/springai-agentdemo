@@ -316,7 +316,7 @@ public final class CodeTuiView extends InlineApp {
     private int histIndex;                                           // 回溯指针；== history.size() 表示未回溯（草稿态）
     private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
     private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
-    private long animTick;                                           // 动画帧计数（drain 每 ~33ms 自增），驱动状态栏波光
+    private long animTick;                                           // 动画帧计数（Task 8：每个动画帧批自增 ~66ms），驱动状态栏波光
     private final ImageAttachmentDetector imageDetector = new ImageAttachmentDetector();
     /** 本次输入是否已按 Ctrl+X 取消附件。清空输入框时复位（见 {@link #clearInput}）——否则取消一次就永久失效。 */
     private boolean attachmentsCancelled;
@@ -464,9 +464,11 @@ public final class CodeTuiView extends InlineApp {
     private static final Duration RESIZE_SETTLE_DELAY = Duration.ofMillis(132);
 
     /**
-     * 动画帧间隔。<b>Task 8 预留</b>（fix round M-5 标记）：本任务（Task 7）刻意未接线——
-     * 接线点在 computeFollowUpFlags 的 animationActive 置真 + coordinator.updateAnimationDemand
-     * （active 时续排、静止时取消）。在 Task 8 落地前保持未引用状态（javac 不警告未用字段）。
+     * 动画帧间隔（§10.3）。Task 8 已接线：批尾经
+     * {@code coordinator.updateAnimationDemand(animationDemandActive(), ANIMATION_FRAME_DELAY)}
+     * 接通——忙态保持至多一个在飞的 66ms 一次性帧任务（到期 publish VIEW、下一批按
+     * {@code animationActive} 续排），状态消失立即取消，空闲无 timer。
+     * 与旧 drain 周期（66ms）同值，波光/压缩条的视觉节奏不变。
      */
     private static final Duration ANIMATION_FRAME_DELAY = Duration.ofMillis(66);
 
@@ -538,6 +540,8 @@ public final class CodeTuiView extends InlineApp {
         // 流式当前残行（未换行段）。节流：内容变化且距上次预览 ≥150ms 才更新——
         // 输出中残行每帧都在变，预览行不节流就会每帧重写（高频 ANSI → Terminal.app 输入法崩溃，
         // 见字段注释）。tail 为空（无流式）时立即清空，保证回合结束预览行马上消失。
+        // （Task 8）这里是节流的<b>最终采纳点</b>：唤醒侧由 computeFollowUpFlags 的
+        // schedulePreview(剩余窗口) 按需安排，到期批到达时本判定决定是否真换内容。
         String tail;
         String curTail = lastLine(state.streaming());
         long nowNanos = System.nanoTime();
@@ -688,6 +692,13 @@ public final class CodeTuiView extends InlineApp {
         coordinator.scheduleResizeSettle(RESIZE_SETTLE_DELAY, this::settleResizeOnUiThread);
     }
 
+    /**
+     * 测试专用（Task 8）：等价一次宽度变化事件（钉光标 + 安排一次性 settle）。
+     * 生产由 onStart 挂的 ResizeEvent global handler 触发；测试态没有事件循环，
+     * 直接调用同一方法体。
+     */
+    void onWidthChangedForTest() { onWidthChanged(); }
+
     /** resize 停稳后的 UI 线程动作：全量重放 + 恢复 IME 光标锚点。 */
     private void settleResizeOnUiThread() {
         try {
@@ -775,8 +786,8 @@ public final class CodeTuiView extends InlineApp {
     private UiUpdateCoordinator.UpdateResult processUpdatesInsideBatch(int dirtyBits) {
         lastDirtyBitsForFlag = dirtyBits;   // computeFollowUpFlags 的 context-usage 判据
         processedBatches.incrementAndGet();
-        // 动画帧计数：事件驱动下由「批」推进（每批一帧）。Task 8 会换成按需帧调度；
-        // 本任务里动画若无 demand 事件即静止（波光停在最后一帧，不崩溃、不循环）。
+        // 动画帧计数：每批自增一次。忙态下批由动画帧 timer 驱动（每 ~66ms 一批，Task 8），
+        // 波光/压缩条恢复动态；空闲时没有批，计数静止——与「无周期任务」不冲突。
         animTick++;
         // ── 本批共享预算（fix round I-3 语义保留）：deadline 只算一次，贯穿下方所有输出段 ──
         batchDeadlineNanos = System.nanoTime() + MAX_DRAIN_NANOS;
@@ -885,9 +896,11 @@ public final class CodeTuiView extends InlineApp {
      * <ul>
      *   <li><b>outputRemaining</b>：队列非空或 state 仍有 pending / 流式完整行 → runBatch
      *       安排一次性 continuation（§9.2），无新生产者事件也最终排空；</li>
-     *   <li><b>previewPending</b>：流式残行非空 → Task 8 接管节流（本任务透传标记）；</li>
-     *   <li><b>animationActive</b>：仍在动态状态（忙 / 压缩 / 后台任务运行中）→ 续排下一帧；
-     *       静止时 false，无任何周期任务。</li>
+     *   <li><b>previewPending</b>：流式残行非空且仍在节流窗口内 → 下方按需排一次 preview
+     *       到期（§10.1，Task 8 接管节流调度）；</li>
+     *   <li><b>animationActive</b>：仍在动态状态（忙 / 压缩 / 后台任务运行中）→ 下方接通
+     *       {@code updateAnimationDemand(true, ANIMATION_FRAME_DELAY)}（§10.3，Task 8 接线）；
+     *       静止时立即 false，无任何周期任务。</li>
      * </ul>
      *
      * <p>context-usage 标脏不经 UpdateResult（其 {@code contextUsageDirty} 字段已删，
@@ -898,12 +911,21 @@ public final class CodeTuiView extends InlineApp {
         boolean outputRemaining = !outputQueue.isEmpty()
                 || state.hasPendingOutput()
                 || state.hasCompleteStreamingLine();
-        boolean previewPending = !lastLine(state.streaming()).isEmpty();
-        // ⚠ 动画本任务<b>透传为 false</b>（Task 8 接管帧推进）：忙时若置 true，coordinator 会
-        // 自续 66ms 帧循环——那正是「固定 tick」的还魂，违反「不得保留任何永久/固定周期任务」。
-        // 本任务的降级：动画显示退化为静态（波光停在最后一帧），状态变化事件到达时仍会重绘
-        // （每次批的 requestUiUpdate 都带新 animTick）。不崩溃、不死循环。
-        boolean animationActive = false;
+        String curTail = lastLine(state.streaming());
+        boolean previewPending = !curTail.isEmpty();
+        // ── 动画按需帧（§10.3，Task 8 接线 fix round M-5 预留点）──
+        // 忙态（THINKING/RUNNING_TOOL/compacting/运行中后台任务/在飞子 agent）→ 接通 66ms 帧；
+        // 状态消失立即 false（coordinator 取消在飞帧）；空闲静态无 timer。每帧到期发一次
+        // VIEW → 下一批 animTick++ → render 的波光/压缩条拿到新帧号（恢复动态，文案不变）。
+        boolean animationActive = animationDemandActive();
+        coordinator.updateAnimationDemand(animationActive, ANIMATION_FRAME_DELAY);
+        // ── preview 节流（§10.1，Task 8 接管）──
+        // 残行非空：安排一次「剩余节流窗口」后的一次性 VIEW；窗口内重复到达只更新状态
+        // （coordinator 的每类至多一个在飞 generation 语义 = 只保持首个到期）。
+        // 残行清空不排（render 的 curTail.isEmpty() 分支当帧立即清空，不走时间任务）。
+        if (previewPending) {
+            coordinator.schedulePreview(previewRemainingDelay());
+        }
         if ((lastDirtyBitsForFlag & (UiDirty.OUTPUT | UiDirty.CONTROL)) != 0) {
             // 上下文统计可能变了（新消息/新事件）：按需防抖刷新（旧的 animTick % 30 周期已删）。
             ctxUsageController.markDirty();
@@ -913,12 +935,27 @@ public final class CodeTuiView extends InlineApp {
     }
 
     /**
+     * preview 到期的剩余节流窗口（§10.1）。
+     *
+     * <p>render 的 150ms 判定（{@link #PREVIEW_THROTTLE_NANOS}）仍是<b>最终采纳点</b>——
+     * 到期批只是「现在可以采纳新残行了」的唤醒；此处把窗口剩余量换算成调度延迟，
+     * 使「首段立即可见 + 窗口到期恰一次 VIEW」与旧 tick 世界的节奏一致。
+     * 已过窗口（含首段）返回 {@link Duration#ZERO}：下一帧即可采纳。
+     */
+    private Duration previewRemainingDelay() {
+        long elapsed = System.nanoTime() - lastPreviewAtNanos;
+        long remaining = PREVIEW_THROTTLE_NANOS - elapsed;
+        return remaining <= 0 ? Duration.ZERO
+                : Duration.ofNanos(Math.min(remaining, PREVIEW_THROTTLE_NANOS));
+    }
+
+    /**
      * 是否仍有「动着的状态」需要动画帧：忙（回合/压缩）或后台任务在跑。
      *
-     * <p><b>Task 8 预留（fix round M-5 显式标记）</b>：Task 7 刻意未接线（接线即 66ms 帧循环
-     * 还魂，见 computeFollowUpFlags 的 animationActive 注释）。Task 8 落地时在批尾调
+     * <p>Task 8 已接线（fix round M-5 预留点）：{@code computeFollowUpFlags} 每批尾调用
      * {@code coordinator.updateAnimationDemand(animationDemandActive(), ANIMATION_FRAME_DELAY)}
-     * 即完成按需帧调度；在此之前它是无调用方的预留接缝。
+     * ——active 时保持至多一个在飞的 66ms 一次性帧任务（到期 publish VIEW，下一批续排），
+     * 静止时立即取消。空闲静态界面没有动画 timer。
      */
     private boolean animationDemandActive() {
         return !state.isIdle() || state.isCompacting()
@@ -1101,6 +1138,21 @@ public final class CodeTuiView extends InlineApp {
      * 在飞判定也直接读 coordinator 的诊断口，View 侧不再镜像任何调度状态。
      */
     boolean hasContinuationScheduledForTest() { return coordinator.hasPendingContinuation(); }
+
+    /**
+     * 测试观测（Task 8）：是否有 preview 一次性任务在飞。
+     * 节流窗口到期消费后、回合结束（streaming 空）后必须为 false。
+     */
+    boolean hasPendingPreviewScheduledForTest() { return coordinator.hasPendingPreview(); }
+
+    /**
+     * 测试观测（Task 8）：是否有动画帧一次性任务在飞。
+     * 空闲静态必须为 false（动画 timer demand 驱动、状态消失即停）。
+     */
+    boolean hasPendingAnimationFrameForTest() { return coordinator.hasPendingAnimation(); }
+
+    /** 测试观测（Task 8）：动画帧计数（每帧一批自增；波光/压缩条的驱动量）。 */
+    long animTickForTest() { return animTick; }
 
     /** 测试观测：初始全量同步是否完成。 */
     boolean initialAllSyncDoneForTest() { return initialAllSyncDone; }

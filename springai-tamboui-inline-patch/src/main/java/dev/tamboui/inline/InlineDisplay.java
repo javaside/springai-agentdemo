@@ -263,6 +263,26 @@ public final class InlineDisplay implements AutoCloseable {
         previousFrameValid = false;
     }
 
+    /**
+     * 本帧之后是否还需要再画一帧（Task 8 按需 follow-up 帧的唯一信号源）。
+     *
+     * <p>返回 {@code cursorBandRepairFramesLeft > 0}：与 IME 光标带修复窗口<b>同源同寿命</b>。
+     * 事件驱动 UI 关闭了全局 tick，光标带重申窗口（见 {@link #cursorBandRepairFramesLeft}
+     * 的 8 帧计数）内的帧<b>只能</b>由调用方按需补排——本方法就是「补排判断」。
+     *
+     * <p>语义约束（有 {@code InlineDisplayDiffTest.needsFollowUpFrameTracksCursorBandRepairWindow} 钉）：
+     * <ul>
+     *   <li>触及光标带的变更武装窗口 → true；</li>
+     *   <li>窗口逐帧消耗（每帧 render 自减一次）→ 剩余 &gt; 0 期间持续 true；</li>
+     *   <li>计数耗尽且无新触发 → false（静止零输出，调用方停止补排）。</li>
+     * </ul>
+     *
+     * <p>线程纪律：与 {@link #render} 同线程调用（渲染线程）；只读一个 int 字段。
+     */
+    public boolean needsFollowUpFrame() {
+        return cursorBandRepairFramesLeft > 0;
+    }
+
     public void release() {
         if (released) return;
         StringBuilder batch = new StringBuilder();

@@ -20,10 +20,13 @@ import java.util.function.IntConsumer;
 
 import org.junit.jupiter.api.Test;
 
+import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.DiffResult;
 import dev.tamboui.layout.Position;
 import dev.tamboui.layout.Size;
 import dev.tamboui.terminal.Backend;
+import dev.tamboui.terminal.Frame;
+import dev.tamboui.style.Style;
 
 class InlineTuiRunnerEventDrivenTest {
 
@@ -180,6 +183,94 @@ class InlineTuiRunnerEventDrivenTest {
         assertEquals(0, actions.get());
     }
 
+    // ── Task 8：IME 光标带修复的按需 follow-up 帧 ─────────────────────────
+
+    /** 等待帧流静止：连续 {@code quietMillis} 无新帧即认为稳定（返回静止时的累计帧数）。 */
+    private static int awaitQuietFrames(RunnerFixture fixture, int minFrames, long quietMillis)
+            throws InterruptedException {
+        int last;
+        int stable;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        do {
+            last = fixture.draws.get();
+            TimeUnit.MILLISECONDS.sleep(quietMillis);
+            stable = fixture.draws.get();
+        } while (stable != last && System.nanoTime() < deadline);
+        return stable;
+    }
+
+    /**
+     * 一次 draw 触及光标带（武装 IME 修复窗口）后，runner 必须按需补排后续 render，
+     * 且窗口耗尽后回到静止零输出——不恢复全局 tick。
+     *
+     * <p>场景：先用「两帧间切换光标带内单元格」的渲染器武装窗口（模拟中文编辑活动），
+     * 再冻结内容——窗口内的 8 帧重申全部由 runner 的 follow-up 调度驱动（无全局 tick、
+     * 无外部 requestRender），耗尽后必须静止。
+     */
+    @Test
+    void cursorBandRepairArmsDemandDrivenFollowUpFramesThenStops() throws Exception {
+        try (RunnerFixture fixture = startRunner(POLL_TIMEOUT)) {
+            assertTrue(fixture.initialDraw.await(1, TimeUnit.SECONDS));
+            AtomicBoolean editing = new AtomicBoolean();
+            AtomicBoolean wide = new AtomicBoolean();
+            fixture.renderBody = frame -> {
+                Buffer buffer = frame.buffer();
+                if (editing.get()) {
+                    // 编辑活动：每帧切换光标带内单元格（真实 diff → 触及光标带 → 武装/续期窗口）。
+                    buffer.setString(1, 0, wide.getAndSet(!wide.get()) ? "中" : "a", Style.EMPTY);
+                } else {
+                    // 冻结：内容不再变化——后续帧只剩窗口内的光标带重申（bandTail）。
+                    buffer.setString(1, 0, wide.get() ? "中" : "a", Style.EMPTY);
+                }
+                frame.setCursorPosition(1, 0);
+            };
+
+            // 一次编辑帧武装窗口，随后立即冻结内容。
+            editing.set(true);
+            fixture.runner.requestRender();
+            assertTrue(fixture.awaitDraws(2, 1, TimeUnit.SECONDS), "编辑帧必须被绘制");
+            int drawsAtFreeze = fixture.draws.get();
+            editing.set(false);   // 冻结：后续帧的唯一驱动就是 follow-up 调度
+
+            // follow-up 调度把窗口内的帧补完；补完后帧流静止。
+            int settled = awaitQuietFrames(fixture, drawsAtFreeze, 300);
+            int followUps = settled - drawsAtFreeze;
+            // 编辑帧可能晚于 latch 到达再切一次内容（一次重武装）——允许 8 或 9，但必须是
+            // 有界的（任何常驻循环都会远超这个数）。
+            assertTrue(followUps >= 8 && followUps <= 10,
+                    "窗口内必须由 follow-up 调度补帧（8 帧重申 ±1 次重武装），实际补了 "
+                            + followUps + " 帧");
+
+            // 窗口耗尽后静止：不再有任何帧。
+            int drawsAfterWindow = fixture.draws.get();
+            CountDownLatch unexpected = fixture.drawNumber(drawsAfterWindow + 1);
+            assertFalse(unexpected.await(400, TimeUnit.MILLISECONDS),
+                    "光标带修复窗口耗尽后必须停止补帧（静止零输出）");
+            assertEquals(drawsAfterWindow, fixture.draws.get());
+        }
+    }
+
+    /** 静止内容（无重申窗口）不得触发任何 follow-up 帧：首帧后的窗口耗尽即永久静止。 */
+    @Test
+    void idleRunnerWithoutCursorBandActivityDoesNotRenderFollowUps() throws Exception {
+        try (RunnerFixture fixture = startRunner(POLL_TIMEOUT)) {
+            assertTrue(fixture.initialDraw.await(1, TimeUnit.SECONDS));
+            fixture.renderBody = frame -> {
+                // 内容完全静止：首帧（从空到有内容）会武装一次窗口，之后窗口耗尽即静止。
+                frame.buffer().setString(1, 0, "steady", Style.EMPTY);
+                frame.setCursorPosition(1, 0);
+            };
+            fixture.runner.requestRender();
+            // 等首帧后的 follow-up 窗口全部耗尽（帧流静止）。
+            awaitQuietFrames(fixture, 2, 300);
+            int after = fixture.draws.get();
+            CountDownLatch unexpected = fixture.drawNumber(after + 1);
+            assertFalse(unexpected.await(400, TimeUnit.MILLISECONDS),
+                    "静止内容不得产生 follow-up 帧");
+            assertEquals(after, fixture.draws.get());
+        }
+    }
+
     private static RunnerFixture startRunner(Duration pollTimeout) throws Exception {
         RecordingBackend backend = new RecordingBackend();
         InlineTuiRunner runner = InlineTuiRunner.create(backend, config(pollTimeout));
@@ -208,6 +299,8 @@ class InlineTuiRunnerEventDrivenTest {
         private final CountDownLatch initialDraw = drawNumber(1);
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private volatile IntConsumer onDraw = draw -> { };
+        /** 可编程帧内容（Task 8 follow-up 测试用）：设置后每帧渲染它而非空帧。 */
+        private volatile java.util.function.Consumer<Frame> renderBody;
         private final Thread thread;
 
         private RunnerFixture(InlineTuiRunner runner, RecordingBackend backend) {
@@ -216,6 +309,10 @@ class InlineTuiRunnerEventDrivenTest {
             this.thread = new Thread(() -> {
                 try {
                     runner.run((event, activeRunner) -> false, frame -> {
+                        java.util.function.Consumer<Frame> body = renderBody;
+                        if (body != null) {
+                            body.accept(frame);
+                        }
                         int draw = draws.incrementAndGet();
                         onDraw.accept(draw);
                         CountDownLatch latch = targetDraw.get();
@@ -237,6 +334,11 @@ class InlineTuiRunnerEventDrivenTest {
                 latch.countDown();
             }
             return latch;
+        }
+
+        /** 等待累计绘制数达到 {@code target}（从当前值起最多增加 target-current）。 */
+        private boolean awaitDraws(int target, long timeout, TimeUnit unit) throws InterruptedException {
+            return drawNumber(target).await(timeout, unit);
         }
 
         @Override

@@ -390,6 +390,36 @@ class InlineDisplayDiffTest {
         assertEquals(0, backend.writeCalls(), "带外变更不得武装修复窗口");
     }
 
+    /**
+     * Task 8（按需 follow-up 帧）：{@code needsFollowUpFrame()} 是「本帧后还要不要再画一帧」的
+     * 信号源。它必须与光标带修复窗口<b>同源同寿命</b>：触及光标带的变更武装窗口 → true；
+     * 窗口逐帧消耗 → 持续 true；计数耗尽且无新触发 → false（静止零输出）。
+     * 事件驱动 UI 没有 tick 兜底，runner 靠它决定是否补排一次性 render——语义错一点，
+     * 要么 IME 修复窗口被砍短（修复能力回退），要么静止界面出现常驻帧循环（重构目标作废）。
+     */
+    @Test
+    void needsFollowUpFrameTracksCursorBandRepairWindow() {
+        InlineDisplay display = display(1);
+        // 静止起点：无变更 → 不需要后续帧。
+        renderCells(display, "a", "A");
+        assertFalse(display.needsFollowUpFrame(), "无光标带触发时不得要求后续帧");
+
+        // 带内编辑（col1 变更落在光标行）：武装 8 帧窗口。
+        renderCells(display, "中", "A");
+        assertTrue(display.needsFollowUpFrame(), "触及光标带的变更必须武装 follow-up 窗口");
+
+        // 窗口内逐帧消耗：每帧仍要求后续帧（帧数递减但 >0 即 true）。
+        for (int frame = 1; frame <= 7; frame++) {
+            renderCells(display, "中", "A");
+            assertTrue(display.needsFollowUpFrame(),
+                    "窗口第 " + frame + " 帧后仍需后续帧（剩余帧数 > 0）");
+        }
+
+        // 计数耗尽：第 8 帧消耗掉最后一个名额后归零 → false。
+        renderCells(display, "中", "A");
+        assertFalse(display.needsFollowUpFrame(), "窗口耗尽后必须停止要求后续帧（静止零输出）");
+    }
+
     /** 3 行圆角框：row0 顶边框（含 ╮），row1 = │ + 文本 + │（光标行），row2 底边框（含 ╯）。 */
     private void renderBox(InlineDisplay display, String text) {
         display.render((area, buffer) -> {

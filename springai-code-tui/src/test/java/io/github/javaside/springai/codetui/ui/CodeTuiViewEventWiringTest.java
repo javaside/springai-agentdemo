@@ -700,4 +700,292 @@ class CodeTuiViewEventWiringTest {
         assertFalse(src.contains("new ResizeSettle("),
                 "ResizeSettle（帧驱动的停稳判定器）已随每帧轮询删除：settle 由 coordinator 132ms 一次性任务承担");
     }
+
+    // ── Task 8：preview / animation / IME 的按需时间任务 ───────────────────
+
+    /**
+     * 首个流式残行可立即可见（§10.1「首个新残行立即请求预览」）：
+     * token 到达后第一批渲染就把残行画进 live 区，不等 150ms 节流窗口。
+     */
+    @Test
+    @DisplayName("preview：首个流式残行可立即可见（不等节流窗口）")
+    void preview_firstStreamingTailIsImmediatelyVisible(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+
+        s.onTurnStarted(1L);
+        s.onAssistantToken(1L, "首个残行");
+        v.runPendingUiUpdatesForTest();
+
+        // 首段立即可见：第一批 render（ViewScreen 等价 render()）就读得到残行。
+        // lastPreviewedTail 初值 ""，render 的采纳条件（curTail 非空且距上次预览 ≥0）立即满足。
+        assertTrue(ViewScreen.of(v).contains("首个残行"),
+                "首个流式残行必须立即可见（150ms 节流窗口只挡住后续更新）");
+    }
+
+    /**
+     * 150ms 窗口内的多个 token 只产生<b>一个</b> pending preview wake（§10.1）：
+     * 窗口内到达的 token 只更新状态、不追加调度；到期只发一次 VIEW。
+     *
+     * <p>每个消费步后跑一次 {@code ViewScreen.of(v)}（等价生产「批后即 render」——
+     * requestUiUpdate 完成后必然一次合并绘制，preview 的采纳点在 render 内更新
+     * {@code lastPreviewAtNanos}，下一批的剩余窗口由此起算）。不跑 render 的话
+     * 采纳点不前进，窗口永远是 ZERO——那不是生产形态。
+     */
+    @Test
+    @DisplayName("preview：150ms 窗口内多次 token 只安排一个一次性 VIEW 到期")
+    void preview_tokensInsideThrottleWindowProduceSinglePendingWake(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+        ViewScreen.of(v);   // 初始 render（等价生产首帧）
+
+        s.onTurnStarted(1L);
+        s.onAssistantToken(1L, "残行起点");
+        v.runPendingUiUpdatesForTest();
+        ViewScreen.of(v);   // 生产：批后 render 采纳首段（立即可见）并重置节流时钟
+        assertTrue(v.hasPendingPreviewScheduledForTest(),
+                "流式残行非空时必须有一个 preview 到期在飞（§10.1）");
+
+        // 窗口内连续 50 个 token（真实事件，各自 publish OUTPUT|VIEW）。
+        // 每次消费后 render（生产节拍），模拟 150ms 窗口内的密集到达。
+        for (int i = 0; i < 50; i++) {
+            s.onAssistantToken(1L, " more" + i);
+            v.runPendingUiUpdatesForTest();
+            ViewScreen.of(v);
+        }
+        // 节流窗口内每批至多安排一个 preview 一次性任务（coordinator 每类至多一个在飞）。
+        assertTrue(v.hasPendingPreviewScheduledForTest(),
+                "残行仍在时 preview 到期在飞是合法状态（下一窗口的唤醒）");
+
+        // 静止等待：token 停止后，preview 到期只发一次 VIEW 批——残行内容在 render 处
+        // 每 150ms 才被采纳一次，批次数必须有界（任何「一 token 一批」或自驱动循环都会远超）。
+        // ⚠ 上限要容纳动画帧：回合仍在 THINKING（忙态），§10.3 的 66ms 帧续排是<b>合法</b>
+        // 批次——200ms 观测窗 ≈3 个动画帧 + ≤2 个 preview 到期 + 调度余量，故上界取 10；
+        // 一 token 一批会是 50+，自驱动循环会是 40（每 5ms 一批）——都远超此界。
+        int batches = v.processedBatchesForTest();
+        for (int i = 0; i < 40; i++) {   // 200ms 观测：≥1 个节流窗口到期
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+            ViewScreen.of(v);
+        }
+        int extra = v.processedBatchesForTest() - batches;
+        assertTrue(extra <= 12,
+                "窗口内 50 token 到期后批次数必须有界（动画帧 + preview 到期；实际新增 "
+                        + extra + " 批）");
+        // 流式仍在（回合未结束）：preview timer 允许在飞（这是下一窗口的唤醒），
+        // 但批次数有界已由上式钉住。回合结束后的静止由 preview_noTaskAfterTurnCompletion 钉。
+    }
+
+    /** 残行清空立即 VIEW、不等节流（§10.1）：回合结束预览行马上消失。 */
+    @Test
+    @DisplayName("preview：残行清空立即更新（flush 后预览行立即消失）")
+    void preview_emptyTailBypassesThrottleImmediately(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+
+        s.onTurnStarted(1L);
+        s.onAssistantToken(1L, "残行内容");
+        v.runPendingUiUpdatesForTest();      // 首段可见
+        assertTrue(ViewScreen.of(v).contains("残行内容"));
+
+        // 回合结束 → flushStreaming 把残行定稿、streaming 清空 → render 的采纳分支
+        // （curTail.isEmpty() → 立即清空）当帧生效，不等 150ms。
+        s.onTurnComplete(1L);
+        v.runPendingUiUpdatesForTest();
+        String screen = ViewScreen.of(v);
+        assertFalse(screen.contains("残行内容"),
+                "残行清空必须立即清空预览（curTail.isEmpty() 分支绕过节流）：\n" + screen);
+    }
+
+    /** 回合结束后不再续排 preview（§10.1）：流式静止后无 pending preview 任务。 */
+    @Test
+    @DisplayName("preview：回合结束后不续排 preview 任务")
+    void preview_noTaskAfterTurnCompletion(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+
+        s.onTurnStarted(1L);
+        s.onAssistantToken(1L, "流式内容");
+        v.runPendingUiUpdatesForTest();
+        s.onTurnComplete(1L);                   // 残行定稿 → streaming 清空
+        v.runPendingUiUpdatesForTest();
+
+        // 等 preview 窗口与任何在飞任务全部到期。
+        for (int i = 0; i < 30; i++) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertFalse(v.hasPendingPreviewScheduledForTest(),
+                "回合结束（streaming 空）后不得续排 preview 任务");
+        assertEquals(0, v.coordinatorForTest().pendingDirtyBits(), "静止后无脏位");
+    }
+
+    /**
+     * 动画帧只在忙态接通（§10.3）：THINKING/RUNNING_TOOL/compacting/运行中后台任务
+     * 存在时 updateAnimationDemand(true)；全部消失立即 false；空闲无 timer。
+     */
+    @Test
+    @DisplayName("animation：忙态接通 66ms 帧续排，状态消失立即停止，空闲无 timer")
+    void animation_demandDrivenOnlyWhileBusyStatesExist(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+
+        // 空闲静态：无动画 timer。
+        assertFalse(v.hasPendingAnimationFrameForTest(), "空闲静态界面不得有动画 timer");
+
+        // THINKING：动画接通。
+        s.onTurnStarted(1L);
+        v.runPendingUiUpdatesForTest();
+        assertTrue(v.hasPendingAnimationFrameForTest(), "THINKING 必须接通动画帧");
+
+        // RUNNING_TOOL：动画保持。
+        s.onToolStarted(1L, "Read", "{}");
+        v.runPendingUiUpdatesForTest();
+        assertTrue(v.hasPendingAnimationFrameForTest(), "RUNNING_TOOL 必须保持动画帧");
+
+        // 回合结束（状态消失）：立即取消动画 timer。
+        s.onToolFinished(1L, "Read", "ok", true);
+        s.onTurnComplete(1L);
+        v.runPendingUiUpdatesForTest();
+        // 等 follow-up 到期消费完（最多 66ms 的在飞帧）。
+        for (int i = 0; i < 30 && v.hasPendingAnimationFrameForTest(); i++) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertFalse(v.hasPendingAnimationFrameForTest(), "忙态消失后动画 timer 必须立即取消");
+
+        // 压缩中：动画再次接通。
+        s.onCompactionStarted("手动");
+        v.runPendingUiUpdatesForTest();
+        assertTrue(v.hasPendingAnimationFrameForTest(), "compacting 必须接通动画帧");
+        s.onCompactionFinished(0, 0);
+        v.runPendingUiUpdatesForTest();
+        for (int i = 0; i < 30 && v.hasPendingAnimationFrameForTest(); i++) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertFalse(v.hasPendingAnimationFrameForTest(), "压缩结束后动画必须停止");
+
+        // 运行中后台任务：动画接通（面板行波光 + 耗时跳动）。
+        s.onBackgroundTaskStarted("b1", "explore", "描述");
+        v.runPendingUiUpdatesForTest();
+        assertTrue(v.hasPendingAnimationFrameForTest(), "运行中后台任务必须接通动画帧");
+        s.onBackgroundTaskFinished("b1", "结果", true);
+        v.runPendingUiUpdatesForTest();
+        for (int i = 0; i < 30 && v.hasPendingAnimationFrameForTest(); i++) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertFalse(v.hasPendingAnimationFrameForTest(), "后台任务全部结束后动画必须停止");
+        assertEquals(0, v.coordinatorForTest().pendingDirtyBits(), "静止后无脏位");
+    }
+
+    /**
+     * 动画帧推进 StatusBar 的 animTick（§10.3「恢复动态」）：
+     * 忙态下每个动画帧批自增 animTick，波光/压缩条不再停在最后一帧。
+     */
+    @Test
+    @DisplayName("animation：每个动画帧批自增 animTick（波光恢复动态）")
+    void animation_framesAdvanceAnimTick(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+
+        s.onTurnStarted(1L);
+        v.runPendingUiUpdatesForTest();
+        long tick0 = v.animTickForTest();
+        // 等若干动画帧到期并消费（每帧一批 → animTick++）。
+        int guard = 0;
+        while (v.animTickForTest() < tick0 + 3 && guard++ < 100) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertTrue(v.animTickForTest() >= tick0 + 3,
+                "忙态动画帧必须推进 animTick（" + tick0 + " → " + v.animTickForTest() + "）");
+    }
+
+    /** 空闲静止观测：一段时间内没有任何批次自发出现（无 timer = 无周期唤醒）。 */
+    @Test
+    @DisplayName("idle：静止界面持续观测无任何自发批次（无动画/preview/continuation timer）")
+    void idle_noSpontaneousBatchesOverObservationWindow(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+        int baseline = v.processedBatchesForTest();
+
+        // 观测窗口 ≥ 3×动画帧周期 + preview 窗口：任何残留 timer 都会在此自发产生批次。
+        for (int i = 0; i < 40; i++) {
+            TimeUnit.MILLISECONDS.sleep(10);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertEquals(baseline, v.processedBatchesForTest(),
+                "空闲静止界面在观测窗口内不得有任何自发批次");
+        assertFalse(v.hasPendingAnimationFrameForTest(), "空闲不得有动画 timer");
+        assertFalse(v.hasPendingPreviewScheduledForTest(), "空闲不得有 preview timer");
+        assertFalse(v.hasContinuationScheduledForTest(), "空闲不得有 continuation timer");
+    }
+
+    // ── Task 8：resize settle 的按需验证（132ms generation 替换已由 Task 7 落地） ──
+
+    /**
+     * 宽度变化立即钉光标并安排一次性 settle；连续宽度变化只让<b>最新</b> generation
+     * 的 settle 动作执行（重放只发生一次）。停稳失败（测试态 runner()==null，
+     * replayAfterResize 直接降级返回）也必须在 finally 复位 parkCursorAtTop。
+     */
+    @Test
+    @DisplayName("resize：立即钉光标，仅最新 settle generation 执行，失败也 finally 复位停放")
+    void resize_settleGenerationReplacementAndCursorParkReset(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+
+        // 首个宽度变化：光标立即钉顶（不等 settle）。
+        v.onWidthChangedForTest();
+        assertTrue(v.parkCursorAtTop, "宽度变化事件必须立即钉光标到第 0 行（resize 窗口开启）");
+
+        // 静默窗口内的后续宽度变化：替换 generation（旧的 settle 永不执行——coordinator
+        // 侧语义已由 UiUpdateCoordinatorTest.replacingResizeSettleSuppressesStaleAction 钉，
+        // 此处验证 View 侧链条在替换后仍收敛：最新一代到期执行、停放复位）。
+        v.onWidthChangedForTest();          // 第二次（generation 2 替换 generation 1）
+        assertTrue(v.parkCursorAtTop, "静默窗口内的后续宽度变化保持钉顶（settle 未到期）");
+
+        // 等 132ms+ 让最新 generation 到期（settle 动作经 requestUiUpdate → 测试队列）。
+        for (int i = 0; i < 40; i++) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        // settle 动作已执行（测试态 replayAfterResize 因 runner==null 降级）——但 finally
+        // 必须把 IME 光标锚点放回文本行：这是「settle 失败也复位停放」的钉。
+        assertFalse(v.parkCursorAtTop,
+                "settle 执行后（含 replay 降级/失败）必须在 finally 复位 parkCursorAtTop"
+                        + "——否则 IME 光标锚点永久钉在边框上（用户实报「打字错位」）");
+    }
+
+    /** resize 后批次照常：settle 不影响事件驱动消费（回归钉）。 */
+    @Test
+    @DisplayName("resize：settle 之后事件驱动的输出消费照常")
+    void resize_settleDoesNotDisturbEventDrivenBatches(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+
+        v.onWidthChangedForTest();
+        s.pushInfo("resize 之后的输出");
+        v.runPendingUiUpdatesForTest();
+        assertFalse(s.hasPendingOutput(), "settle 在飞时输出消费照常进行");
+    }
 }

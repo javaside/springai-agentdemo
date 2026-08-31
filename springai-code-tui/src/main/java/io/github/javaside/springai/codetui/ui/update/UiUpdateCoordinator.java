@@ -348,7 +348,27 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
      * 空闲必须为 false——排空后没有 timer 残留。
      */
     public boolean hasPendingContinuation() {
-        ScheduledFuture<?> future = continuationFuture.get();
+        return hasPendingTimer(continuationFuture);
+    }
+
+    /**
+     * 是否有一个已排定、尚未完成的 preview 一次性任务（诊断/测试，Task 8）。
+     * 节流窗口到期消费后、流式静止后必须为 false。
+     */
+    public boolean hasPendingPreview() {
+        return hasPendingTimer(previewFuture);
+    }
+
+    /**
+     * 是否有一个已排定、尚未完成的动画帧一次性任务（诊断/测试，Task 8）。
+     * 空闲静态必须为 false——动画 timer 必须 demand 驱动、状态消失即停。
+     */
+    public boolean hasPendingAnimation() {
+        return hasPendingTimer(animationFuture);
+    }
+
+    private static boolean hasPendingTimer(AtomicReference<ScheduledFuture<?>> slot) {
+        ScheduledFuture<?> future = slot.get();
         return future != null && !future.isDone();
     }
 

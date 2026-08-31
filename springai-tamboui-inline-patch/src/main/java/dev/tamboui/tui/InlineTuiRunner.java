@@ -59,6 +59,16 @@ public final class InlineTuiRunner implements AutoCloseable {
 
     private static final Logger log = Logger.getLogger(InlineTuiRunner.class.getName());
 
+    /**
+     * IME 光标带 follow-up 帧间隔（毫秒）。
+     *
+     * <p>沿用原视觉节拍的量级：code-tui 旧帧长 100ms（见 InlineDisplay 的
+     * {@code CURSOR_BAND_REPAIR_FRAMES} 注释「帧数 × 当前帧长」），窗口 8 帧 ≈ 800ms。
+     * 事件驱动后没有全局 tick，本值就是窗口的<b>实际帧长</b>——保持 ~100ms 使修复窗口的
+     * 时长与重构前同量级（窗口覆盖 IME 异步清理的滞后区间，砍短会漏修复）。
+     */
+    private static final long IME_FOLLOW_UP_DELAY_MS = 100;
+
     private final Backend backend;
     private final InlineViewport viewport;
     private final InlineTuiConfig config;
@@ -78,6 +88,15 @@ public final class InlineTuiRunner implements AutoCloseable {
     private final AtomicReference<Instant> nextTickTime;
     private final AtomicReference<Size> lastSize;
     private final TerminalInputReader inputReader;
+    /**
+     * IME 光标带修复的 follow-up 帧在飞标志（Task 8）。
+     *
+     * <p>一次 draw 武装了修复窗口（{@code viewport.needsFollowUpFrame() == true}）时，runner
+     * 在自身 scheduler 上排一个<b>一次性</b>延迟任务请求合并重绘，到位后 draw 再看窗口是否仍在。
+     * CAS 保证至多一个 follow-up 在飞；窗口耗尽（draw 后 {@code needsFollowUpFrame() == false}）
+     * 即不再续排，静止界面零帧输出。<b>绝不 scheduleAtFixedRate</b>——那是被删除的常驻 tick。
+     */
+    private final AtomicBoolean imeFollowUpScheduled = new AtomicBoolean();
 
     private InlineTuiRunner(Backend backend, InlineViewport viewport, InlineTuiConfig config) {
         this.backend = backend;
@@ -192,7 +211,7 @@ public final class InlineTuiRunner implements AutoCloseable {
         activeRenderer = renderer;
         try {
             // Initial draw
-            viewport.draw(renderer::render);
+            drawAndMaybeScheduleImeFollowUp(renderer::render);
 
             while (running.get()) {
                 Event event = pollEvent(config.pollTimeout());
@@ -214,7 +233,7 @@ public final class InlineTuiRunner implements AutoCloseable {
                             handleThrowable(t);
                         }
                         if (running.get()) {
-                            viewport.draw(renderer::render);
+                            drawAndMaybeScheduleImeFollowUp(renderer::render);
                         }
                         continue;
                     }
@@ -227,13 +246,46 @@ public final class InlineTuiRunner implements AutoCloseable {
                         continue;
                     }
                     if (shouldRedraw && running.get()) {
-                        viewport.draw(renderer::render);
+                        drawAndMaybeScheduleImeFollowUp(renderer::render);
                     }
                 }
             }
         } finally {
             activeRenderer = null;
             RenderThread.clearRenderThread();
+        }
+    }
+
+    /**
+     * draw 一次，随后按需补排 IME 光标带修复的后续帧（Task 8）。
+     *
+     * <p><b>为什么要补排</b>：macOS 终端把 IME 预编辑串画在硬件光标处，其清理是异步的、
+     * 会越界擦坏相邻行右缘（见 InlineDisplay 的光标带修复注释）。修复窗口（8 帧）内的
+     * 整行重申依赖「每帧都画」——事件驱动关掉全局 tick 后，这 8 帧只能由 runner 自己
+     * 按需驱动。窗口仍在（draw 后 {@code needsFollowUpFrame()==true}）→ 排一个一次性
+     * {@link #requestRender()}；耗尽 → 不再排，静止界面零帧零字节。
+     *
+     * <p><b>纪律</b>：一次性（{@code scheduler.schedule}，绝不用 {@code scheduleAtFixedRate}）；
+     * CAS 至多一个在飞（连续多帧触发也只挂一个 timer）；回调只经既有
+     * {@link #requestRender()} 合并请求，不直接画（渲染仍只在渲染线程）。
+     */
+    private void drawAndMaybeScheduleImeFollowUp(java.util.function.Consumer<Frame> renderFunction) {
+        viewport.draw(renderFunction);
+        if (!viewport.needsFollowUpFrame()) {
+            return;   // 窗口未武装或已耗尽：无事可做（绝大多数帧走这里，零开销）
+        }
+        if (imeFollowUpScheduled.compareAndSet(false, true)) {
+            try {
+                scheduler.schedule(() -> {
+                    imeFollowUpScheduled.set(false);
+                    if (running.get()) {
+                        requestRender();   // 合并请求：真正的 draw 在事件循环里发生
+                    }
+                }, IME_FOLLOW_UP_DELAY_MS, TimeUnit.MILLISECONDS);
+            } catch (Throwable t) {
+                imeFollowUpScheduled.set(false);   // scheduler 已关闭（停止路径）：放弃并归还
+                log.log(Level.FINE, "IME follow-up frame schedule rejected", t);
+            }
         }
     }
 
@@ -415,7 +467,7 @@ public final class InlineTuiRunner implements AutoCloseable {
 
             Renderer renderer = activeRenderer;
             if (shouldRender && running.get() && renderer != null) {
-                viewport.draw(renderer::render);
+                drawAndMaybeScheduleImeFollowUp(renderer::render);
             }
         } finally {
             uiUpdateQueued.set(false);
