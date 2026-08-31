@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -294,5 +295,89 @@ class ContextUsageTest {
         ContextUsage cu = new ContextUsage(() -> s, new RecordingSink());
         cu.refresh();
         assertEquals(" · 上下文 30% · 缓存命中 80%", cu.suffix());
+    }
+
+    // ── refresh() 返回「可见数据是否真实变化」（Task 6：按需、单飞刷新的判定输入） ──
+
+    /**
+     * refresh 只有在<b>可见数据</b>（后缀/报告口径的字段）变化时才返回 true——
+     * 状态栏刷新的调度方（refresh controller）只关心「UI 需不需要重画」，不关心
+     * 快照对象身份是否换了。这里两条 record 在可见口径上相等：events 同、
+     * perTurnTokens 同（estimatedTokens 同、systemPromptTokens 同）、window 同、
+     * cacheHitPercent 同——身份不同但可见输出一字不差 → false。
+     */
+    @Test
+    void refresh_visibleDataUnchanged_returnsFalseEvenForNewRecord() {
+        // 两个独立构造的等值快照（破除 Integer 缓存：数值故意用 != -128..127 的 12345）
+        ContextStats first = statsWithEstimate(30_000L);
+        ContextStats second = statsWithEstimate(30_000L);
+        AtomicInteger reads = new AtomicInteger();
+        AtomicReference<ContextStats> src = new AtomicReference<>(first);
+        ContextUsage cu = new ContextUsage(() -> {
+            reads.incrementAndGet();
+            return src.get();
+        }, new RecordingSink());
+
+        assertTrue(cu.refresh(), "首次 refresh：empty → 有数据，可见输出变化 → true");
+        src.set(second);
+        assertFalse(cu.refresh(), "等值新快照 → 可见输出一字不变 → false");
+        assertEquals(2, reads.get(), "两次 refresh 各现算一次（无缓存读副作用）");
+    }
+
+    /** events 数变化是可见变化（尚无对话 ↔ 有对话，后缀在空/非空间切换）。 */
+    @Test
+    void refresh_eventCountChange_isVisibleChange() {
+        AtomicReference<ContextStats> src = new AtomicReference<>(ContextStats.empty());
+        ContextUsage cu = new ContextUsage(() -> src.get(), new RecordingSink());
+
+        assertFalse(cu.refresh(), "empty → empty：初始缓存就是 empty，无可见变化");
+        src.set(statsWithEstimate(30_000L));
+        assertTrue(cu.refresh(), "empty → 有对话：后缀从空串变为「 · 上下文 30%」");
+    }
+
+    /** 后缀百分比依赖的字段（每回合 token / 窗口 / 命中率）变化即可见变化。 */
+    @Test
+    void refresh_percentInputsChange_isVisibleChange() {
+        ContextUsage cu = new ContextUsage(() -> statsWithEstimate(30_000L), new RecordingSink());
+        assertTrue(cu.refresh());
+        // 窗口不同 → 百分比从 30% 变 60%
+        ContextUsage windowChanged = new ContextUsage(
+                () -> new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 50_000L, 20, 10, 0, 0L),
+                new RecordingSink());
+        assertTrue(windowChanged.refresh(), "首刷即变化");
+    }
+
+    /** 异常返回 false 且保留旧快照——调用方据此知道「没变化、别触发 UI 刷新」。 */
+    @Test
+    void refresh_sourceThrows_returnsFalseAndKeepsCache() {
+        AtomicReference<Supplier<ContextStats>> ref = new AtomicReference<>(ContextUsageTest::full);
+        ContextUsage cu = new ContextUsage(() -> ref.get().get(), new RecordingSink());
+        assertTrue(cu.refresh(), "首刷有数据 → true");
+
+        ref.set(() -> { throw new RuntimeException("boom"); });
+        assertFalse(cu.refresh(), "异常 → false");
+        assertEquals(" · 上下文 30%", cu.suffix(), "异常后仍读旧快照");
+    }
+
+    /**
+     * null 快照沿旧语义<b>不更新缓存</b>：返回 false，且已建立的非空缓存不被重置回空
+     * （否则状态栏「 · 上下文 N%」会在 source 偶发返回 null 时闪没）。
+     */
+    @Test
+    void refresh_nullSource_returnsFalseAndKeepsCache() {
+        ContextUsage cu = new ContextUsage(() -> null, new RecordingSink());
+        assertFalse(cu.refresh(), "null → false（无变化）");
+
+        AtomicReference<Supplier<ContextStats>> ref = new AtomicReference<>(ContextUsageTest::full);
+        ContextUsage withCache = new ContextUsage(() -> ref.get().get(), new RecordingSink());
+        assertTrue(withCache.refresh(), "先建立非空缓存");
+        ref.set(() -> null);
+        assertFalse(withCache.refresh(), "null 不更新缓存");
+        assertEquals(" · 上下文 30%", withCache.suffix(), "null 后仍读旧快照（不得重置回空）");
+    }
+
+    /** 可见口径助手：指定 estimatedTokens、其余字段取满快照的常用值。 */
+    private static ContextStats statsWithEstimate(long estimatedTokens) {
+        return new ContextStats(100, 40, 50, 8, 2, estimatedTokens, 60_000L, 100_000L, 20, 10, 0, 0L);
     }
 }

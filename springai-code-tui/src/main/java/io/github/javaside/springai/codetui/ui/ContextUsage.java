@@ -16,15 +16,18 @@ import java.util.function.Supplier;
  *
  * <p><b>现算 vs 缓存</b>：{@link #report()} 读<em>实时</em> {@code source}（报告要最新）；
  * {@link #suffix()} 读<em>缓存</em> {@code cached}（状态栏每帧读，绝不每帧重算——重算要遍历全部消息 + 估算 token）。
- * {@link #refresh()} 由视图 drain 每 ~1s 调一次，把最新快照存进缓存。
+ * {@link #refresh()} 由 {@code ui.update.ContextUsageRefreshController} 按需（事件标脏 + 防抖）调度。
+ *
+ * <p><b>跨包可见性</b>：类/构造器/{@link #refresh()} 为 public——controller 在 {@code ui.update} 包，
+ * 需要构造被测对象并消费 refresh 的「可见数据是否变化」返回值；其余成员保持包内可见。
  */
-final class ContextUsage {
+public final class ContextUsage {
 
     private final Supplier<ContextStats> source;   // 现算：读一遍当前会话（估算 token）
     private final Consumer<String> sink;           // 输出：灰色信息行下沉 scrollback
     private volatile ContextStats cached = ContextStats.empty();   // 状态栏节流缓存：refresh 写、suffix 读
 
-    ContextUsage(Supplier<ContextStats> source, Consumer<String> sink) {
+    public ContextUsage(Supplier<ContextStats> source, Consumer<String> sink) {
         this.source = source;
         this.sink = sink;
     }
@@ -117,15 +120,32 @@ final class ContextUsage {
     }
 
     /**
-     * 重算状态栏用的上下文用量快照（视图 drain 里节流调用，绝不每帧）。用量是辅助信息：
-     * 估算失败绝不能拖垮主 UI，异常时静默保留旧值。
+     * 重算状态栏用的上下文用量快照（按需调度：{@code ui.update.ContextUsageRefreshController}，
+     * 绝不每帧）。用量是辅助信息：估算失败绝不能拖垮主 UI，异常时静默保留旧值。
+     *
+     * <p><b>返回值（Task 6）</b>：仅当缓存的<b>可见数据</b>真实变化时返回 {@code true}——
+     * 也就是 {@link #suffix()} / {@link #cacheHitSuffix()} / {@link #report()} 全部输出会变的情况。
+     * 相等判定覆盖可见口径的所有字段（events、各分桶数、token 及分桶、窗口/阈值、保留数、
+     * 视觉与缓存计数、系统提示词）；record 自带的 equals 语义与此恰好一致（全部组件逐一比较），
+     * 故等值但身份不同的新快照返回 {@code false}，不会触发无意义的 UI 重画。
+     * null 快照沿旧语义<b>不更新缓存</b>（返回 {@code false}）；异常同样保留旧快照并返回
+     * {@code false}。
      */
-    void refresh() {
+    public boolean refresh() {
         try {
-            ContextStats s = source.get();
-            if (s != null) cached = s;
+            ContextStats next = source.get();
+            if (next == null) {
+                return false;   // 旧语义保留：null 不更新缓存（视为无变化，勿把状态栏重置回空）
+            }
+            ContextStats prev = cached;
+            if (next.equals(prev)) {
+                return false;   // 可见口径一字未变：不重写 volatile（免无谓的内存屏障），也不触发 UI 重画
+            }
+            cached = next;
+            return true;
         } catch (RuntimeException ignore) {
             // 尽力而为：保留上一次快照，不影响状态栏其余内容
+            return false;
         }
     }
 
