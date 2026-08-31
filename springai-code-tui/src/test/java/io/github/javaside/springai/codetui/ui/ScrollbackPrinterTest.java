@@ -172,7 +172,12 @@ class ScrollbackPrinterTest {
         io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine s1 = c.next();
         assertNotNull(s1.styled(), "assistant 走带样式路径");
         assertTrue(s1.styled().rawContent().startsWith("  "), "悬挂缩进");
-        assertTrue(dev.tamboui.text.CharWidth.of(s1.styled().rawContent()) <= 78);
+        // 段宽上限 = 终端宽 80（缩进 2 + 内容 ≤ inner 78），不是 inner 78——fix round 2 / 复审 N-1：
+        // 旧「先缩进后折行」把整行（含缩进）按 inner 折，段宽上限被压到 inner 且续段从第 0 列起；
+        // wrap-then-indent 后缩进在折行预算之外，每段 = 缩进 2 + ≤78 列内容。
+        assertTrue(dev.tamboui.text.CharWidth.of(s1.styled().rawContent()) <= 80,
+                "段宽上限应为终端宽 80（缩进 2 + 内容 ≤78），实际 "
+                        + dev.tamboui.text.CharWidth.of(s1.styled().rawContent()));
         assertNotNull(s1.raw(), "留底原文（Text）必须挂上（I-2）");
         // 原文是折行前的整行（120 列，含缩进 122 列）：宽度信息无损，重放才能按新宽度回流
         assertEquals(122, dev.tamboui.text.CharWidth.of(
@@ -180,8 +185,127 @@ class ScrollbackPrinterTest {
 
         io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine s2 = c.next();
         assertTrue(!c.hasNext(), "120 列在内宽 78 下应折成 2 段");
+        assertTrue(s2.styled().rawContent().startsWith("  "),
+                "折行续段也必须带悬挂缩进（复审 N-1 的核心缺陷面），实际：" + s2.styled().rawContent());
+        assertTrue(dev.tamboui.text.CharWidth.of(s2.styled().rawContent()) <= 80, "续段宽度 ≤ 终端宽");
         assertSame(s1.raw(), s2.raw(), "两段共享同一 raw 引用");
-        String joined = s1.styled().rawContent() + s2.styled().rawContent();
-        assertTrue(joined.contains("字".repeat(30)) && joined.contains("y".repeat(60)), "拼回不丢内容");
+        // 拼回校验：逐段剥掉缩进前缀再拼——缩进是排版前缀不是内容；wrap-then-indent 后拆分点在
+        // 内容流上（18y / 42y），直接拼物理段会把第二段缩进夹进 y 流（contains 必假）。精确相等
+        // 比此前的 contains 断言更强（一字不差 vs 子串）。
+        assertEquals(longBody,
+                deindent(s1.styled().rawContent()) + deindent(s2.styled().rawContent()),
+                "两段去缩进后拼回必须一字不差");
+    }
+
+    // ── fix round 2（复审 N-1）：折行续段的悬挂缩进 ──────────────────────
+
+    /** 剥掉物理段的悬挂缩进前缀（INDENT=2 空格；测试正文本身不含连续空格，安全）。 */
+    private static String deindent(String physicalSegment) {
+        return physicalSegment.startsWith("  ") ? physicalSegment.substring(2) : physicalSegment;
+    }
+
+    /**
+     * 跑完一个 cursor，收集每段纯文本（消费循环与 {@code PhysicalOutputQueue.drain} 一致；
+     * next 返回 null 视为结束——游标契约里 hasNext 假阳性由 drain 兜底）。
+     */
+    private static List<String> drainCursorTexts(
+            io.github.javaside.springai.codetui.ui.output.OutputCursor c) {
+        List<String> out = new ArrayList<>();
+        while (c.hasNext()) {
+            io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine l = c.next();
+            if (l == null) break;
+            out.add(l.styled() != null ? l.styled().rawContent() : l.plain());
+        }
+        return out;
+    }
+
+    @Test
+    void assistantCursor_everyWrappedSegmentCarriesHangingIndent_withinTerminalWidth() {
+        // 80 列终端 → 内宽 78。中文占 2 列：这段 ~108 列显示宽的正文折出 2 段——中文正文在 80 列
+        // 终端几乎必然折行（复审 N-1 的生产主路径）。折行源必须是<b>未缩进</b>的渲染结果按内宽折、
+        // 每段前置缩进；旧实现把「已缩进整行」当折行源：首段吃 2 列预算、续段从第 0 列起。
+        ScrollbackPrinter p = printerOver(new RecordingSink());
+        String body = "模型回复的中文正文在八十列终端几乎必然折行，续段必须保持悬挂缩进对齐首段内容，不能从第零列开始。";
+        List<String> segs = drainCursorTexts(p.assistantCursor(body));
+
+        assertTrue(segs.size() >= 2, "前置：正文在内宽 78 下应折出 ≥2 段，实际 " + segs.size() + "：" + segs);
+        for (int i = 0; i < segs.size(); i++) {
+            assertTrue(segs.get(i).startsWith("  "),
+                    "第 " + i + " 段（含折行续段）必须带悬挂缩进，实际：" + segs.get(i));
+            assertTrue(dev.tamboui.text.CharWidth.of(segs.get(i)) <= 80,
+                    "第 " + i + " 段显示宽度必须 ≤ 终端宽 80（缩进 2 + 内容 ≤78），实际 "
+                            + dev.tamboui.text.CharWidth.of(segs.get(i)) + "：" + segs.get(i));
+        }
+        // 段间拼回（去缩进）必须一字不差：缩进是排版前缀，不是内容
+        assertEquals(body, String.join("", segs).replace("  ", ""),
+                "全部段拼回（去缩进）必须等于原文");
+    }
+
+    @Test
+    void assistantCursor_manySegmentChineseBody_everySegmentIndented() {
+        // 更长的中文正文 → 更多折行段（≥5），把「每一段」的断言从 2 段扩到多段；
+        // 中文无空格断点，整段按宽度硬切——正是 80 列终端上的真实形态。
+        // 长度标定：整句 64 个 CJK 字符（含标点）= 128 显示列，×3 = 384 列，内宽 78 下折 5 段。
+        // ⚠ repeat 必须括在整句上：`"A" + "B".repeat(3)` 只重复 B 句（~220 列，折 3 段），
+        //   `>= 5` 前置会假红——上一轮残留草稿正是这个错。
+        ScrollbackPrinter p = printerOver(new RecordingSink());
+        String body = ("这是一段很长很长的中文正文，用于制造五个以上的折行段，验证每一个续段都带悬挂缩进、"
+                + "每段宽度都不超过终端宽度上限，且内容无损拼回。").repeat(3);
+        List<String> segs = drainCursorTexts(p.assistantCursor(body));
+
+        assertTrue(segs.size() >= 5, "前置：长中文正文应折出 ≥5 段，实际 " + segs.size());
+        for (int i = 0; i < segs.size(); i++) {
+            assertTrue(segs.get(i).startsWith("  "), "第 " + i + " 段必须带悬挂缩进：" + segs.get(i));
+            assertTrue(dev.tamboui.text.CharWidth.of(segs.get(i)) <= 80, "第 " + i + " 段超宽");
+        }
+        assertEquals(body, String.join("", segs).replace("  ", ""), "拼回一字不差");
+    }
+
+    @Test
+    void assistantCursor_mixedWidthAndStreamingSegmentsKeepHangingIndent() {
+        ScrollbackPrinter p = printerOver(new RecordingSink());
+        // 中英混合 + 跨样式拆分（**bold** 拆出多 span，样式跨拆分点保留）+ 窄终端主路径。
+        // 长度标定（显示宽）：10(宽字)+8(mixed宽)+3×2+3×2+80+4+100 = ~208 列 → 内宽 78 下 ≥3 段。
+        String logical = "中英mixed宽**加粗段**" + "字".repeat(40) + "tail" + "z".repeat(100);
+
+        List<String> segs = drainCursorTexts(p.assistantCursor(logical));
+        assertTrue(segs.size() >= 3, "前置：混合宽字符长行应折出 ≥3 段，实际 " + segs.size());
+        for (int i = 0; i < segs.size(); i++) {
+            assertTrue(segs.get(i).startsWith("  "), "第 " + i + " 段必须带悬挂缩进：" + segs.get(i));
+            assertTrue(dev.tamboui.text.CharWidth.of(segs.get(i)) <= 80, "第 " + i + " 段超宽");
+        }
+        assertEquals(logical.replace("**", ""),
+                String.join("", segs).replace("  ", "").replace("**", ""),
+                "拼回不丢内容（markdown 标记剥掉后比对）");
+
+        // 流式完整行与 assistant 同一条 MdLineCursor：同语义钉一份
+        List<String> streamingSegs = drainCursorTexts(
+                p.streamingLinesCursor(List.of("s".repeat(200))));
+        assertEquals(3, streamingSegs.size(), "200 列在内宽 78 下应折成 3 段");
+        for (int i = 0; i < streamingSegs.size(); i++) {
+            assertTrue(streamingSegs.get(i).startsWith("  "),
+                    "流式第 " + i + " 段必须带悬挂缩进：" + streamingSegs.get(i));
+            assertTrue(dev.tamboui.text.CharWidth.of(streamingSegs.get(i)) <= 80);
+        }
+    }
+
+    @Test
+    void assistantCursor_wrapThenIndent_matchesOneShotPrintWrappedExactly() {
+        // 「与一次性方法逐字同源」的钉子：同一输入、同一 md 状态链（两个 printer 各自从 reset 态起），
+        // cursor 产出的物理行序列必须与一次性 assistant()（= printWrapped，wrap-then-indent）完全相等。
+        String[] bodies = {
+                "短行",
+                "字".repeat(30) + "y".repeat(60),
+                "模型回复的中文正文在八十列终端几乎必然折行。" + "续段要对齐。" + "q".repeat(100),
+                "" };
+        for (String body : bodies) {
+            RecordingSink oneShotSink = new RecordingSink();
+            printerOver(oneShotSink).assistant(body);          // 一次性路径（printWrapped）
+            List<String> cursorSegs = drainCursorTexts(
+                    printerOver(new RecordingSink()).assistantCursor(body));
+            assertEquals(oneShotSink.lines, cursorSegs,
+                    "cursor 与一次性 printWrapped 分家（body 前缀="
+                            + body.substring(0, Math.min(12, body.length())) + "…）——续段缩进/宽度语义必须一致");
+        }
     }
 }

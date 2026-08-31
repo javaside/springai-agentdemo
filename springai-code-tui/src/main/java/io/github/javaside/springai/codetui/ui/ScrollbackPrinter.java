@@ -191,15 +191,16 @@ final class ScrollbackPrinter {
     }
 
     /**
-     * 渲染出的一行 spans 按「终端宽 − 缩进」折行、逐段带缩进下沉（悬挂缩进）。
+     * 渲染出的一行 spans 按「终端宽 − 缩进」折行、逐段带缩进下沉（<b>wrap-then-indent</b>：
+     * 先按内宽折好，再给每一段——含续段——前置缩进，即悬挂缩进）。{@link MdLineCursor} 与本方法
+     * 逐字同源（同一折行源、同一缩进时机），等价性由 {@code ScrollbackPrinterTest} 钉住。
      *
      * <p>必须在 println 前折好：{@code InlineDisplay.println(Text)} 定宽渲染、超宽<b>截断</b>
      * ——不折行，超过终端宽度的正文右边直接消失（用户实报「回复文字没显示全」）；
      * 又不能任由终端自己折（「一个 println = 一个物理行」纪律，折了推歪显示区记账）。
      */
     private void printWrapped(List<Span> spans) {
-        int inner = Math.max(1, terminalWidth.getAsInt() - displayWidth(INDENT));
-        for (Text piece : TextWrap.wrap(Text.from(Line.from(spans)), inner)) {
+        for (Text piece : TextWrap.wrap(Text.from(Line.from(spans)), innerWidth())) {
             sink.println(indented(piece.lines().get(0).spans()));
         }
     }
@@ -217,7 +218,9 @@ final class ScrollbackPrinter {
         run(lineCursor(ol));
     }
 
-    // ── cursor 工厂（严格分批；渲染语义与上面的一次性方法逐字同源） ──────────
+    // ── cursor 工厂（严格分批；渲染语义与上面的一次性方法逐字同源——
+    //     assistant/流式的「wrap-then-indent + 悬挂缩进」由 ScrollbackPrinterTest
+    //     的逐段等价断言钉住，其余路径与对应一次性方法共享同一套私有渲染方法） ────────
 
     /**
      * 用户消息 cursor：灰底白字块。每条逻辑行按内宽<b>逐段</b>折行、右侧补白铺满灰底。
@@ -254,10 +257,11 @@ final class ScrollbackPrinter {
     }
 
     /**
-     * AI 正文 cursor：一条逻辑行 → {@code md.renderFinalized}（推进围栏/高亮状态）→ 折行 → 带缩进
-     * 物理段。<b>状态跨批次保持</b>：{@link #md} 是 printer 级单例，游标每次 {@code next()} 渲染下一条
-     * 逻辑行时从上一条结束时的状态继续——把渲染拆进游标而不复制状态，正是为了保证这一点。
-     * 留底原文 = 折行前的整行渲染结果（Text，含样式与缩进；重放按新宽度重新折行）。
+     * AI 正文 cursor：一条逻辑行 → {@code md.renderFinalized}（推进围栏/高亮状态）→ 按内宽折行、
+     * 每段前置缩进（悬挂缩进，wrap-then-indent，见 {@link MdLineCursor}）。<b>状态跨批次保持</b>：
+     * {@link #md} 是 printer 级单例，游标每次 {@code next()} 渲染下一条逻辑行时从上一条结束时的状态
+     * 继续——把渲染拆进游标而不复制状态，正是为了保证这一点。留底原文 = 折行前的整行渲染结果
+     * （Text，含样式与缩进；重放按新宽度重新折行）。
      */
     OutputCursor assistantCursor(String text) {
         return new MdLineCursor(text.split("\n", -1));
@@ -413,15 +417,25 @@ final class ScrollbackPrinter {
 
     /**
      * markdown 正文行游标（assistant / 流式完整行共享）：一条逻辑行 = {@code md.renderFinalized}
-     * （推进围栏/高亮状态）→ 折行（终端宽−缩进，{@link SegmentedWrap.Styled} 逐段、样式保留）
-     * → 悬挂缩进。留底原文 = 折行前的整行渲染（含缩进；Text）。折行语义与 {@link #printWrapped}
-     * / {@link TextWrap} 一致（由 {@code SegmentedWrapTest} 钉住）。
+     * （推进围栏/高亮状态）→ 折行 → 悬挂缩进。留底原文 = 折行前的整行渲染（含缩进；Text）。
+     *
+     * <p><b>折行源是未缩进的渲染结果</b>（fix round 2 / 复审 N-1）：按内宽（终端宽−缩进）对
+     * {@code renderFinalized} 的 spans 折行，<b>每一段</b>（含续段）产出时前置
+     * {@link Span#raw(String) Span.raw(INDENT)}——与一次性方法 {@link #printWrapped} 的
+     * wrap-then-indent 语义逐字一致（同一折行源、同一缩进时机；由 {@code ScrollbackPrinterTest}
+     * 钉住：同一输入下两条路径产出的物理行序列逐一相等）。此前曾把「已缩进的整行」当折行源，
+     * 两个后果：①缩进吃掉首段 2 列内容预算，续段从第 0 列起——中文正文在 80 列终端几乎必然
+     * 折行，续段顶格是排版回归；②段宽上限从终端宽（80）错位成 inner（78），折行预算里混入了
+     * 排版缩进。折行算法本身（宽字符不切半、样式跨拆分点保留、逐段推进）与
+     * {@link SegmentedWrap.Styled} / {@link TextWrap} 一致（由 {@code SegmentedWrapTest} 钉住）。
+     * 留底 {@code raw} 仍是 {@code indented(...)} 整行（折行前原文，宽度信息无损——
+     * resize 重放按新宽度重折的语义不受本修复影响）。
      */
     private final class MdLineCursor implements OutputCursor {
         private final String[] logicals;
         private int at;
-        private SegmentedWrap.Styled segs;   // 当前逻辑行的段推进器
-        private Text raw;                    // 当前逻辑行的整行渲染（留底原文）
+        private SegmentedWrap.Styled segs;   // 当前逻辑行的段推进器（折行源 = 未缩进渲染）
+        private Text raw;                    // 当前逻辑行的整行渲染（含缩进；留底原文）
 
         MdLineCursor(String[] logicals) { this.logicals = logicals; }
 
@@ -433,11 +447,17 @@ final class ScrollbackPrinter {
             try {
                 if (segs == null || !segs.hasNextSegment()) {
                     if (at >= logicals.length) return null;
-                    raw = indented(md.renderFinalized(logicals[at++]));   // 状态推进在渲染时发生
-                    int inner = Math.max(1, terminalWidth.getAsInt() - displayWidth(INDENT));
-                    segs = SegmentedWrap.styled(raw.lines().get(0).spans(), inner);
+                    List<Span> rendered = md.renderFinalized(logicals[at++]);   // 状态推进在渲染时发生
+                    raw = indented(rendered);                                  // 留底原文（折行前整行，含缩进）
+                    segs = SegmentedWrap.styled(rendered, innerWidth());        // 折行源 = 未缩进渲染
                 }
-                return PhysicalLine.of(null, Text.from(Line.from(segs.nextSegment())), raw);
+                List<Span> piece = segs.nextSegment();
+                if (piece == null) return null;
+                // wrap-then-indent：每一段（含续段）前置缩进——续段对齐首段内容，即悬挂缩进
+                List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
+                indentedSeg.add(Span.raw(INDENT));
+                indentedSeg.addAll(piece);
+                return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), raw);
             } catch (RuntimeException e) {
                 return null;   // 渲染降级：一条逻辑行失败不打断批次（md 渲染器自身「不抛」契约的兜底）
             }

@@ -390,7 +390,8 @@ public final class CodeTuiView extends InlineApp {
     private int batchRowsUsed;
 
     /**
-     * 本 tick 的共享 drain deadline（绝对 nanoTime；{@code Long.MAX_VALUE}=测试态无预算）。
+     * 本 tick 的共享 drain deadline（绝对 nanoTime，{@code System.nanoTime()} 域；
+     * {@code PhysicalOutputQueue.drain} 收到 ≤0 视为不限时）。
      * 在 drainInsideBatch 开头计算一次，本 tick 的所有输出段共用（见 MAX_DRAIN_NANOS 注释）。
      */
     private long batchDeadlineNanos;
