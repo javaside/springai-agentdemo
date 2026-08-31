@@ -242,8 +242,10 @@ Esc 取消链路见 [14](#14-回合中插话) 末段与 [4](#4-输入框与按�
   流式残行预览 150ms（高频 ANSI 打断 IME 合成）。
 - `InlineRenderBatch.open(runner)` 反射调 `beginPrintBatch/endPrintBatch` 合批，失败静默降级。
 - resize：`onStart` 只**旁观** `ResizeEvent`（返回 UNHANDLED，库还要靠它触发重画），
-  `ResizeSettle(4)` 防抖（连续 4 帧无变化）后 `replayAfterResize()`：`ScreenCleaner.clear` +
+  事件驱动后 settle 由 `UiUpdateCoordinator.scheduleResizeSettle` 的 **132ms 一次性任务**
+  （generation 替换：连发只重放最后一次）触发 `replayAfterResize()`：`ScreenCleaner.clear` +
   `scrollTail`（`SCROLL_TAIL_CAP=400` 条环形留底，存**折行前**原始行）按新宽度全量重放（幂等）。
+  旧的 `ResizeSettle(4)` 帧计数判定器已随每帧 tick 删除（没有 tick 可喂拍）。
 - `parkCursorAtTop`：平时硬件光标停在文本行（IME 预编辑串的锚点），仅 resize 窗口内钉第 0 行。
 
 ### 输入框

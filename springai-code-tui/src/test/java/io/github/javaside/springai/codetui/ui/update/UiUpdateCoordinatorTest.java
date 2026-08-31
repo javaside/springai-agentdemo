@@ -249,7 +249,7 @@ class UiUpdateCoordinatorTest {
                     if (!more) {
                         drained.countDown();
                     }
-                    return new UiUpdateCoordinator.UpdateResult(more, false, false, false);
+                    return new UiUpdateCoordinator.UpdateResult(more, false, false);
                 })) {
             coordinator.start();
             // 初始生产者事件一次
@@ -327,9 +327,9 @@ class UiUpdateCoordinatorTest {
                     int frame = frames.incrementAndGet();
                     if (frame >= 3) {
                         done.countDown();
-                        return new UiUpdateCoordinator.UpdateResult(false, false, false, false);
+                        return new UiUpdateCoordinator.UpdateResult(false, false, false);
                     }
-                    return new UiUpdateCoordinator.UpdateResult(false, false, true, false);
+                    return new UiUpdateCoordinator.UpdateResult(false, false, true);
                 })) {
             coordinator.start();
             coordinator.updateAnimationDemand(true, Duration.ofMillis(10));
@@ -353,7 +353,7 @@ class UiUpdateCoordinatorTest {
                 bits -> {
                     frames.incrementAndGet();
                     // processor 永远宣称 animation 活跃：必须由 demand=false 停止
-                    return new UiUpdateCoordinator.UpdateResult(false, false, true, false);
+                    return new UiUpdateCoordinator.UpdateResult(false, false, true);
                 })) {
             coordinator.start();
             coordinator.updateAnimationDemand(true, Duration.ofMillis(10));
@@ -590,7 +590,8 @@ class UiUpdateCoordinatorTest {
         assertFalse(idle.outputRemaining());
         assertFalse(idle.previewPending());
         assertFalse(idle.animationActive());
-        assertFalse(idle.contextUsageDirty());
+        // contextUsageDirty 字段已删（fix round I-3）：context-usage 的标脏接线在 View 侧
+        // （computeFollowUpFlags 直接 markDirty），经 UpdateResult 路由无消费者——保留只会是死参数。
     }
 
     // ── 工具 ────────────────────────────────────────────────────────────

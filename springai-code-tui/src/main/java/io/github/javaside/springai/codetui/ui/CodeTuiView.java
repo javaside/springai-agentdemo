@@ -185,7 +185,6 @@ public final class CodeTuiView extends InlineApp {
      * 只在渲染线程读写（onStart 种基线、全局 handler 更新）。
      */
     private int lastSeenWidth;
-    /** resize 停稳判定：33ms × 4 帧 ≈132ms 静默后只重放一次。只在渲染线程读写。 */
     /**
      * 残行预览节流：流式输出中残行每帧都在变，若每帧都重画预览行，Terminal.app 的
      * 输入法合成（中文打字）会被高频 ANSI 打断而崩溃（EXC_BAD_ACCESS，崩溃栈在
@@ -195,7 +194,9 @@ public final class CodeTuiView extends InlineApp {
     private static final long PREVIEW_THROTTLE_NANOS = 150_000_000L;
     private String lastPreviewedTail = "";
     private long lastPreviewAtNanos = 0L;
-    private final ResizeSettle resizeSettle = new ResizeSettle(4);
+    // （fix round M-2）原 ResizeSettle 帧驱动停稳判定器已删除：事件驱动后没有每帧 tick 可
+    // 喂拍，「等 4 帧无变化」无从谈起；停稳窗口由 coordinator.scheduleResizeSettle 的
+    // 132ms 一次性任务 + generation 替换承担（onWidthChanged），类与字段一并移除。
     /**
      * resize 进行中（首个宽度变化事件 → 停稳重放完成）临时把硬件光标钉到显示区第 0 行。
      *
@@ -393,8 +394,10 @@ public final class CodeTuiView extends InlineApp {
         // scheduler：coordinator 的按需一次性任务（continuation/preview/resize/animation）与
         // context-usage 防抖共用一个单线程 daemon 池。生产在 run() 后复用 runner().scheduler()
         // 是不对的——onStop 时 runner 先关、coordinator 还要排空，必须自己持有生命周期。
-        // 构造即建：View 构造后立刻绑定变化源（见 bindChangeSources），MCP「connecting 进入」
-        // 等早期通知（可能早于 onStart）才听得到。
+        // 构造即建：View 构造后立刻绑定变化源（见 bindChangeSources）。⚠ 早于 coordinator.start()
+        // 的通知（如 MCP「connecting 进入」）会被 coordinator 直接丢弃（NEW 态 no-op）——
+        // 接住启动前<b>状态</b>的不是这些通知，而是 onStart 的初始 ALL 同步 + render 每帧活读
+        // 真相源（fix round M-1：绑定早只为 start 之后的通知不丢）。
         this.updateScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "ui-update-scheduler");
             t.setDaemon(true);
@@ -424,8 +427,10 @@ public final class CodeTuiView extends InlineApp {
      * 绑定两路变化源到 coordinator：{@code state.setUiChangeListener}（View 直绑，
      * CodingAgent 刻意不代绑——绑两次 = 同一通知进 coordinator 两次、批次翻倍）与
      * {@code onSubmit.setUiChangeListener}（CodingAgent fan-out 到 Interjections /
-     * SubagentRunner / BackgroundTaskRegistry / McpRegistry）。构造即调用一次，onStart 再调用
-     * 幂等（各源整体替换，无残留路由）；停止时以 {@code null} 解绑。
+     * SubagentRunner / BackgroundTaskRegistry / McpRegistry）。
+     *
+     * <p>只在<b>构造期调用一次</b>（fix round M-1：onStart 不再调它——「onStart 幂等再绑定」
+     * 的描述与实现不符，实现里 onStart 只做 coordinator.start()）。停止时以 {@code null} 解绑。
      */
     private void bindChangeSources() {
         state.setUiChangeListener(coordinator);
@@ -452,10 +457,17 @@ public final class CodeTuiView extends InlineApp {
     /** context-usage 防抖窗口：突发标脏合并成一次刷新（旧刷新周期 ~1s，这里保持同量级）。 */
     private static final Duration CONTEXT_USAGE_DEBOUNCE = Duration.ofMillis(500);
 
-    /** resize 静默窗口：宽度停稳后一次性 settle + 全量重放（旧为 33ms×4 帧，语义等价）。 */
+    /**
+     * resize 静默窗口：宽度停稳后一次性 settle + 全量重放（旧为 33ms×4 帧计数 ≈132ms，
+     * 现由 coordinator 的一次性延迟任务直接表达同一时长；fix round M-2）。
+     */
     private static final Duration RESIZE_SETTLE_DELAY = Duration.ofMillis(132);
 
-    /** 动画帧间隔（Task 8 接管帧推进；本任务声明需求，coordinator 按此续排一次性帧）。 */
+    /**
+     * 动画帧间隔。<b>Task 8 预留</b>（fix round M-5 标记）：本任务（Task 7）刻意未接线——
+     * 接线点在 computeFollowUpFlags 的 animationActive 置真 + coordinator.updateAnimationDemand
+     * （active 时续排、静止时取消）。在 Task 8 落地前保持未引用状态（javac 不警告未用字段）。
+     */
     private static final Duration ANIMATION_FRAME_DELAY = Duration.ofMillis(66);
 
     /**
@@ -629,9 +641,10 @@ public final class CodeTuiView extends InlineApp {
 
     @Override
     protected void onStart() {
-        // 终端改宽度时只登记最新宽度并重置停稳计时；不在每个事件里清屏，避免 Windows Terminal
-        // 显示「清空后尚未重画」的中间帧。InlineTuiRunner 仍处理事件并按新宽度构造当前 live 帧，
-        // 约 132ms 无新事件后再统一清屏、按新宽度重放 scrollback。
+        // 终端改宽度时只登记最新宽度；不在每个事件里清屏，避免 Windows Terminal 显示
+        // 「清空后尚未重画」的中间帧。InlineTuiRunner 仍处理事件并按新宽度构造当前 live 帧，
+        // 约 132ms 无新事件后（coordinator 一次性 settle，fix round M-2）统一清屏、按新宽度
+        // 重放 scrollback。
         lastSeenWidth = terminalWidth();
         runner().eventRouter().addGlobalHandler(event -> {
             if (event instanceof ResizeEvent re && re.width() > 0 && re.width() != lastSeenWidth) {
@@ -640,9 +653,10 @@ public final class CodeTuiView extends InlineApp {
             }
             return EventResult.UNHANDLED;   // 只旁观，别拦事件：库还要靠它触发重画
         });
-        // 变化源绑定已在构造期完成（一次性；MCP「connecting 进入」等早于 onStart 的通知也因此
-        // 听得到——通知落进 coordinator 的 dirty bits，start 后首批即消费）。此刻 runner 已就位，
-        // uiSink 从测试队列切到真实 requestUiUpdate。
+        // 变化源绑定已在构造期完成（一次性；start 之后的通知——含 MCP 后台连接的
+        // 迟到状态——因此一条不丢）。⚠ 早于此刻 coordinator.start() 的通知已被 NEW 态
+        // no-op 丢弃：接住启动前<b>状态</b>的是随后的初始 ALL 同步 + render 活读，不是通知。
+        // 此刻 runner 已就位，uiSink 从测试队列切到真实 requestUiUpdate。
         coordinator.start();
         // 启动期显式 markDirty 一次：空会话到首条消息之间也要有首刷（否则状态栏上下文用量
         // 一片空白，直到第一次 turn 结束才出现）。防抖窗口内合并，只产生一次后台刷新。
@@ -664,12 +678,13 @@ public final class CodeTuiView extends InlineApp {
         publishInitialAllSync();
     }
 
-    /** 宽度变化（ResizeEvent 或兜底发现）：重置停稳计时 + 钉光标 + 安排一次性 settle。 */
+    /** 宽度变化（ResizeEvent）：钉光标 + 安排一次性 settle（132ms 静默窗口，generation 替换）。 */
     private void onWidthChanged() {
-        resizeSettle.changed();
         parkCursorAtTop = true;
         // 按需一次性 settle（设计 §10.2）：132ms 静默后经 requestUiUpdate 在 UI 线程重放一次。
         // 新调用整体替换旧的（coordinator generation 语义）——连续拖拽只重放最后一次。
+        // （fix round M-2）停稳判定不再用帧计数器（ResizeSettle 已删）：静默窗口本身就是
+        // generation 替换语义——窗口内新事件不断重排，静默满 132ms 才执行最后一次。
         coordinator.scheduleResizeSettle(RESIZE_SETTLE_DELAY, this::settleResizeOnUiThread);
     }
 
@@ -690,13 +705,13 @@ public final class CodeTuiView extends InlineApp {
      *
      * <p><b>严格保持旧 {@code drainInsideBatch} 的顺序</b>（设计 §8 / brief Step 4）：
      * <ol>
-     *   <li>stage/consume pending 与流式完整行（含 resize settle 的批内推进）；</li>
+     *   <li>stage/consume pending 与流式完整行；</li>
      *   <li>drain 一个严格物理批；</li>
      *   <li>同步模态身份 / 畸形问询降级 / 进入新模态（计划正文同批下沉）；</li>
      *   <li>推进 attention 边沿；</li>
      *   <li>重读 busy（自动出队执行点完整重读闸门）；</li>
      *   <li>未送达插话，否则 queued，否则后台结果；</li>
-     *   <li>返回 flags：outputRemaining / previewPending / animationActive / contextUsageDirty。</li>
+     *   <li>返回 flags：outputRemaining / previewPending / animationActive。</li>
      * </ol>
      *
      * <p><b>绝不循环到空</b>：输出存量未清空由 coordinator 的 continuation 排空（§9.2），
@@ -707,17 +722,58 @@ public final class CodeTuiView extends InlineApp {
      * 永远从 state 重读。
      */
     private UiUpdateCoordinator.UpdateResult processUpdates(int dirtyBits) {
+        // InlineRenderBatch.open 失败自降级为 NOOP、其 closeable 的 close 失败自记 debug
+        // （均在该类内部兜住、不上抛）——因此这个 catch 只可能来自 processUpdatesInsideBatch
+        // 的业务异常（fix round I-1），close 仍由 try-with-resources 正常执行（收尾不丢）。
         try (AutoCloseable ignored = InlineRenderBatch.open(runner())) {
-            return processUpdatesInsideBatch(dirtyBits);
-        } catch (Exception impossible) {
-            log.debug("关闭行内打印批次失败，已降级", impossible);
-            return computeFollowUpFlags();
+            UiUpdateCoordinator.UpdateResult result = processUpdatesInsideBatch(dirtyBits);
+            consecutiveBatchFailures.set(0);   // 整批成功跑完（含各段早退路径）：连续失败序列结束
+            return result;
+        } catch (Exception e) {
+            return handleBatchFailure(e, dirtyBits);
         }
     }
 
+    /**
+     * 批处理业务异常的自我恢复（fix round I-1）。
+     *
+     * <p><b>为什么必须在 View 侧处理而不是上抛</b>：coordinator 的 {@code runBatch} 在调
+     * processor 之前已把 dirty bits <b>取走</b>（getAndSet(0)）——异常上抛给 InlineTuiRunner
+     * 的 Throwable 防护只会记一条日志，本批该消费的 pending / 模态同步 / 自动出队全部丢失，
+     * 且空队列路径上没有任何兜底重排（旧世界 66ms tick 会自动重试；事件驱动后只能等下一个
+     * 无关事件）。故这里 warn 记录 + 补发一次 {@code UiDirty.ALL} 让下一批重跑。
+     *
+     * <p><b>防异常风暴</b>：同一连续失败序列最多补发 {@link #MAX_BATCH_FAILURE_RETRIES} 次
+     * （连续失败计数，任一成功批清零）。持续失败时停止补发、pending 原样保留——下一个真实
+     * 生产者事件仍会触发新批（计数不清零，直到成功才恢复补发资格）。
+     *
+     * <p>返回 {@link UiUpdateCoordinator.UpdateResult#idle()}：批没跑完，follow-up 需求
+     * 不可知；声明 remaining 会让 continuation 盲目重跑（若异常在输出段之前，队列本就是空的）。
+     * {@code InlineRenderBatch} 自身的 open/close 失败不在此列——那是无害降级，在该类内部
+     * 保持 debug 级记录。
+     */
+    private UiUpdateCoordinator.UpdateResult handleBatchFailure(Exception e, int dirtyBits) {
+        int failures = consecutiveBatchFailures.incrementAndGet();
+        if (failures <= MAX_BATCH_FAILURE_RETRIES) {
+            log.warn("UI 批处理失败（第 {}/{} 次连续失败），补发一次全量重试批 dirtyBits={}",
+                    failures, MAX_BATCH_FAILURE_RETRIES, dirtyBits, e);
+            coordinator.onUiChanged(UiDirty.ALL);
+        } else {
+            log.warn("UI 批处理连续失败 {} 次，停止补发重试（等待下一个真实事件）；未消费状态保留",
+                    failures, e);
+        }
+        return UiUpdateCoordinator.UpdateResult.idle();
+    }
+
+    /** 连续批处理失败计数（任一成功批清零）。补发重试的防风暴闸。 */
+    private final java.util.concurrent.atomic.AtomicInteger consecutiveBatchFailures =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** 同一连续失败序列最多补发的重试批数（fix round I-1：有界重试，防「失败→补发→再失败」循环）。 */
+    private static final int MAX_BATCH_FAILURE_RETRIES = 2;
+
     private UiUpdateCoordinator.UpdateResult processUpdatesInsideBatch(int dirtyBits) {
         lastDirtyBitsForFlag = dirtyBits;   // computeFollowUpFlags 的 context-usage 判据
-        continuationScheduled = false;      // 本批即此前的 continuation 到达（或普通批）：窗口关闭
         processedBatches.incrementAndGet();
         // 动画帧计数：事件驱动下由「批」推进（每批一帧）。Task 8 会换成按需帧调度；
         // 本任务里动画若无 demand 事件即静止（波光停在最后一帧，不崩溃、不循环）。
@@ -727,7 +783,9 @@ public final class CodeTuiView extends InlineApp {
         batchRowsUsed = 0;
         drainDeadlinesObserved.clear();
         pendingIntakeCount = 0;
-        // ── 输出段（只在 OUTPUT 位置位或队列未清空时做转入）──
+        // ── 输出段（无 OUTPUT 位闸门：每批无条件做转入——存量清不清空由队列/pending 的
+        // 真实状态决定，纯 VIEW 批跑一遍空循环无副作用。fix round M-1：删除原「只在
+        // OUTPUT 位置位或队列未清空时做转入」的不存在闸门描述）──
         // pending 转入有界（fix round I-3）：每批最多 MAX_PENDING_INTAKE_PER_TICK 条，
         // 剩余留在 state.pending 等后续批（顺序不变、不丢内容）——continuation 会接续消费。
         for (OutputLine ol; pendingIntakeCount < MAX_PENDING_INTAKE_PER_TICK
@@ -817,15 +875,24 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 批尾 follow-up 需求（brief Step 4 第 7 步）。
      *
+     * <p><b>continuation 单一调度方（fix round I-3）</b>：本方法只<b>声明</b>
+     * {@code outputRemaining}，不直接调 {@code coordinator.scheduleOutputContinuation}——
+     * 生产路径唯一调度方是 coordinator 的 {@code runBatch}（收到 true 后自己排 ZERO 延迟
+     * 一次性任务）。View 侧再排一份等于双重所有权：两条链并行、批次翻倍、封顶语义失真。
+     * {@code coordinator.scheduleOutputContinuation} 仍保留为测试直连 seam
+     * （{@code UiUpdateCoordinatorTest} 用它钉 coordinator 侧的排空契约）。
+     *
      * <ul>
-     *   <li><b>outputRemaining</b>：队列非空或 state 仍有 pending / 流式完整行 → coordinator
+     *   <li><b>outputRemaining</b>：队列非空或 state 仍有 pending / 流式完整行 → runBatch
      *       安排一次性 continuation（§9.2），无新生产者事件也最终排空；</li>
      *   <li><b>previewPending</b>：流式残行非空 → Task 8 接管节流（本任务透传标记）；</li>
      *   <li><b>animationActive</b>：仍在动态状态（忙 / 压缩 / 后台任务运行中）→ 续排下一帧；
-     *       静止时 false，无任何周期任务；</li>
-     *   <li><b>contextUsageDirty</b>：本批有 OUTPUT/CONTROL 类变化 → 交给 ctxUsageController
-     *       防抖刷新（Task 6 接线：事件源挂 markDirty）。</li>
+     *       静止时 false，无任何周期任务。</li>
      * </ul>
+     *
+     * <p>context-usage 标脏不经 UpdateResult（其 {@code contextUsageDirty} 字段已删，
+     * fix round I-3：runBatch 从不消费它，路由过去只是死参数）：真实接线在下方直接调
+     * {@code ctxUsageController.markDirty()}（Task 6），保持 View 私有。
      */
     private UiUpdateCoordinator.UpdateResult computeFollowUpFlags() {
         boolean outputRemaining = !outputQueue.isEmpty()
@@ -837,24 +904,21 @@ public final class CodeTuiView extends InlineApp {
         // 本任务的降级：动画显示退化为静态（波光停在最后一帧），状态变化事件到达时仍会重绘
         // （每次批的 requestUiUpdate 都带新 animTick）。不崩溃、不死循环。
         boolean animationActive = false;
-        if (outputRemaining) {
-            // continuation 批间延迟 ZERO（Task 3 结转）：尽快排空，批与批之间事件循环仍可
-            // 处理按键/粘贴/resize。
-            coordinator.scheduleOutputContinuation(Duration.ZERO);
-            continuationScheduled = true;
-        }
         if ((lastDirtyBitsForFlag & (UiDirty.OUTPUT | UiDirty.CONTROL)) != 0) {
             // 上下文统计可能变了（新消息/新事件）：按需防抖刷新（旧的 animTick % 30 周期已删）。
             ctxUsageController.markDirty();
         }
         return new UiUpdateCoordinator.UpdateResult(
-                outputRemaining, previewPending, animationActive, false);
+                outputRemaining, previewPending, animationActive);
     }
 
     /**
      * 是否仍有「动着的状态」需要动画帧：忙（回合/压缩）或后台任务在跑。
-     * <b>本任务未接线</b>（见 computeFollowUpFlags）：Task 8 用它做按需帧调度
-     * （active 时续排、静止时取消，见 {@code UiUpdateCoordinator.updateAnimationDemand}）。
+     *
+     * <p><b>Task 8 预留（fix round M-5 显式标记）</b>：Task 7 刻意未接线（接线即 66ms 帧循环
+     * 还魂，见 computeFollowUpFlags 的 animationActive 注释）。Task 8 落地时在批尾调
+     * {@code coordinator.updateAnimationDemand(animationDemandActive(), ANIMATION_FRAME_DELAY)}
+     * 即完成按需帧调度；在此之前它是无调用方的预留接缝。
      */
     private boolean animationDemandActive() {
         return !state.isIdle() || state.isCompacting()
@@ -885,9 +949,10 @@ public final class CodeTuiView extends InlineApp {
      * 纯本地状态（输入框文本、选择器高亮、模态选项、notice、权限模式标签、MCP 面板）
      * 一律走这里——绝不能等 Agent 事件（它们不来）。
      *
-     * <p>输入框文本变化不经此路（每个字符都 publish 会把 token 级合并打爆）——文本的可见性
-     * 由按键事件本身的重绘携带（TamboUI 按键处理完自动重绘），这里只发布「live 区结构变化」
-     * 类状态（选择器/面板开关、高亮移动、notice、模式标签）。
+     * <p><b>输入框文本也经此路</b>（fix round M-1：原「文本不经此路」与实现不符——
+     * {@code InputBox.handleKeyEvent} 的 HANDLED 与编辑器两个分支逐键都调它）：token 级
+     * 风暴由 coordinator 的合并吸收（同类 burst 只产生一个已调度 update），每次按键的
+     * 开销是一次原子 OR + 幂等的 requestRender。文本之外的可见性仍由按键自身的重绘携带。
      */
     private void publishLocalViewChange() {
         localViewPublished = true;
@@ -1011,7 +1076,15 @@ public final class CodeTuiView extends InlineApp {
         publishInitialAllSync();
     }
 
-    /** 测试专用：等价 onStop 的停止序列（coordinator/controller 停 + 解绑 + 设施关闭）。 */
+    /**
+     * 测试专用：等价 onStop 的停止序列（coordinator/controller 停 + 解绑 + 设施关闭）。
+     *
+     * <p><b>与生产 onStop 的唯一差异</b>（fix round M-6 写明）：不调 {@code super.onStop()}——
+     * 超类清理走 terminal 恢复等真实 IO，测试态没有起过 runner，调它只会引入「未运行态收尾」
+     * 的未定义行为。其余步骤（coordinator/controller 停止、双源解绑、两池关闭）与生产逐字一致。
+     * 真实的停止顺序（含 super.onStop）由 CodeTuiViewEventWiringTest.stop_unbindsAndStopsBeforeSuperCleanup
+     * 在 coordinator 生命周期层面钉住。
+     */
     void stopForTest() {
         coordinator.stop();
         ctxUsageController.stop();
@@ -1024,32 +1097,16 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 是否有 continuation 一次性任务在飞（诊断/测试：空闲必须为 false）。
      *
-     * <p>coordinator 未暴露 continuation 槽；这里用行为等价判定——{@code computeFollowUpFlags}
-     * 在安排 continuation 时置 {@link #continuationScheduled}（UI 线程写）、该 continuation
-     * 的 publish 到达时清（任何线程写）。ZERO 延迟下窗口极短，测试断言「排空后为 false」
-     * 与「remaining 时为 true（刚安排）」两种形态。
+     * <p>fix round I-3 后 View 不再自排 continuation（单一调度方是 coordinator.runBatch），
+     * 在飞判定也直接读 coordinator 的诊断口，View 侧不再镜像任何调度状态。
      */
-    private volatile boolean continuationScheduled;
-
-    boolean hasContinuationScheduledForTest() { return continuationScheduled; }
-
-    /** 测试观测：周期 drain 调度计数（事件驱动后恒 0）。 */
-    private final java.util.concurrent.atomic.AtomicInteger repeatingDrainScheduled =
-            new java.util.concurrent.atomic.AtomicInteger();
-
-    int repeatingDrainScheduledForTest() { return repeatingDrainScheduled.get(); }
+    boolean hasContinuationScheduledForTest() { return coordinator.hasPendingContinuation(); }
 
     /** 测试观测：初始全量同步是否完成。 */
     boolean initialAllSyncDoneForTest() { return initialAllSyncDone; }
 
     /** 测试观测：欢迎横幅是否打印。 */
     boolean welcomePrintedForTest() { return welcomePrinted; }
-
-    /** 测试观测：是否仍保留「每帧宽度轮询」（事件驱动后必须 false）。 */
-    boolean widthPollingEveryFrameForTest() { return widthPollingEveryFrame; }
-
-    /** 是否保留每帧宽度轮询（SIGWINCH 合并兜底）。事件驱动切换后为 false：见 processUpdates 注释。 */
-    private static final boolean widthPollingEveryFrame = false;
 
     /** 测试观测：本批是否消费掉全部 pending（控制顺序断言用）。 */
     boolean pendingOutputConsumedForTest() { return !state.hasPendingOutput(); }
@@ -1067,11 +1124,14 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 启动期初始全量同步：publish(UiDirty.ALL) 一次，由 coordinator 调度一批。
      * 生产里投给 requestUiUpdate（onStart 已在 UI 线程，请求一次合并重绘）；测试态落队列。
+     *
+     * <p>{@code initialAllSyncDone} 在 publish（测试态含同步排空）<b>之后</b>置位——标记的是
+     * 「启动期那次 ALL 已经投递/执行完」，不是「批内的某个时刻」；首批批内的实际消费由
+     * {@code processUpdates} 自己负责（fix round M-1：原注释「标记时机在批内」与实现不符）。
      */
     private void publishInitialAllSync() {
         coordinator.onUiChanged(UiDirty.ALL);
-        // 测试态立即执行这一批（生产由 requestUiUpdate 在事件循环里跑）；
-        // 标记 initialAllSyncDone 的时机在批内（processUpdates 首批）。
+        // 测试态立即执行这一批（生产由 requestUiUpdate 在事件循环里跑）。
         if (runner() == null) {
             runPendingUiUpdatesForTest();
         }

@@ -54,8 +54,8 @@ PROTECTED -- settle replay wipes the scrollback. Real reflowing terminals
 wrapped rows into the SCROLLBACK on every narrow drag -- ESC[J sweeping can
 never reach them, so each drag deposited a full stale copy of the UI (banner +
 box + status line, plus screenfuls of blanks) into history: scrolling back was
-garbage. The fix: the stage-2 settle replay (ResizeSettle +
-CodeTuiView.replayAfterResize) erases scrollback too (ESC[3J, same path as
+garbage. The fix: the stage-2 settle replay (event-driven one-shot settle in
+UiUpdateCoordinator + CodeTuiView.replayAfterResize) erases scrollback too (ESC[3J, same path as
 /clear) and replays the WHOLE scrollTail keep, so scrolling back shows a clean
 re-wrapped conversation instead of frame corpses. pyte has no scrollback, so
 this script asserts the CONTRACT on the raw byte stream: after each resize

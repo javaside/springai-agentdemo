@@ -20,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import reactor.core.Disposable;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -83,6 +85,10 @@ class CodeTuiViewEventWiringTest {
         CodeTuiView v = new CodeTuiView(new ConversationState(), noopHandler(), Path.of("."));
         InlineTuiConfig cfg = v.configure(4);
         assertFalse(cfg.ticksEnabled(), "tick 必须关闭：常驻周期重绘是本次重构删除的对象");
+        // fix round I-2 真实钉：tickRate=null 是 InlineTuiRunner 构造里「不 scheduleAtFixedRate」
+        // 的判定前提（config.ticksEnabled() && config.tickRate() != null）。只断言 ticksEnabled()
+        // 不够——把 tickRate 留成非 null 值而 ticksEnabled 恒 true 的实现改动会让它静默通过。
+        assertNull(cfg.tickRate(), "tickRate 必须为 null（runner 据此跳过 scheduleAtFixedRate）");
     }
 
     @Test
@@ -119,8 +125,9 @@ class CodeTuiViewEventWiringTest {
         CodeTuiView v = new CodeTuiView(state, noopHandler(), root);
         v.startForTest();   // 等价 onStart 的 coordinator start + 欢迎横幅 + 初始 ALL 同步
 
-        assertTrue(v.repeatingDrainScheduledForTest() == 0,
-                "事件驱动后不得再安排 scheduleRepeating drain");
+        // 「无周期任务」真实钉（fix round I-2）：直接扫描生产源——注释/字符串里提到不算，
+        // 代码里出现这些符号 = 有人恢复了周期任务（或每帧轮询），必须变红。
+        assertNoPeriodicSchedulingTokens(viewSource());
         assertTrue(v.welcomePrintedForTest(), "欢迎横幅应在启动路径打印（UI 线程一次性）");
         assertTrue(v.initialAllSyncDoneForTest(), "启动期必须有一次 UiDirty.ALL 初始全量同步");
         // 初始同步是「有界批」：首批吃 pending（队头惰性 + 防插队语义保留），流式完整行由
@@ -359,6 +366,222 @@ class CodeTuiViewEventWiringTest {
         return List.copyOf(list);
     }
 
+    // ── fix round I-1 / I-3：处理失败的有界重试 + continuation 单一调度方 ───
+
+    /**
+     * 可编程 {@link SubmitHandler} 桩：{@code takePendingInterjections} 在批处理的
+     * 自动出队段被调用（输出/模态/attention 之后），允许测试让<b>批处理进行中</b>抛业务
+     * 异常——注入「批处理异常」的接缝（{@code ConversationState} 是 final 不能继承；
+     * 其 {@code publish} 对 listener 异常有防护，从发布侧注入也到不了 processor）。
+     *
+     * <p>刻意选自动出队段而不是输出消费段：输出段抛异常时未消费的 pending 仍在，旧实现经
+     * {@code outputRemaining} 的 continuation 也能自我恢复；<b>自动出队段在输出之后</b>，
+     * 那里抛异常（dirty bits 已被 runBatch 取走、无输出存量）才是「静默停滞到下一个
+     * 无关事件」的真实缺口。
+     */
+    private static final class FlakyHandler implements SubmitHandler {
+        volatile Runnable beforeTakeInterjections;
+
+        @Override public Disposable submit(String text) { return () -> { }; }
+
+        @Override public List<String> takePendingInterjections() {
+            Runnable hook = beforeTakeInterjections;
+            if (hook != null) hook.run();
+            return List.of();
+        }
+    }
+
+    @Test
+    @DisplayName("批处理业务异常：warn + 补发一次 ALL 重试批；连续失败有界（不无限循环、不静默停滞）")
+    void batchFailure_warnsAndRetriesOnceThenStopsBounded(@TempDir Path root) throws Exception {
+        FlakyHandler h = new FlakyHandler();
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, h, root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();   // 初始同步批正常完成
+        assertEquals(0, v.coordinatorForTest().pendingDirtyBits(), "前置：初始同步后无脏位");
+        int baselineBatches = v.processedBatchesForTest();
+
+        // 自动出队段抛 IllegalStateException 一次（输出已排空、无 continuation 兜底——
+        // 若 View 只记日志不补发，这条 pending 就静默停滞到下一个无关事件）。
+        AtomicReference<RuntimeException> bomb = new AtomicReference<>(
+                new IllegalStateException("boom: processor failure"));
+        h.beforeTakeInterjections = () -> {
+            RuntimeException b = bomb.get();
+            if (b != null) {
+                bomb.set(null);   // 只炸一次
+                throw b;
+            }
+        };
+        s.pushInfo("这条会炸批");
+        v.runPendingUiUpdatesForTest();   // 失败批 + （若同步补发）重试批都会在这一轮排空里执行
+        int afterFirstRound = v.processedBatchesForTest();
+        assertTrue(afterFirstRound >= baselineBatches + 1,
+                "前置：至少一个失败批已执行");
+
+        // View 不得把异常抛出事件循环（测试队列即事件循环等价物，抛出 = 击穿防护），且必须自我恢复：
+        // 补发一次 ALL 重试批把炸批时的 pending 消费掉。
+        int guard = 0;
+        while (s.hasPendingOutput() && guard++ < 100) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertFalse(s.hasPendingOutput(),
+                "批处理异常后 View 必须补发重试批消费未完成的 pending（不得静默停滞到下一个无关事件）");
+        assertTrue(v.processedBatchesForTest() >= baselineBatches + 2,
+                "异常批 + 至少一个重试批（实际总批数 " + v.processedBatchesForTest() + "）");
+
+        // 异常风暴有界：自动出队段每次都炸。连续失败达上限后 View 停止补发，
+        // 不产生「失败→补发→再失败→再补发」的无限循环。注入点在输出段之后，故风暴批的
+        // pending 仍被正常消费（数据不丢）；「停滞」的实质是模态同步/自动出队没跑完——
+        // 由封顶后无新批自发出现来钉。
+        AtomicInteger failures = new AtomicInteger();
+        h.beforeTakeInterjections = () -> {
+            failures.incrementAndGet();
+            throw new IllegalStateException("persistent boom #" + failures.get());
+        };
+        s.pushInfo("风暴测试");
+        v.runPendingUiUpdatesForTest();   // 触发失败批（含至多 MAX_BATCH_FAILURE_RETRIES 次补发）
+        int batchesAtCap = v.processedBatchesForTest();
+        for (int i = 0; i < 5; i++) {     // 再给足时间：封顶后不得有任何新批自发出现
+            TimeUnit.MILLISECONDS.sleep(10);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertEquals(batchesAtCap, v.processedBatchesForTest(),
+                "连续失败封顶后不得继续补发重试批（防异常风暴）：失败次数=" + failures.get());
+        assertTrue(failures.get() >= 1 && failures.get() <= 3,
+                "重试有界：同一连续失败序列的失败批数必须封顶（1 次原始失败 + 至多 "
+                        + "2 次补发；实际失败 " + failures.get() + " 次）");
+        // 下一个真实生产者事件仍能驱动新批（封顶只停补发，不锁死事件路径）。
+        h.beforeTakeInterjections = null;
+        s.pushInfo("风暴后的恢复");
+        v.runPendingUiUpdatesForTest();
+        assertTrue(v.processedBatchesForTest() > batchesAtCap,
+                "封顶后真实事件必须仍能驱动新批（View 未被失败序列锁死）");
+    }
+
+    @Test
+    @DisplayName("批处理异常不炸事件循环：返回 idle 结果（不声明任何 follow-up），后续批照常")
+    void batchFailure_returnsIdleResultAndKeepsLoopAlive(@TempDir Path root) {
+        FlakyHandler h = new FlakyHandler();
+        h.beforeTakeInterjections = () -> { throw new IllegalStateException("processor failed"); };
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, h, root);
+        v.startForTest();
+
+        // 异常批（直接跑 ALL 批就会撞上）：View 不得把它抛出（抛出 = 击穿防护）。
+        // 返回值退化为 idle——批没跑完，follow-up 需求不可知，声明 remaining 会安排 continuation 盲目重跑。
+        UiUpdateCoordinator.UpdateResult r = v.processUpdatesForTest(UiDirty.ALL);
+        assertNotNull(r, "异常批也必须返回结果（不抛、不返回 null）");
+        assertFalse(r.outputRemaining(), "异常批不得声明 outputRemaining（continuation 会盲目重跑）");
+        assertFalse(r.animationActive(), "异常批不得声明 animationActive");
+
+        // 恢复后（不再抛）下一批照常消费：批处理失败不产生永久损伤。
+        h.beforeTakeInterjections = null;
+        UiUpdateCoordinator.UpdateResult ok = v.processUpdatesForTest(UiDirty.ALL);
+        assertFalse(ok.outputRemaining(), "恢复后的批照常排空");
+    }
+
+    @Test
+    @DisplayName("continuation 单一调度方：View 不再直接 scheduleOutputContinuation，只由 runBatch 排")
+    void continuation_soleSchedulerIsCoordinatorRunBatch(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 5000; i++) big.append("line ").append(i).append('\n');
+        s.onAssistantToken(1L, big.toString());
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+
+        // 单一调度方验证（fix round I-3）：View 侧不调 coordinator.scheduleOutputContinuation——
+        // 生产路径只由 runBatch 按 outputRemaining 排。这里用真实事件驱动整条链：
+        // publish(ALL) → runBatch → processUpdates 声明 remaining → runBatch 安排 continuation。
+        UiUpdateCoordinator c = v.coordinatorForTest();
+        v.runPendingUiUpdatesForTest();   // 初始同步批（经 runBatch）
+        assertTrue(c.hasPendingContinuation(),
+                "runBatch 收到 outputRemaining 后必须自己安排 continuation（生产唯一调度方）");
+
+        // 排空到静止：continuation 链最终清空（无生产者事件）。
+        int guard = 0;
+        while ((s.hasPendingOutput() || s.hasCompleteStreamingLine() || c.hasPendingContinuation())
+                && guard++ < 400) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+        }
+        assertFalse(s.hasPendingOutput(), "continuation 链应最终排空 pending");
+        assertFalse(s.hasCompleteStreamingLine(), "continuation 链应最终排空流式完整行");
+        assertFalse(c.hasPendingContinuation(), "排空后不得残留 continuation timer");
+    }
+
+    // ── fix round I-2：无周期任务的真实钉（源码扫描） ──────────────────────
+
+    /**
+     * 读取 {@link CodeTuiView} 生产源码（从工作目录定位 {@code src/main/java} 下的文件；
+     * surefire 工作目录是模块根，父级回退兜 IDE 内联运行）。
+     */
+    private static String viewSource() {
+        Path p = Path.of("src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java");
+        if (!Files.isRegularFile(p)) {
+            p = Path.of("..", "springai-code-tui",
+                    "src/main/java/io/github/javaside/springai/codetui/ui/CodeTuiView.java");
+        }
+        try {
+            return Files.readString(p);
+        } catch (IOException e) {
+            throw new IllegalStateException("无法读取 CodeTuiView 源码做无周期任务扫描: " + p.toAbsolutePath(), e);
+        }
+    }
+
+    /** 剥掉字符串/字符字面量与注释后的源码（符号扫描只看真实代码，注释里提到不算违规）。 */
+    private static String stripLiteralsAndComments(String src) {
+        StringBuilder out = new StringBuilder(src.length());
+        int i = 0;
+        int mode = 0;   // 0=code 1=lineComment 2=blockComment 3=string 4=char
+        while (i < src.length()) {
+            char c = src.charAt(i);
+            char next = i + 1 < src.length() ? src.charAt(i + 1) : '\0';
+            switch (mode) {
+                case 3, 4 -> {
+                    if (c == '\\') { i += 2; continue; }   // 转义序列整体跳过
+                    if ((mode == 3 && c == '"') || (mode == 4 && c == '\'')) mode = 0;
+                    i++;
+                }
+                case 1 -> {
+                    if (c == '\n') { mode = 0; out.append(c); }
+                    i++;
+                }
+                case 2 -> {
+                    if (c == '*' && next == '/') { mode = 0; i += 2; } else i++;
+                }
+                default -> {
+                    if (c == '/' && next == '/') mode = 1;
+                    else if (c == '/' && next == '*') mode = 2;
+                    else if (c == '"') mode = 3;
+                    else if (c == '\'') mode = 4;
+                    else out.append(c);
+                    i++;
+                }
+            }
+        }
+        return out.toString();
+    }
+
+    /** 生产源码（去注释/字符串）里不得出现任何「周期调度 / 常驻 tick」符号。 */
+    private static void assertNoPeriodicSchedulingTokens(String rawSource) {
+        String code = stripLiteralsAndComments(rawSource);
+        List<String> banned = List.of(
+                "scheduleRepeating",     // 旧 66ms drain 的注册方式（InlineToolkitRunner.scheduleRepeating）
+                "scheduleAtFixedRate",   // 固定频率任务的底层原语
+                ".tickRate(",            // configure 里重新开启 tick
+                ".onTick("               // 每帧喂拍类轮询（ResizeSettle.onTick）
+        );
+        for (String token : banned) {
+            assertFalse(code.contains(token),
+                    "CodeTuiView 生产代码不得包含周期调度符号「" + token
+                            + "」（事件驱动：一次性任务归 coordinator，常驻周期是本次重构删除对象）");
+        }
+    }
+
     // ── 本地 UI 状态变化（不在 Agent 源里） ───────────────────────────────
 
     @Test
@@ -398,9 +621,17 @@ class CodeTuiViewEventWiringTest {
         CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
         v.startForTest();
 
+        // 直连批（不经 runBatch）：验证 View 只「声明」remaining（fix round I-3 后 View 不自排
+        // continuation，单一调度方是 runBatch——故此处断言声明位，不断言 coordinator 槽；
+        // 槽的排定由 continuation_soleSchedulerIsCoordinatorRunBatch 经真实链钉住）。
         UiUpdateCoordinator.UpdateResult r1 = v.processUpdatesForTest(UiDirty.ALL);
         assertTrue(r1.outputRemaining(), "5000 行一批打不完，必须声明 remaining");
-        assertTrue(v.hasContinuationScheduledForTest(), "remaining 时 coordinator 必须已安排 continuation");
+
+        // 经真实链再跑一批（runBatch 收到 remaining → 自己排 continuation）：
+        s.pushInfo("追加一批存量");   // 生产者事件把 runBatch 投进队列
+        v.runPendingUiUpdatesForTest();
+        assertTrue(v.hasContinuationScheduledForTest(),
+                "runBatch 收到 outputRemaining 后必须安排 continuation（ZERO 延迟在飞或已消费皆可由后续排空证明）");
 
         // 无任何新生产者事件，靠 continuation 一批批排空：每轮「等 timer 到期 → 执行其 publish
         // 的 UI update」直到没有 continuation（5000 行 / 300 行批 ≈ 17 批；上限防死循环）。
@@ -417,7 +648,12 @@ class CodeTuiViewEventWiringTest {
         }
         UiUpdateCoordinator.UpdateResult last = v.processUpdatesForTest(UiDirty.OUTPUT);
         assertFalse(last.outputRemaining(), "排空后不得再声明 remaining");
-        assertFalse(v.hasContinuationScheduledForTest(), "排空后不得残留 continuation timer");
+        int guard = 0;
+        while (v.coordinatorForTest().hasPendingContinuation() && guard++ < 50) {
+            TimeUnit.MILLISECONDS.sleep(5);   // 让已排定的 ZERO 延迟 timer 自然触发完
+            v.runPendingUiUpdatesForTest();
+        }
+        assertFalse(v.coordinatorForTest().hasPendingContinuation(), "排空后不得残留 continuation timer");
     }
 
     @Test
@@ -443,7 +679,10 @@ class CodeTuiViewEventWiringTest {
         CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
         v.tickForTest();
         assertNotNull(v.activeAskForTest(), "tickForTest 必须仍能侦测并进入模态");
-        assertEquals(0, v.repeatingDrainScheduledForTest(), "tickForTest 不得安排周期任务");
+        // 「不启动周期任务」由源码扫描钉（startup_consumesPreStartPendingWithoutPeriodicDrain）；
+        // 此处补行为面：跑一批后 coordinator 侧不得出现常驻性 continuation 在飞。
+        assertFalse(v.coordinatorForTest().hasPendingContinuation(),
+                "单批 ALL 后排空（无存量输出），不得留下在飞的 continuation timer");
     }
 
     @Test
@@ -451,7 +690,14 @@ class CodeTuiViewEventWiringTest {
     void resize_keepsEventPathWithoutPerFramePolling(@TempDir Path root) {
         CodeTuiView v = new CodeTuiView(new ConversationState(), noopHandler(), root);
         v.startForTest();
-        assertFalse(v.widthPollingEveryFrameForTest(),
-                "事件驱动后不得保留每帧宽度轮询（ResizeEvent 已主动通知）");
+        // fix round I-2：原 widthPollingEveryFrameForTest() 是编译期常量 false（恒真断言）。
+        // 真实钉 = 源码扫描：每帧宽度轮询的载体正是 drain/tick 里的 ResizeSettle.onTick() 喂拍，
+        // 两个符号都被禁（onTick 调用 / new ResizeSettle 实例化），谁恢复轮询谁变红。
+        String src = viewSource();
+        assertNoPeriodicSchedulingTokens(src);
+        assertFalse(src.contains(".onTick("),
+                "每帧宽度轮询（ResizeSettle.onTick 每帧喂拍）不得恢复：resize 走 ResizeEvent → 一次性 settle");
+        assertFalse(src.contains("new ResizeSettle("),
+                "ResizeSettle（帧驱动的停稳判定器）已随每帧轮询删除：settle 由 coordinator 132ms 一次性任务承担");
     }
 }

@@ -46,8 +46,11 @@ import dev.tamboui.tui.InlineTuiRunner;
  *       （关闭“消费者清 scheduled 与生产者发通知交错”的丢唤醒窗口）。</li>
  * </ol>
  * 绝不在单个 UI action 内循环到空——批与批之间事件循环可以处理按键、粘贴和 resize（§9.2）。
- * processor 抛出的异常照原样上抛（由 {@code InlineTuiRunner} 的既有 Throwable 防护记录并
- * 保持事件循环存活），{@code finally} 保证 {@code scheduled} 被释放，不会永久卡住后续调度。
+ * processor 抛出的异常照原样上抛：{@code finally} 保证 {@code scheduled} 被释放，不会永久卡住
+ * 后续调度（投递目标的 {@code InlineTuiRunner} 对 UI action 有既有 Throwable 防护，记录并保持
+ * 事件循环存活）。<b>生产 processor（CodeTuiView）自行捕获处理异常</b>（warn + 有界补发一次
+ * 重试批，见其 {@code processUpdates} 注释），不会走到这条上抛路径；上抛契约仍保留给
+ * 未防护的处理器与测试桩（{@code UiUpdateCoordinatorTest.processorFailureReleasesScheduled}）。
  *
  * <h2>timer 纪律（设计 §10）</h2>
  * <ul>
@@ -81,18 +84,16 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
     /**
      * 一批处理后的后续需求。
      *
-     * @param outputRemaining   输出存量未清空 → 需要一次性 continuation（§9.2），
+     * @param outputRemaining 输出存量未清空 → 需要一次性 continuation（§9.2），
      *                          无新生产者事件也必须最终排空；
      * @param previewPending    流式残行预览待处理（本任务只透传标记，Task 8 接管节流）；
-     * @param animationActive   仍有动态状态 → 续排下一动画帧（§10.3）；
-     * @param contextUsageDirty 上下文用量标脏（Task 6 的 refresh controller 接管）。
+     * @param animationActive   仍有动态状态 → 续排下一动画帧（§10.3）。
      */
     public record UpdateResult(boolean outputRemaining,
                                boolean previewPending,
-                               boolean animationActive,
-                               boolean contextUsageDirty) {
+                               boolean animationActive) {
         public static UpdateResult idle() {
-            return new UpdateResult(false, false, false, false);
+            return new UpdateResult(false, false, false);
         }
     }
 
@@ -340,6 +341,15 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
     /** 尚未被任何批取走的 dirty bits（诊断/测试）。 */
     public int pendingDirtyBits() {
         return dirtyBits.get();
+    }
+
+    /**
+     * 是否有一个已排定、尚未完成的 continuation 一次性任务（诊断/测试）。
+     * 空闲必须为 false——排空后没有 timer 残留。
+     */
+    public boolean hasPendingContinuation() {
+        ScheduledFuture<?> future = continuationFuture.get();
+        return future != null && !future.isDone();
     }
 
     /** 是否存在一个已投递、尚未执行完的 UI update（诊断/测试）。 */
