@@ -375,3 +375,129 @@ BUILD SUCCESS
    足够；跨逻辑行穿插的场景不存在（一条逻辑行的段连续产出）。
 5. **12ms 仍未标定**（I-3 只是把「单 tick 最坏 2×」修成 1×，量值本身待实机回标，见常量注释）。
 
+---
+
+# Task 5 fix round 2 实施报告（复审 N-1 + Minor）
+
+## 状态
+
+DONE（提交 `530e1fc`，3 files，+166/−21）
+
+## 对上一轮限流中断残留工作的取舍
+
+worktree 里遗留三个文件的未提交改动（ScrollbackPrinter / CodeTuiView / ScrollbackPrinterTest），
+通读后的取舍：
+
+- **核心修复保留并完善**：`MdLineCursor` 改为「未缩进 `renderFinalized` spans 按 `innerWidth()`
+  折行 + 每段前置 `Span.raw(INDENT)`；raw 仍存 `indented(...)` 整行」——与复审要求 1 完全一致，
+  逻辑推演（`SegmentedWrap.Styled` 空行补空段语义、raw 引用共享、样式保留）与实现全部核对无误。
+  javadoc 声明「与一次性方法逐字同源」成立（等价性测试钉住），予以保留。
+- **重写 ①（残留测试的 `.repeat(3)` 优先级 bug）**：
+  `assistantCursor_manySegmentChineseBody_everySegmentIndented` 里
+  `"A" + "B".repeat(3)` 只重复了后半句（整段 ~220 列，inner 78 下仅折 3 段），`>= 5` 段前置
+  断言必然假红；注释「~126 列 ×3」暴露原意是整句 ×3。改为整句括号后 repeat（64 CJK 字符 =
+  128 列 ×3 = 384 列 → 5 段）。
+- **重写 ②（既有断言按缺陷语义同步）**：
+  `assistantCursor_overlongLine_producesSegmentsWithPreWrapRawText` 的 `<= 78` 段宽断言是
+  fix round 1 按「先缩进后折行」写的——段宽上限=inner 正是 N-1 列为缺陷的项之一（正确上限 =
+  终端宽 80 = 缩进 2 + 内容 ≤78）。改为 `<= 80` 并注明缘由；同用例补上 s2 续段
+  `startsWith("  ")` 断言（加强）。其 `contains` 拼回断言在正确语义下必假（wrap-then-indent
+  后拆分点移到内容流上 18y/42y，直接拼物理段把第二段缩进夹进 y 流）——改为**逐段去缩进后精确
+  相等**（比原 contains 更强）。
+- **Minor 修正保留**：`batchDeadlineNanos` javadoc 陈旧的「Long.MAX_VALUE=测试态无预算」改为
+  与 `PhysicalOutputQueue.drain` 实际契约一致（绝对 nanoTime 域；≤0 视为不限时；生产无
+  Long.MAX_VALUE 用法，grep 复核）。
+- javadoc 中「每段宽度上限变成 inner(78)+缩进语义混乱」语病修顺（②段宽上限从终端宽 80 错位成
+  inner 78，折行预算里混入排版缩进）。
+
+## N-1 修复摘要（修复要求 1–3）
+
+`MdLineCursor.next()`（原 ~:436-440 的「先 `indented()` 后折行」）改为：
+
+```java
+List<Span> rendered = md.renderFinalized(logicals[at++]);   // 状态推进在渲染时发生（不变）
+raw = indented(rendered);                                  // 留底原文（折行前整行，含缩进；I-2 语义不变）
+segs = SegmentedWrap.styled(rendered, innerWidth());        // 折行源 = 未缩进渲染
+...
+indentedSeg.add(Span.raw(INDENT)); indentedSeg.addAll(piece);   // 每一段（含续段）前置缩进
+```
+
+- **续段缩进**：缩进不再吃折行预算，折出几段每段都带 `"  "` 前缀——悬挂缩进语义恢复，与旧
+  `printWrapped`（wrap-then-indent）逐字一致；留底重放（raw 存整行、重放重折）同步恢复。
+- **段宽上限**：inner(78)+缩进(2)=80=终端宽，不再是 inner(78)。
+- **修复要求 3（javadoc）**：`MdLineCursor` 类注释写明「折行源是未缩进的渲染结果 + 每段前置
+  INDENT + 与 printWrapped 逐字一致（由 ScrollbackPrinterTest 钉住）」；cursor 工厂区注释与
+  `printWrapped` javadoc 同步。「逐字同源」声明现在真实成立。
+
+## 回归钉（修复要求 2：每一段、不只首段）
+
+`ScrollbackPrinterTest` 新增 4 例 + 既有 1 例加强（13 例全绿）：
+
+- `assistantCursor_everyWrappedSegmentCarriesHangingIndent_withinTerminalWidth`：
+  ~108 列中文正文（生产主路径形态）折 2 段——**每段** `startsWith("  ")` + 每段宽 ≤80 +
+  去缩进拼回精确等于原文；
+- `assistantCursor_manySegmentChineseBody_everySegmentIndented`：384 列中文正文折 5 段，
+  「每一段」断言从 2 段扩到多段；
+- `assistantCursor_mixedWidthAndStreamingSegmentsKeepHangingIndent`：中英混合 +
+  `**bold**` 跨样式拆分 + 窄终端（≥3 段）；流式完整行（同一 `MdLineCursor`）钉 200 列 = 3 段、
+  每段带缩进；
+- `assistantCursor_wrapThenIndent_matchesOneShotPrintWrappedExactly`：同一输入下 cursor 与
+  一次性 `assistant()`（printWrapped）物理行序列**逐一相等**（短行/宽窄混排/长中文/空行 4 组）——
+  「逐字同源」的直接钉子；
+- 既有 `assistantCursor_overlongLine_producesSegmentsWithPreWrapRawText` 加强：s2 续段
+  `startsWith("  ")` + `<= 80`（原 `<= 78` 按缺陷语义写）+ 去缩进精确拼回（原 contains 升级）。
+
+**RED 确认**（主实现 stash 回旧版、保留新测试）：5 例红，失败信息即 N-1 症状——
+`第 1 段（含折行续段）必须带悬挂缩进，实际：，不能从第零列开始。`、
+`实际：yyyyyy…（顶格续段）`；等价性用例的 diff 直接展示两路径分家
+（一次性 `  yyy…` 带缩进 vs 旧 cursor `yyy…` 顶格）。恢复修复实现后全绿。
+
+## 测试命令与结果
+
+目标套件（brief 指定 7 类）：
+
+```bash
+mvn -pl springai-code-tui -am \
+  -Dtest=DrainBurstCapTest,StrictOutputFairnessTest,ScrollbackPrinterTest,DiffRendererTest,SegmentedWrapTest,ScrollTailRecordingTest,DrainBudgetSharingTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+```
+Tests run: 13, Failures: 0, Errors: 0, Skipped: 0 -- ScrollbackPrinterTest（+4 新例，1 例加强）
+Tests run: 8,  Failures: 0, Errors: 0, Skipped: 0 -- DrainBurstCapTest
+Tests run: 7,  Failures: 0, Errors: 0, Skipped: 0 -- SegmentedWrapTest
+Tests run: 9,  Failures: 0, Errors: 0, Skipped: 0 -- DiffRendererTest
+Tests run: 4,  Failures: 0, Errors: 0, Skipped: 0 -- DrainBudgetSharingTest
+Tests run: 3,  Failures: 0, Errors: 0, Skipped: 0 -- ScrollTailRecordingTest
+Tests run: 3,  Failures: 0, Errors: 0, Skipped: 0 -- StrictOutputFairnessTest
+Tests run: 47, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+全模块回归（设计 §15.6）：`mvn -pl springai-code-tui -am test`
+
+```
+Tests run: 1768, Failures: 0, Errors: 0, Skipped: 10（既有 skip，与本任务无关）
+springai-agentdemo SUCCESS / springai-tamboui-inline-patch SUCCESS / springai-code-tui SUCCESS [01:05 min]
+BUILD SUCCESS
+```
+
+（上轮 1764 + 净新增 4 = 1768 ✓；既有断言零弱化——`122` raw 宽度、`assertSame` 引用共享、
+751 段完整性等全部原样通过，两处改动均为加强。）
+
+## commit
+
+`530e1fc`（worktree `refactor/event-driven-ui`，基于 `9e909d8`）
+
+## fix round 2 concerns
+
+1. **`deindent` 辅助假定段前缀恰为 2 空格**：assistant 物理段的 INDENT 是 printer 私有常量
+  `"  "`，测试无法引用（包私有可反射，但直接字面量更直白）；若日后 INDENT 变更需同步测试。
+   测试正文均不含连续空格，`replace("  ", "")` 拼回不会被正文空格干扰。
+2. **`printWrapped` 与 `MdLineCursor` 仍是两份实现**（一份 `TextWrap` 一次性、一份
+   `SegmentedWrap.Styled` 增量）——与上轮 concern 2 同源；本轮新增的等价性钉子
+   （4 组输入逐一相等）把分家窗口从「折行算法层」缩到「缩进时机 + 折行源层」，若后续改
+   `printWrapped` 的缩进语义该测试会当场红。
+3. 上轮 concern 1/3/5（diff 工厂成本预算外、raw 内存形态、12ms 未标定）本轮未触碰，仍然成立。
+
+
