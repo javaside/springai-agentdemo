@@ -308,7 +308,8 @@ class ContextUsageTest {
      */
     @Test
     void refresh_visibleDataUnchanged_returnsFalseEvenForNewRecord() {
-        // 两个独立构造的等值快照（破除 Integer 缓存：数值故意用 != -128..127 的 12345）
+        // 两个独立构造的等值快照：实例身份必然不同，但 record equals 逐组件相等
+        // （Integer/Long 组件按 equals 比较，与 == 语义无关，缓存区间不是变量）
         ContextStats first = statsWithEstimate(30_000L);
         ContextStats second = statsWithEstimate(30_000L);
         AtomicInteger reads = new AtomicInteger();
@@ -335,16 +336,39 @@ class ContextUsageTest {
         assertTrue(cu.refresh(), "empty → 有对话：后缀从空串变为「 · 上下文 30%」");
     }
 
-    /** 后缀百分比依赖的字段（每回合 token / 窗口 / 命中率）变化即可见变化。 */
+    /**
+     * 后缀百分比依赖的字段（每回合 token / 窗口）变化即可见变化：<b>同一实例</b>上先建缓存、
+     * 再变百分比输入——恒真断言（empty→有数据）不构成本场景的证据。
+     */
     @Test
     void refresh_percentInputsChange_isVisibleChange() {
-        ContextUsage cu = new ContextUsage(() -> statsWithEstimate(30_000L), new RecordingSink());
-        assertTrue(cu.refresh());
-        // 窗口不同 → 百分比从 30% 变 60%
-        ContextUsage windowChanged = new ContextUsage(
-                () -> new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 50_000L, 20, 10, 0, 0L),
-                new RecordingSink());
-        assertTrue(windowChanged.refresh(), "首刷即变化");
+        AtomicReference<ContextStats> src = new AtomicReference<>(statsWithEstimate(30_000L));
+        ContextUsage cu = new ContextUsage(() -> src.get(), new RecordingSink());
+
+        assertTrue(cu.refresh(), "先建缓存（empty → 有数据）");
+        assertEquals(" · 上下文 30%", cu.suffix(), "30000/100000 = 30%");
+
+        // 同一实例再 refresh，窗口 100_000 → 50_000：百分比 30% → 60%
+        src.set(new ContextStats(100, 40, 50, 8, 2, 30_000L, 60_000L, 50_000L, 20, 10, 0, 0L));
+        assertTrue(cu.refresh(), "窗口变化 → 缓存百分比输入变化 → true");
+        assertEquals(" · 上下文 60%", cu.suffix(), "30000/50000 = 60%（后缀确实随窗口变化）");
+    }
+
+    /**
+     * 同一实例上 {@code cacheHitPercent} 变化（null→80）也是可见变化：
+     * 后缀从无到有追加「 · 缓存命中 80%」，报告命中行从省略到打印。
+     */
+    @Test
+    void refresh_cacheHitPercentChange_isVisibleChange() {
+        AtomicReference<ContextStats> src = new AtomicReference<>(withCache(0L, 0L, null));
+        ContextUsage cu = new ContextUsage(() -> src.get(), new RecordingSink());
+
+        assertTrue(cu.refresh(), "先建缓存");
+        assertEquals(" · 上下文 30%", cu.suffix(), "无计费输入 → 后缀不含缓存命中");
+
+        src.set(withCache(80L, 100L, 80));   // 仅缓存命中三字段 + cacheHitPercent 变化
+        assertTrue(cu.refresh(), "cacheHitPercent null → 80：可见变化 → true");
+        assertEquals(" · 上下文 30% · 缓存命中 80%", cu.suffix(), "后缀追加「 · 缓存命中 80%」");
     }
 
     /** 异常返回 false 且保留旧快照——调用方据此知道「没变化、别触发 UI 刷新」。 */

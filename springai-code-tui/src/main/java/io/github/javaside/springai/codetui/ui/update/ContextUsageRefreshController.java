@@ -131,7 +131,11 @@ public final class ContextUsageRefreshController implements AutoCloseable {
         }
     }
 
-    /** 是否有一个 refresh 正在执行（诊断/测试）。 */
+    /**
+     * 是否有一个 refresh 正在执行（诊断/测试）。
+     * <b>不反映 {@link #stop()}</b>：stop 后在飞的 refresh 仍报 {@code true} 直至自然跑完
+     * （设计取舍——在飞任务无法安全中断，允许跑完但完成路径静默：不回调、不追赶）。
+     */
     public boolean refreshInFlight() {
         return inFlight.get();
     }

@@ -125,8 +125,12 @@ public final class ContextUsage {
      *
      * <p><b>返回值（Task 6）</b>：仅当缓存的<b>可见数据</b>真实变化时返回 {@code true}——
      * 也就是 {@link #suffix()} / {@link #cacheHitSuffix()} / {@link #report()} 全部输出会变的情况。
-     * 相等判定覆盖可见口径的所有字段（events、各分桶数、token 及分桶、窗口/阈值、保留数、
-     * 视觉与缓存计数、系统提示词）；record 自带的 equals 语义与此恰好一致（全部组件逐一比较），
+     * 判变用 record 自带的 equals（全部组件逐一比较），它是可见口径的<b>超集</b>，方向安全
+     * （多通知、不漏通知）：可见数据变化 ⇒ 必有渲染组件变化 ⇒ equals 不相等 ⇒ true；
+     * 反向只可能「多通知」——仅未渲染组件变化时也返回 true、多一次重画，可接受。
+     * 未渲染组件只有 {@code autoKeepEvents}（{@code manualKeepEvents} 有「手动 /compact」行，
+     * {@code autoKeepEvents} 无任何输出），且生产取值为常量
+     * （{@code AgentTools.MAX_EVENTS_TO_KEEP}，编译期定死、不随会话变化），不产生实际噪音。
      * 故等值但身份不同的新快照返回 {@code false}，不会触发无意义的 UI 重画。
      * null 快照沿旧语义<b>不更新缓存</b>（返回 {@code false}）；异常同样保留旧快照并返回
      * {@code false}。

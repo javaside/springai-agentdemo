@@ -6,15 +6,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Delayed;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -41,7 +47,9 @@ import io.github.javaside.springai.codetui.ui.ContextUsage;
  * </ul>
  *
  * <p>确定性接缝：手动 executor（入队不执行，测试受控 drive）+ 真实单线程 scheduler
- * （防抖到期真实异步发生）。生产环境里 executor 是 CodeTuiView 的
+ * （防抖到期真实异步发生）。时序敏感的用例（防抖窗口内重复标脏、executor 拒绝降级）改用
+ * 手动 scheduler 假时钟（到期由测试显式触发，零真实 sleep）与可开关拒绝的 executor
+ * （拒哪次提交由测试精确指定）。生产环境里 executor 是 CodeTuiView 的
  * {@code context-usage-refresh} 单线程池、scheduler 是 coordinator 共享 scheduler；
  * 被测对象与生产构造完全一致，只有驱动时机受控。
  */
@@ -67,6 +75,197 @@ class ContextUsageRefreshControllerTest {
         }
 
         /** 执行最早入队的任务（FIFO）。 */
+        void runNext() {
+            tasks.remove(0).run();
+        }
+
+        int queued() {
+            return tasks.size();
+        }
+    }
+
+    /**
+     * 手动 scheduler —— <b>可注入的假时钟</b>：防抖任务入队不执行，测试在受控时机
+     * {@link #fireNext()} 模拟「防抖到期」。时序测试零真实 sleep：慢机器上不再有
+     * 「两次标脏落在窗口两侧」的假红，判别力反而更强——窗口内重复标脏是否叠加任务，
+     * 直接数 {@link #pendingCount()} 即知，不依赖 wall-clock 巧合。
+     */
+    private static final class ManualScheduler implements ScheduledExecutorService {
+        private final CopyOnWriteArrayList<RecordedTask> pending = new CopyOnWriteArrayList<>();
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            RecordedTask task = new RecordedTask(command);
+            pending.add(task);
+            return task;
+        }
+
+        /** 触发最早入队的防抖任务；已被 stop 取消的跳过。没有任务可触发即失败（防吞掉武装）。 */
+        void fireNext() {
+            for (RecordedTask task : pending) {
+                pending.remove(task);
+                task.run();
+                return;
+            }
+            throw new IllegalStateException("没有已武装的防抖任务可触发");
+        }
+
+        int pendingCount() {
+            return pending.size();
+        }
+
+        @Override
+        public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
+            throw new UnsupportedOperationException("controller 只用 schedule(Runnable, ...)");
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void shutdown() { /* 测试桩：无需 */ }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return List.of();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return false;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return false;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return true;
+        }
+
+        @Override
+        public <T> Future<T> submit(Callable<T> task) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> Future<T> submit(Runnable task, T result) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Future<?> submit(Runnable task) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> T invokeAny(Collection<? extends Callable<T>> tasks) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> T invokeAny(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            throw new UnsupportedOperationException();
+        }
+
+        /** 已入队的防抖任务：支持 stop() 的 cancel(false)；未取消时按命令原样执行。 */
+        private static final class RecordedTask implements ScheduledFuture<Void> {
+            private final Runnable command;
+            private final AtomicBoolean cancelled = new AtomicBoolean();
+
+            RecordedTask(Runnable command) {
+                this.command = command;
+            }
+
+            void run() {
+                if (!cancelled.get()) {
+                    command.run();
+                }
+            }
+
+            @Override
+            public long getDelay(TimeUnit unit) {
+                return 0L;
+            }
+
+            @Override
+            public int compareTo(Delayed other) {
+                return 0;
+            }
+
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                return cancelled.compareAndSet(false, true);
+            }
+
+            @Override
+            public boolean isCancelled() {
+                return cancelled.get();
+            }
+
+            @Override
+            public boolean isDone() {
+                return cancelled.get();
+            }
+
+            @Override
+            public Void get() {
+                return null;
+            }
+
+            @Override
+            public Void get(long timeout, TimeUnit unit) {
+                return null;
+            }
+        }
+    }
+
+    /**
+     * 可开关拒绝的 executor（M-4）：{@link #rejectNextSubmit()} 之后恰好一次
+     * {@code execute} 抛 {@link RejectedExecutionException}，随后自动恢复接受——
+     * 「拒绝哪一次提交」由测试精确指定，拒绝后的重试提交无论何时到达都成功（无时序竞态）。
+     */
+    private static final class ToggleExecutor implements Executor {
+        private final CopyOnWriteArrayList<Runnable> tasks = new CopyOnWriteArrayList<>();
+        private final AtomicInteger rejectionsPending = new AtomicInteger();
+
+        /** 让下一次 execute() 被拒（一次性）。 */
+        void rejectNextSubmit() {
+            rejectionsPending.incrementAndGet();
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            if (rejectionsPending.getAndUpdate(v -> v > 0 ? v - 1 : 0) > 0) {
+                throw new RejectedExecutionException("simulated executor shutdown");
+            }
+            tasks.add(command);
+        }
+
         void runNext() {
             tasks.remove(0).run();
         }
@@ -170,21 +369,24 @@ class ContextUsageRefreshControllerTest {
 
     @Test
     @DisplayName("防抖窗口内的重复 markDirty 不叠加第二个任务")
-    void debounceWindowRepeatedMarksStayOneTask() throws Exception {
+    void debounceWindowRepeatedMarksStayOneTask() {
+        // 假时钟接缝（ManualScheduler）：防抖窗口不推进就不到期——窗口内的重复标脏
+        // 严格可复现，慢机器无假红。判别力不弱于旧时序版：窗口内任意多次标脏只允许武装一个 timer。
+        ManualScheduler manualScheduler = new ManualScheduler();
         ScriptedSource source = new ScriptedSource();
         try (ContextUsageRefreshController controller = new ContextUsageRefreshController(
-                source.usage(line -> { }), executor, scheduler,
+                source.usage(line -> { }), executor, manualScheduler,
                 Duration.ofMillis(80), () -> { })) {
 
             controller.markDirty();
-            Thread.sleep(30);
+            assertEquals(1, manualScheduler.pendingCount(), "首标脏武装一个防抖 timer");
             controller.markDirty();
-            Thread.sleep(30);
             controller.markDirty();
+            assertEquals(1, manualScheduler.pendingCount(), "窗口内重复标脏不重排/不叠加 timer");
+            assertEquals(0, executor.queued(), "防抖到期前不得提交 refresh 任务");
 
-            awaitQueued(1);
-            Thread.sleep(150);   // 后续窗口全部滑过，不允许再排第二个任务
-            assertEquals(1, executor.queued(), "滑动窗口内重复标脏不叠加任务");
+            manualScheduler.fireNext();   // 模拟窗口到期
+            assertEquals(1, executor.queued(), "到期恰好提交一个 refresh 任务");
             assertEquals(0, source.reads.get(), "任务未执行前不得触碰 source");
         }
     }
@@ -403,6 +605,98 @@ class ContextUsageRefreshControllerTest {
         controller.markDirty();
         Thread.sleep(80);
         assertEquals(0, executor.queued(), "close 后不再接受新任务");
+    }
+
+    // ── 拒绝降级（M-4）：executor 拒绝提交时单飞权不泄漏、改走防抖重试 ──
+
+    /**
+     * 追赶提交被拒：单飞权归还 + 改走 markDirty 防抖重试（原 Concerns §6.4 路径）。
+     * 用 {@link ManualScheduler} 假时钟保证全程序列零真实等待：在飞期间标脏 → 放行首刷 →
+     * 完成复查发现欠账、追赶提交被拒 → 权限归还 + 重新武装防抖 → 到期重试提交成功 →
+     * 重试 refresh 照常执行并可回调。恢复路径完整（不卡死、不丢欠账）。
+     */
+    @Test
+    @DisplayName("追赶提交被 executor 拒绝：归还单飞权并改走防抖重试，恢复路径完整")
+    void rejectedCatchUpSubmitDegradesToDebouncedRetry() throws Exception {
+        CountDownLatch refreshEntered = new CountDownLatch(1);
+        CountDownLatch releaseRefresh = new CountDownLatch(1);
+        AtomicInteger callbacks = new AtomicInteger();
+        ScriptedSource source = new ScriptedSource();
+        // 第一刷：变化（empty→STEP）、阻塞在 source 中；第二刷（重试）：变化（STEP→STEP_MORE）
+        source.set(blockedThen(refreshEntered, releaseRefresh, STEP));
+        ManualScheduler manualScheduler = new ManualScheduler();
+        ToggleExecutor executor = new ToggleExecutor();
+
+        try (ContextUsageRefreshController controller = new ContextUsageRefreshController(
+                source.usage(line -> { }), executor, manualScheduler,
+                Duration.ofMillis(80), callbacks::incrementAndGet)) {
+
+            controller.markDirty();
+            manualScheduler.fireNext();   // 防抖到期 → 提交首刷（此时尚未武装拒绝）
+            assertEquals(1, executor.queued(), "首刷任务已入队");
+
+            Thread worker = new Thread(executor::runNext, "refresh-worker");
+            worker.start();
+            assertTrue(refreshEntered.await(10, TimeUnit.SECONDS), "首刷必须已进入 source");
+            assertTrue(controller.refreshInFlight(), "首刷在飞");
+
+            executor.rejectNextSubmit(); // 拒掉完成复查的追赶提交，之后的提交（防抖重试）都接受
+            controller.markDirty();      // 在飞期间标脏 → 记欠账（不提交任务）
+            source.set(() -> STEP_MORE); // 放行后重试刷将看到的数据
+            releaseRefresh.countDown();
+            worker.join(10_000);
+
+            // 完成复查：追赶提交被 ToggleExecutor 拒绝 → 归还单飞权 + 重新武装防抖（未到期）
+            assertFalse(controller.refreshInFlight(), "追赶提交被拒后单飞权必须归还（不泄漏）");
+            assertEquals(0, executor.queued(), "被拒的追赶没有留下任何任务");
+            assertEquals(1, manualScheduler.pendingCount(), "降级路径重新武装了一个防抖 timer");
+            assertEquals(1, callbacks.get(), "首刷的可见变化（empty→STEP）照常回调一次（降级只影响追赶，不吞首刷通知）");
+
+            manualScheduler.fireNext();   // 防抖重试到期 → 提交成功
+            assertEquals(1, executor.queued(), "防抖重试恰好再提交一个 refresh 任务");
+
+            executor.runNext();
+            assertEquals(2, source.reads.get(), "首刷 + 防抖重试各现算一次");
+            assertEquals(2, callbacks.get(), "重试刷见新数据（STEP→STEP_MORE）→ 再回调一次");
+            assertFalse(controller.refreshInFlight(), "重试完成后单飞权归还");
+        }
+    }
+
+    /**
+     * 防抖到期提交被拒（{@code debounceFired} 路径）：武装位已清、静默吞掉拒绝，
+     * 之后新的 markDirty 可重新武装防抖——一次拒绝不构成永久失能。
+     */
+    @Test
+    @DisplayName("防抖到期的提交被 executor 拒绝：不炸、可重新武装重试")
+    void rejectedDebounceSubmitAllowsRearm() throws Exception {
+        AtomicInteger callbacks = new AtomicInteger();
+        ScriptedSource source = new ScriptedSource();
+        ManualScheduler manualScheduler = new ManualScheduler();
+        ToggleExecutor executor = new ToggleExecutor();
+        executor.rejectNextSubmit();   // 拒掉防抖到期的提交，之后的提交都接受
+
+        try (ContextUsageRefreshController controller = new ContextUsageRefreshController(
+                source.usage(line -> { }), executor, manualScheduler,
+                Duration.ofMillis(80), callbacks::incrementAndGet)) {
+
+            controller.markDirty();
+            assertEquals(1, manualScheduler.pendingCount(), "首标脏武装防抖");
+
+            manualScheduler.fireNext();   // 到期 → executor.execute 抛 RejectedExecutionException
+            assertEquals(0, executor.queued(), "提交被拒：没有任务入队");
+            assertEquals(0, source.reads.get(), "从未触碰 source");
+            assertFalse(controller.refreshInFlight(), "提交被拒不产生在飞任务");
+            assertEquals(0, manualScheduler.pendingCount(), "被拒后没有自动残留 timer");
+
+            controller.markDirty();       // 新标脏：必须能重新武装（armed 已被到期路径清回）
+            assertEquals(1, manualScheduler.pendingCount(), "拒绝后 markDirty 可重新武装防抖");
+
+            manualScheduler.fireNext();   // 重试到期 → 提交成功
+            executor.runNext();
+            assertEquals(1, source.reads.get(), "重试提交的 refresh 正常执行");
+            assertEquals(1, callbacks.get(), "首刷可见变化（empty→STEP）→ 回调一次");
+            assertFalse(controller.refreshInFlight());
+        }
     }
 
     @Test
