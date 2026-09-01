@@ -62,7 +62,7 @@
 > **内置清单里能直接用上视觉的：OpenAI、Anthropic、DeepSeek 与智谱四家**（`gpt-5.6-*` / `gpt-5.5` /
 > `gpt-5.4`、`claude-*`、`deepseek-v4-flash-vision-exp`、`glm-5.3-flash`——最后这个是 2026-08-26 上线的
 > GLM-5 系首个原生多模态模型，1M 上下文，价格为 glm-5.3 的 1/10）。
-> 千问的内置清单（`qwen3.7-max`/`qwen3.6-flash`/`qwen3-coder-next`）仍无视觉模型——
+> 千问的内置清单（`qwen3.7-max`/`qwen3.7-plus`/`qwen3.6-flash`/`qwen3-coder-next`）仍无视觉模型——
 > 要在千问用视觉，得自己用 `DASHSCOPE_MODELS` 配一个 `-vl` 系 id；智谱的 `glm-4.6v`（2025-12 上线，
 > 首个原生 Function Call 的视觉线，Flash 档免费）同理走 `ZHIPU_MODELS`。
 
@@ -142,8 +142,8 @@ DeepSeek 每张图按服务端自动缩放后计费，**单张最多 384 token**
 （`ZhipuVisionSmokeTest`，纯红/纯蓝图 → 颜色答对、工具触发）——spring-ai-openai 通路对智谱 v4
 无需任何 HTTP 改写（与 DeepSeek 的区别：DeepSeek 的 SDK 丢 Media，必须走改写层）。
 上述验证在智谱 Coding Plan 端点（`ZHIPU_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4`）取得——
-key 的资源包绑在该端点，普通端点 `https://open.bigmodel.cn/api/paas/v4` 对这把 key 是 429 余额不足
-（计费问题，非通路问题；两端口同属智谱 v4 协议，协议层结论可迁移）。
+key 的资源包绑在该端点，普通端点 `https://open.bigmodel.cn/api/paas/v4` 对这把 key 是 429 余额不足。
+普通计费端点未实际调用成功；它与 Coding Plan 端点共用 v4 兼容协议，因此上述协议层结论预计可迁移，但仍需独立真机确认。
 
 **DeepSeek**：`deepseek-v4-flash-vision-exp` 的<b>内联 base64 通道</b>已真机验证（纯红图 →
 模型答对颜色）。Files API 通道（`DEEPSEEK_VISION_TRANSPORT=files`）已做单测覆盖，未真机验证。
