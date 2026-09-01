@@ -25,7 +25,10 @@ public final class VisionModels {
             "claude-",
             "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl",
             "glm-4v", "glm-4.1v", "glm-4.5v",
-            "deepseek-v4-flash-vision"        // ★ DeepSeek 视觉实验模型（2026-08-21 上线）
+            "glm-4.6v",                        // ★ 2025-12 上线，首个原生 Function Call 的视觉线
+            "glm-5.3-flash",                   // ★ 2026-08-26 上线，GLM-5 系首个原生多模态（注意：glm-5.3 本身仍是纯文本）
+            "glm-5v",                          // ★ GLM-5V 系（2026-04 GLM-5V-Turbo，多模态 Coding 基座）
+            "deepseek-v4-flash-vision"         // ★ DeepSeek 视觉实验模型（2026-08-21 上线）
     );
 
     /**
