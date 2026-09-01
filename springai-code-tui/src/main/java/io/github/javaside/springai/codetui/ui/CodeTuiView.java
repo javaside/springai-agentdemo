@@ -1231,7 +1231,7 @@ public final class CodeTuiView extends InlineApp {
     /** 测试专用：当前正在作答的问询（null=非作答态）。 */
     AskRequest activeAskForTest() { return activeAsk; }
 
-    /** 测试专用：直接驱动上下文用量刷新（测试里没有 UI 批循环，animTick 永不推进）。 */
+    /** 测试专用：直接驱动上下文用量刷新（测试里没有事件循环，refresh 经 markDirty 防抖异步调度，测试需要同步结果）。 */
     ContextUsage ctxUsageForTest() { return ctxUsage; }
 
     /** 测试专用：当前正在审批的计划（null=非计划态）。 */

@@ -228,3 +228,31 @@ idle 零字节与有界输入延迟两个专项均含在上表 #1（0 bytes / ma
 3. **编译**：`mvn -pl springai-code-tui -am -DskipTests package` → **exit 0**，`springai-code-tui/target/springai-code-tui.jar` 正常产出（证明 `{@link #processUpdatesInsideBatch}` 链接目标存在，无悬空引用）；
 4. 提交聚焦：commit 只含上述 8 个 java 文件，`git status` 干净。
 
+---
+
+# Fix Round 2（F-1）：ctxUsageForTest javadoc 中「animTick 永不推进」残留 + 「两帧之间」措辞
+
+**状态：PASS**（纯注释改动 3 行，代码零变更自证 + 编译通过）
+
+- Worktree: `/Users/zxh/IdeaProjects/springai-agentdemo/.worktrees/event-driven-ui`
+- 审查发现：① `CodeTuiView.ctxUsageForTest()` 的 javadoc 后半句「animTick 永不推进」是已删耦合的残留——现行 ctxUsage 刷新触发点是 OUTPUT|CONTROL 脏位 → `ctxUsageController.markDirty()`（防抖/单飞调度，见 `ContextUsageRefreshController`），与 animTick 无关；且测试 `animation_framesAdvanceAnimTick` 能推进 animTick，原句双重失实；② 顺手项：两处「两帧之间」在无全局帧的事件驱动模型下措辞不准。
+
+## 修正清单（3 处）
+
+| 位置 | 旧 → 新 | 理由 |
+| --- | --- | --- |
+| `CodeTuiView.java:1234` | 「测试专用：直接驱动上下文用量刷新（测试里没有 UI 批循环，animTick 永不推进）。」→「测试专用：直接驱动上下文用量刷新（测试里没有事件循环，refresh 经 markDirty 防抖异步调度，测试需要同步结果）。」 | 唯一修复项 F-1。现行机制：调用方（CacheHitStatusBarWidthTest 等 3 个测试）直接调 `ctxUsageForTest().refresh()` 取同步结果，绕开的正是 markDirty 的防抖/单飞异步调度（500ms 防抖 + executor 提交），而非已删除的 animTick 周期触发（那已在 Task 6/7 被控制器取代）。 |
+| `AttentionTracker.java:85` | 「标题写回必须留在渲染线程（两帧之间）」→「（两次绘制之间）」 | 事件驱动后没有全局帧；「帧」仅在忙态动画帧补排语境存在，此处指的是任意两次绘制之间的间隙。 |
+| `TerminalAttention.java:24` | 「所有调用都发生在渲染线程（UI 批内，两帧之间）」→「（UI 批内，两次绘制之间）」 | 同上，顺手纯注释项。 |
+
+## 自证方式
+
+1. **代码零变更**：`git diff` 共 3 对 -/+ 行，逐行目检全部为 javadoc/块注释行内的措辞替换，无任何代码 token 变更；
+2. **编译**：`mvn -pl springai-code-tui -am -DskipTests package -q` → **exit 0**；
+3. 提交聚焦：commit 只含上述 3 个 java 文件与本报告（报告入库与前两轮先例一致，需 `-f`）。
+
+## Concerns（本轮）
+
+1. 无新增；Terminal.app 人工验收仍未闭环（沿用 §8 第 1 条）。
+
+
