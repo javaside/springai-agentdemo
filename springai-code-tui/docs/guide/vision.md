@@ -54,16 +54,17 @@
 | OpenAI | `gpt-5.`、`gpt-4o`、`o4-` |
 | Anthropic | `claude-` |
 | 通义千问 | `qwen-vl`、`qwen2-vl`、`qwen2.5-vl`、`qwen3-vl` |
-| 智谱 | `glm-4v`、`glm-4.1v`、`glm-4.5v` |
+| 智谱 | `glm-4v`、`glm-4.1v`、`glm-4.5v`、`glm-4.6v`、`glm-5.3-flash`、`glm-5v` |
 | DeepSeek | `deepseek-v4-flash-vision` |
 
 **不在名单里的一律判「不支持」**——误判「不支持」只是拦住你、提示可见可改；误判「支持」是把图真发出去吃一个看不懂的 400。
 
-> **内置模型清单里能直接用上视觉的只有 OpenAI 与 Anthropic 两家**（`gpt-5.6-*` / `gpt-5.5` / `gpt-5.4`、`claude-*`）。
-> 千问与智谱的内置清单是 `qwen3.7-max`/`qwen3.6-flash`/`qwen3-coder-next` 与 `glm-5.3`/`glm-5.2`/`glm-5.1`/`glm-5-turbo`，**没有一个命中名单**——
-> 要在这两家用视觉，得自己用 `DASHSCOPE_MODELS` / `ZHIPU_MODELS` 配一个 `-vl` / `glm-4v` 系的 id。
-> DeepSeek 的内置清单**已含视觉模型**（`deepseek-v4-flash-vision-exp`，`/model` 直接可切），
-> 是除 OpenAI / Anthropic 外第三家内置可用视觉的 provider。
+> **内置清单里能直接用上视觉的：OpenAI、Anthropic、DeepSeek 与智谱四家**（`gpt-5.6-*` / `gpt-5.5` /
+> `gpt-5.4`、`claude-*`、`deepseek-v4-flash-vision-exp`、`glm-5.3-flash`——最后这个是 2026-08-26 上线的
+> GLM-5 系首个原生多模态模型，1M 上下文，价格为 glm-5.3 的 1/10）。
+> 千问的内置清单（`qwen3.7-max`/`qwen3.6-flash`/`qwen3-coder-next`）仍无视觉模型——
+> 要在千问用视觉，得自己用 `DASHSCOPE_MODELS` 配一个 `-vl` 系 id；智谱的 `glm-4.6v`（2025-12 上线，
+> 首个原生 Function Call 的视觉线，Flash 档免费）同理走 `ZHIPU_MODELS`。
 
 ### 图片从不进会话记忆
 
@@ -135,7 +136,14 @@ DeepSeek 每张图按服务端自动缩放后计费，**单张最多 384 token**
 
 「工具结果 → 合成一条 user 消息（带图）」这个消息序列，只在**一个本地兼容中转网关 + `gpt-5.6-sol`** 上做过真机验证：发纯红 / 纯绿 / 纯蓝三张图，模型三次全答对；**对照组**（同样序列但不挂图）明确回答「只看到图片文件引用，无法看到实际图像内容」。
 
-**`api.openai.com` 原生端点，以及 Anthropic / 千问 / 智谱三家，完全没有验证过**（本机没有对应 API key）。它们第一次真用时**仍可能返回 400**。请不要把这一节读成「已支持五家」。
+**`api.openai.com` 原生端点，以及 Anthropic / 千问两家，完全没有验证过**（本机没有对应 API key）。它们第一次真用时**仍可能返回 400**。请不要把这一节读成「已支持五家」。
+
+**智谱**：`glm-5.3-flash` 的内联 base64 通道、流式工具调用、图+工具复合请求均已真机验证
+（`ZhipuVisionSmokeTest`，纯红/纯蓝图 → 颜色答对、工具触发）——spring-ai-openai 通路对智谱 v4
+无需任何 HTTP 改写（与 DeepSeek 的区别：DeepSeek 的 SDK 丢 Media，必须走改写层）。
+上述验证在智谱 Coding Plan 端点（`ZHIPU_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4`）取得——
+key 的资源包绑在该端点，普通端点 `https://open.bigmodel.cn/api/paas/v4` 对这把 key 是 429 余额不足
+（计费问题，非通路问题；两端口同属智谱 v4 协议，协议层结论可迁移）。
 
 **DeepSeek**：`deepseek-v4-flash-vision-exp` 的<b>内联 base64 通道</b>已真机验证（纯红图 →
 模型答对颜色）。Files API 通道（`DEEPSEEK_VISION_TRANSPORT=files`）已做单测覆盖，未真机验证。
