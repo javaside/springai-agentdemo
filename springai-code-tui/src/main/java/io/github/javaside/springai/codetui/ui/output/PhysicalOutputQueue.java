@@ -27,7 +27,7 @@ import java.util.function.Function;
  * 之间</b>；展开队头 entry 的工厂调用（diff 的读文件 + LCS，O(一个工具入参)，受
  * DiffRenderer 的 LCS_MAX/BODY_CAP 上限约束）发生在第一行<b>之前</b>，无法按行切片。这笔成本
  * 每条 diff 输出只付一次（不随批数放大），且量级受 diff 渲染器自身上限封顶——但它确实游离于
- * deadline 之外，单 tick 最坏会超出预算这一笔。彻底消除需要把 diff 展开本身做成增量游标，
+ * deadline 之外，单批最坏会超出预算这一笔。彻底消除需要把 diff 展开本身做成增量游标，
  * 留给后续任务；当前用「首行之前不检查时间」避免它挤占行吞吐（否则慢机器上首批只出 1 行）。
  *
  * <p><b>流式行不物化</b>：{@link #enqueueStreamingLines} 只记录逻辑行引用列表（这些
@@ -35,8 +35,8 @@ import java.util.function.Function;
  * 渲染在 drain 时逐行进行——一批 300 行只渲染 300 行。
  *
  * <p><b>时间预算（绝对 deadline）</b>：{@code deadlineNanos} 是<b>绝对</b>时刻
- * （{@code System.nanoTime()} 域），由调用方计算并可在同一 UI tick 的多个 drain 段之间
- * <b>共享</b>（fix round I-3：此前每段各自新起窗口，单 tick 最坏 2×预算）。行间检查
+ * （{@code System.nanoTime()} 域），由调用方计算并可在同一 UI 批的多个 drain 段之间
+ * <b>共享</b>（fix round I-3：此前每段各自新起窗口，单批最坏 2×预算）。行间检查
  * {@code System.nanoTime() >= deadlineNanos} 耗尽即停（{@code timeBudgetExhausted}）；
  * 从第 2 行起检查（首行前的工厂成本见上面的如实声明）。
  *
@@ -110,7 +110,7 @@ public final class PhysicalOutputQueue {
      *
      * @param maxPhysicalRows 本批物理行硬上限（&gt;0）
      * @param deadlineNanos   <b>绝对</b>截止时刻（nanoTime 域）；≤0 视为不限时。
-     *                        同一 UI tick 的多个 drain 段应传同一个值（per-tick 共享预算）。
+     *                        同一 UI 批的多个 drain 段应传同一个值（批内共享预算）。
      * @param sink            物理行出口（两条分支对应 {@link PhysicalLine} 的两种形态）
      * @return 批次结果
      */

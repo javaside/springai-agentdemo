@@ -26,7 +26,7 @@ package io.github.javaside.springai.codetui.ui.output;
  *   <li>{@code next()} 返回的 {@code PhysicalLine.raw} 是该段所属<b>逻辑行的折行前原文</b>
  *       （String 或 Text；同一条逻辑行的所有段共享同一引用），留底方据此记录原文；
  *       无折行来源的自包含行 raw 为 null；</li>
- *   <li>游标内部异常由实现自兜（渲染降级），绝不把异常抛进 drain 循环。</li>
+ *   <li>游标内部异常由实现自兜（渲染降级），绝不把异常抛进 UI 更新批。</li>
  * </ul>
  *
  * <p><b>状态跨调用保持</b>：markdown 代码围栏 / 围栏内语言 / 跨行块注释状态、diff 的

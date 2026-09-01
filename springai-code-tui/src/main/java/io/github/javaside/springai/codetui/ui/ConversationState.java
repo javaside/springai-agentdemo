@@ -32,7 +32,7 @@ import java.util.Set;
  *       下沉 scrollback，只把最后残段留在底部 live 区预览。</li>
  * </ul>
  *
- * 并发：写在 Reactor 线程、读/drain 在渲染线程；复合操作在 {@code synchronized} 块内完成、标志
+ * 并发：写在 Reactor 线程、读/输出批消费在 UI 线程；复合操作在 {@code synchronized} 块内完成、标志
  * {@code volatile}；每个带 turnId 的写入先做迟到过滤（{@link #onTurnStarted} 例外——它设定 acceptingTurnId）。
  *
  * <p><b>变化通知纪律（事件驱动 UI）</b>：本类同时是 {@link UiChangeSource}——
@@ -289,7 +289,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
 
     /**
      * -c 恢复启动：把历史消息回放进 scrollback（仿 Claude Code --continue），直观重现上次对话，
-     * 而非只提示「已恢复 N 条」。转换出的定稿行走正常 drain 通道下沉，故排在欢迎横幅之后、首条新输入之前。
+     * 而非只提示「已恢复 N 条」。转换出的定稿行走正常输出队列通道下沉，故排在欢迎横幅之后、首条新输入之前。
      * 空历史则什么都不做。
      */
     public void replayHistory(List<Message> messages) {
@@ -509,10 +509,10 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      * 渲染线程调用：取走<b>一条</b>定稿行（队空返回 null）。
      *
      * <p>限速的计量单位必须是「真实写进终端的物理行」，而一条 {@link OutputLine} 经折行 / diff 展开
-     * 可以变成几十上百个物理行——按条数取就只能<b>估</b>本帧写了多少。故改为单条取：调用方每打完一条
-     * 就核对一次自己的物理行预算，超了立刻收手，剩下的自然留在队列里等下一帧。
+     * 可以变成几十上百个物理行——按条数取就只能<b>估</b>本批写了多少。故改为单条取：调用方每打完一条
+     * 就核对一次自己的物理行预算，超了立刻收手，剩下的自然留在队列里等下一批。
      *
-     * <p>限速的存在理由见 {@code CodeTuiView.MAX_ROWS_PER_DRAIN}：一帧灌几百 KB 会让渲染线程
+     * <p>限速的存在理由见 {@code CodeTuiView.MAX_ROWS_PER_DRAIN}：一批灌几百 KB 会让渲染线程
      * 长时间占住（按键排队，用户感知「打字卡死」），也会把终端推进它自己的崩溃区。
      */
     public synchronized OutputLine pollPending() {

@@ -21,7 +21,7 @@ import java.lang.reflect.Field;
  * （{@link ScreenCleaner}），库升级改名时由 {@code TerminalAttentionTest} 的结构断言红灯提醒。
  *
  * <p><b>失败契约</b>：任何反射/IO 失败不抛、返回 false、静默降级——提示是锦上添花，绝不能
- * 拖垮主流程。所有调用都发生在渲染线程（drain 内，两帧之间），与 {@code ScreenCleaner}
+ * 拖垮主流程。所有调用都发生在渲染线程（UI 批内，两帧之间），与 {@code ScreenCleaner}
  * 同一条纪律：不能在绘制中途写裸转义序列。
  */
 final class TerminalAttention {

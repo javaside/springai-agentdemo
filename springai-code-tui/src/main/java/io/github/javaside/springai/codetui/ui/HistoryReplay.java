@@ -14,7 +14,7 @@ import java.util.List;
 
 /**
  * 把已恢复会话（{@code -c} 启动）的历史消息转成一批定稿 {@link OutputLine}，喂进正常的 scrollback
- * drain 通道回放，使重开后 TUI 直观重现上次对话（仿 Claude Code 的 {@code --continue}），
+ * 输出队列通道回放，使重开后 TUI 直观重现上次对话（仿 Claude Code 的 {@code --continue}），
  * 而不只是「已恢复 N 条」一行提示。
  *
  * <p>渲染刻意与实时通道一致，回放看起来就和当时一样：用户块 {@code ›} + 助手 markdown 正文 +

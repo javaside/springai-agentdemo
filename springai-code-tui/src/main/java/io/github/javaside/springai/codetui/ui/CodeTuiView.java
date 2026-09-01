@@ -155,7 +155,7 @@ public final class CodeTuiView extends InlineApp {
     private final SubmitHandler onSubmit;
     /**
      * 「需要你看一眼」的边沿检测（BEL + tab 标题），见 {@link AttentionTracker}。
-     * 与 {@link #bgPending} 一样只在渲染线程（drain / 按键事件线程）读写。
+     * 与 {@link #bgPending} 一样只在 UI 线程（更新批 / 按键事件）读写。
      */
     private final AttentionTracker attention = new AttentionTracker();
     /**
@@ -179,7 +179,7 @@ public final class CodeTuiView extends InlineApp {
                 t.setDaemon(true);
                 return t;
             });
-    /** 后台任务结果的自动送达判定与失控刹车（纯状态机，见其类注释）。只在渲染线程（drain）读写。 */
+    /** 后台任务结果的自动送达判定与失控刹车（纯状态机，见其类注释）。只在 UI 线程（更新批）读写。 */
     private final BackgroundNotifier notifier = new BackgroundNotifier();
     /**
      * 上一次见到的终端列宽，用来从 ResizeEvent 里滤出「宽度真的变了」（拖高度不重排）。
@@ -215,14 +215,14 @@ public final class CodeTuiView extends InlineApp {
      * 变宽重放无法回流合并、配额被物理段稀释）。resize 停稳后清可见屏、从这里按新宽度重放最近
      * 一屏，救回被终端重排顶走的信息流。上限见 {@link #SCROLL_TAIL_CAP}（重放最多用到一屏行数，
      * 400 是宽裕量，防长会话无界增长；按<b>逻辑行</b>计——长逻辑行折出几百段也只占一条配额）。
-     * 只在渲染线程读写（sink 打印与重放都在 drain/渲染线程）。
+     * 只在 UI 线程读写（sink 打印在输出批、resize 重放在 UI 线程的一次性任务里）。
      */
     private final ArrayDeque<Object> scrollTail = new ArrayDeque<>();
     private static final int SCROLL_TAIL_CAP = 400;
 
     /**
      * 严格分批的物理行输出队列（设计 §9.1/§9.2）：pending / 流式完整行 / 超预算计划正文都先进它，
-     * {@link #drainInsideBatch} 每批按「物理行数 + 时间」双预算从队头游标逐行消费。
+     * {@link #processUpdatesInsideBatch} 每批按「物理行数 + 时间」双预算从队头游标逐行消费。
      *
      * <p><b>为什么换掉旧的 {@code rowsThisFrame} 软上限</b>：旧实现按「条」取，一条 {@link OutputLine}
      * 经 markdown/diff/折行展开是原子的——单个大输出（长正文 / 大 diff / 无换行超长行）一帧可写
@@ -362,7 +362,7 @@ public final class CodeTuiView extends InlineApp {
         this.state = state;
         this.onSubmit = onSubmit;
         this.root = root;
-        // 惰性桥接 runner()：构造时不解引用。判空与 InlineApp.println 自身一致——drain 里的
+        // 惰性桥接 runner()：构造时不解引用。判空与 InlineApp.println 自身一致——UI 批里的
         // 计划正文下沉在测试态（未 start，runner()==null）也会跑到，不判空就是每个用例一发 NPE。
         ScrollbackPrinter.Sink sink = testSink != null ? testSink : new ScrollbackPrinter.Sink() {
             @Override public void println(Text t)   { var r = runner(); if (r != null) r.println(t); }
@@ -487,18 +487,18 @@ public final class CodeTuiView extends InlineApp {
     /** 测试观测：欢迎横幅是否已打印（启动路径一次性）。 */
     private volatile boolean welcomePrinted;
 
-    /** 本批 drain 已写出的物理行数（drainInsideBatch 内跨段共享 MAX_ROWS_PER_DRAIN 预算）。 */
+    /** 本批 drain 已写出的物理行数（processUpdatesInsideBatch 内跨段共享 MAX_ROWS_PER_DRAIN 预算）。 */
     private int batchRowsUsed;
 
     /**
-     * 本 tick 的共享 drain deadline（绝对 nanoTime，{@code System.nanoTime()} 域；
+     * 本批的共享 drain deadline（绝对 nanoTime，{@code System.nanoTime()} 域；
      * {@code PhysicalOutputQueue.drain} 收到 ≤0 视为不限时）。
-     * 在 drainInsideBatch 开头计算一次，本 tick 的所有输出段共用（见 MAX_DRAIN_NANOS 注释）。
+     * 在 processUpdatesInsideBatch 开头计算一次，本批的所有输出段共用（见 MAX_DRAIN_NANOS 注释）。
      */
     private long batchDeadlineNanos;
 
     /**
-     * 消费一批输出队列：行预算 {@code budget}（≤0 直接 no-op）+ 本 tick 的共享时间预算。
+     * 消费一批输出队列：行预算 {@code budget}（≤0 直接 no-op）+ 本批的共享时间预算。
      *
      * @return 本段实际写出的物理行数（供后续段从同一预算里扣）
      */
@@ -522,7 +522,7 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
-    /** 初始高度：圆角输入框(空态 3=边框2+1 行) + 状态行(1)；输入换行后 textArea 的 preferredSize 随行数增高，运行器逐帧跟随。 */
+    /** 初始高度：圆角输入框(空态 3=边框2+1 行) + 状态行(1)；输入换行后 textArea 的 preferredSize 随行数增高，运行器每次重绘跟随。 */
     @Override
     protected int height() {
         return 4;
@@ -559,7 +559,7 @@ public final class CodeTuiView extends InlineApp {
                 // ⏱ 后台任务面板（零任务时不占行）。/tasks 打开时收起：那个面板列的是同一批任务，
                 // 两份并排只会把输入框往上顶，且用户分不清该按哪一份。
                 scope(!bgTasks.isEmpty() && !pickingTasks, backgroundChildren(bgTasks)),
-                // 未送达插话面板：排在排队面板<b>上方</b>，因为它先走（drain 排在 pollQueued 之前）。
+                // 未送达插话面板：排在排队面板<b>上方</b>，因为它先走（消费插话的段排在 pollQueued 之前）。
                 // 两个面板的上下顺序即送达先后，看一眼就知道自己那句话什么时候会被听见。
                 scope(!interjections.isEmpty(), interjectionChildren(interjections)),
                 scope(!queued.isEmpty(), queuedChildren(queued)),   // 排队消息面板：固定显示在输入框上方
@@ -1003,7 +1003,7 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 后台任务结果的自动送达：空闲 + 输入框为空 + 有已完成未消费任务时，起一个新回合交给模型。
      *
-     * <p><b>判定与提交在同一帧内完成</b>：drain 跑在渲染线程（单线程），「读输入框是否为空」
+     * <p><b>判定与提交在同一 UI 批内完成</b>：批跑在 UI 线程（单线程），「读输入框是否为空」
      * 与「调 submit」之间不会被用户按键插入，故不存在「判定时为空、提交时用户已开始打字」的竞态。
      *
      * <p><b>{@code shouldNotifyResults} 有副作用</b>（判定为该送达时消耗一次刹车额度），故只调一次、
@@ -1224,14 +1224,14 @@ public final class CodeTuiView extends InlineApp {
     int pendingIntakeCapForTest() { return MAX_PENDING_INTAKE_PER_TICK; }
 
 
-    /** 测试专用：终端注意提示状态机（断言 drain 接线的边沿落点；IO 已静默降级）。 */
+    /** 测试专用：终端注意提示状态机（断言 UI 批接线的边沿落点；IO 已静默降级）。 */
     AttentionTracker attentionForTest() { return attention; }
     PermissionRequest activePermissionForTest() { return activePermission; }
 
     /** 测试专用：当前正在作答的问询（null=非作答态）。 */
     AskRequest activeAskForTest() { return activeAsk; }
 
-    /** 测试专用：直接驱动上下文用量刷新（测试里没有 drain 循环，animTick 永不推进）。 */
+    /** 测试专用：直接驱动上下文用量刷新（测试里没有 UI 批循环，animTick 永不推进）。 */
     ContextUsage ctxUsageForTest() { return ctxUsage; }
 
     /** 测试专用：当前正在审批的计划（null=非计划态）。 */
@@ -1677,7 +1677,7 @@ public final class CodeTuiView extends InlineApp {
             shutdownAndQuit();
             return EventResult.HANDLED;
         }
-        // 任意用户按键 = 人在场：DONE 态的提示标题就此收场（下一拍 drain 恢复默认标题）。
+        // 任意用户按键 = 人在场：DONE 态的提示标题就此收场（下一个 UI 批恢复默认标题）。
         attention.userActed();
         // 任意按键消费掉上一条 sticky notice（如「已取消当前回合」），恢复状态栏常态行。
         // 本次按键若要显示新 notice，会在下方各分支重新 setNotice（晚于此处），故当次提示不受影响。
@@ -2066,7 +2066,7 @@ public final class CodeTuiView extends InlineApp {
                         printer.welcome(onSubmit.currentModel(),
                                 io.github.javaside.springai.codetui.AppInfo.versionLabel());
                     } else {
-                        state.pushInfo("─── 新会话（上下文已清空）───");   // 反射失败降级；pushInfo 经 drain 下沉 scrollback
+                        state.pushInfo("─── 新会话（上下文已清空）───");   // 反射失败降级；pushInfo 经输出批下沉 scrollback
                     }
                 });
             } else {
@@ -2753,7 +2753,7 @@ public final class CodeTuiView extends InlineApp {
     boolean pickingMcpForTest() { return pickingMcp; }
 
     // ── AskUserQuestion 作答面板 ─────────────────────────────────────────
-    /** 可作答性：至少 1 问、且每问至少 1 个选项（否则 onAskKey 的 `% n` 会除零崩线程，见 drain 的降级）。 */
+    /** 可作答性：至少 1 问、且每问至少 1 个选项（否则 onAskKey 的 `% n` 会除零崩线程，见 UI 批的降级）。 */
     private static boolean isAnswerable(AskRequest ask) {
         List<QuestionSpec> qs = ask.questions();
         if (qs.isEmpty()) return false;
@@ -2870,9 +2870,9 @@ public final class CodeTuiView extends InlineApp {
         state.setNotice(notice);
     }
 
-    /** 清作答态并从 state 的模态队列摘除该问询（避免 drain 再次进入）。 */
+    /** 清作答态并从 state 的模态队列摘除该问询（避免 UI 批再次进入）。 */
     private void clearAskState() {
-        AskRequest done = activeAsk;                 // 先取引用再置 null：否则 removeModal(null) 摘不掉，drain 会反复重入
+        AskRequest done = activeAsk;                 // 先取引用再置 null：否则 removeModal(null) 摘不掉，UI 批会反复重入
         activeAsk = null; askQ = 0; askOpt = 0; askAnswers.clear(); askChecked.clear();
         askFreeText = false; askInput.clear();
         state.removeModal(done);
@@ -3107,7 +3107,7 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
-    /** 清计划态（不碰队列）：外部取消后 drain 的「队首已不是它」分支与 {@link #finishPlan} 共用。 */
+    /** 清计划态（不碰队列）：外部取消后 UI 批的「队首已不是它」分支与 {@link #finishPlan} 共用。 */
     private void resetPlanUi() {
         activePlan = null;
         planOpt = 0;
@@ -3887,7 +3887,7 @@ public final class CodeTuiView extends InlineApp {
     }
 
     // ── 内部工具 ─────────────────────────────────────────────────────────
-    /** 取最后一个真实换行之后的残段（流式预览用；complete 行由 drain 下沉 scrollback）。 */
+    /** 取最后一个真实换行之后的残段（流式预览用；complete 行由输出批下沉 scrollback）。 */
     private static String lastLine(String s) {
         int i = s.lastIndexOf('\n');
         return i < 0 ? s : s.substring(i + 1);

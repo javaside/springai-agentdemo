@@ -213,7 +213,7 @@ final class ScrollbackPrinter {
         run(toolStartCursor(ol));
     }
 
-    /** drain 的 default 分支：工具/Todo/错误等单色贴左；{@code styleFor} 返回 null（ASSISTANT）则原样。 */
+    /** 输出段的 default 分支：工具/Todo/错误等单色贴左；{@code styleFor} 返回 null（ASSISTANT）则原样。 */
     void line(OutputLine ol) {
         run(lineCursor(ol));
     }
