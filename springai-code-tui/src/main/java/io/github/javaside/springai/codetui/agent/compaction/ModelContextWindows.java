@@ -19,6 +19,11 @@ public final class ModelContextWindows {
             Map.entry("deepseek:deepseek-v4-flash", 1_000_000L),
             Map.entry("deepseek:deepseek-v4-flash-vision-exp", 1_000_000L),
             Map.entry("zhipu:glm-5.3", 1_000_000L),
+            // 智谱视觉线（2026-09-01 官方文档核实）：flash 1M / 4.6v 128K / 4.5v 64K；
+            // glm-4v / glm-4.1v 窗口未核实，不进表——落保守兜底，用户可经 CODETUI_CONTEXT_WINDOWS 覆盖。
+            Map.entry("zhipu:glm-5.3-flash", 1_000_000L),
+            Map.entry("zhipu:glm-4.6v", 128_000L),
+            Map.entry("zhipu:glm-4.5v", 64_000L),
             Map.entry("anthropic:claude-opus-5", 1_000_000L),
             Map.entry("anthropic:claude-fable-5", 1_000_000L),
             Map.entry("anthropic:claude-sonnet-5", 1_000_000L),
