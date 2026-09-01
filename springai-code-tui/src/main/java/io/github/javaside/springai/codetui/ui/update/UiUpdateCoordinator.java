@@ -123,18 +123,33 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
     private final Object resizeLock = new Object();
 
     /**
-     * 生产构造函数：UI update 投给 TamboUI 唯一 UI 执行器
-     * （{@link InlineTuiRunner#requestUiUpdate(Runnable)}，Task 1）。
+     * 直接持有 runner 的构造函数（预留）。
+     *
+     * <p><b>预留而非生产路径</b>：生产（CodeTuiView 构造期 {@code runner() == null}，run() 之后
+     * 才有 runner）经 {@link #UiUpdateCoordinator(Consumer, ScheduledExecutorService, UpdateProcessor)}
+     * Consumer 接缝惰性桥接到真实 runner，无法在构造期传入本构造；当前全库无调用者。
+     * 此构造供未来直接持有 runner 的装配与同包测试使用，合并/调度行为与接缝构造完全一致
+     * （本构造直接委托）。
+     *
+     * <p>包外不可见（final-review I-1）：死 public API 缩窄为包内预留接缝，防止装配层误以为
+     * 生产走这条路（Task 3 note 曾裁定「Task 7 接线应使用 InlineTuiRunner 版本」，Task 7 实际
+     * 因构造期 runner 为 null 偏离该裁定改走 Consumer 接缝——偏离合理，已在 CodeTuiView 接线处注释）。
      */
-    public UiUpdateCoordinator(InlineTuiRunner runner,
-                               ScheduledExecutorService scheduler,
-                               UpdateProcessor processor) {
+    UiUpdateCoordinator(InlineTuiRunner runner,
+                        ScheduledExecutorService scheduler,
+                        UpdateProcessor processor) {
         this(runner == null ? null : runner::requestUiUpdate, scheduler, processor);
     }
 
     /**
      * 接缝构造函数：{@code uiUpdateSink} 是 {@code requestUiUpdate} 的直接等价物，
      * 供确定性测试（受控 runner）与装配替换使用；合并/调度行为与生产构造函数完全一致。
+     *
+     * <p><b>生产构造入口（Task 7 起，final-review I-1）</b>：CodeTuiView 在 {@code ui} 包
+     * （本类在 {@code ui.update} 子包）经此构造接线——构造期 {@code runner() == null}，
+     * sink 里惰性解析 {@code runner()}（未 run 的 View 投测试队列，run 之后走真实
+     * {@code requestUiUpdate}）。故本构造必须保持 public（跨包调用方
+     * {@code CodeTuiView}），不降 package-private；Task 3 note 的 M-7 评估结论为维持 public。
      */
     public UiUpdateCoordinator(Consumer<Runnable> uiUpdateSink,
                                ScheduledExecutorService scheduler,

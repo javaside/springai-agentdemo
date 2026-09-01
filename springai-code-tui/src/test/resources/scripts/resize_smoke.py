@@ -382,14 +382,20 @@ def assert_controlling_terminal(cmd_python):
         os.setsid()
         fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
 
+    # fd 生命周期（final-review M-4）：slave_fd 在 Popen 成功后立即关闭（父进程不再需要，
+    # 只留子进程持有的副本）；Popen 本身也放进 try——它失败（如 preexec_fn 抛异常）时
+    # 旧代码会泄漏 master/slave 且 finally 引用未定义的 proc。失败路径统一走 finally：
+    # proc 为 None 时跳过 kill，master_fd 无条件关闭。
+    proc = None
+    buf = b""
     try:
         proc = subprocess.Popen(
             probe_cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
             preexec_fn=_make_ctty,
         )
         os.close(slave_fd)
+        slave_fd = None
         deadline = time.time() + 10.0
-        buf = b""
         while time.time() < deadline:
             r, _, _ = select.select([master_fd], [], [], 0.2)
             if r:
@@ -405,10 +411,16 @@ def assert_controlling_terminal(cmd_python):
             if proc.poll() is not None:
                 break
     finally:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        if slave_fd is not None:
+            try:
+                os.close(slave_fd)
+            except OSError:
+                pass
         try:
             os.close(master_fd)
         except OSError:
