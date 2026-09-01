@@ -344,6 +344,31 @@ class UiUpdateCoordinatorTest {
     }
 
     @Test
+    @DisplayName("animation：timer 回调内立即消费 UI 批时仍持续续帧")
+    void animationContinuesWhenUiBatchRunsInsideTimerCallback() throws Exception {
+        InlineRunnerSeam seam = new InlineRunnerSeam();
+        AtomicInteger frames = new AtomicInteger();
+        CountDownLatch done = new CountDownLatch(1);
+        try (UiUpdateCoordinator coordinator = new UiUpdateCoordinator(
+                seam, scheduler,
+                bits -> {
+                    int frame = frames.incrementAndGet();
+                    boolean more = frame < 3;
+                    if (!more) {
+                        done.countDown();
+                    }
+                    return new UiUpdateCoordinator.UpdateResult(false, more);
+                })) {
+            coordinator.start();
+            coordinator.updateAnimationDemand(true, Duration.ofMillis(10));
+
+            assertTrue(done.await(1, TimeUnit.SECONDS),
+                    "timer 回调尚未返回时内联执行的 UI 批也必须成功续排；实际帧数=" + frames.get());
+            assertEquals(3, frames.get(), "动画需求消失前应连续推进 3 帧");
+        }
+    }
+
+    @Test
     @DisplayName("animation 关闭后不再产生帧")
     void animationStopsWhenDemandDisappears() throws Exception {
         QueuingRunnerSeam seam = new QueuingRunnerSeam();

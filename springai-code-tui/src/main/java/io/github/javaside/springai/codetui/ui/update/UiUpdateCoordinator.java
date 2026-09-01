@@ -285,6 +285,11 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
     /**
      * 在 slot 内安排一次性任务：已有未完成的同类任务 → 保持现有 generation（合并）；
      * 否则新任务 CAS 入槽，竞争失败（别的线程刚放了新的）则取消自己。
+     *
+     * <p>任务正文执行前必须先按 future 身份清空自己的 slot。否则 timer 回调 publish 后，
+     * UI 批可能在该回调返回（future 变为 done）之前执行；批尾续排会误把正在收尾的旧 future
+     * 当成下一帧，从而丢掉动画/continuation 链。注册锁只覆盖 schedule + 入槽，使 worker
+     * 不会抢在 {@code self} 赋值及 CAS 入槽之前运行；正文在锁外执行。
      */
     private void scheduleOneShot(AtomicReference<ScheduledFuture<?>> slot, Duration delay,
             Runnable body) {
@@ -295,12 +300,26 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
         if (existing != null && !existing.isDone()) {
             return; // 每类至多一个在飞 generation
         }
-        ScheduledFuture<?> future = safeSchedule(delay, body);
-        if (future == null) {
-            return;
-        }
-        if (!slot.compareAndSet(existing, future)) {
-            future.cancel(false);
+        Object registrationLock = new Object();
+        AtomicReference<ScheduledFuture<?>> self = new AtomicReference<>();
+        Runnable task = () -> {
+            synchronized (registrationLock) {
+                ScheduledFuture<?> current = self.get();
+                if (current == null || !slot.compareAndSet(current, null)) {
+                    return; // 注册竞争失败、已取消或已被新 generation 替换
+                }
+            }
+            body.run();
+        };
+        synchronized (registrationLock) {
+            ScheduledFuture<?> future = safeSchedule(delay, task);
+            if (future == null) {
+                return;
+            }
+            self.set(future);
+            if (!slot.compareAndSet(existing, future)) {
+                future.cancel(false);
+            }
         }
     }
 
