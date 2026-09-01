@@ -85,7 +85,19 @@ TASKS_PANEL_TITLE = "⏱ 后台任务（↑↓ 选择"          # /tasks 面板�
 TASKS_EMPTY = "（暂无后台任务）"
 BG_PANEL_PREFIX = "⏱ 后台任务 ("                    # 常驻 ⏱ 面板标题（带计数）
 NOTIFY_HEAD = "[后台任务完成]"
-NOTIFY_TAIL = "以上是你先前派出的后台任务的结果，请据此继续。"
+# 当前生产文案（BackgroundNotifier.compose，02159c3 起）：通知不只是确认结果，
+# 必须给出下一步行动指令（检查 Todo 计划列表 → 执行下一项 pending → 或汇报完成）。
+# 旧文案「…的结果，请据此继续。」已废弃，等它只会等到超时。
+NOTIFY_TAIL = ("以上是你先前派出的后台任务的结果。"
+               "请检查你的 Todo 计划列表，找出下一项 pending 的任务并立即执行；"
+               "如果所有任务已完成，向用户汇报最终结果。")
+# 通知以用户块回显（带 › 缩进），长句在 120 列下会<b>折行</b>——NOTIFY_TAIL 整句
+# 永远不会完整出现在一个物理行里。等它出现要按「去空白跨行拼接」比较：把整屏
+# 行拼成一串、抽掉所有空白，再找同样抽掉空白的整句。这与既有 expected_above 的
+# 处理同一道理：折行改变断点，不改变内容。
+NOTIFY_TAIL_PARTS = ["以上是你先前派出的后台任务的结果。",
+                     "请检查你的 Todo 计划列表，找出下一项 pending 的任务并立即执行；",
+                     "如果所有任务已完成，向用户汇报最终结果。"]
 KILL_CONFIRM = "⚠ 确认终止"
 # 定位<b>面板里</b>那句确认时不能用 KILL_CONFIRM：状态行也以「⚠ 确认终止」开头（短版本，不带 id），
 # 而 find_row 按设计取<b>最后</b>一个匹配（活面板钉在底部、scrollback 在上面）——于是它会稳定
@@ -271,6 +283,17 @@ def task_ids_on_screen(session):
     return seen
 
 
+def _squeeze(text):
+    """抽掉所有空白：折行只改变断点，不改变内容（与 resize_smoke 的 expected_above 同理）。"""
+    return "".join(text.split())
+
+
+def notify_tail_on_screen(session):
+    """通知整句是否已在屏上——按「去空白跨行拼接」比较，容忍 › 缩进导致的折行。"""
+    squeezed = _squeeze(session.screen_text())
+    return _squeeze(NOTIFY_TAIL) in squeezed
+
+
 def quit_app(session, budget=20.0):
     """/exit 并断言按时退出。
 
@@ -391,7 +414,8 @@ def check_auto_turn_wraps_lines(session):
     session.write(("派活 " + BG_ONE_MARKER).encode() + b"\r")
     wait_until(session, lambda: NOTIFY_HEAD in session.screen_text(),
                90, "自动起的回合把「%s」通知送进 scrollback" % NOTIFY_HEAD)
-    wait_until(session, lambda: NOTIFY_TAIL in session.screen_text(),
+    # 整句匹配要容忍折行（› 缩进 + 120 列下这句必然折成两行），见 notify_tail_on_screen。
+    wait_until(session, lambda: notify_tail_on_screen(session),
                30, "通知末尾那句「%s」" % NOTIFY_TAIL)
     session.pump(1.0)
     print_screen("场景 3: 自动起回合 + 通知换行", session.screen.display)

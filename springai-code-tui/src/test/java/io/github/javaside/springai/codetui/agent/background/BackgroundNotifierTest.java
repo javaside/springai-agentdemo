@@ -62,6 +62,30 @@ class BackgroundNotifierTest {
         assertTrue(text.contains("✓"));
     }
 
+    /**
+     * 通知结尾必须是「下一步行动指令」而非一句客套的「请据此继续」。
+     *
+     * <p>02159c3 的产品修复：自动起的回合如果只确认结果，模型会停下来等用户；
+     * 文案必须点名三件事——检查 Todo 计划列表、立即执行下一项 pending、
+     * 全部完成则向用户汇报最终结果。这条断言把文案契约钉进测试，
+     * 防止它（或依赖它的 background_smoke.py）再悄悄漂回旧文案。
+     */
+    @Test
+    void notificationTailDirectsModelToNextTodoAction() {
+        BackgroundNotifier n = new BackgroundNotifier(3);
+        String text = n.shouldNotify(List.of(done("ab12", "explore", "调查", "结论")), true, true).get();
+        assertTrue(text.contains("以上是你先前派出的后台任务的结果。"),
+                "通知结尾必须先陈述「这是你先前派出的后台任务的结果」");
+        assertTrue(text.contains("请检查你的 Todo 计划列表"),
+                "通知必须指示模型检查 Todo 计划列表，否则它会停在原地等用户");
+        assertTrue(text.contains("找出下一项 pending 的任务并立即执行"),
+                "通知必须指示模型立即执行下一项 pending 任务，而不是只确认结果");
+        assertTrue(text.contains("如果所有任务已完成，向用户汇报最终结果"),
+                "通知必须为「全部完成」分支给出终点行为：向用户汇报");
+        assertFalse(text.contains("请据此继续"),
+                "旧文案「请据此继续。」没有可执行指令，不得回归");
+    }
+
     @Test
     void failedTaskIsMarkedWithCrossNotCheck() {
         BackgroundNotifier n = new BackgroundNotifier(3);
