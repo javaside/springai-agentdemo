@@ -850,10 +850,14 @@ class CodeTuiViewEventWiringTest {
                 "长观测窗结束后不得有 preview 排队（静止残行无 demand）");
 
         // 下一个真 token 到达时 preview 链必须重新启动（不因修复而丢失唤醒）。
+        // 观测窗已超过节流窗口，生产会 schedulePreview(ZERO)：future 可能在本线程断言前完成，
+        // 因此不能要求它仍处于 pending。ZERO 到期的确定性可观察结果是二者之一：
+        // future 尚在飞，或它已 publish VIEW dirty bits（等待下一 UI 批消费）。
         s.onAssistantToken(1L, " 新内容");
         v.runPendingUiUpdatesForTest();
-        assertTrue(v.hasPendingPreviewScheduledForTest(),
-                "新 token（未采纳内容出现）必须重新排 preview 到期");
+        assertTrue(v.hasPendingPreviewScheduledForTest()
+                        || v.coordinatorForTest().pendingDirtyBits() != 0,
+                "新 token（未采纳内容出现）必须重新启动 preview：timer 尚在飞或到期 VIEW 已发布");
         assertTrue(ViewScreen.of(v).contains("新内容"),
                 "节流窗口已过（观测 420ms）→ 新残行当帧采纳");
     }

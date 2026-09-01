@@ -324,3 +324,39 @@ mvn -f <worktree>/pom.xml -pl springai-code-tui -am test
 ### 7.4 Concerns
 
 - 未执行范围外的 PTY / Terminal.app 人工验收；Maven 指定与全模块回归均通过。
+
+---
+
+## 8. Fix round 2（2026-09-01）
+
+### 8.1 修复摘要
+
+- **Important I-1**：修正 `preview_staticTailDoesNotSelfRescheduleHotLoop` 末段的新 token 重启断言。
+  420ms 观测后节流窗口已过，生产按预期调用 `schedulePreview(Duration.ZERO)`；该 future 可以在测试线程
+  检查前完成并发布 VIEW dirty bits，因此不再错误要求 future 必须仍为 pending。
+- 新断言接受两种等价且完整的生产链路状态：preview future 尚在飞，**或** ZERO future 已完成且
+  coordinator 中已有待消费 dirty bits。随后仍断言新内容当帧可见，确保 token 没有丢失。
+- 已验证回归钉有效：临时恢复旧生产条件（只按“残行非空”续排）后，本测试稳定红于静止态热循环
+  批次上界（实际新增 85 批）；恢复正确生产实现后转绿。
+
+### 8.2 测试结果
+
+```text
+CodeTuiViewEventWiringTest ×5
+→ 每次 Tests run: 30, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS
+
+UiUpdateCoordinatorTest
+→ Tests run: 15, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS
+
+mvn -f <worktree>/pom.xml -pl springai-code-tui -am test
+→ patch: 45；code-tui: 1810；合计 Tests run: 1855,
+  Failures: 0, Errors: 0, Skipped: 10 — BUILD SUCCESS
+```
+
+### 8.3 Commit
+
+本节所在提交 — `test(code-tui): stabilize zero-delay preview restart`
+
+### 8.4 Concerns
+
+- 无新增 concern；仍未执行范围外的 PTY / Terminal.app 人工验收。
