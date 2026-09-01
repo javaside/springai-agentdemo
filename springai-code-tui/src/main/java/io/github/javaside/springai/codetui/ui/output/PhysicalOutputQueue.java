@@ -9,7 +9,7 @@ import java.util.function.Function;
 
 /**
  * 严格分批的<b>物理行输出队列</b>（设计 §9.1/§9.2）：把逻辑输出（{@code OutputLine} / 流式完整行）
- * 变成 {@link OutputCursor} 消费流，{@link #drain(int, long)} 在两个预算——物理行数与
+ * 变成 {@link OutputCursor} 消费流，{@link #drain(int, long, PhysicalSink)} 在两个预算——物理行数与
  * UI 线程执行时间——任一耗尽时<b>立即</b>返回事件循环，尚未提交的物理行留在游标里，
  * 顺序不变、内容不丢。
  *
