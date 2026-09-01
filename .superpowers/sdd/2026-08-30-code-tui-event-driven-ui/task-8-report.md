@@ -275,3 +275,52 @@ CodeTuiViewEventWiringTest ×3                                 → 29/29 全绿
    而非精确 8——精确断言对调度时序过脆；「有界 + 之后静止」是本测试真正要钉的不变量。
 5. **（范围外）PTY 冒烟与 Terminal.app 人工验收未执行**：属设计 §16 验收阶段（含波光实机观感、
    IME 预编辑/取消、resize 拖拽重放），本任务按 brief 只跑 Maven 测试。
+
+---
+
+## 7. Fix round（2026-09-01）
+
+### 7.1 修复摘要与残留测试取舍
+
+- **C-1**：`computeFollowUpFlags()` 的 preview demand 改为
+  `!curTail.isEmpty() && !curTail.equals(lastPreviewedTail)`。只有存在尚未被 render 采纳的残行内容才
+  `schedulePreview`；静止且已采纳的非空残行停止 preview 链，下一真 token 由 OUTPUT 事件重启。
+  同步修正批尾与 `previewRemainingDelay()` javadoc，明确 ZERO 只服务未采纳内容，不允许静止态自续排。
+- **残留测试取舍**：保留上个实施者留下的 `preview_staticTailDoesNotSelfRescheduleHotLoop` 主体，因为其
+  420ms 长观测窗与批次上界能准确抓住 ZERO 热循环；删除临时 `DEBUG` 测试。原前置用
+  `ViewScreen.contains` 读取 styled preview，在测试 renderer 中错误失败，改为直接调用真实采纳点
+  `renderForTest()`。修正后在旧实现上观察到 **84 个新增批次**，如期红于 `extra <= 10`；生产修复后转绿。
+- **M-1**：从 `UiUpdateCoordinator.UpdateResult` 删除无消费者的 `previewPending` 字段，构造点、测试与
+  coordinator/View javadoc 全部同步。preview 调度继续由 View 直调 `schedulePreview`，保持单一所有权。
+- **M-3**：原 `preview_tokensInsideThrottleWindowProduceSinglePendingWake` 改名为
+  `preview_tokensInsideThrottleWindowProduceBoundedFollowUpBatches`，断言真实 `processedBatches`，上界由
+  12 收紧为 10，并新增“最新残行采纳后无 preview timer”断言。
+- **M-4**：runner 测试注释由“允许 8 或 9”统一为与断言一致的 `8..10`。
+
+### 7.2 测试命令与精确结果
+
+```text
+mvn -f <worktree>/pom.xml -pl springai-code-tui -am \
+  -Dtest=CodeTuiViewEventWiringTest -Dsurefire.failIfNoSpecifiedTests=false test
+→ Tests run: 30, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS
+
+mvn -f <worktree>/pom.xml -pl springai-code-tui -am \
+  -Dtest=UiUpdateCoordinatorTest -Dsurefire.failIfNoSpecifiedTests=false test
+→ Tests run: 15, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS
+
+mvn -f <worktree>/pom.xml -pl springai-tamboui-inline-patch test
+→ Tests run: 45, Failures: 0, Errors: 0, Skipped: 0 — BUILD SUCCESS
+  （stderr 的 `expected test failure` 为 actionFailureDoesNotKillFollowingActions 故意注入并被 runner 捕获）
+
+mvn -f <worktree>/pom.xml -pl springai-code-tui -am test
+→ patch: 45；code-tui: 1810；合计 Tests run: 1855,
+  Failures: 0, Errors: 0, Skipped: 10 — BUILD SUCCESS
+```
+
+### 7.3 Commit
+
+`3ee16f0` — `fix(code-tui): stop static preview rescheduling`
+
+### 7.4 Concerns
+
+- 未执行范围外的 PTY / Terminal.app 人工验收；Maven 指定与全模块回归均通过。
