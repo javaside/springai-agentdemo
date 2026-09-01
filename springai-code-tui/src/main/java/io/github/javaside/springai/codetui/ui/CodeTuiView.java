@@ -722,7 +722,7 @@ public final class CodeTuiView extends InlineApp {
      *   <li>推进 attention 边沿；</li>
      *   <li>重读 busy（自动出队执行点完整重读闸门）；</li>
      *   <li>未送达插话，否则 queued，否则后台结果；</li>
-     *   <li>返回 flags：outputRemaining / previewPending / animationActive。</li>
+     *   <li>返回 coordinator flags：outputRemaining / animationActive；preview 由 View 在批尾直调调度。</li>
      * </ol>
      *
      * <p><b>绝不循环到空</b>：输出存量未清空由 coordinator 的 continuation 排空（§9.2），
@@ -896,8 +896,9 @@ public final class CodeTuiView extends InlineApp {
      * <ul>
      *   <li><b>outputRemaining</b>：队列非空或 state 仍有 pending / 流式完整行 → runBatch
      *       安排一次性 continuation（§9.2），无新生产者事件也最终排空；</li>
-     *   <li><b>previewPending</b>：流式残行非空且仍在节流窗口内 → 下方按需排一次 preview
-     *       到期（§10.1，Task 8 接管节流调度）；</li>
+     *   <li><b>preview demand</b>：流式残行非空且与最近已采纳内容不同 → View 直调
+     *       {@code schedulePreview} 按需排一次到期；已采纳的静止残行不续排，下一 token 的
+     *       OUTPUT 事件会重新启动（§10.1）；</li>
      *   <li><b>animationActive</b>：仍在动态状态（忙 / 压缩 / 后台任务运行中）→ 下方接通
      *       {@code updateAnimationDemand(true, ANIMATION_FRAME_DELAY)}（§10.3，Task 8 接线）；
      *       静止时立即 false，无任何周期任务。</li>
@@ -912,7 +913,7 @@ public final class CodeTuiView extends InlineApp {
                 || state.hasPendingOutput()
                 || state.hasCompleteStreamingLine();
         String curTail = lastLine(state.streaming());
-        boolean previewPending = !curTail.isEmpty();
+        boolean previewPending = !curTail.isEmpty() && !curTail.equals(lastPreviewedTail);
         // ── 动画按需帧（§10.3，Task 8 接线 fix round M-5 预留点）──
         // 忙态（THINKING/RUNNING_TOOL/compacting/运行中后台任务/在飞子 agent）→ 接通 66ms 帧；
         // 状态消失立即 false（coordinator 取消在飞帧）；空闲静态无 timer。每帧到期发一次
@@ -920,9 +921,10 @@ public final class CodeTuiView extends InlineApp {
         boolean animationActive = animationDemandActive();
         coordinator.updateAnimationDemand(animationActive, ANIMATION_FRAME_DELAY);
         // ── preview 节流（§10.1，Task 8 接管）──
-        // 残行非空：安排一次「剩余节流窗口」后的一次性 VIEW；窗口内重复到达只更新状态
-        // （coordinator 的每类至多一个在飞 generation 语义 = 只保持首个到期）。
-        // 残行清空不排（render 的 curTail.isEmpty() 分支当帧立即清空，不走时间任务）。
+        // 只有残行包含尚未被 render 采纳的内容时，才安排一次「剩余节流窗口」后的 VIEW；
+        // 窗口内重复 token 只更新状态（coordinator 每类至多一个在飞，保持首个到期）。
+        // 已采纳的静止残行不续排，避免窗口到期后 remaining=ZERO 形成 immediate 热循环；
+        // 下一 token 的 OUTPUT 事件会重新进入本批并启动 preview。残行清空则由 render 当帧清空。
         if (previewPending) {
             coordinator.schedulePreview(previewRemainingDelay());
         }
@@ -930,8 +932,7 @@ public final class CodeTuiView extends InlineApp {
             // 上下文统计可能变了（新消息/新事件）：按需防抖刷新（旧的 animTick % 30 周期已删）。
             ctxUsageController.markDirty();
         }
-        return new UiUpdateCoordinator.UpdateResult(
-                outputRemaining, previewPending, animationActive);
+        return new UiUpdateCoordinator.UpdateResult(outputRemaining, animationActive);
     }
 
     /**
@@ -940,7 +941,8 @@ public final class CodeTuiView extends InlineApp {
      * <p>render 的 150ms 判定（{@link #PREVIEW_THROTTLE_NANOS}）仍是<b>最终采纳点</b>——
      * 到期批只是「现在可以采纳新残行了」的唤醒；此处把窗口剩余量换算成调度延迟，
      * 使「首段立即可见 + 窗口到期恰一次 VIEW」与旧 tick 世界的节奏一致。
-     * 已过窗口（含首段）返回 {@link Duration#ZERO}：下一帧即可采纳。
+     * 已过窗口（含首段）返回 {@link Duration#ZERO}：下一帧即可采纳。调用方仅在残行与
+     * {@code lastPreviewedTail} 不同时调用本方法；已采纳的静止残行不会以 ZERO 延迟自续排。
      */
     private Duration previewRemainingDelay() {
         long elapsed = System.nanoTime() - lastPreviewAtNanos;

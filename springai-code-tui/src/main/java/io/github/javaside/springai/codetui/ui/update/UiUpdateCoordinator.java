@@ -82,18 +82,19 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
     }
 
     /**
-     * 一批处理后的后续需求。
+     * 一批处理后的 coordinator 所有后续需求。
      *
      * @param outputRemaining 输出存量未清空 → 需要一次性 continuation（§9.2），
      *                          无新生产者事件也必须最终排空；
-     * @param previewPending    流式残行预览待处理（本任务只透传标记，Task 8 接管节流）；
-     * @param animationActive   仍有动态状态 → 续排下一动画帧（§10.3）。
+     * @param animationActive  仍有动态状态 → 续排下一动画帧（§10.3）。
+     *
+     * <p>preview 不经本结果透传：View 在批尾按「存在未采纳残行」直接调用
+     * {@link #schedulePreview(Duration)}，该调用是 preview 调度的单一所有权。
      */
     public record UpdateResult(boolean outputRemaining,
-                               boolean previewPending,
                                boolean animationActive) {
         public static UpdateResult idle() {
-            return new UpdateResult(false, false, false);
+            return new UpdateResult(false, false);
         }
     }
 

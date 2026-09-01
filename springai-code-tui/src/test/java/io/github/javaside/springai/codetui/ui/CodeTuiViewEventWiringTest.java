@@ -735,8 +735,8 @@ class CodeTuiViewEventWiringTest {
      * 采纳点不前进，窗口永远是 ZERO——那不是生产形态。
      */
     @Test
-    @DisplayName("preview：150ms 窗口内多次 token 只安排一个一次性 VIEW 到期")
-    void preview_tokensInsideThrottleWindowProduceSinglePendingWake(@TempDir Path root) throws Exception {
+    @DisplayName("preview：150ms 窗口内多次 token 后，实际 follow-up 批次数保持有界")
+    void preview_tokensInsideThrottleWindowProduceBoundedFollowUpBatches(@TempDir Path root) throws Exception {
         ConversationState s = new ConversationState();
         CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
         v.startForTest();
@@ -773,11 +773,89 @@ class CodeTuiViewEventWiringTest {
             ViewScreen.of(v);
         }
         int extra = v.processedBatchesForTest() - batches;
-        assertTrue(extra <= 12,
+        assertTrue(extra <= 10,
                 "窗口内 50 token 到期后批次数必须有界（动画帧 + preview 到期；实际新增 "
                         + extra + " 批）");
-        // 流式仍在（回合未结束）：preview timer 允许在飞（这是下一窗口的唤醒），
-        // 但批次数有界已由上式钉住。回合结束后的静止由 preview_noTaskAfterTurnCompletion 钉。
+        // token 已停止且最新残行已采纳：preview demand 消失，不应再有下一窗口唤醒；
+        // 回合结束后的清空静止另由 preview_noTaskAfterTurnCompletion 钉。
+        assertFalse(v.hasPendingPreviewScheduledForTest(),
+                "最新残行采纳后 preview timer 必须停止，下一真 token 再由 OUTPUT 事件重启");
+    }
+
+    /**
+     * <b>静止残行不得自续排热循环</b>（C-1 回归钉）：token 停止后残行静止但非空
+     * （streaming 只在工具开始/子 agent/回合结束才 flush），此时：
+     * <ol>
+     *   <li>残行内容已被 render 采纳（curTail == lastPreviewedTail）→ <b>无未采纳内容</b>
+     *       → previewPending 必须为 false，不得续排任何 preview 到期；</li>
+     *   <li>长观测窗（≥2×150ms 节流窗口）内批次数必须有界且极小——旧实现
+     *       「previewPending = 残行非空」在 render 不采纳（tail 相同 → lastPreviewAtNanos
+     *       不前进）时退化为 ZERO 延迟自续排：到期 → 批 → 再排 → 无限循环，
+     *       任何 &gt;300ms 的流式中途停顿都触发 CPU/渲染线程自旋。</li>
+     * </ol>
+     *
+     * <p>本测试在旧实现下必须红：ZERO 链每 5ms 观测步都在产生自发批
+     * （观测 400ms+ 远超节流窗口，批次数会持续增长）。
+     */
+    @Test
+    @DisplayName("preview：静止残行（内容已采纳）不自续排——长观测窗内批次有界、无 preview 排队")
+    void preview_staticTailDoesNotSelfRescheduleHotLoop(@TempDir Path root) throws Exception {
+        ConversationState s = new ConversationState();
+        CodeTuiView v = new CodeTuiView(s, noopHandler(), root);
+        v.startForTest();
+        v.runPendingUiUpdatesForTest();
+        ViewScreen.of(v);   // 初始 render
+
+        s.onTurnStarted(1L);
+        s.onAssistantToken(1L, "中途停顿的残行");
+        v.runPendingUiUpdatesForTest();
+        v.renderForTest();  // 首段采纳（立即可见）；直接走真实采纳点，避免屏幕序列化丢样式文本
+
+        // token 停止（模拟 LLM 流式中途停顿 >300ms 的常态）：残行静止但非空。
+        // 先让首个 preview 到期被消费（窗口推进一轮），确保观测起点是「内容已采纳」的静止态。
+        for (int i = 0; i < 40; i++) {   // 200ms：首个节流窗口到期
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+            ViewScreen.of(v);
+        }
+
+        // ── 观测起点：残行静止、内容已被 render 采纳 ──
+        // 静止后不允许再排任何 preview 到期（无未采纳内容 = 无 demand）。
+        for (int i = 0; i < 30 && v.hasPendingPreviewScheduledForTest(); i++) {
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+            ViewScreen.of(v);
+        }
+        assertFalse(v.hasPendingPreviewScheduledForTest(),
+                "静止残行（内容已采纳）不得续排 preview：残行非空 ≠ 有未采纳内容"
+                        + "——旧实现 ZERO 链自续排即 CPU 热循环");
+        assertFalse(v.hasContinuationScheduledForTest(), "无输出存量时不得有 continuation");
+
+        // 长观测窗（420ms ≥ 2×150ms 节流窗口 + 3×66ms 动画帧）：
+        // 旧 ZERO 链会持续产生自发批（每 5ms 观测步都排新的 ZERO 到期），批次计数无界增长。
+        int baseline = v.processedBatchesForTest();
+        for (int i = 0; i < 84; i++) {   // 420ms 观测
+            TimeUnit.MILLISECONDS.sleep(5);
+            v.runPendingUiUpdatesForTest();
+            ViewScreen.of(v);
+        }
+        int extra = v.processedBatchesForTest() - baseline;
+        // 上界只容纳合法来源：回合仍在 THINKING（忙态）的 66ms 动画帧（420/66 ≈ 7 帧）
+        // + 少量调度余量。旧实现 ZERO 链 = 每观测步一批 → 80+ 批，远超此界。
+        assertTrue(extra <= 10,
+                "静止残行后长观测窗内批次数必须有界（动画帧 + 余量；实际新增 "
+                        + extra + " 批）——ZERO 延迟自续排链会持续产生批次（CPU/渲染线程自旋）");
+        // 观测窗结束后仍静止：无任何 preview 排队。
+        assertFalse(v.hasPendingPreviewScheduledForTest(),
+                "长观测窗结束后不得有 preview 排队（静止残行无 demand）");
+
+        // 下一个真 token 到达时 preview 链必须重新启动（不因修复而丢失唤醒）。
+        s.onAssistantToken(1L, " 新内容");
+        v.runPendingUiUpdatesForTest();
+        assertTrue(v.hasPendingPreviewScheduledForTest(),
+                "新 token（未采纳内容出现）必须重新排 preview 到期");
+        assertTrue(ViewScreen.of(v).contains("新内容"),
+                "节流窗口已过（观测 420ms）→ 新残行当帧采纳");
     }
 
     /** 残行清空立即 VIEW、不等节流（§10.1）：回合结束预览行马上消失。 */

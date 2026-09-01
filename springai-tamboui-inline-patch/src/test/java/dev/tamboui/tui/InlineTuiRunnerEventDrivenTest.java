@@ -235,7 +235,7 @@ class InlineTuiRunnerEventDrivenTest {
             // follow-up 调度把窗口内的帧补完；补完后帧流静止。
             int settled = awaitQuietFrames(fixture, drawsAtFreeze, 300);
             int followUps = settled - drawsAtFreeze;
-            // 编辑帧可能晚于 latch 到达再切一次内容（一次重武装）——允许 8 或 9，但必须是
+            // 编辑帧可能晚于 latch 到达再切一次内容（一次重武装）——允许 8..10，但必须是
             // 有界的（任何常驻循环都会远超这个数）。
             assertTrue(followUps >= 8 && followUps <= 10,
                     "窗口内必须由 follow-up 调度补帧（8 帧重申 ±1 次重武装），实际补了 "
