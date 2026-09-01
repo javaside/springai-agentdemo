@@ -29,12 +29,15 @@ public final class ZhipuProvider implements LlmProvider {
     // 国内官方端点；海外/Coding Plan 可经 ZHIPU_BASE_URL 覆盖为 https://api.z.ai/api/paas/v4。
     private static final String DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
     // 2026 在售 GLM-5 系：glm-5.3 旗舰（2026-08-14 发布，同 5.2 基座、后训练强化，编码 +50%）
+    // / glm-5.3-flash 原生多模态（2026-08-26 发布，视觉+编码，1M 上下文，价 1/10，性能超 glm-5.2）
     // / glm-5.2 上代旗舰 / glm-5.1 长任务 / glm-5-turbo 快档。
+    // 视觉线 glm-4.6v / glm-5v 系不进内置清单（glm-5v 确切 API id 未核实），经 ZHIPU_MODELS 自配。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("glm-5.3",     "glm-5.3",     "旗舰 · Agentic 编码/长上下文"),
-            new ModelOption("glm-5.2",     "glm-5.2",     "上代旗舰 · Agentic 编码"),
-            new ModelOption("glm-5.1",     "glm-5.1",     "长任务 · 自规划"),
-            new ModelOption("glm-5-turbo", "glm-5-turbo", "快 · 便宜"));
+            new ModelOption("glm-5.3",       "glm-5.3",       "旗舰 · Agentic 编码/长上下文"),
+            new ModelOption("glm-5.3-flash", "glm-5.3-flash", "原生多模态 · 视觉+编码 · 1M 上下文 · 1/10 价"),
+            new ModelOption("glm-5.2",       "glm-5.2",       "上代旗舰 · Agentic 编码"),
+            new ModelOption("glm-5.1",       "glm-5.1",       "长任务 · 自规划"),
+            new ModelOption("glm-5-turbo",   "glm-5-turbo",   "快 · 便宜"));
 
     private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
 
@@ -94,6 +97,10 @@ public final class ZhipuProvider implements LlmProvider {
     public ThinkingCapabilities thinkingCapabilities(String modelId) {
         // glm-5.3（官方文档）：仅支持开启思考、不可禁用；reasoning_effort 取 low/high/max（默认 max）。
         if ("glm-5.3".equals(modelId)) {
+            return ThinkingCapabilities.effort(false, List.of("low", "high", "max"));
+        }
+        // glm-5.3-flash（官方文档）：文本参数与 glm-5.3 一致——thinking.type 仅支持 enabled，effort 同三档。
+        if ("glm-5.3-flash".equals(modelId)) {
             return ThinkingCapabilities.effort(false, List.of("low", "high", "max"));
         }
         if ("glm-5.2".equals(modelId)) {
