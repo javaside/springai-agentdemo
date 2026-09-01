@@ -498,16 +498,19 @@ class CodeTuiViewEventWiringTest {
         // publish(ALL) → runBatch → processUpdates 声明 remaining → runBatch 安排 continuation。
         UiUpdateCoordinator c = v.coordinatorForTest();
         v.runPendingUiUpdatesForTest();   // 初始同步批（经 runBatch）
-        assertTrue(c.hasPendingContinuation(),
-                "runBatch 收到 outputRemaining 后必须自己安排 continuation（生产唯一调度方）");
+        int batchesAfterInitialSync = v.processedBatchesForTest();
 
-        // 排空到静止：continuation 链最终清空（无生产者事件）。
+        // 不断言 hasPendingContinuation() 的瞬时值：ZERO-delay timer 到期后会先清槽再 publish，
+        // 因而观察时 future 可能已消费、下一 UI 批已入队。稳定契约是没有任何新生产者事件时，
+        // continuation 链仍会驱动后续批并最终排空。
         int guard = 0;
         while ((s.hasPendingOutput() || s.hasCompleteStreamingLine() || c.hasPendingContinuation())
                 && guard++ < 400) {
             TimeUnit.MILLISECONDS.sleep(5);
             v.runPendingUiUpdatesForTest();
         }
+        assertTrue(v.processedBatchesForTest() > batchesAfterInitialSync,
+                "无新生产者事件时 continuation 必须驱动至少一个后续批（生产唯一调度方）");
         assertFalse(s.hasPendingOutput(), "continuation 链应最终排空 pending");
         assertFalse(s.hasCompleteStreamingLine(), "continuation 链应最终排空流式完整行");
         assertFalse(c.hasPendingContinuation(), "排空后不得残留 continuation timer");
@@ -630,9 +633,9 @@ class CodeTuiViewEventWiringTest {
         // 经真实链再跑一批（runBatch 收到 remaining → 自己排 continuation）：
         s.pushInfo("追加一批存量");   // 生产者事件把 runBatch 投进队列
         v.runPendingUiUpdatesForTest();
-        assertTrue(v.hasContinuationScheduledForTest(),
-                "runBatch 收到 outputRemaining 后必须安排 continuation（ZERO 延迟在飞或已消费皆可由后续排空证明）");
+        int batchesAfterProducer = v.processedBatchesForTest();
 
+        // 不观察 ZERO-delay future 是否仍在槽中：它可能已清槽并把下一 UI 批入队。
         // 无任何新生产者事件，靠 continuation 一批批排空：每轮「等 timer 到期 → 执行其 publish
         // 的 UI update」直到没有 continuation（5000 行 / 300 行批 ≈ 17 批；上限防死循环）。
         int batches = 0;
@@ -646,6 +649,8 @@ class CodeTuiViewEventWiringTest {
                 if (!r.outputRemaining()) break;
             }
         }
+        assertTrue(v.processedBatchesForTest() > batchesAfterProducer,
+                "无新生产者事件时 continuation 必须驱动后续批");
         UiUpdateCoordinator.UpdateResult last = v.processUpdatesForTest(UiDirty.OUTPUT);
         assertFalse(last.outputRemaining(), "排空后不得再声明 remaining");
         int guard = 0;
