@@ -27,6 +27,7 @@ import dev.tamboui.layout.Size;
 import dev.tamboui.terminal.Backend;
 import dev.tamboui.terminal.Frame;
 import dev.tamboui.style.Style;
+import dev.tamboui.tui.event.ResizeEvent;
 
 class InlineTuiRunnerEventDrivenTest {
 
@@ -271,6 +272,117 @@ class InlineTuiRunnerEventDrivenTest {
         }
     }
 
+    // ── Task 9 fix round：backend→runner 的 resize 事件链 ─────────────────
+
+    /**
+     * backend 的 onResize 回调（生产里由 JLine WINCH handler 触发）必须被 runner
+     * 翻译成 {@link ResizeEvent} 交给 handler，且随后发生<b>新宽度</b>的 draw；
+     * 同尺寸重复触发不得再发事件（去重契约——JLine 对一次拖拽可能回调多次）。
+     *
+     * <p>这条链是 resize_smoke.py 失败排查后补上的缺口：PTY 冒烟只覆盖「内核
+     * SIGWINCH → JLine → onResize」的前半段（且依赖 harness 正确设置 controlling
+     * terminal），「onResize → ResizeEvent → handler → 新宽度重画 → 同尺寸去重」
+     * 全在这里以纯 Java 钉死，不再依赖真实终端。
+     *
+     * <p>宽度真相取自 draw 时 renderer 收到的 {@link Frame}——InlineViewport 每次
+     * draw 前都会 {@code syncArea}（display.render → syncWidth 查询 backend），
+     * 所以 frame 宽度就是「这帧真正画出来的宽度」，与 resize_smoke.py 断言屏幕
+     * 上输入框宽度是同一语义。
+     */
+    @Test
+    void backendResizeCallbackDeliversResizeEventAndRedrawsAtNewWidthWithoutDuplicates() throws Exception {
+        MutableSizeBackend backend = new MutableSizeBackend(new Size(60, 24));
+        InlineTuiRunner runner = InlineTuiRunner.create(backend, config(POLL_TIMEOUT));
+
+        List<ResizeEvent> resizeEvents = new ArrayList<>();
+        List<Integer> frameWidths = new ArrayList<>();
+        CountDownLatch resizeHandled = new CountDownLatch(1);
+        CountDownLatch frameAt100 = new CountDownLatch(1);
+
+        Thread thread = new Thread(() -> {
+            try {
+                runner.run((event, activeRunner) -> {
+                    if (event instanceof ResizeEvent) {
+                        resizeEvents.add((ResizeEvent) event);
+                    }
+                    return false;   // 返回 false：ResizeEvent 后的 draw 由 runner 自己负责（run 源码语义）
+                }, frame -> {
+                    frameWidths.add(frame.width());
+                    if (frame.width() == 100) {
+                        frameAt100.countDown();
+                    }
+                });
+            } catch (Throwable t) {
+                // 生命周期异常在 quit/close 断言里暴露，不在测试线程外裸抛。
+            }
+        }, "inline-runner-resize-test");
+        try {
+            thread.start();
+            awaitFirstFrame(frameWidths);
+            assertEquals(List.of(60), distinctWidths(frameWidths),
+                    "初始 60 列下 run() 首帧必须以 60 列宽度绘制");
+
+            backend.setSize(new Size(100, 24));
+            backend.fireResize();   // 生产语义：JLine WINCH handler 调 onResize 注册的 Runnable
+
+            assertTrue(resizeHandled.await(1, TimeUnit.SECONDS) || !resizeEvents.isEmpty(),
+                    "onResize 回调后 handler 必须收到 ResizeEvent");
+            assertTrue(frameAt100.await(1, TimeUnit.SECONDS),
+                    "收到 ResizeEvent 后必须发生一次新宽度（100 列）的 draw");
+            assertEquals(1, resizeEvents.size(), "一次宽度变化只该送达一个 ResizeEvent");
+            assertEquals(100, resizeEvents.get(0).width());
+            assertEquals(24, resizeEvents.get(0).height());
+
+            // 同尺寸重复触发（一次拖拽中 JLine 可能回调多次）：不得再发事件、不得再画。
+            awaitQuietWidths(frameWidths, 300);
+            int drawsBefore = frameWidths.size();
+            backend.fireResize();
+            Thread.sleep(400);      // 与其余测试的「静止窗口」同一量级
+            assertEquals(1, resizeEvents.size(),
+                    "同尺寸重复 onResize 不得再投递 ResizeEvent（去重契约）");
+            assertEquals(drawsBefore, frameWidths.size(),
+                    "同尺寸重复 onResize 不得触发额外 draw");
+        } finally {
+            runner.quit();
+            thread.join(1_000);
+            runner.close();
+        }
+        assertFalse(thread.isAlive());
+    }
+
+    /** 等第一帧（来自 run() 的 initial draw）落进宽度记录。 */
+    private static void awaitFirstFrame(List<Integer> frameWidths) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (frameWidths.isEmpty() && System.nanoTime() < deadline) {
+            TimeUnit.MILLISECONDS.sleep(10);
+        }
+        assertFalse(frameWidths.isEmpty(), "run() 的首帧应在 2 秒内发生");
+    }
+
+    /** 等帧宽记录静止（连续 quietMillis 无新帧），供重复触发前排除在飞的帧。 */
+    private static void awaitQuietWidths(List<Integer> frameWidths, long quietMillis)
+            throws InterruptedException {
+        int last;
+        int stable;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        do {
+            last = frameWidths.size();
+            TimeUnit.MILLISECONDS.sleep(quietMillis);
+            stable = frameWidths.size();
+        } while (stable != last && System.nanoTime() < deadline);
+    }
+
+    /** 按出现顺序去重的宽度序列（首帧断言用）。 */
+    private static List<Integer> distinctWidths(List<Integer> widths) {
+        List<Integer> distinct = new ArrayList<>();
+        for (int width : widths) {
+            if (distinct.isEmpty() || distinct.get(distinct.size() - 1) != width) {
+                distinct.add(width);
+            }
+        }
+        return distinct;
+    }
+
     private static RunnerFixture startRunner(Duration pollTimeout) throws Exception {
         RecordingBackend backend = new RecordingBackend();
         InlineTuiRunner runner = InlineTuiRunner.create(backend, config(pollTimeout));
@@ -352,7 +464,7 @@ class InlineTuiRunnerEventDrivenTest {
         }
     }
 
-    private static final class RecordingBackend implements Backend {
+    private static class RecordingBackend implements Backend {
         private volatile boolean closed;
 
         @Override public void draw(DiffResult diff) { }
@@ -372,5 +484,37 @@ class InlineTuiRunnerEventDrivenTest {
         @Override public int read(int timeoutMs) { return -2; }
         @Override public int peek(int timeoutMs) { return -2; }
         @Override public void close() { closed = true; }
+    }
+
+    /**
+     * 尺寸可变的 RecordingBackend：{@code setSize} 改变 {@link #size()} 的答案，
+     * {@code fireResize} 触发 {@link #onResize(Runnable)} 注册的回调——与生产
+     * JLineBackend 完全同一语义（WINCH handler 里查 size + 调回调）。
+     */
+    private static final class MutableSizeBackend extends RecordingBackend {
+        private volatile Size size;
+        private volatile Runnable resizeHandler;
+
+        MutableSizeBackend(Size initial) {
+            this.size = initial;
+        }
+
+        @Override public Size size() { return size; }
+
+        @Override public void onResize(Runnable handler) {
+            this.resizeHandler = handler;
+        }
+
+        void setSize(Size newSize) {
+            this.size = newSize;
+        }
+
+        /** 模拟一次 SIGWINCH：JLine 的 handler 语义是「回调里现查 size」。 */
+        void fireResize() {
+            Runnable handler = this.resizeHandler;
+            if (handler != null) {
+                handler.run();
+            }
+        }
     }
 }

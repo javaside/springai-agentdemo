@@ -76,6 +76,7 @@ Usage:
 Exit code 0 + "SMOKE PASS" on success, non-zero + "SMOKE FAIL: <reason>".
 """
 import fcntl
+import json
 import os
 import re
 import select
@@ -129,13 +130,34 @@ def print_screen(label, lines):
 
 
 class PtySession:
+    # ── 为什么不用 start_new_session=True ──────────────────────────────────
+    # subprocess 的 start_new_session 在子进程里只做 setsid(2)：新会话有了，
+    # 但 slave pty <b>从未通过 TIOCSCTTY 成为 controlling terminal</b>。后果：
+    # TIOCSWINSZ 仍会更新可查询的尺寸（ioctl 查询照常返回新值），内核却<b>不投递
+    # SIGWINCH</b>——signal 是发给 ctty 前台进程组的，没有 ctty 就没有收件人。
+    # 于是生产链（JLine WINCH handler → InlineTuiRunner 的 ResizeEvent →
+    # settle 重放）整条从未被触发。Task 7 删掉每帧宽度轮询兜底后，这个缺陷
+    # 不再被掩盖：应用永远画旧宽度，脚本最后误报「输入框应按新宽度重画」。
+    # 修法：preexec_fn 钩子里 setsid() 后立刻对 slave fd 做 TIOCSCTTY，
+    # 让子进程真正拥有这个 pty 作为 controlling terminal。
     def __init__(self, cmd, cwd, env, rows, cols):
         self.rows, self.cols = rows, cols
         self.master_fd, self.slave_fd = os.openpty()
         fcntl.ioctl(self.slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+        slave_fd = self.slave_fd   # 闭包捕获：preexec_fn 在 fork 后的子进程里执行
+
+        def _make_ctty():
+            # 1) 脱离父会话，成为无 ctty 的新会话 leader（等价 start_new_session=True）
+            os.setsid()
+            # 2) 把本 pty slave 设为自己的 controlling terminal——setsid 之后
+            #    对任一 tty fd 的首个 ioctl(TIOCSCTTY) 即生效（此时尚非任何会话的
+            #    ctty，不会 EPERM/EBUSY）。此后内核才会给它投递 SIGWINCH/SIGHUP。
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+
         self.proc = subprocess.Popen(
             cmd, stdin=self.slave_fd, stdout=self.slave_fd, stderr=self.slave_fd,
-            cwd=cwd, env=env, start_new_session=True,
+            cwd=cwd, env=env, preexec_fn=_make_ctty,
         )
         os.close(self.slave_fd)
         self.slave_fd = None
@@ -328,8 +350,87 @@ def build_classpath():
         return CLASSES_DIR + os.pathsep + f.read().strip()
 
 
+def assert_controlling_terminal(cmd_python):
+    """harness 启动自检：子进程必须真的拿到 controlling terminal。
+
+    用与被测进程完全相同的 spawn 方式（openpty + setsid + TIOCSCTTY）起一个
+    一次性探针，让它自报两件事：
+      1. 能否 open("/dev/tty")——无 ctty 时这个 open 以 ENXIO 失败（探针实测：
+         ctty=y / no-ctty=n）；
+      2. tcgetpgrp(0) 是否等于自己的进程组——无 ctty 时 tcgetpgrp 抛 OSError
+         （探针实测：ctty=True / no-ctty=err）。
+    两者都过，本脚本的 TIOCSWINSZ 才会被内核翻译成 SIGWINCH 投给子进程；
+    任一失败就直接报「PTY has no controlling terminal」——否则失败会迟到
+    到最后一步，被误报成「输入框应按新宽度重画」这种 UI 宽度问题。
+    """
+    master_fd, slave_fd = os.openpty()
+    probe_src = (
+        "import json,os,sys\n"
+        "try:\n"
+        "    fd=os.open('/dev/tty',os.O_RDWR); os.close(fd); has_tty=True\n"
+        "except OSError: has_tty=False\n"
+        "try: fg_ok = os.tcgetpgrp(0)==os.getpgrp()\n"
+        "except OSError: fg_ok=False\n"
+        # 直接往 pty master 写回读不到——从子进程视角，master 是「终端的另一头」，
+        # 没有可用 fd。往 stdout（= slave pty）写即可被本函数从 master 读到。
+        "sys.stdout.write(json.dumps({'has_tty':has_tty,'fg_ok':fg_ok})+'\\n')\n"
+        "sys.stdout.flush()\n"
+    )
+    probe_cmd = [cmd_python, "-c", probe_src]
+
+    def _make_ctty():
+        os.setsid()
+        fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+
+    try:
+        proc = subprocess.Popen(
+            probe_cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            preexec_fn=_make_ctty,
+        )
+        os.close(slave_fd)
+        deadline = time.time() + 10.0
+        buf = b""
+        while time.time() < deadline:
+            r, _, _ = select.select([master_fd], [], [], 0.2)
+            if r:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+                if b"\n" in buf:
+                    break
+            if proc.poll() is not None:
+                break
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    line = buf.split(b"\n", 1)[0].strip()
+    try:
+        report = json.loads(line)
+    except ValueError:
+        report = None
+    if not isinstance(report, dict) or not report.get("has_tty") or not report.get("fg_ok"):
+        die("PTY has no controlling terminal: SIGWINCH 不会被投递，resize 链无从触发"
+            "（探针输出 %r；spawn 必须在 setsid 后对 slave fd 做 TIOCSCTTY）" % (line,))
+    print("HARNESS SELF-CHECK OK: 子进程拥有 controlling terminal（/dev/tty 可开、"
+          "tcgetpgrp==自有 pgrp）——TIOCSWINSZ 将产生 SIGWINCH")
+
+
 def main():
     classpath = build_classpath()
+    # 先证明 harness 本身能把 SIGWINCH 送达子进程，再谈 UI 断言——
+    # 否则 PTY 缺陷会在脚本最后一步被误报成「UI 没按新宽度重画」。
+    assert_controlling_terminal(sys.executable or "/usr/bin/python3")
     tmpdir = tempfile.mkdtemp(prefix="codetui-resize-smoke-")
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
