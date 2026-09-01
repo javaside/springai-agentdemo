@@ -211,7 +211,8 @@ ChatModelStreamAdvisor          LOWEST
 
 `handleChunk` 全链路 null-guard 抽 delta → `listener.onAssistantToken(turnId, delta)` →
 `ConversationState.onAssistantToken`（`turnId != acceptingTurnId` 直接丢弃）→ 追加进 `streaming`
-缓冲 → 渲染线程 `drain()` 调 `takeCompleteStreamingLines()`（按真实 `\n` 切，残行只做预览）→
+缓冲 + 锁外 dirty 通知（数千 token 经 `UiUpdateCoordinator` 合并，至多一个在飞 UI update）→
+UI 批 `processUpdates` 调 `takeCompleteStreamingLines()`（按真实 `\n` 切，残行只做预览）→
 `ScrollbackPrinter.streamingLine`。Spring AI 类型不出 `CodingAgent`（三个 handler 全私有）。
 
 ### 回合结束与取消
@@ -231,18 +232,44 @@ Esc 取消链路见 [14](#14-回合中插话) 末段与 [4](#4-输入框与按�
 
 ### 渲染模型
 
-- `render()` 每帧重建整棵 `column(...)`。`scope(cond, children)` 隐藏时 `preferredSize=0`
+- `render()` 只在被请求时重建整棵 `column(...)`（事件驱动，见下方「事件驱动链路」）。
+  `scope(cond, children)` 隐藏时 `preferredSize=0`
   → 视口收缩 → 行被回收，这是「面板用完即收起」的全部机制。
-  **第二参数每帧 eager 求值**，所以所有 `xxxChildren()` 首行必须判空。
-- 两条通道严格分离：live 区（输入框 + 面板 + 状态行）由 tamboui 重绘；scrollback 由 `drain()`
-  在**渲染线程、两帧之间**用 `runner().println` 推进。不变量是「一个 println = 一个物理行」，
-  所有出口先经 `TextWrap.wrap` 折行（`InlineDisplay.println` 超宽是**截断**而非折行）。
-- 节流参数都有实测理由：`tickRate` 100ms、drain 66ms（macOS Terminal.app 多窗口高频 ANSI 会冻结）、
-  每帧最多 300 行（防 pty 突发触发 Terminal.app 的 GCD use-after-free）、
-  流式残行预览 150ms（高频 ANSI 打断 IME 合成）。
-- `InlineRenderBatch.open(runner)` 反射调 `beginPrintBatch/endPrintBatch` 合批，失败静默降级。
+  **第二参数每次渲染 eager 求值**，所以所有 `xxxChildren()` 首行必须判空。
+- 两条通道严格分离：live 区（输入框 + 面板 + 状态行）由 tamboui 按请求差分重绘；scrollback 由
+  UI 批（`processUpdates`）在**渲染线程、两帧之间**用 `runner().println` 推进。不变量是
+  「一个 println = 一个物理行」，所有出口先经 `TextWrap.wrap` 折行（`InlineDisplay.println`
+  超宽是**截断**而非折行）。
+- 空闲静态界面**零周期任务、零 ANSI 输出**（PTY 冒烟有 idle 零字节断言钉住）：
+  常驻 100ms tick（`tickRate`）与 66ms drain 两个周期任务已删除，重绘/输出全部由事件唤醒。
+- 输出节流参数都有实测理由：每个 UI 批最多 300 物理行 + 12ms 时间预算
+  （防 pty 突发触发 Terminal.app 的 GCD use-after-free、防渲染线程长占把按键排队）、
+  流式残行预览 150ms（高频 ANSI 打断 IME 合成）、动画帧 66ms 仅忙态续排。
+
+#### 事件驱动链路（Task 1–10 重构后的当前架构）
+
+```text
+Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改状态
+  -> durable state/queue       ConversationState + Interjections/SubagentRunner/
+                               BackgroundTaskRegistry/McpRegistry（真相源，含迟到过滤）
+  -> lock-free dirty notify    锁内只改数据 + 记 dirty bits，锁外调 onUiChanged(bits)
+  -> UiUpdateCoordinator       原子 OR 合并；CAS 赢家才投递（数千 token → 至多一个在飞 update）
+  -> InlineTuiRunner wake      requestUiUpdate 入事件队列并唤醒（合并、无事件对象）
+  -> bounded processUpdates    UI 线程一批：行/时间双预算消费输出 + 模态同步 + attention +
+                               自动出队，绝不循环到空
+  -> one-shot continuation/    输出未清空 → ZERO 延迟续批；preview/动画帧/resize settle
+     render                    全是按需一次性 timer；批尾恰好一次差分 render
+```
+
+要点：dirty bits 只是「该做哪段」的提示，真相永远从 state 回读；四类一次性任务
+（continuation / preview / resize / animation）每类至多一个在飞 generation，状态消失即取消；
+本地 UI 状态（按键改高亮、notice 等）由 `publishLocalViewChange` 主动 `onUiChanged(VIEW)`
++ `requestRender`，不等 Agent 事件。
+
+- `InlineRenderBatch.open(runner)` 反射调 `beginPrintBatch/endPrintBatch` 把一个 UI 批的所有
+  println 合成一次提交，失败静默降级。
 - resize：`onStart` 只**旁观** `ResizeEvent`（返回 UNHANDLED，库还要靠它触发重画），
-  事件驱动后 settle 由 `UiUpdateCoordinator.scheduleResizeSettle` 的 **132ms 一次性任务**
+  settle 由 `UiUpdateCoordinator.scheduleResizeSettle` 的 **132ms 一次性任务**
   （generation 替换：连发只重放最后一次）触发 `replayAfterResize()`：`ScreenCleaner.clear` +
   `scrollTail`（`SCROLL_TAIL_CAP=400` 条环形留底，存**折行前**原始行）按新宽度全量重放（幂等）。
   旧的 `ResizeSettle(4)` 帧计数判定器已随每帧 tick 删除（没有 tick 可喂拍）。
@@ -318,7 +345,7 @@ Esc 取消链路见 [14](#14-回合中插话) 末段与 [4](#4-输入框与按�
 - 三条入队回调都做迟到过滤且**每条路径必须应答**：问询迟到/队满 → `cancel()`；
   审批 → `DENY`（比 CANCEL 轻，回合继续）+ 队满时打一行可见 ERROR；计划迟到 → `CANCEL`、
   队满 → `KEEP_PLANNING`。
-- UI 在 `drain` 里 `peekModal()`，用**引用比较**判队首身份变化。新增子类型必须在这里补分支，
+- UI 在每个 UI 批（`processUpdates`）里 `peekModal()`，用**引用比较**判队首身份变化。新增子类型必须在这里补分支，
   漏了不报错、后果是面板永不弹出、工具线程永久 park。
 - 三条键处理器守同一纪律：**不得存在「既不应答也不取消」的出口**。退出统一
   **先 `removeModal(req)` 再应答**；CANCEL 交给共用的 `cancelTurnFor(req, notice)`。
@@ -350,7 +377,8 @@ Esc 取消链路见 [14](#14-回合中插话) 末段与 [4](#4-输入框与按�
 构成百分比走 largest-remainder 分配、**合计恒 100%**；自动压缩行的分子刻意用 `estimatedTokens`
 （不含系统提示词，与上方消息项之和对得上账）。
 
-`refresh()` 由 drain 每 30 帧调，**必须在独立线程池跑**（大会话下估算耗时数百 ms）。
+`refresh()` 由 `ContextUsageRefreshController` 按需触发（影响统计的事件标脏 + 500ms 防抖 + 单飞），
+**必须在独立线程池跑**（大会话下估算耗时数百 ms）。
 
 ### 6.2 自动压缩与 `/compact`
 
@@ -826,13 +854,13 @@ catch `Throwable`（Error 也兜，否则池线程静默死亡、任务永停 RU
   （`interjectionPending` 是必填构造参数）——这一等跑在主 agent 工具线程上，
   期间不发模型调用，而模型调用是插话唯一送达点，不让路则「后台」二字被 `block=true` 抵消。
   查无此 id 时**三件事都说**（可能来自已结束进程、可能是被淘汰的已结束记录、外加当前清单）。
-- **空闲自动送达**：`CodeTuiView.deliverBackgroundResults()` 每帧（drain 66ms）调，
+- **空闲自动送达**：`CodeTuiView.deliverBackgroundResults()` 在每个空闲 UI 批里调，
   **先判闸门再取列表**（取列表会顺手落盘）。**submit 抛异常时不标记已消费**
-  （标记就等于丢结果），下一帧重试。
+  （标记就等于丢结果），下一批重试。
 
 **失控刹车** `BackgroundNotifier`：连续自动回合 ≤ `DEFAULT_MAX_CONSECUTIVE=3`，
 任何真实用户输入归零（挂在**提交**上而非按键上，挂按键则一个方向键就松开刹车）。
-三个前置条件都在 `consecutive++` **之前**，否则每帧一次的空转几秒就把额度耗光。
+三个前置条件都在 `consecutive++` **之前**，否则空转批几秒就把额度耗光。
 多任务**合并成一条**通知。
 
 **限幅** `TaskResultStore`：`completedBackgroundTasks()` 是后台结果进入会话的**唯一入口**，
@@ -868,12 +896,12 @@ Esc 取消只剩子 agent 收尾（state 已 IDLE 但 busy 仍 true）都不会�
 
 **可见性设计**：输入那一刻**刻意什么都不往 scrollback 打**（scrollback 的行改不了、位置会永远
 停在错的地方），未送达期间的存在感全靠输入框上方的面板（读**非破坏性**快照
-`pendingInterjectionTexts()`——接到 `takePendingInterjections()` 上会每帧清空队列）+ 状态栏计数。
+`pendingInterjectionTexts()`——接到 `takePendingInterjections()` 上会把队列在 render 里清空）+ 状态栏计数。
 
 `InterjectionText` 把 wrap/unwrap 放在同一个类里，因为 `-c` 回放曾把「给模型的行为指引」
 当成用户原话显示出来。
 
-**回合末兜底**：drain 空闲分支里 `takePendingInterjections()`（只取未送达的）排在 `pollQueued`
+**回合末兜底**：UI 批空闲分支里 `takePendingInterjections()`（只取未送达的）排在 `pollQueued`
 **之前** dispatch——已送达那条归 `handleComplete` 补历史，抢走会让同一句话发两遍。
 
 **Esc 取回**：`drainForRefill` 取回**全部**（含已送达的）回填输入框。理由是取消走 `doOnCancel`，
@@ -1053,18 +1081,18 @@ spring-ai-deepseek 2.0.0 序列化消息时只用 `getText()`，`Media` 被**静
 
 ## 19. 终端注意提示
 
-`CodeTuiView.advanceAttention(modalWaiting)`（在 drain 里、**出队之前**调用，因为出队路径可能 return）
+`CodeTuiView.advanceAttention(modalWaiting)`（在 UI 批里、**出队之前**调用，因为出队路径可能 return）
 → `ui.AttentionTracker`（纯状态机）+ `ui.TerminalAttention`（IO）。
 
 `AttentionTracker` 是四态边沿检测机（IDLE / BUSY / WAITING_USER / DONE），返回
 `NONE | ALERT_WAITING | ALERT_DONE | RESTORE`。要状态机而不是事件处直呼的理由：
-drain 与事件之间没有同步关系，直呼会每帧重复响铃或让多个事件源互相覆盖标题。
+UI 批与按键事件可能连续到达，直呼会在相邻批里重复响铃或让多个事件源互相覆盖标题。
 
 | 语义 | 实现 |
 | --- | --- |
 | DONE 是**吸收态** | 标题持续显示直到用户按键（`userActed()` 由 `onInputKey` 顶部无条件调）或起了新活 |
 | 答完问询、活继续跑**不响铃** | `WAITING_USER → BUSY` 与 `DONE → BUSY` 只 `RESTORE`——「答完就响完成了」是撒谎 |
-| 用户主动 Esc 那次忙→闲**不算完成** | `userCancelledSinceLastTick`（volatile，按键线程置位、drain 消费后复位） |
+| 用户主动 Esc 那次忙→闲**不算完成** | `userCancelledSinceLastTick`（volatile，按键线程置位、UI 批消费后复位） |
 | busy 定义**刻意减去模态一份** | `state.isBusy()` 含「有模态」，直接用会把 WAITING_USER 拍成 BUSY |
 
 `TerminalAttention.alert`：反射拿私有 backend，写 `ESC]0;title` + `ESC]2;title` + BEL 再 flush。

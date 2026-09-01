@@ -15,7 +15,7 @@ import java.util.function.Supplier;
  * {@link CodeTuiView} 里无法单测。抽成纯 Java 类后可喂 {@link ContextStats} 断言每一行文案与分桶。
  *
  * <p><b>现算 vs 缓存</b>：{@link #report()} 读<em>实时</em> {@code source}（报告要最新）；
- * {@link #suffix()} 读<em>缓存</em> {@code cached}（状态栏每帧读，绝不每帧重算——重算要遍历全部消息 + 估算 token）。
+ * {@link #suffix()} 读<em>缓存</em> {@code cached}（状态栏每次重绘都读，绝不重算——重算要遍历全部消息 + 估算 token）。
  * {@link #refresh()} 由 {@code ui.update.ContextUsageRefreshController} 按需（事件标脏 + 防抖）调度。
  *
  * <p><b>跨包可见性</b>：类/构造器/{@link #refresh()} 为 public——controller 在 {@code ui.update} 包，
@@ -121,7 +121,7 @@ public final class ContextUsage {
 
     /**
      * 重算状态栏用的上下文用量快照（按需调度：{@code ui.update.ContextUsageRefreshController}，
-     * 绝不每帧）。用量是辅助信息：估算失败绝不能拖垮主 UI，异常时静默保留旧值。
+     * 绝不在渲染路径同步重算）。用量是辅助信息：估算失败绝不能拖垮主 UI，异常时静默保留旧值。
      *
      * <p><b>返回值（Task 6）</b>：仅当缓存的<b>可见数据</b>真实变化时返回 {@code true}——
      * 也就是 {@link #suffix()} / {@link #cacheHitSuffix()} / {@link #report()} 全部输出会变的情况。

@@ -4,9 +4,9 @@ package io.github.javaside.springai.codetui.ui;
  * 「需要你看一眼」的边沿检测状态机：只在<b>状态跳变</b>的那一拍要求发提示（BEL + 改 tab 标题），
  * 平态不响；回到平态时要求恢复默认标题。
  *
- * <p><b>为什么要状态机而不是事件处直呼</b>：{@code CodeTuiView.drain} 每 33ms 跑一次，
- * 事件（模态入队 / 回合结束）与 drain tick 之间没有同步关系——直呼会在每帧重复响铃，
- * 或让多个事件源互相覆盖标题。把「上一拍是什么状态」记下来，跳变才动作，是唯一的去重办法；
+ * <p><b>为什么要状态机而不是事件处直呼</b>：UI 批与按键/Agent 事件之间没有同步关系
+ * （一个回合里可能连着跑好几批），直呼会在相邻批里重复响铃，
+ * 或让多个事件源互相覆盖标题。把「上一批是什么状态」记下来，跳变才动作，是唯一的去重办法；
  * 状态机是纯函数（不碰 IO），可直测。
  *
  * <p>四态：
@@ -25,7 +25,7 @@ final class AttentionTracker {
 
     enum Phase { IDLE, BUSY, WAITING_USER, DONE }
 
-    /** drain 一拍要执行的动作；NONE=什么都不做。 */
+    /** 一个 UI 批要执行的动作；NONE=什么都不做。 */
     enum Action { NONE, ALERT_WAITING, ALERT_DONE, RESTORE }
 
     /** 平态（默认）标题；恢复时用它。 */
@@ -33,7 +33,7 @@ final class AttentionTracker {
 
     private Phase phase = Phase.IDLE;
 
-    /** 用户按过键（人在场）。置标志不直接改相位——标题写回必须留在渲染线程（drain），见 userActed。 */
+    /** 用户按过键（人在场）。置标志不直接改相位——标题写回必须留在渲染线程（UI 批），见 userActed。 */
     private boolean userActed;
 
     Phase phase() {

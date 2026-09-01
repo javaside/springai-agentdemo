@@ -25,7 +25,7 @@ import dev.tamboui.text.Text;
  *
  * <p>为什么必须 shadow 而不是反射：上游 {@code InlineViewport} 是包私有 final 类，
  * {@code InlineTuiRunner}（同为 shadow）持有其字段并直接调用 {@code draw}。补排 follow-up
- * 帧需要 draw 之后立刻读到 display 的 {@code needsFollowUpFrame()}——经反射每帧一次
+ * 帧需要 draw 之后立刻读到 display 的 {@code needsFollowUpFrame()}——经反射每次 draw 一次
  * 既慢又脆（字段名漂移静默失效，IME 修复窗口被无声砍短）。同包 shadow 与既有
  * {@code InlineTuiRunner} 的治理方式一致。
  */

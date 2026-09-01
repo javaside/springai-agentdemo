@@ -859,10 +859,10 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
-     * 未送达插话的快照，供输入框上方的面板每帧读取。
+     * 未送达插话的快照，供输入框上方的面板每次 render 读取。
      *
      * <p><b>非破坏性</b>——委托到 {@link Interjections#pendingSnapshot()} 而不是
-     * {@code takePendingOnly()}。接错的话每渲染一帧就把队列清空一次，插话再也送不出去，
+     * {@code takePendingOnly()}。接错的话每次 render 都把队列清空一次，插话再也送不出去，
      * 而面板看上去还很正常（它读的就是刚被自己清掉的那份）。
      */
     @Override

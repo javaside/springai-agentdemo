@@ -99,11 +99,12 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  * Claude Code 式行内视图，改用官方 <b>Toolkit 声明式 DSL</b>（{@link InlineApp} + {@code InlineToolkitRunner}）。
  *
  * <p><b>为什么是它</b>：把「固定在输入框上方、原地更新、用完即收起」的计划面板做对，关键在于
- * <em>每帧都按 {@code preferredSize} 调用 {@code setContentHeight}（可增可减）并且每个 tick 都重绘</em>。
+ * <em>每次重绘都按 {@code preferredSize} 调用 {@code setContentHeight}（可增可减）</em>。
  * Toolkit 的运行器正是这么做的：{@code InlineScopeElement} 隐藏时 {@code preferredSize=0}，
- * 于是 {@code column} 收缩 → 视口高度收缩 → 腾出的行被回收；而「每 tick 必重绘」让底层
- * {@code InlineDisplay} 的相对光标记账始终与终端实际一致，从根上规避了此前手写渲染里「跳帧 + 收缩
- * (deleteLines)」导致的光标漂移、面板消失。
+ * 于是 {@code column} 收缩 → 视口高度收缩 → 腾出的行被回收；而「重绘必与终端实际一致」让底层
+ * {@code InlineDisplay} 的相对光标记账始终与终端实际对齐，从根上规避了此前手写渲染里「跳帧 + 收缩
+ * (deleteLines)」导致的光标漂移、面板消失。事件驱动后没有常驻 tick：重绘只在
+ * {@code requestUiUpdate / requestRender / 按键 / resize} 时发生（见 {@link #coordinator}）。
  *
  * <p><b>布局（自底向上钉在终端底部，其上是 println 出来的 scrollback）</b>：
  * <pre>
@@ -124,21 +125,21 @@ public final class CodeTuiView extends InlineApp {
     private static final Logger log = LoggerFactory.getLogger(CodeTuiView.class);
 
     /**
-     * 每帧 drain 最多向 pty 写入的<b>物理行</b>数上限（burst 限速）。
+     * 单个 UI 批 drain 最多向 pty 写入的<b>物理行</b>数上限（burst 限速）。
      *
      * <p><b>为什么必须按物理行计</b>：一条 {@link ConversationState.OutputLine} 经折行 / diff 展开
      * 可以变成十几到上百个物理行，按「条数」限速等于没限——实测限 300 条长正文实际写出 4500 行。
      * 计数点是 sink 出口（见构造里的 {@code recording}），那里是所有 println 的唯一必经之路，
-     * 数到的就是真实写进终端的行数。预算用尽即收手，剩下的留到下一帧（内容不丢，只是渐进显示）。
+     * 数到的就是真实写进终端的行数。预算用尽即收手，剩下的留到下一批（内容不丢，只是渐进显示）。
      *
-     * <p><b>为什么要限</b>：两条独立的后果。① 渲染线程在 drain 里做 markdown/高亮/折行/println，
-     * 一帧几千行会把它占住数百 ms，期间<b>按键事件全部排队</b>——用户感知就是「输出的时候打字卡死」。
+     * <p><b>为什么要限</b>：两条独立的后果。① 渲染线程在批里做 markdown/高亮/折行/println，
+     * 一批几千行会把它占住数百 ms，期间<b>按键事件全部排队</b>——用户感知就是「输出的时候打字卡死」。
      * ② macOS Terminal.app 在短时间收到大量 pty 数据时会踩到自身的 use-after-free
      * （EXC_BAD_ACCESS / SIGSEGV，整个 Terminal 崩溃关闭）；输入法预编辑（中文打字）期间屏幕被高速
      * 滚动尤其危险，崩溃栈落在 {@code setMarkedText:} → {@code selectedRange}。工具结果
      * （尤其 BashOutput）与模型吐出的大代码块都能一次产生几千行，是最常见的触发场景。
      *
-     * <p>限速到每帧 300 行（~10KB/帧，~4500 行/秒）：对正常大小的输出（≤300 行）无任何影响。
+     * <p>限速到每批 300 行（~10KB/批，~4500 行/秒）：对正常大小的输出（≤300 行）无任何影响。
      */
     private static final int MAX_ROWS_PER_DRAIN = 300;
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
@@ -158,8 +159,8 @@ public final class CodeTuiView extends InlineApp {
      */
     private final AttentionTracker attention = new AttentionTracker();
     /**
-     * 上一帧到本帧之间用户是否主动按 Esc 取消了回合（抑制「完成」铃声——他刚按过键，必然在场）。
-     * 按键线程置位、drain 消费后复位；volatile：按键与 drain 可能不在同一线程。
+     * 上一批到本批之间用户是否主动按 Esc 取消了回合（抑制「完成」铃声——他刚按过键，必然在场）。
+     * 按键线程置位、UI 批消费后复位；volatile：按键与 UI 批可能不在同一线程。
      */
     private volatile boolean userCancelledSinceLastTick;
     private final TextAreaState inputState = new TextAreaState();    // 输入源（多行编辑模型）
@@ -186,7 +187,7 @@ public final class CodeTuiView extends InlineApp {
      */
     private int lastSeenWidth;
     /**
-     * 残行预览节流：流式输出中残行每帧都在变，若每帧都重画预览行，Terminal.app 的
+     * 残行预览节流：流式输出中残行连续变化，若每次重绘都重画预览行，Terminal.app 的
      * 输入法合成（中文打字）会被高频 ANSI 打断而崩溃（EXC_BAD_ACCESS，崩溃栈在
      * NSTextInputContext/IMKInputSession）。预览行只允许每 ~150ms 更新一次，
      * 输出中的终端写入频率随之大降。渲染线程单线程访问，无需同步。
@@ -232,37 +233,37 @@ public final class CodeTuiView extends InlineApp {
     private final PhysicalOutputQueue outputQueue;
 
     /**
-     * 单个 drain tick 的时间预算（纳秒）——<b>全 tick 共享一个 deadline</b>（fix round I-3）。
+     * 单个 UI 批的时间预算（纳秒）——<b>全批共享一个 deadline</b>（fix round I-3）。
      * 行数预算（{@link #MAX_ROWS_PER_DRAIN}）之外的第二道闸：一行渲染即使很便宜，几千行叠起来
-     * 也占 UI 线程数十 ms——期间按键全部排队。deadline 在 tick 开始时计算一次，贯穿该 tick 的
-     * <b>所有</b>输出段（输出段 + 计划正文段），段与段之间不重开窗口——否则单 tick 最坏 2×预算。
+     * 也占 UI 线程数十 ms——期间按键全部排队。deadline 在批开始时计算一次，贯穿该批的
+     * <b>所有</b>输出段（输出段 + 计划正文段），段与段之间不重开窗口——否则单批最坏 2×预算。
      *
-     * <p>⚠ <b>12ms 未做实测标定</b>：取值依据是「66ms tick 内留足按键/渲染余量」的工程判断，
-     * 待 Terminal.app 实机验收（设计 §16）时以「输出期间按键延迟」为准回标。
+     * <p>⚠ <b>12ms 未做实测标定</b>：取值依据是「输出 continuation 批间隔内留足按键/渲染余量」的
+     * 工程判断，待 Terminal.app 实机验收（设计 §16）时以「输出期间按键延迟」为准回标。
      */
     private static final long MAX_DRAIN_NANOS = 12_000_000L;
 
     /**
-     * 单个 tick 从 {@code state.pending} 转入输出队列的 entry 数上限（fix round I-3）。
+     * 单个 UI 批从 {@code state.pending} 转入输出队列的 entry 数上限（fix round I-3）。
      *
-     * <p><b>为什么要限</b>：极端积压（如 20 000 条 INFO 未消费）下，旧实现一个 tick 把全部
+     * <p><b>为什么要限</b>：极端积压（如 20 000 条 INFO 未消费）下，旧实现一批把全部
      * pending 转成 entry lambda——内存虽是 O(1)/条，但 20 000 次 {@code state.pollPending()}
      * 是一坨完全在时间预算之外的同步循环（渲染线程被白占，且不受任何 drain 预算约束）。
-     * 有界转入把这笔开销摊到多个 tick；超出部分留在 {@code state.pending} 里，顺序不变、不丢内容
+     * 有界转入把这笔开销摊到多个批；超出部分留在 {@code state.pending} 里，顺序不变、不丢内容
      * （消费完队头自然轮到它们）。
      *
      * <p><b>量级依据</b>：入队 entry 本身零渲染（cursor 工厂惰性），上限只防「积压瞬间转移」的
-     * 突刺；600 ≈ 2× 物理行预算，正常体量（几十条）一个 tick 转完、无感。
+     * 突刺；600 ≈ 2× 物理行预算，正常体量（几十条）一批转完、无感。
      */
     private static final int MAX_PENDING_INTAKE_PER_TICK = 600;
 
 
     /**
-     * 刹车期间探明的「确有结果被扣住」。状态栏那句提示读它，<b>不</b>每帧去取列表。
+     * 刹车期间探明的「确有结果被扣住」。状态栏那句提示读它，<b>不</b>每批去取列表。
      *
-     * <p>为什么不能每帧取：取列表会顺手做结果限幅 + 落盘（见
+     * <p>为什么不能每批取：取列表会顺手做结果限幅 + 落盘（见
      * {@code CodingAgent.completedBackgroundTasks}——限幅刻意放在那个唯一入口上）。
-     * 闸门关着时每帧取一次，就是每 33ms 对着一份可能上百 KB 的报告做一次同步文件写，
+     * 刹车踩着时每批取一次，就是对一份可能上百 KB 的报告反复做同步文件写，
      * <b>而且跑在渲染线程上</b>：TUI 会肉眼可见地卡，模型此刻去 Read 那个 artifact
      * 还可能读到正在被重写的中间态。
      */
@@ -271,7 +272,7 @@ public final class CodeTuiView extends InlineApp {
      * 本次刹车期间是否已经探过一次。踩下刹车后只探一次，放行时复位（见 {@link #releaseBrake()}）。
      *
      * <p><b>已知的陈旧窗口</b>：探明之后若又有后台任务完成，这句提示不会立刻更新，要等下一次
-     * 用户输入。可以接受——放行刹车靠的正是用户输入，而"每帧重探"恰恰是这里要消除的东西。
+     * 用户输入。可以接受——放行刹车靠的正是用户输入，而"每批重探"恰恰是这里要消除的东西。
      */
     private boolean bgProbedWhileBraked;
     private final Path root;                                         // 工作区根目录（欢迎页展示）
@@ -316,14 +317,14 @@ public final class CodeTuiView extends InlineApp {
     private int histIndex;                                           // 回溯指针；== history.size() 表示未回溯（草稿态）
     private String histDraft = "";                                   // 开始回溯前的输入草稿（Down 越过最新时恢复）
     private String lastShownModel = "";                              // 上次已提示的模型：仅在变化时再打 ⚙ 行
-    private long animTick;                                           // 动画帧计数（Task 8：每个动画帧批自增 ~66ms），驱动状态栏波光
+    private long animTick;                                           // 动画帧计数（Task 8：每个动画帧批自增，忙态 ~66ms 一批），驱动状态栏波光
     private final ImageAttachmentDetector imageDetector = new ImageAttachmentDetector();
     /** 本次输入是否已按 Ctrl+X 取消附件。清空输入框时复位（见 {@link #clearInput}）——否则取消一次就永久失效。 */
     private boolean attachmentsCancelled;
-    // 识别结果的「按文本」记忆：render 每帧都跑（TamboUI 逐帧重绘），而 detectWithOverflow 要切词 +
-    // 遍历每个词做路径解析。detector 自己按「路径+mtime」缓存了读盘嗅探，但切词/解析仍是每帧开销，
-    // 故这里再记一层：文本没变就直接复用。代价是「文本已打好、之后才把文件拷进那个路径」要等下一次
-    // 击键才认出来——比每帧扫一遍文本划算得多。
+    // 识别结果的「按文本」记忆：render 每次重绘都跑，而 detectWithOverflow 要切词 +
+    // 遍历每个词做路径解析。detector 自己按「路径+mtime」缓存了读盘嗅探，但切词/解析仍是每次重绘的
+    // 开销，故这里再记一层：文本没变就直接复用。代价是「文本已打好、之后才把文件拷进那个路径」要等下一次
+    // 击键才认出来——比每次重绘扫一遍文本划算得多。
     private String attachCacheText;
     private ImageAttachmentDetector.Result attachCache = ImageAttachmentDetector.Result.EMPTY;
 
@@ -396,7 +397,7 @@ public final class CodeTuiView extends InlineApp {
         // 是不对的——onStop 时 runner 先关、coordinator 还要排空，必须自己持有生命周期。
         // 构造即建：View 构造后立刻绑定变化源（见 bindChangeSources）。⚠ 早于 coordinator.start()
         // 的通知（如 MCP「connecting 进入」）会被 coordinator 直接丢弃（NEW 态 no-op）——
-        // 接住启动前<b>状态</b>的不是这些通知，而是 onStart 的初始 ALL 同步 + render 每帧活读
+        // 接住启动前<b>状态</b>的不是这些通知，而是 onStart 的初始 ALL 同步 + render 每次重绘活读
         // 真相源（fix round M-1：绑定早只为 start 之后的通知不丢）。
         this.updateScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "ui-update-scheduler");
@@ -527,18 +528,18 @@ public final class CodeTuiView extends InlineApp {
         return 4;
     }
 
-    /** 每帧构造 UI。scrollback 的 println 放在 {@link #drain} 里另行推进。 */
+    /** 构造一帧 UI 树（仅在被请求的重绘时调用）。scrollback 的 println 放在 UI 批（{@link #processUpdates}）里另行推进。 */
     @Override
     protected Element render() {
         List<String> todos = state.todoSnapshot();
         List<ConversationState.SubtaskView> subs = state.subtaskSnapshot();
         List<ConversationState.BackgroundView> bgTasks = state.backgroundTasks();
         List<String> queued = state.queuedSnapshot();
-        // ⚠ 必须是非破坏性快照。接到 takePendingInterjections() 上的话，渲染一帧就把队列清空，
+        // ⚠ 必须是非破坏性快照。接到 takePendingInterjections() 上的话，一次 render 就把队列清空，
         // 而面板看上去还很正常（它读的就是刚被自己清掉的那份）——插话再也送不到模型手里。
         List<String> interjections = onSubmit.pendingInterjectionTexts();
         // 流式当前残行（未换行段）。节流：内容变化且距上次预览 ≥150ms 才更新——
-        // 输出中残行每帧都在变，预览行不节流就会每帧重写（高频 ANSI → Terminal.app 输入法崩溃，
+        // 输出中残行连续变化，预览行不节流就会每次重绘都重写（高频 ANSI → Terminal.app 输入法崩溃，
         // 见字段注释）。tail 为空（无流式）时立即清空，保证回合结束预览行马上消失。
         // （Task 8）这里是节流的<b>最终采纳点</b>：唤醒侧由 computeFollowUpFlags 的
         // schedulePreview(剩余窗口) 按需安排，到期批到达时本判定决定是否真换内容。
@@ -1008,9 +1009,9 @@ public final class CodeTuiView extends InlineApp {
      * <p><b>{@code shouldNotifyResults} 有副作用</b>（判定为该送达时消耗一次刹车额度），故只调一次、
      * 且调了就必须真的用返回值去起回合。状态栏想显示刹车状态请读 {@code brakeEngaged()}，别再试探一次。
      *
-     * <p><b>submit 抛异常时不标记已消费</b>：一次提交失败不能把结果丢掉，下一帧会再试。代价是重试也各
+     * <p><b>submit 抛异常时不标记已消费</b>：一次提交失败不能把结果丢掉，下一批会再试。代价是重试也各
      * 消耗一次额度——连续失败三次就会踩下刹车、等用户回车放行。这是刹车该有的样子：与其对着炸掉的
-     * 网关每 33ms 重投一次，不如停下来告诉用户。
+     * 网关每批重投一次，不如停下来告诉用户。
      */
     private void deliverBackgroundResults() {
         // ⚠ 输入框的真相在 inputState，不在 state——ConversationState.currentInput() 是输入迁移后留下的
@@ -1018,12 +1019,12 @@ public final class CodeTuiView extends InlineApp {
         String typed = inputState.text();
         boolean inputEmpty = typed == null || typed.isEmpty();   // 连空格都算在打字：抢跑一次比晚送一帧讨厌得多
         // ⚠ <b>先判闸门，再取列表</b>。取列表会顺手做结果限幅 + 落盘（那是设计上的「唯一入口」，
-        // 位置没错），但这个方法每 33ms 被调一次——闸门关着还照取，就是每帧一次同步文件写。
+        // 位置没错），但闸门关着还照取，就是每个空闲批一次同步文件写。
         if (busy() || !inputEmpty) return;
 
         if (notifier.brakeEngaged()) {
             // 刹车已踩下：状态栏仍要如实告诉用户「确有结果被扣住」，但探明一次就够——
-            // 之后每帧再取只是白白重写落盘文件，而屏幕上那句话一个字都不会变。
+            // 之后每批再取只是白白重写落盘文件，而屏幕上那句话一个字都不会变。
             if (!bgProbedWhileBraked) {
                 bgProbedWhileBraked = true;
                 bgPending = !onSubmit.completedBackgroundTasks().isEmpty();
@@ -1165,7 +1166,7 @@ public final class CodeTuiView extends InlineApp {
      */
     boolean hasPendingAnimationFrameForTest() { return coordinator.hasPendingAnimation(); }
 
-    /** 测试观测（Task 8）：动画帧计数（每帧一批自增；波光/压缩条的驱动量）。 */
+    /** 测试观测（Task 8）：动画帧计数（每个动画帧批自增一次；波光/压缩条的驱动量）。 */
     long animTickForTest() { return animTick; }
 
     /** 测试观测：初始全量同步是否完成。 */
@@ -1246,7 +1247,7 @@ public final class CodeTuiView extends InlineApp {
      */
     EventResult feedKeyForTest(KeyEvent k) { return new InputBox().handleKeyEvent(k, true); }
 
-    /** 测试专用：构造一帧 UI 树（等价渲染线程每帧调用的 render）。用于回归「每帧构造子面板」类空指针。 */
+    /** 测试专用：构造一帧 UI 树（等价渲染线程被请求时调用的 render）。用于回归「render 构造子面板」类空指针。 */
     Element renderForTest() { return render(); }
 
     /** 测试专用：读取输入框当前文本 / 光标（行、列），断言编辑快捷键的落点。 */
@@ -1469,7 +1470,7 @@ public final class CodeTuiView extends InlineApp {
             //
             // 为什么 resize 中要钉第 0 行：内联显示区的位置全靠「光标在显示区第几行」这条相对
             // 记账。终端变窄时把屏上内容重新折行，光标跟着**自己那行字符**走——它上方每一行
-            // （整宽的框顶边框）被拆成几行，物理落点就比记账低几行；此后每帧重画从偏低处开始，
+            // （整宽的框顶边框）被拆成几行，物理落点就比记账低几行；此后每次重画从偏低处开始，
             // 帧往下爬、旧帧顶部留残迹，拖一次窗口累积一片（tmux 实测连拖 10 档留 20+ 行）。
             // 钉在第 0 行上方无行可拆、位移恒 0（同一实测归零）。两头都要：状态相关停放，
             // parkCursorAtTop 的生命周期见字段注释。已知代价：每轮拖拽第一步光标还在文本行，
@@ -2010,7 +2011,7 @@ public final class CodeTuiView extends InlineApp {
         quit();
     }
 
-    /** 提交：忙时把消息入队（回合结束由 {@link #drain} 自动出队提交），空闲时立即提交。均清空输入框。 */
+    /** 提交：忙时把消息入队（回合结束由 UI 批自动出队提交），空闲时立即提交。均清空输入框。 */
     private void submitInput() {
         String text = inputState.text();
         if (text == null || text.isBlank()) {
@@ -2541,7 +2542,7 @@ public final class CodeTuiView extends InlineApp {
     }
 
     private Element[] thinkingSettingsChildren() {
-        // scope(boolean, ...) 的第二个参数每帧都会立即求值（见 render 里所有 children 方法），
+        // scope(boolean, ...) 的第二个参数每次 render 都会立即求值（见 render 里所有 children 方法），
         // 未进入二级面板时 thinkingTarget 为 null，必须先在这里挡掉，否则 onSubmit.thinkingSettings(null, …)
         // 会一路抛到 ProviderRegistry。
         if (thinkingTarget == null) return new Element[0];
@@ -2608,7 +2609,7 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 技能选择器面板：标题 + 以高亮项为中心的固定窗口。
      *
-     * <p>不能把全部技能都塞进 InlineDisplay：面板高度超过终端后，运行器每帧按 preferredSize
+     * <p>不能把全部技能都塞进 InlineDisplay：面板高度超过终端后，运行器每次重绘按 preferredSize
      * 扩缩显示区，终端又会滚动/重排，二者互相追赶就表现为整屏不停闪动、上下晃动。固定可见行数后，
      * 面板高度稳定；高亮移出窗口时才平移内容，仍可遍历并选择全部技能。
      */
@@ -2707,7 +2708,7 @@ public final class CodeTuiView extends InlineApp {
      *  高亮走纯前景 PICK_SEL（底色条会串到下一项，见 Theme.PICK_SEL 注释）。 */
     private Element[] mcpPickerChildren() {
         List<McpRegistry.ServerView> list = onSubmit.mcpServers();
-        if (list.isEmpty()) return new Element[0];               // scope 每帧 eager 求值：首行判空
+        if (list.isEmpty()) return new Element[0];               // scope 每次 render eager 求值：首行判空
         int sel = clampIndex(pickIndex, list.size());
         List<Element> els = new ArrayList<>();
         els.add(text("  MCP 服务器（↑↓ 选择 · Enter 启用/禁用 · Tab 查看工具 · Esc 关闭）").style(PICK_TITLE));
@@ -2879,8 +2880,8 @@ public final class CodeTuiView extends InlineApp {
 
     /** 作答面板：进度 + header + 问题文本 + 逐项选项（单选 ❯ 高亮）。 */
     private Element[] askChildren() {
-        // scope(cond, el) 会「先构造 el 再按 cond 决定是否显示」——即本方法每帧都被调用（含非作答态），
-        // 故必须先 null 判空，否则 activeAsk==null 时解引用会每帧崩渲染线程（单测只驱动按键、不跑 render，漏掉此路径）。
+        // scope(cond, el) 会「先构造 el 再按 cond 决定是否显示」——即本方法每次 render 都被调用（含非作答态），
+        // 故必须先 null 判空，否则 activeAsk==null 时解引用会在渲染线程崩（单测只驱动按键、不跑 render，漏掉此路径）。
         if (activeAsk == null) return new Element[0];
         List<QuestionSpec> qs = activeAsk.questions();
         QuestionSpec q = qs.get(askQ);
@@ -2982,7 +2983,7 @@ public final class CodeTuiView extends InlineApp {
      * 高亮走纯前景 {@link Theme#PICK_SEL}（底色条会串到下一项，见 Theme.PICK_SEL 注释）。
      */
     private Element[] permissionChildren() {
-        // scope 每帧 eager 求值：首行必须判空，否则非审批态每帧崩渲染线程
+        // scope 每次 render eager 求值：首行必须判空，否则非审批态在渲染线程崩
         if (activePermission == null) return new Element[0];
         PermissionRequest r = activePermission;
         List<PermOption> opts = permOptions(r);
@@ -3135,7 +3136,7 @@ public final class CodeTuiView extends InlineApp {
      * 高亮走纯前景 {@link Theme#PICK_SEL}（底色条会串到下一项，见 Theme.PICK_SEL 注释）。
      */
     private Element[] planChildren() {
-        // scope 每帧 eager 求值：首行必须判空，否则非计划态每帧崩渲染线程
+        // scope 每次 render eager 求值：首行必须判空，否则非计划态在渲染线程崩
         if (activePlan == null) return new Element[0];
         List<Element> els = new ArrayList<>();
         els.add(text("  📋 计划待批准（正文见上方）").style(PICK_TITLE));
@@ -3253,7 +3254,7 @@ public final class CodeTuiView extends InlineApp {
      * <p>高亮走纯前景 {@code PICK_SEL}（底色条会串到下一项，见 {@code Theme.PICK_SEL} 注释）。
      */
     private Element[] permsPanelChildren() {
-        // scope 每帧 eager 求值（非面板态也会进来）：首行判空，否则每帧崩渲染线程
+        // scope 每次 render eager 求值（非面板态也会进来）：首行判空，否则渲染线程崩
         if (!pickingPerms) return new Element[0];
         // 审批/计划/作答模态在前台时按键归它们（见 onInputKey 的分支顺序），此时把面板收起来，
         // 免得屏幕上并排两个面板、而其中一个根本按不动。
@@ -3403,7 +3404,7 @@ public final class CodeTuiView extends InlineApp {
      * <p>高亮走纯前景 {@link Theme#PICK_SEL}（底色条会串到下一项，见 {@code Theme.PICK_SEL} 注释）。
      */
     private Element[] tasksPanelChildren() {
-        // scope 每帧 eager 求值（非面板态也会进来）：首行判空，否则每帧崩渲染线程
+        // scope 每次 render eager 求值（非面板态也会进来）：首行判空，否则渲染线程崩
         if (!pickingTasks) return new Element[0];
         // 模态在前台时按键归它们（见 onInputKey 的分支顺序），此时把面板收起来，
         // 免得屏幕上并排两个面板、而其中一个根本按不动。
@@ -3597,7 +3598,7 @@ public final class CodeTuiView extends InlineApp {
     /**
      * ⏱ 后台任务面板：计数标题 + 每个任务一行（▶/✓/✗ 分色 + id + agent + 描述 + 耗时 + 当前工具）。
      *
-     * <p><b>首行必须判空</b>——TamboUI 的 {@code scope(cond, children)} 每帧 <b>eager 求值</b>：
+     * <p><b>首行必须判空</b>——TamboUI 的 {@code scope(cond, children)} 每次 render <b>eager 求值</b>：
      * 即使 cond 为 false，children 也会被构造一次。不判空会在零任务时越界（同 {@link #subtaskChildren}）。
      *
      * <p><b>与 ⟐ 任务面板分开显示</b>：那个是本回合的前台子 agent（回合一结束就清），这个跨回合存活。
@@ -3834,7 +3835,7 @@ public final class CodeTuiView extends InlineApp {
      * 而「现在会不会问你」比「有几个后台任务」更不该被截掉。
      *
      * <p>刹车状态读 {@code brakeEngaged()} 而不是再调一次判定——那个方法有副作用（会消耗刹车额度），
-     * 拿它来试探等于每帧烧掉一次自动回合的名额。
+     * 拿它来试探等于每次状态行重绘烧掉一次自动回合的名额。
      */
     private String backgroundStatusSuffix() {
         StringBuilder sb = new StringBuilder();

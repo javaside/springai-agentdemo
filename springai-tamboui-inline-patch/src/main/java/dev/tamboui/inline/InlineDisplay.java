@@ -58,9 +58,11 @@ public final class InlineDisplay implements AutoCloseable {
     /**
      * 编辑活动后连续重申光标带的帧数，覆盖 IME 预编辑异步、可能滞后的清理。
      *
-     * <p>换算成时长要乘调用方的 tickRate，<b>不是固定毫秒数</b>：code-tui 现在跑 100ms/帧
-     * （见其 {@code configure} 的降频注释），窗口即 ~800ms。任何按写死毫秒等窗口耗尽的验证
-     * （如 pty 冒烟的 pump 时长）都必须按「帧数 × 当前帧长」重算，否则会随帧率调整静默错位。
+     * <p>换算成时长要乘调用方的实际帧间隔，<b>不是固定毫秒数</b>：code-tui 事件驱动后没有
+     * 全局 tick，窗口内的重申帧由 runner 的 IME follow-up 一次性任务按 ~100ms/帧补排
+     * （见 {@code InlineTuiRunner.IME_FOLLOW_UP_DELAY_MS}），窗口即 ~800ms。任何按写死毫秒
+     * 等窗口耗尽的验证（如 pty 冒烟的 pump 时长）都必须按「帧数 × 当前帧间隔」重算，
+     * 否则会随帧率调整静默错位。
      */
     private static final int CURSOR_BAND_REPAIR_FRAMES = 8;
     /** 光标带半径：光标行上下各一行（顶边框/底边框正好落在此带内）。 */

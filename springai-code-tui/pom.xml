@@ -75,7 +75,7 @@
             <artifactId>tamboui-widgets</artifactId>
         </dependency>
         <!-- 声明式 DSL（InlineApp / InlineToolkitRunner / scope 折叠面板 / textInput）：
-             固定在输入框上方、原地更新、用完收缩的计划面板靠它按 preferredSize 每帧增减高度实现。 -->
+             固定在输入框上方、原地更新、用完收缩的计划面板靠它按 preferredSize 在每次重绘增减高度实现。 -->
         <dependency>
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-toolkit</artifactId>

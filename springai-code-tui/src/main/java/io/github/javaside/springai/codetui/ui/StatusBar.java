@@ -79,7 +79,7 @@ final class StatusBar {
         List<Span> spans = new ArrayList<>(n);
         if (n == 0) return spans;
         int period = n + 6;                           // 光带扫完 + 一段间隔再重来（脉冲感）
-        int center = (int) ((animTick / 2) % period); // 每 2 帧(~66ms)前进一格，避免过快闪烁
+        int center = (int) ((animTick / 2) % period); // 每 2 个动画帧(~132ms)前进一格，避免过快闪烁
         for (int i = 0; i < n; i++) {
             spans.add(Span.styled(String.valueOf(label.charAt(i)), Math.abs(i - center) <= 1 ? SHIMMER_HI : base));
         }
