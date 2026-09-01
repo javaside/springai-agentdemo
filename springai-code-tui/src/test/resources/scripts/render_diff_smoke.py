@@ -42,12 +42,15 @@ def main():
         session.wait_for(resize_smoke.WELCOME, timeout=30)
         session.wait_stable(quiet=1.1)
 
-        mark = len(session.raw)
-        session.pump(0.5)
-        idle = session.raw[mark:]
-        if idle:
-            die("静止 500ms 应零输出，实际 %d 字节：%r" % (len(idle), idle[:160]), session)
-        print("IDLE OK: 500ms / ~15 ticks emitted zero bytes")
+        # 事件驱动后没有「多少个 tick」可数。确认画面/字节都已停稳，再清空原始累积器，
+        # 连续观察两秒；任何不可见 ANSI 也必须被计入，证明没有永久 drain。
+        session.wait_stable(quiet=1.0, timeout=8)
+        session.raw = b""
+        session.pump(2.0)
+        if session.raw:
+            die("完全静止 2s 应零终端字节，实际 %d 字节：%r"
+                % (len(session.raw), session.raw[:160]), session)
+        print("IDLE OK: raw accumulator cleared; 2.0s emitted zero terminal bytes")
 
         # 光标带修复语义：任何触及光标行 ±1 的编辑（含 ASCII）都会整行重申输入框
         # 顶边框/文本行/底边框（拼音被取消时应用收不到事件，损坏只能靠下一次编辑修复），
@@ -87,13 +90,11 @@ def main():
             die("CJK 输入后左右竖线必须保留：%r" % input_row, session)
         print("CJK OK: complete glyph patch, band corners and borders reasserted")
 
-        # 删空输入后边框与四角必须完好（空框缺角案例），且修复窗口耗尽后恢复静止零输出。
-        # ⚠ pump 时长必须覆盖 CURSOR_BAND_REPAIR_FRAMES(8) × tickRate。tickRate 已从 40ms 降到
-        # 100ms（见 CodeTuiView.configure 的降频注释），窗口因此是 ~800ms 而非 ~320ms：
-        # 沿用旧的 0.6s 会让窗口剩两帧没走完，那两帧的重申被下面「应零输出」的断言算成失败。
-        # 写死的等待时长会随任何一次帧率调整静默错位，故这里按帧数×帧长算，留一倍余量。
+        # 删空输入后边框与四角必须完好（空框缺角案例）。IME/光标带补帧现在按需调度，
+        # 所以等待可观测画面停稳，不再用「补帧数 × tickRate」推算时长。
         session.write(b"\x15")
-        session.pump(1.2)
+        if not session.wait_stable(quiet=0.8, timeout=8):
+            die("删空后的按需补帧未停稳", session)
         rows = list(session.screen.display)
         box_rows = [i for i, line in enumerate(rows) if line.lstrip().startswith("╭")]
         if not box_rows:
@@ -105,11 +106,11 @@ def main():
             die("删空后文本行右竖线缺失：%r" % rows[top + 1], session)
         if not rows[top + 2].rstrip().endswith("╯"):
             die("删空后底边框右圆角缺失：%r" % rows[top + 2], session)
-        mark = len(session.raw)
-        session.pump(0.5)
-        idle = session.raw[mark:]
-        if idle:
-            die("修复窗口耗尽后应恢复零输出，实际 %d 字节：%r" % (len(idle), idle[:160]), session)
+        session.raw = b""
+        session.pump(2.0)
+        if session.raw:
+            die("按需补帧完成后 2s 应零终端字节，实际 %d 字节：%r"
+                % (len(session.raw), session.raw[:160]), session)
         print("REPAIR-DRAIN OK: borders intact after clearing input, silence restored")
 
         session.write(b"\x15/exit\r")

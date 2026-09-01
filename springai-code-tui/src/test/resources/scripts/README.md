@@ -1,46 +1,67 @@
-# src/test/resources/scripts/
+# Code TUI PTY smoke scripts
 
-辅助脚本，用于端到端冒烟测试等需要真实运行时环境的场景。
+这些脚本从真实 PTY 启动已打包的 Code TUI，并用 `pyte` 回放终端字节。除明确标为 `npx` 的两项外，脚本使用本地桩或不提交模型请求，不需要网络和真实 API key。
 
-| 脚本 | 用途 |
-|---|---|
-| `clear_smoke.py` | 在真实伪终端 (PTY) 中启动应用，驱动 `/help` + `/clear`，验证清屏行为。 |
-| `render_diff_smoke.py` | 行内差分渲染字节契约：静止帧零输出、ASCII/CJK 输入不触发整行擦除或重写边框/状态栏。 |
-| `resize_smoke.py` | resize 合并契约：前 100ms 不逐事件清屏，停稳后单次清理回滚缓冲并按新宽度重放。 |
-| `memory_smoke.py` | 在真实伪终端中启动应用，验证长时记忆工具在启动时正确装配、存储目录自动创建。 |
-| `mcp_smoke.py` | 在真实伪终端中启动应用（配置真实 stdio MCP server），验证 MCP 装配不崩、工具被发现、`/exit` 及时退出、无孤儿子进程。**需 `npx`（Node.js）。** |
-| `mcp_manage_smoke.py` | 在真实伪终端中驱动 `/mcp` 面板：禁用→断言行翻转 + `mcp.json` 回写 `enabled:false`，再启用→断言真实重连 + 回写翻回，Esc 关面板、退出无孤儿进程。用 `-Duser.home` 隔离用户层配置。**需 `npx`（Node.js）。** |
-| `attachment_smoke.py` | 用户贴图的附件行实机冒烟：输入图片路径→附件行出现、**`Ctrl+X` 取消**、取消态在本次输入内保持、清空后复位、非图片路径不误附。**`Ctrl+X` 只有 pty 能验**——单测入口 `feedKeyForTest` 绕过 TamboUI 按键路由器（`Tab`/`Shift+Tab` 当年就是这么被 `FOCUS_NEXT`/`FOCUS_PREVIOUS` 悄悄吃掉的）。**但 pty 只证「字节到了应用能处理」**，证明不了「用户按下组合键时终端真的发出那个字节」——前任 `Ctrl+G` 就是被 Chrome/Gemini 的 OS 级全局热键抢走的，那一段只有真人实机按一次才算验过。**不需要 key、不需要网络**（全程不按 Enter）。 |
-| `permission_smoke.py` | 权限层实机冒烟：`Shift+Tab` 模式循环（含斜杠菜单 / `/mcp` 面板里的裸 Tab 守卫双向验证）、`/permissions` 只读报告，以及**完整的 ASK 阻塞握手**——脚本内起一个 DeepSeek SSE 桩模型（`DEEPSEEK_BASE_URL` 指过去），让它发起 `Bash(git push …)`，断言审批面板渲染（五选项各占一物理行、高亮**纯前景无背景色**）、拒绝后回合继续、Esc 中断后下一条消息不报 400。**不需要真实 key、不需要网络。** |
-| `background_smoke.py` | 后台子 agent（`run_in_background`）实机冒烟：`/tasks` 空态、⏱ 面板与状态栏后缀、任务完成后**自动起回合**且通知按 `\n` 逐物理行渲染、`/tasks` → `k` → Enter 终止。脚本内起 DeepSeek SSE 桩模型（按最后一条消息路由，既扮主 agent 也扮被派出的子 agent），整条链是真的。**最有价值的一条断言**：24 行小窗口 + 3 条任务时**输入框是否还在可见区内**——⏱ 面板在输入框上方多占行，那是 `InlineDisplay` 的行数记账问题，离屏 Buffer 没有「屏幕只有 24 行」这个约束、永远测不出来。**不需要真实 key、不需要网络。** |
-| `model_memory_smoke.py` | 模型记忆实机冒烟：进程 A 用 `/model` 选一个非默认模型 → 断言切换确认行 + `model.json` 落盘 → `/exit`；进程 B 同目录**不带 `-c`** 重启 → 断言状态栏一上来就是它、且没有回退提示。**单测替代不了**：`restoreLastModel` 可以写得完全正确，却因为在 `main` 里插错位置而彻底不生效，那种错一条单测都不会红。**不需要真实 key、不需要网络。** |
-| `attention_smoke.py` | 终端注意提示实机冒烟（tab 标题 + BEL，仿 Claude Code）：完整回合结束后断言 OSC 0/2 标题含「已完成」且发出过 BEL（pyte 解析 `screen.title`），用户再按任意键断言默认标题写回；另验证 Esc 抑制路径。**单测替代不了**：`TerminalAttention` 反射进 TamboUI 私有 `Backend`，只有真终端（`runner() != null`）才走得到。脚本内起 DeepSeek SSE 桩模型。**不需要真实 key、不需要网络。** |
+## 前置依赖
 
-运行前需要先编译项目：
+- macOS/Linux PTY 设施：`openpty`、`fcntl`、`termios`、`TIOCSWINSZ`。
+- JDK 与 Maven；`java`、`mvn` 在 `PATH`。
+- `/usr/bin/python3` 与 `pyte`。项目既有约定允许从该解释器的 user site-packages 加载 `pyte`；若缺失，按项目/开发机既有 Python 用户环境安装说明处理，不要系统级安装。
+- 仅 `mcp_smoke.py`、`mcp_manage_smoke.py` 需要 Node.js 的 `npx`，并可能由 `npx` 获取 MCP 包；它们不属于本地/无网络脚本集。
+
+从**仓库根目录**先执行精确构建命令：
 
 ```bash
-mvn -q -pl springai-code-tui -am compile
+mvn -q -pl springai-tamboui-inline-patch -am install -DskipTests
+mvn -q -pl springai-code-tui -am package -DskipTests
+mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target/cp.txt
 ```
 
-从项目根目录执行：
+## 脚本清单
+
+| 脚本 | 验收范围 | 网络/额外依赖 |
+|---|---|---|
+| `attachment_smoke.py` | 附件识别、`Ctrl+X` 取消及输入内取消态。 | 本地 |
+| `attention_smoke.py` | 完成/取消后的终端标题与 BEL。 | 本地 SSE 桩 |
+| `background_smoke.py` | 后台任务面板、通知、自动续回合、终止。 | 本地 SSE 桩 |
+| `clear_smoke.py` | `/help` 后 `/clear` 真清屏并恢复欢迎横幅。 | 本地 |
+| `edit_shortcut_smoke.py` | 输入编辑快捷键及边界行为。 | 本地 |
+| `event_driven_fairness_smoke.py` | 5,000 行流式输出期间的按键公平性、完整性、延迟和静止后 2.2s 零终端字节。 | 本地 SSE 桩 |
+| `interjection_smoke.py` | 忙时插话 UI、模型消息顺序及 Esc 回填。 | 本地 SSE 桩 |
+| `memory_smoke.py` | 长时记忆工具装配与存储目录。 | 本地 |
+| `model_memory_smoke.py` | `/model` 选择持久化及重启恢复。 | 本地 |
+| `permission_smoke.py` | 权限模式、面板、ASK 阻塞握手与取消历史。 | 本地 SSE 桩；配置中禁用 MCP，不调用 `npx` |
+| `render_diff_smoke.py` | 局部差分、按需 IME 补帧、完全静止 2s 零终端字节。 | 本地 |
+| `resize_smoke.py` | 真 `SIGWINCH`、generation settle 的 `ESC[3J` 重放与最终画面/光标。 | 本地；pyte 不支持 reflow，视觉 reflow 仍需实机 |
+| `stream_box_smoke.py` | 流式预览期间无双边框、正文完整、按需 IME 补帧完成。 | 本地 SSE 桩 |
+| `mcp_smoke.py` | 真实 stdio MCP 装配、工具发现、退出及无孤儿进程。 | **需要 `npx`/Node.js，可能联网** |
+| `mcp_manage_smoke.py` | `/mcp` 禁用/启用、配置回写及真实重连。 | **需要 `npx`/Node.js，可能联网** |
+
+## 本地/无网络命令
 
 ```bash
-python3 src/test/resources/scripts/clear_smoke.py
-python3 src/test/resources/scripts/render_diff_smoke.py
-python3 src/test/resources/scripts/resize_smoke.py
-python3 src/test/resources/scripts/memory_smoke.py
-python3 src/test/resources/scripts/mcp_smoke.py
-python3 src/test/resources/scripts/mcp_manage_smoke.py
-python3 src/test/resources/scripts/attachment_smoke.py
-python3 src/test/resources/scripts/permission_smoke.py
-python3 src/test/resources/scripts/background_smoke.py
-python3 src/test/resources/scripts/model_memory_smoke.py
-python3 src/test/resources/scripts/attention_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/event_driven_fairness_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/render_diff_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/stream_box_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/resize_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/permission_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/interjection_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/attachment_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/clear_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/background_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/attention_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/edit_shortcut_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/memory_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/model_memory_smoke.py
 ```
 
-> `mcp_smoke.py` / `mcp_manage_smoke.py` / `attachment_smoke.py` / `permission_smoke.py` / `model_memory_smoke.py` / `attention_smoke.py` 额外需要 `dependency:build-classpath` 生成的 `target/cp.txt`：
->
-> ```bash
-> mvn -q -pl springai-tamboui-inline-patch -am install -DskipTests
-> mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target/cp.txt
-> ```
+## `npx` 脚本命令
+
+仅在 Node.js、`npx` 和所需 MCP 包可用且允许相关网络行为时执行：
+
+```bash
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/mcp_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/mcp_manage_smoke.py
+```
+
+所有脚本成功时退出码为 0 并打印 `SMOKE PASS`；失败时退出非零并尽量打印最后画面/原始字节诊断。`event_driven_fairness_smoke.py` 的 `CODETUI_FAIRNESS_MUTATE_IDLE=1` 仅用于证明 idle 原始字节断言能变红，不是正常验收命令。

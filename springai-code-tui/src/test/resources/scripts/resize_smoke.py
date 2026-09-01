@@ -56,7 +56,9 @@ never reach them, so each drag deposited a full stale copy of the UI (banner +
 box + status line, plus screenfuls of blanks) into history: scrolling back was
 garbage. The fix: the stage-2 settle replay (event-driven one-shot settle in
 UiUpdateCoordinator + CodeTuiView.replayAfterResize) erases scrollback too (ESC[3J, same path as
-/clear) and replays the WHOLE scrollTail keep, so scrolling back shows a clean
+/clear) and replays the WHOLE scrollTail keep. The smoke observes that replay
+marker and the final screen/cursor state; it does not infer completion from
+`33ms × 4` or any other frame-count timing. Scrolling back then shows a clean
 re-wrapped conversation instead of frame corpses. pyte has no scrollback, so
 this script asserts the CONTRACT on the raw byte stream: after each resize
 settles (~300ms quiet), ESC[3J must have been emitted. Screen-level truth is

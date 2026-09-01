@@ -236,7 +236,10 @@ def main():
             session.pump(0.2)
             if (BODY % (LINES - 1)) in session.screen_text():
                 break
-        session.wait_stable(quiet=0.8, timeout=10)
+        # 回合完成后仍可能有按需 IME/光标带补帧；以画面连续静止为完成信号，
+        # 不再假定固定数量的 100ms tick。
+        if not session.wait_stable(quiet=1.0, timeout=10):
+            rs.die("回合结束后的按需 IME 补帧未完成", list(session.screen.display))
         raw = session.raw[mark:]
 
         ghosts, worst = audit_intermediate_frames(raw)
