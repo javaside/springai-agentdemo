@@ -849,17 +849,37 @@ class CodeTuiViewEventWiringTest {
         assertFalse(v.hasPendingPreviewScheduledForTest(),
                 "长观测窗结束后不得有 preview 排队（静止残行无 demand）");
 
-        // 下一个真 token 到达时 preview 链必须重新启动（不因修复而丢失唤醒）。
-        // 观测窗已超过节流窗口，生产会 schedulePreview(ZERO)：future 可能在本线程断言前完成，
-        // 因此不能要求它仍处于 pending。ZERO 到期的确定性可观察结果是二者之一：
-        // future 尚在飞，或它已 publish VIEW dirty bits（等待下一 UI 批消费）。
+        // 下一个真 token 到达时 preview 链必须重新启动（不因修复而丢失唤醒）。记录最终可观察量，
+        // 不断言 ZERO future / dirty bits 的瞬时中间态。把节流时钟移到足够早，确保本次 preview
+        // delay 为 ZERO；随后只驱动 coordinator 已排 UI update，直到「批已消费 + render 已采纳
+        // + preview 链再次静止」这一完整生命周期成立。deadline 只负责让失败有界。
+        int beforeRestartBatches = v.processedBatchesForTest();
+        String beforeRestartTail = v.lastPreviewedTailForTest();
+        String expectedTail = beforeRestartTail + " 新内容";
+        v.makePreviewImmediatelyDueForTest();
         s.onAssistantToken(1L, " 新内容");
-        v.runPendingUiUpdatesForTest();
-        assertTrue(v.hasPendingPreviewScheduledForTest()
-                        || v.coordinatorForTest().pendingDirtyBits() != 0,
-                "新 token（未采纳内容出现）必须重新启动 preview：timer 尚在飞或到期 VIEW 已发布");
-        assertTrue(ViewScreen.of(v).contains("新内容"),
-                "节流窗口已过（观测 420ms）→ 新残行当帧采纳");
+
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        do {
+            v.runPendingUiUpdatesAndRenderForTest();
+            if (v.processedBatchesForTest() >= beforeRestartBatches + 2
+                    && expectedTail.equals(v.lastPreviewedTailForTest())
+                    && !v.hasPendingPreviewScheduledForTest()
+                    && v.coordinatorForTest().pendingDirtyBits() == 0) {
+                break;
+            }
+            TimeUnit.MILLISECONDS.sleep(1);
+        } while (System.nanoTime() < deadlineNanos);
+
+        assertTrue(v.processedBatchesForTest() >= beforeRestartBatches + 2,
+                "新 token 后必须消费 producer 批与 ZERO preview wake 批（before="
+                        + beforeRestartBatches + ", after=" + v.processedBatchesForTest() + ")");
+        assertEquals(expectedTail, v.lastPreviewedTailForTest(),
+                "coordinator 驱动的批后 render 必须采纳新残行，不能靠测试直接 render");
+        assertFalse(v.hasPendingPreviewScheduledForTest(),
+                "新 token 的 ZERO preview wake 消费后，preview future 必须再次静止");
+        assertEquals(0, v.coordinatorForTest().pendingDirtyBits(),
+                "新 token 的 preview wake 必须已被 UI batch 消费，不得残留 dirty bits");
     }
 
     /** 残行清空立即 VIEW、不等节流（§10.1）：回合结束预览行马上消失。 */

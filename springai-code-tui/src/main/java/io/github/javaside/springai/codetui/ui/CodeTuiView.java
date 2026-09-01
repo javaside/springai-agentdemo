@@ -1105,6 +1105,18 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
+    /**
+     * 测试专用：逐个执行已投递 UI update，并在每个 action 后构造一帧，等价生产 runner 的
+     * 「UI action → coalesced draw」。用于确定性观察 coordinator 批实际触发的 render 采纳。
+     */
+    void runPendingUiUpdatesAndRenderForTest() {
+        Runnable action;
+        while ((action = pendingUiUpdatesForTest.poll()) != null) {
+            action.run();
+            render();
+        }
+    }
+
     /** 测试专用：等价 onStart 的关键步骤（不真正起 runner）：coordinator start + 欢迎横幅 + 初始 ALL 同步。 */
     void startForTest() {
         coordinator.start();
@@ -1170,6 +1182,14 @@ public final class CodeTuiView extends InlineApp {
             new java.util.concurrent.atomic.AtomicInteger();
 
     int processedBatchesForTest() { return processedBatches.get(); }
+
+    /** 测试观测：render 最后采纳的流式残行，只读生产字段。 */
+    String lastPreviewedTailForTest() { return lastPreviewedTail; }
+
+    /** 测试控制：把 preview 节流时钟移到足够早，使下一次未采纳残行使用 ZERO delay。 */
+    void makePreviewImmediatelyDueForTest() {
+        lastPreviewAtNanos = System.nanoTime() - PREVIEW_THROTTLE_NANOS - 1L;
+    }
 
     /** 测试观测：本地 UI 状态变化是否主动发布过 VIEW。 */
     private volatile boolean localViewPublished;

@@ -360,3 +360,46 @@ mvn -f <worktree>/pom.xml -pl springai-code-tui -am test
 ### 8.4 Concerns
 
 - 无新增 concern；仍未执行范围外的 PTY / Terminal.app 人工验收。
+
+---
+
+## 9. Fix round 3（2026-09-01）
+
+### 9.1 修复摘要
+
+- 重做 `preview_staticTailDoesNotSelfRescheduleHotLoop` 的新-token 重启段，不再断言
+  `hasPendingPreview || pendingDirtyBits != 0` 这类 ZERO future/dirty bits 瞬时状态，也不再用
+  `ViewScreen.of(v)` 的直接 render 作为消费证明。
+- 新增 package-private seams：`lastPreviewedTailForTest()` 只读真实采纳字段；
+  `makePreviewImmediatelyDueForTest()` 将 `lastPreviewAtNanos` 移到足够早，使下一次未采纳残行确定走
+  ZERO delay；`runPendingUiUpdatesAndRenderForTest()` 按生产 runner 的 action→draw 顺序逐批驱动。
+- 发 token 前记录 batch/tail；发 token 后在 1s 失败 deadline 内循环驱动 coordinator 队列，最终断言：
+  producer 批与 ZERO preview wake 批均被消费（batch 至少 +2，因此也满足“> before”）、
+  `lastPreviewedTail` 等于预期完整新残行、preview future 为 false、dirty bits 为 0。
+- **C-1 的 420ms 长观测钉保持原样**：84×5ms、`extra <= 10`，没有缩短或放宽。
+
+### 9.2 RED / GREEN 证据
+
+- RED：临时把生产 demand 从
+  `!curTail.isEmpty() && !curTail.equals(lastPreviewedTail)` 破坏为 `!curTail.isEmpty()`，运行单个 C-1
+  测试稳定红于 420ms 长观测上界：实际新增 **104890** 批（`extra <= 10` 失败）。随后立即恢复生产条件。
+- GREEN：恢复生产修复后，单个 C-1 生命周期测试通过；完整 EventWiringTest 与全模块回归通过。
+
+### 9.3 测试结果
+
+```text
+CodeTuiViewEventWiringTest ×5
+→ 5/5 BUILD SUCCESS；每次 Tests run: 30, Failures: 0, Errors: 0, Skipped: 0
+
+mvn -f <worktree>/pom.xml -pl springai-code-tui -am test
+→ patch: 45；code-tui: 1810；合计 Tests run: 1855,
+  Failures: 0, Errors: 0, Skipped: 10 — BUILD SUCCESS
+```
+
+### 9.4 Commit
+
+本节所在提交 — `test(code-tui): prove preview wake lifecycle`
+
+### 9.5 Concerns
+
+- 无新增 concern；仍未执行范围外的 PTY / Terminal.app 人工验收。
