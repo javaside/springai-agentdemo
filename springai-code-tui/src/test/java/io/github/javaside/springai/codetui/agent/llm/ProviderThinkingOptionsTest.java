@@ -95,6 +95,17 @@ class ProviderThinkingOptionsTest {
         assertFalse(provider.thinkingCapabilities("claude-fable-5").supportsDisable());
     }
 
+    /** fable 系（含新旗舰 claude-fable-5-1，2026-08 发布）thinking always-on 不可禁用；effort 档位同 opus。 */
+    @Test
+    void anthropicFable5FamilyCannotDisableThinking() {
+        AnthropicProvider provider = new AnthropicProvider("k");
+        assertFalse(provider.thinkingCapabilities("claude-fable-5-1").supportsDisable());
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.options("claude-fable-5-1", ThinkingConfig.disabled()));
+        assertEquals(List.of("low", "medium", "high", "max"),
+                provider.thinkingCapabilities("claude-fable-5-1").effortValues());
+    }
+
     @Test
     void customModelsUseProviderFallbackCapabilities() {
         assertTrue(new OpenAiProvider("k", null, "private-gpt").thinkingCapabilities("private-gpt").configurable());

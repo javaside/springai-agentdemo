@@ -24,6 +24,7 @@ public final class ModelContextWindows {
             Map.entry("zhipu:glm-5.3-flash", 1_000_000L),
             Map.entry("zhipu:glm-4.6v", 128_000L),
             Map.entry("zhipu:glm-4.5v", 64_000L),
+            Map.entry("anthropic:claude-fable-5-1", 1_000_000L),
             Map.entry("anthropic:claude-opus-5", 1_000_000L),
             Map.entry("anthropic:claude-fable-5", 1_000_000L),
             Map.entry("anthropic:claude-sonnet-5", 1_000_000L),

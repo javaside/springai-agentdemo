@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.javaside</groupId>
         <artifactId>springai-agentdemo</artifactId>
-        <version>1.19.0</version>
+        <version>1.19.1</version>
     </parent>
 
     <artifactId>springai-tamboui-inline-patch</artifactId>
