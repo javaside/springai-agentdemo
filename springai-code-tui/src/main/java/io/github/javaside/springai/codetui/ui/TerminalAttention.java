@@ -1,11 +1,8 @@
 package io.github.javaside.springai.codetui.ui;
 
-import dev.tamboui.terminal.Backend;
 import dev.tamboui.toolkit.app.InlineToolkitRunner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.lang.reflect.Field;
 
 /**
  * 终端注意提示：把「需要你看一眼」写进<b>终端自己的 UI</b>——tab 标题（OSC 0/2）与 bell（BEL）。
@@ -16,13 +13,15 @@ import java.lang.reflect.Field;
  * 两者合起来就是 Claude Code 那套「tab 上看得出它在等你」的机制。写进 tab 标题的内容
  * <b>只出现在多路复用器/窗口管理器给的壳上</b>，不占屏幕一行。
  *
- * <p><b>为什么反射</b>：TamboUI 0.4.0 的 {@code InlineTuiRunner} 持有私有 {@code Backend}
- * 但不公开它；{@code Backend.writeRaw} 是 default 方法、公开可用。本项目已有同路先例
- * （{@link ScreenCleaner}），库升级改名时由 {@code TerminalAttentionTest} 的结构断言红灯提醒。
+ * <p><b>为什么必须经 pty writer 队列而不是反射直写 backend</b>（审核 M-3/P1）：
+ * OSC/BEL 与模型输出共享同一个 JLine PrintWriter——pty-writer 线程卡死在 write(2) 时
+ * <b>持有 PrintWriter 内部锁</b>，直写这几十字节会先阻塞在锁上（根本轮不到内核缓冲），
+ * 把「输出时打字卡死」原样引回渲染线程。提示恰在「回合完成/弹审批」时触发——与输出
+ * 高峰同现，不是罕见路径。改走 {@code InlineTuiRunner.submitPtyControlSequence}：
+ * 小帧豁免软预算、永不阻塞调用方、与内容字节保序。被拒时静默丢弃——提示是锦上添花。
  *
- * <p><b>失败契约</b>：任何反射/IO 失败不抛、返回 false、静默降级——提示是锦上添花，绝不能
- * 拖垮主流程。所有调用都发生在渲染线程（UI 批内，两次绘制之间），与 {@code ScreenCleaner}
- * 同一条纪律：不能在绘制中途写裸转义序列。
+ * <p><b>失败契约</b>：任何失败不抛、返回 false、静默降级。所有调用都发生在渲染线程
+ * （UI 批内，两次绘制之间）。
  */
 final class TerminalAttention {
 
@@ -40,22 +39,20 @@ final class TerminalAttention {
      * 默认画一个点）或弹通知（iTerm2 可配）。<b>响铃频率由调用方的边沿检测守着</b>，
      * 这里不自限频。
      *
-     * @return 是否成功写到底层 backend；失败（runner null / 反射失败 / IO 异常）返回 false
+     * @return 是否成功提交到 pty writer 队列；失败（runner null / 队列拒收）返回 false
      */
     static boolean alert(InlineToolkitRunner runner, String title) {
-        Backend backend = backend(runner);
-        if (backend == null) return false;
+        if (runner == null) return false;
         String safe = sanitize(title);
         try {
-            // OSC 序列以 BEL 终止；末尾再补一个独立 BEL 作为铃。tmux 的 passthrough 不需要
-            // 额外包裹——OSC 0/2 是终端原生命令，多路复用器会按规则转发。
-            backend.writeRaw("\033]0;" + safe + "\033\\");
-            backend.writeRaw("\033]2;" + safe + "\033\\");
-            backend.writeRaw("\007");
-            backend.flush();
+            // 三段拼接成一个小帧一次性提交（与内容同序，不会被大块输出插队拆散）。
+            runner.tuiRunner().submitPtyControlSequence(
+                    "\033]0;" + safe + "\033\\"
+                            + "\033]2;" + safe + "\033\\"
+                            + "\007");
             return true;
-        } catch (RuntimeException | java.io.IOException e) {
-            log.debug("终端注意提示写入失败（已降级为无提示）", e);
+        } catch (RuntimeException e) {
+            log.debug("终端注意提示提交失败（已降级为无提示）", e);
             return false;
         }
     }
@@ -64,29 +61,15 @@ final class TerminalAttention {
      * 恢复默认标题。只在「因提示而改过标题」时调用（调用方 {@code AttentionTracker} 记着状态）。
      */
     static boolean restore(InlineToolkitRunner runner, String title) {
-        Backend backend = backend(runner);
-        if (backend == null) return false;
+        if (runner == null) return false;
         try {
-            backend.writeRaw("\033]0;" + sanitize(title) + "\033\\");
-            backend.writeRaw("\033]2;" + sanitize(title) + "\033\\");
-            backend.flush();
+            runner.tuiRunner().submitPtyControlSequence(
+                    "\033]0;" + sanitize(title) + "\033\\"
+                            + "\033]2;" + sanitize(title) + "\033\\");
             return true;
-        } catch (RuntimeException | java.io.IOException e) {
+        } catch (RuntimeException e) {
             log.debug("终端标题恢复失败（已忽略）", e);
             return false;
-        }
-    }
-
-    /** 反射取 InlineTuiRunner 的私有 backend；任何失败返回 null（调用方降级）。 */
-    private static Backend backend(InlineToolkitRunner runner) {
-        if (runner == null) return null;
-        try {
-            Object tui = runner.tuiRunner();
-            Field f = tui.getClass().getDeclaredField("backend");
-            f.setAccessible(true);
-            return (Backend) f.get(tui);
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            return null;
         }
     }
 

@@ -68,6 +68,32 @@ public final class InlineDisplay implements AutoCloseable {
     /** 光标带半径：光标行上下各一行（顶边框/底边框正好落在此带内）。 */
     private static final int CURSOR_BAND_RADIUS = 1;
 
+    // ── 异步 pty 写（根治「输出时打字卡死」，见 AsyncPtyWriter 类注释） ──
+    /**
+     * 异步写线程（null = 同步直写的旧行为，测试与未接线路径）。
+     * 挂接后 {@link #submit} 只把整批字节入队，渲染线程永不阻塞在 write(2) 上。
+     */
+    private AsyncPtyWriter asyncWriter;
+    /** 写线程排空回调（挂接时由调用方注入，用于唤醒延迟批重投；可为 null）。 */
+    private volatile Runnable onWriterDrained;
+    /**
+     * 被拒收（writer 饱和）的延迟批队列：FIFO，条目数超 {@link #DEFERRED_BATCH_CAP}
+     * 时最老两条<b>保序合并</b>（见 {@link #submit} 的兜底说明）。绝不丢弃——pty 是
+     * 协议字节流，丢一段 = 花屏/丢内容；也绝不在渲染线程同步直写——那会把卡死的
+     * write 原样引回（首版缺陷）。重投在渲染线程进行（{@link #retryDeferred()}，
+     * 由 {@code onWriterDrained} 唤醒），保证与后续新批的相对顺序。
+     *
+     * <p><b>锁纪律（审核 M3）</b>：正常路径只在渲染线程触碰（submit/retryDeferred）；
+     * 但 shutdown hook（cleanup→release/writeDirect 不碰队列）与 close 线程
+     * （flushPendingForClose）在关停窗口可能并发——所有访问收进 {@link #deferredLock}，
+     * 渲染线程自身无争用（单线程顺序拿锁），关停窗口互斥。
+     */
+    private final java.util.ArrayDeque<String> deferredBatches = new java.util.ArrayDeque<>();
+    /** deferredBatches 的互斥锁（见上：关停窗口的 hook/close 并发防护）。 */
+    private final Object deferredLock = new Object();
+    /** 延迟批条目上限：超出即合并最老两条（字节总量由上层背压门控约束）。 */
+    private static final int DEFERRED_BATCH_CAP = 4;
+
     InlineDisplay(int height, int width, Backend backend, PrintWriter out) {
         this(height, width, false, backend, out, SynchronizedOutput.systemDefault());
     }
@@ -287,14 +313,28 @@ public final class InlineDisplay implements AutoCloseable {
 
     public void release() {
         if (released) return;
+        released = true;   // 先置位：恢复写可能超时放弃，绝不能因重入再试一次
         StringBuilder batch = new StringBuilder();
         if (shouldClearOnClose) appendClearDisplayArea(batch);
         batch.append('\r');
         int toBottom = currentHeight - 1 - lastCursorY;
         down(batch, toBottom);
         batch.append(AnsiStringBuilder.RESET).append("\u001b[?25h\u001b[0 q\r\n");
-        submit(batch);
-        released = true;
+        String payload = synchronizedOutput.wrap(batch.toString());
+        // 关停恢复序列（光标重现/复位/落底）<b>绕过异步 writer 有界直写</b>（审核 M2+B-1）：
+        // ① writer 已 closed（close 先于 cleanup→release），submit 只会静默 no-op；
+        // ② 但直写走 backend 的 PrintWriter——pty-writer 卡死在 write(2) 时它<b>持有
+        // PrintWriter 内部锁</b>，直接同步写会无限期挂死退出线程（SIGTERM 的 shutdown
+        // hook 同样挂死 → 进程杀不死）。故在一次性守护线程里写、join 有界等待：
+        // 恢复序列发不出去（终端已死）就放弃——「可退出」优先于「退出时的完整性」。
+        Thread releaser = new Thread(() -> writeDirect(payload), "pty-release");
+        releaser.setDaemon(true);
+        releaser.start();
+        try {
+            releaser.join(500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public int height() {
@@ -321,7 +361,12 @@ public final class InlineDisplay implements AutoCloseable {
         try {
             if (hardwareCursorVisible) backend.showCursor();
             else backend.hideCursor();
-            backend.flush();
+            // 异步路径：初始化 flush 也走 writer（渲染线程上同步 flush 慢 pty 一样会卡）。
+            if (asyncWriter != null) {
+                asyncWriter.flush();
+            } else {
+                backend.flush();
+            }
         } catch (IOException ignored) {
         }
         initialized = true;
@@ -547,12 +592,148 @@ public final class InlineDisplay implements AutoCloseable {
 
     private void submit(StringBuilder batch) {
         if (batch.isEmpty()) return;
+        String payload = synchronizedOutput.wrap(batch.toString());
+        if (asyncWriter != null) {
+            // 异步路径：先重投历史延迟批（FIFO 保序），再投本批；被拒转延迟队列，
+            // 渲染线程绝不在此阻塞——这正是「输出时打字卡死」的根治点。
+            synchronized (deferredLock) {
+                if (!deferredBatches.isEmpty()) {
+                    retryDeferredLocked();
+                }
+                if (!asyncWriter.submit(payload)) {
+                    deferredBatches.addLast(payload);
+                    asyncWriter.armWakeup();   // 武装单发排空唤醒（onDrained→requestRender 驱动重投）
+                    // 上限兜底：条目过多时<b>合并最老两条</b>（保序拼接），绝不在渲染线程
+                    // 同步直写——直写会把「卡死的 write」原样引回渲染线程（首版缺陷）。
+                    // 拼接在协议上安全：每个批的 home 定位假设前一批已落盘，FIFO 拼接
+                    // 恰好维持该假设（字节序 = 批序）。字节总量由调用方背压门控约束
+                    // （writer 饱和时上层停止再产出大输出）。
+                    while (deferredBatches.size() > DEFERRED_BATCH_CAP) {
+                        String first = deferredBatches.pollFirst();
+                        String second = deferredBatches.pollFirst();
+                        deferredBatches.addFirst(first + second);
+                    }
+                }
+            }
+            return;
+        }
+        writeDirect(payload);
+    }
+
+    /** 同步直写（旧路径；关停收尾）。 */
+    private void writeDirect(String payload) {
         try {
-            backend.writeRaw(synchronizedOutput.wrap(batch.toString()));
+            backend.writeRaw(payload);
             backend.flush();
         } catch (IOException ignored) {
             previousFrameValid = false;
         }
+    }
+
+    /**
+     * 挂接异步写线程：此后 {@link #submit} 只入队，渲染线程永不阻塞在 pty 写上。
+     *
+     * @param writer      异步写线程（由 runner 创建并管理生命周期）
+     * @param onDrained   写线程排空回调（在<b>写线程</b>上执行！只做唤醒，如
+     *                    {@code requestRender}；绝不做任何 display 状态变更）
+     */
+    public void useAsyncWriter(AsyncPtyWriter writer, Runnable onDrained) {
+        this.asyncWriter = writer;
+        this.onWriterDrained = onDrained;
+        if (writer != null) {
+            writer.setDrainListener(() -> {
+                Runnable callback = this.onWriterDrained;
+                if (callback != null) {
+                    callback.run();
+                }
+            });
+        }
+    }
+
+    /**
+     * 是否有被拒收的延迟批待重投（诊断/测试观测）。
+     * 有延迟批意味着 writer 饱和过——渲染线程应在下一帧前调用 {@link #retryDeferred()}。
+     */
+    public boolean hasDeferredOutput() {
+        synchronized (deferredLock) {
+            return !deferredBatches.isEmpty();
+        }
+    }
+
+    /**
+     * 重投延迟批（渲染线程调用）：FIFO 逐批 {@code writer.submit}，仍被拒即停
+     * （保序：后面的批不能插到前面）。通常由 {@code onDrained} 唤醒的下一帧触发；
+     * {@code submit} 里也会在投新批前先尝试。
+     */
+    public void retryDeferred() {
+        synchronized (deferredLock) {
+            retryDeferredLocked();
+        }
+    }
+
+    /** {@link #retryDeferred()} 的锁内实现（调用方必须持有 {@link #deferredLock}）。 */
+    private void retryDeferredLocked() {
+        while (!deferredBatches.isEmpty()) {
+            String head = deferredBatches.peekFirst();
+            if (!asyncWriter.submit(head)) {
+                return;   // 仍饱和：剩余批保持 FIFO，等下一次唤醒
+            }
+            deferredBatches.pollFirst();
+        }
+    }
+
+    /**
+     * 关停收尾（渲染线程）：把延迟批与 writer 在途内容尽力排空——延迟批按序
+     * 转投 writer（不落盘的旧路径），再等 writer 消化完（有界 {@code timeout}）。
+     * 关停路径允许阻塞等待（响应性让位于完整性）。
+     */
+    public void flushPendingForClose(long timeout, java.util.concurrent.TimeUnit unit) {
+        long deadlineNanos = System.nanoTime() + unit.toNanos(timeout);
+        synchronized (deferredLock) {
+            while (!deferredBatches.isEmpty() && asyncWriter != null && !asyncWriter.isDead()) {
+                String head = deferredBatches.peekFirst();
+                if (!asyncWriter.submit(head)) {
+                    long remainMs = (deadlineNanos - System.nanoTime()) / 1_000_000;
+                    if (remainMs <= 0 || !asyncWriter.awaitFlushed(remainMs,
+                            java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        break;   // 有界放弃：设备停摆/超时，剩余批丢弃（关停完整性让位于可退出）
+                    }
+                    continue;
+                }
+                deferredBatches.pollFirst();
+            }
+        }
+        if (asyncWriter != null) {
+            asyncWriter.flush();
+            asyncWriter.awaitFlushed(timeout, unit);
+        }
+    }
+
+    /**
+     * 清屏屏障（审核 M-1/P2）：/clear 与 resize 重放前调用。
+     *
+     * <p><b>为什么必须有它</b>：清屏字节若直写（立即落屏）而 writer 队列里还积着
+     * <b>更早提交</b>的旧会话批（终端慢时恰是常态），实际字节序变成「清屏 → 旧内容」
+     * ——旧内容在已清空的屏上复活，且 ESC[3J 已发过无法再抹。更持久的伤害：在飞
+     * 批自带的光标定位假设与已被调用方归零的记账失配，整屏错位且不能自愈。
+     *
+     * <p>动作：① 丢弃全部延迟批（调用方即将清屏重放，旧批的内容注定作废——
+     * 语义性丢弃，与「绝不丢」纪律不冲突：清屏本身就是对这段内容的否定）；
+     * ② 等 writer 在飞队列排空（有界 {@code timeout}）。
+     *
+     * @return true = 屏障成立（writer 已排空、延迟批已清），调用方可安全直写清屏；
+     *         false = 排空超时/设备死亡——调用方必须降级（如改打一行分割线、
+     *         跳过真清屏），绝不能在积压未清时直写清屏字节。
+     */
+    public boolean clearQueuedOutputAndBarrier(long timeout, java.util.concurrent.TimeUnit unit) {
+        synchronized (deferredLock) {
+            deferredBatches.clear();   // 清屏语义性丢弃（见注释）：重放由调用方负责
+        }
+        if (asyncWriter == null || asyncWriter.isDead()) {
+            return true;   // 无异步层/设备已死：直写是唯一路径
+        }
+        asyncWriter.flush();
+        return asyncWriter.awaitFlushed(timeout, unit);
     }
 
     private int findLastContentPosition(Buffer buffer, int line) {

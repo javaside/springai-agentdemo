@@ -86,15 +86,24 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
      *
      * @param outputRemaining 输出存量未清空 → 需要一次性 continuation（§9.2），
      *                          无新生产者事件也必须最终排空；
-     * @param animationActive  仍有动态状态 → 续排下一动画帧（§10.3）。
+     * @param animationActive  仍有动态状态 → 续排下一动画帧（§10.3）；
+     * @param continuationDelay continuation 的调度延迟：默认 ZERO（存量接续，越快越好）；
+     *                          <b>唯一成因是 pty 写背压</b>（应用闸已关、queue/pending/streaming
+     *                          全空）时给非零退避（如 30ms）——ZERO 会与每圈一次 render
+     *                          形成双线程满载空转（终审 e）；排空唤醒保证链不断。
      *
      * <p>preview 不经本结果透传：View 在批尾按「存在未采纳残行」直接调用
      * {@link #schedulePreview(Duration)}，该调用是 preview 调度的单一所有权。
      */
     public record UpdateResult(boolean outputRemaining,
-                               boolean animationActive) {
+                               boolean animationActive,
+                               Duration continuationDelay) {
         public static UpdateResult idle() {
-            return new UpdateResult(false, false);
+            return new UpdateResult(false, false, Duration.ZERO);
+        }
+
+        public UpdateResult(boolean outputRemaining, boolean animationActive) {
+            this(outputRemaining, animationActive, Duration.ZERO);
         }
     }
 
@@ -351,7 +360,10 @@ public final class UiUpdateCoordinator implements UiChangeListener, AutoCloseabl
             // demand-driven follow-ups：安排一次性任务，不在本 action 内循环
             if (result != null) {
                 if (result.outputRemaining()) {
-                    scheduleOneShot(continuationFuture, Duration.ZERO,
+                    // 背压退避（终审 e）：唯一成因是 pty 饱和时用非零 delay，防 ZERO 空转。
+                    Duration delay = result.continuationDelay() == null
+                            ? Duration.ZERO : result.continuationDelay();
+                    scheduleOneShot(continuationFuture, delay,
                             () -> publishFromTimer(UiDirty.OUTPUT));
                 }
                 if (result.animationActive()) {

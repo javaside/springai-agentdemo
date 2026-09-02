@@ -638,7 +638,10 @@ public final class CodeTuiView extends InlineApp {
         // 3) 关闭本 View 持有的执行设施（context-usage 单飞池 + 按需任务 scheduler）。
         contextUsageExecutor.shutdownNow();
         updateScheduler.shutdownNow();
-        // 4) 走既有超类清理（terminal 恢复等）。/clear 与退出的后台语义、MCP 关闭归属不变
+        // 4) 至此真正的终端恢复（raw mode 复位、光标恢复等）已在<b>更早</b>的
+        //    InlineTuiRunner.close() 里完成——InlineApp.run() 的 try-with-resources 先
+        //    close runner 再调本 onStop（上游 InlineApp.java:121-133）。super.onStop()
+        //    只是空基类钩子。/clear 与退出的后台语义、MCP 关闭归属不变
         //    （shutdownAndQuit 仍只调 shutdownBackground；MCP 由 CodeTuiApplication 的
         //    try/finally 关闭）。
         super.onStop();
@@ -781,6 +784,64 @@ public final class CodeTuiView extends InlineApp {
     private final java.util.concurrent.atomic.AtomicInteger consecutiveBatchFailures =
             new java.util.concurrent.atomic.AtomicInteger();
 
+    // ── pty 写背压门控（「输出时打字卡死」根治的应用层配套，见 OutputBackpressureGateTest） ──
+    /**
+     * pty writer 饱和闸（volatile：测试/生产 UI 线程置位，批处理读）。
+     *
+     * <p>库层（springai-tamboui-inline-patch）已把 pty 写剥离到 AsyncPtyWriter 守护线程，
+     * 渲染线程不再睡死在 write(2) 上；代价是 display 侧出现「延迟批」队列。应用层的
+     * 配套纪律：<b>闸关闭（writer 饱和）时本批不产出新输出</b>——pending / 流式完整行
+     * 原样留在 state，等库层「排空唤醒」（onDrained → requestRender → 下一批）接续。
+     * 否则模型持续吐 token 会无限往延迟队列攒批，内存无界。
+     *
+     * <p>生产每批从 {@link #ptyBackpressured()} 读真实 writer 状态；测试经
+     * {@link #setOutputBackpressuredForTest(boolean)} 直控。
+     */
+    private volatile boolean outputBackpressuredForTest;
+
+    /** 测试控制：直控背压闸（生产每批活读 pty writer 饱和态）。 */
+    void setOutputBackpressuredForTest(boolean saturated) {
+        this.outputBackpressuredForTest = saturated;
+    }
+
+    /**
+     * pty writer 当前是否饱和：直接问 runner 的公开查询口（patch 模块是 compile
+     * 依赖，无需反射——首版反射链 {@code getMethod("display")} 对包私有方法必抛
+     * NoSuchMethodException，闸从未生效，审核 B1）。无 runner（测试态）时恒 false。
+     * 测试态（{@link #outputBackpressuredForTest} 置位）优先。
+     */
+    private boolean ptyBackpressured() {
+        if (outputBackpressuredForTest) {
+            return true;
+        }
+        var r = runner();
+        return r != null && r.tuiRunner().isPtyWriteSaturated();
+    }
+
+    /** 设备死亡一次性处理标记（见 computeFollowUpFlags 的死亡检测）。 */
+    private volatile boolean ptyDeathHandled;
+
+    /** pty writer 是否已死（设备死亡检测，见 computeFollowUpFlags；无 runner 恒 false）。 */
+    private boolean ptyWriterDead() {
+        var r = runner();
+        try {
+            return r != null && r.tuiRunner().isPtyWriterDead();
+        } catch (RuntimeException | LinkageError e) {
+            // LinkageError：patch jar 与 tamboui-tui 版本错配（方法缺失）——TerminalAttentionTest
+            // 的结构钉在测试期就该红灯；线上按「未死」降级（终审 minor）。
+            return false;
+        }
+    }
+
+    /**
+     * pty 写背压退避间隔：outputRemaining 的<b>唯一</b>成因是 writer 饱和时
+     * （应用闸已关、queue/pending/streaming 全空），continuation 不用 ZERO——
+     * ZERO 会与「每圈一次 render」形成双线程满载空转（终审 e），最坏在终端
+     * 长时间停摆期间持续数分钟。退避期间链不断：writer 排空的武装唤醒
+     * （armWakeup → requestRender → 下一批）保证及时接续。
+     */
+    private static final java.time.Duration PTY_BACKPRESSURE_BACKOFF = java.time.Duration.ofMillis(30);
+
     /** 同一连续失败序列最多补发的重试批数（fix round I-1：有界重试，防「失败→补发→再失败」循环）。 */
     private static final int MAX_BATCH_FAILURE_RETRIES = 2;
 
@@ -798,16 +859,20 @@ public final class CodeTuiView extends InlineApp {
         // ── 输出段（无 OUTPUT 位闸门：每批无条件做转入——存量清不清空由队列/pending 的
         // 真实状态决定，纯 VIEW 批跑一遍空循环无副作用。fix round M-1：删除原「只在
         // OUTPUT 位置位或队列未清空时做转入」的不存在闸门描述）──
+        // pty 写背压闸（「输出时打字卡死」根治配套）：writer 饱和时本批不产出新输出——
+        // pending / 流式完整行原样留在 state，等库层「排空唤醒」驱动的后续批接续。
+        // 否则模型持续吐 token 会无限往 display 延迟队列攒批（内存无界）。
+        boolean ptySaturated = ptyBackpressured();
         // pending 转入有界（fix round I-3）：每批最多 MAX_PENDING_INTAKE_PER_TICK 条，
         // 剩余留在 state.pending 等后续批（顺序不变、不丢内容）——continuation 会接续消费。
-        for (OutputLine ol; pendingIntakeCount < MAX_PENDING_INTAKE_PER_TICK
+        for (OutputLine ol; !ptySaturated && pendingIntakeCount < MAX_PENDING_INTAKE_PER_TICK
                 && (ol = state.pollPending()) != null; ) {
             enqueueOutputLine(ol);
             pendingIntakeCount++;
         }
         // 流式完整行按「批预算条数」取（渲染仍是逐行惰性）；只在本批输出队列已排空时才取——
         // 上一批没打完的输出在时序上更早，不该被新流式行插队。
-        if (outputQueue.isEmpty()) {
+        if (!ptySaturated && outputQueue.isEmpty()) {
             List<String> rows = state.takeCompleteStreamingLines(MAX_ROWS_PER_DRAIN);
             if (!rows.isEmpty()) {
                 outputQueue.enqueueStreamingLines(rows);
@@ -912,7 +977,20 @@ public final class CodeTuiView extends InlineApp {
     private UiUpdateCoordinator.UpdateResult computeFollowUpFlags() {
         boolean outputRemaining = !outputQueue.isEmpty()
                 || state.hasPendingOutput()
-                || state.hasCompleteStreamingLine();
+                || state.hasCompleteStreamingLine()
+                // pty 写背压（「输出时打字卡死」根治配套）：writer 饱和 ⇒ display 侧可能有
+                // 延迟批在途——保持 continuation 链，下一批（排空唤醒后）重投/接续。
+                // 不依赖 state/queue 的非空（它们可能已空而延迟批仍在），防断链滞留。
+                || ptyBackpressured();
+        // 设备死亡检测（审核 M-2 UI 层）：pty 写失败（IOException / checkError 探针）后
+        // writer 一切提交 no-op——模型还在跑但屏幕永远不更新，静默流失不可接受。
+        // 终端没了：提示（若还能显示）+ 有界自动退出（会话事件已原子落盘，退出最诚实）。
+        if (!ptyDeathHandled && ptyWriterDead()) {
+            ptyDeathHandled = true;   // 只处理一次：后续批不再重复触发
+            state.setNotice("⚠ 终端写入失败，即将退出（会话已保存）");
+            log.warn("pty 写设备死亡（写线程转入 no-op），自动退出");
+            updateScheduler.schedule(this::shutdownAndQuit, 1, java.util.concurrent.TimeUnit.SECONDS);
+        }
         String curTail = lastLine(state.streaming());
         boolean previewPending = !curTail.isEmpty() && !curTail.equals(lastPreviewedTail);
         // ── 动画按需帧（§10.3，Task 8 接线 fix round M-5 预留点）──
@@ -933,7 +1011,15 @@ public final class CodeTuiView extends InlineApp {
             // 上下文统计可能变了（新消息/新事件）：按需防抖刷新（旧的 animTick % 30 周期已删）。
             ctxUsageController.markDirty();
         }
-        return new UiUpdateCoordinator.UpdateResult(outputRemaining, animationActive);
+        // 背压退避（终审 e）：outputRemaining 的唯一成因是 pty 饱和（应用闸已关、
+        // 本地 queue/pending/streaming 全空）时，continuation 用退避而非 ZERO——
+        // ZERO 与每圈 render 形成双线程满载空转。真实存量（本地非空）仍用 ZERO 接续。
+        boolean localWorkRemaining = !outputQueue.isEmpty()
+                || state.hasPendingOutput()
+                || state.hasCompleteStreamingLine();
+        java.time.Duration continuationDelay = (!localWorkRemaining && ptyBackpressured())
+                ? PTY_BACKPRESSURE_BACKOFF : java.time.Duration.ZERO;
+        return new UiUpdateCoordinator.UpdateResult(outputRemaining, animationActive, continuationDelay);
     }
 
     /**
@@ -1181,6 +1267,12 @@ public final class CodeTuiView extends InlineApp {
     /** 测试观测：累计执行的批数（接线表断言「变化驱动了至少一批」）。 */
     private final java.util.concurrent.atomic.AtomicInteger processedBatches =
             new java.util.concurrent.atomic.AtomicInteger();
+
+    /** 测试观测：输出队列是否为空（背压门控断言「饱和批不产出新内容」）。 */
+    boolean outputQueueEmptyForTest() { return outputQueue.isEmpty(); }
+
+    /** 测试观测：本 View 持有的会话状态（背压门控测试直接往 state 攒 pending）。 */
+    ConversationState stateForTest() { return state; }
 
     int processedBatchesForTest() { return processedBatches.get(); }
 

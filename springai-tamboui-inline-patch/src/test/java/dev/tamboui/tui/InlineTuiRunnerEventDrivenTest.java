@@ -275,6 +275,124 @@ class InlineTuiRunnerEventDrivenTest {
     // ── Task 9 fix round：backend→runner 的 resize 事件链 ─────────────────
 
     /**
+     * <b>「输出时打字卡死」根治的接线钉与症状钉</b>（P0，整个修复的存在理由）：
+     * pty 写端卡死（终端读端停摆——IME 合成/渲染积压的根因场景）时，
+     * <b>事件循环必须仍在处理按键</b>。
+     *
+     * <p>钉两层：① 接线——runner 构造器把 {@code AsyncPtyWriter} 挂给了 display
+     * （删掉那行本测试即红：卡死写会拖住事件循环，handler 收不到键）；
+     * ② 症状——按键照常送达、渲染线程（测试主线程）全程不被拖住。
+     */
+    @Test
+    void keyEventsProcessedWhilePtyWriteIsStuck() throws Exception {
+        CountDownLatch releaseWrite = new CountDownLatch(1);
+        StuckWriteBackend backend = new StuckWriteBackend(releaseWrite);
+        // 一次按键：read() 首次返回 'a'，之后超时 -2（模拟用户敲一个键）。
+        backend.enqueueKey('a');
+        InlineTuiRunner runner = InlineTuiRunner.create(backend, config(POLL_TIMEOUT));
+
+        CountDownLatch keyHandled = new CountDownLatch(1);
+        List<dev.tamboui.tui.event.KeyEvent> keys = new ArrayList<>();
+        Thread thread = new Thread(() -> {
+            try {
+                runner.run((event, r) -> {
+                    if (event instanceof dev.tamboui.tui.event.KeyEvent) {
+                        keys.add((dev.tamboui.tui.event.KeyEvent) event);
+                        keyHandled.countDown();
+                    }
+                    return false;
+                }, frame -> { });
+            } catch (Throwable t) {
+                // 生命周期异常在 close 断言里暴露
+            }
+        }, "stuck-pty-test");
+        try {
+            thread.start();
+            // 卡死的 pty 写不影响按键送达——1s 内必须收到。
+            assertTrue(keyHandled.await(1, TimeUnit.SECONDS),
+                    "pty 写卡死期间按键必须照常被事件循环处理（打字卡死的根治点）");
+            assertEquals(1, keys.size());
+
+            // 大块输出经 writer 异步化：display 侧出现延迟批（证明写路径确实走了
+            // AsyncPtyWriter 且被拒收，而不是同步直写把测试线程拖死）。
+            // writer 软预算 1MiB：写线程卡在第一块上不消化，第 3 块 400KB 起被拒
+            // （800K+400K > 1MiB）→ 延迟批出现。
+            for (int i = 0; i < 3; i++) {
+                runner.println(new String(new char[400 * 1024]).replace('\0', 'x'));
+            }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (!displayHasDeferred(runner) && System.nanoTime() < deadline) {
+                TimeUnit.MILLISECONDS.sleep(10);
+            }
+            assertTrue(displayHasDeferred(runner),
+                    "卡死写端下大块输出必须进 display 延迟队列（异步链在位）");
+        } finally {
+            releaseWrite.countDown();   // 解除卡死，让 close 有界退出
+            runner.quit();
+            thread.join(2_000);
+            runner.close();
+        }
+        assertFalse(thread.isAlive());
+    }
+
+    /** 反射读 display 的 hasDeferredOutput（同包 shadow 结构；字段漂移返回 false 由断言红灯暴露）。 */
+    private static boolean displayHasDeferred(InlineTuiRunner runner) {
+        try {
+            java.lang.reflect.Field viewport = runner.getClass().getDeclaredField("viewport");
+            viewport.setAccessible(true);
+            Object vp = viewport.get(runner);
+            java.lang.reflect.Field display = vp.getClass().getDeclaredField("display");
+            display.setAccessible(true);
+            Object disp = display.get(vp);
+            return (Boolean) disp.getClass().getMethod("hasDeferredOutput").invoke(disp);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** 写端卡死的 backend：writeRaw/flush 阻在 latch 上；read 走预置按键队列。 */
+    private static final class StuckWriteBackend extends RecordingBackend {
+        private final CountDownLatch release;
+        private final java.util.concurrent.ConcurrentLinkedQueue<Integer> pendingKeys =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+        StuckWriteBackend(CountDownLatch release) {
+            this.release = release;
+        }
+
+        void enqueueKey(int c) {
+            pendingKeys.offer(c);
+        }
+
+        @Override public void writeRaw(String data) {
+            awaitRelease();
+        }
+
+        @Override public void flush() {
+            awaitRelease();
+        }
+
+        private void awaitRelease() {
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        @Override public int read(int timeoutMs) {
+            Integer k = pendingKeys.poll();
+            if (k != null) return k;
+            try {
+                Thread.sleep(Math.min(timeoutMs, 5));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return -2;
+        }
+    }
+
+    /**
      * backend 的 onResize 回调（生产里由 JLine WINCH handler 触发）必须被 runner
      * 翻译成 {@link ResizeEvent} 交给 handler，且随后发生<b>新宽度</b>的 draw；
      * 同尺寸重复触发不得再发事件（去重契约——JLine 对一次拖拽可能回调多次）。

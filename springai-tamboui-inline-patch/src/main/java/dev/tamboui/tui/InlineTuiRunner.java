@@ -5,6 +5,7 @@
 package dev.tamboui.tui;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -21,6 +22,7 @@ import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import dev.tamboui.inline.AsyncPtyWriter;
 import dev.tamboui.inline.InlineDisplay;
 import dev.tamboui.layout.Size;
 import dev.tamboui.terminal.Backend;
@@ -97,6 +99,18 @@ public final class InlineTuiRunner implements AutoCloseable {
      * 即不再续排，静止界面零帧输出。<b>绝不 scheduleAtFixedRate</b>——那是被删除的常驻 tick。
      */
     private final AtomicBoolean imeFollowUpScheduled = new AtomicBoolean();
+    /**
+     * pty 异步写线程（根治「输出时打字卡死」，见 {@link AsyncPtyWriter} 类注释）。
+     *
+     * <p>渲染线程（本类事件循环）把所有终端字节经 {@code display.submit} 只入队，
+     * 实际 write(2)/flush 由 pty-writer 守护线程执行——pty 读端停摆（IME 合成 /
+     * 终端渲染积压，实测吞吐可跌到 ~20 KiB/s 甚至无限期阻塞）时，渲染线程不再
+     * 跟着睡死，按键照常处理。写线程排空时经 onDrained → {@link #requestRender()}
+     * 唤醒 display 的延迟批重投。生命周期归本 runner（{@link #close()} 有界排空）。
+     */
+    private final AsyncPtyWriter ptyWriter;
+    /** {@link #ptyWriter} 的字节软预算（1 MiB ≈ 数秒终端吞吐；大 scrollback 批 ~150KB）。 */
+    private static final int PTY_WRITER_BYTE_BUDGET = 1024 * 1024;
 
     private InlineTuiRunner(Backend backend, InlineViewport viewport, InlineTuiConfig config) {
         this.backend = backend;
@@ -110,6 +124,8 @@ public final class InlineTuiRunner implements AutoCloseable {
         this.nextTickTime = new AtomicReference<>(
                 config.tickRate() != null ? Instant.now().plus(config.tickRate()) : null);
         this.lastSize = new AtomicReference<>(readCurrentSize(backend));
+        this.ptyWriter = new AsyncPtyWriter(backend, PTY_WRITER_BYTE_BUDGET,
+                errorProbeFor(backend));
 
         backend.onResize(() -> {
             try {
@@ -137,6 +153,10 @@ public final class InlineTuiRunner implements AutoCloseable {
         // Create and start the input reader thread
         this.inputReader = new TerminalInputReader(backend, eventQueue, config.bindings(), running, config.pollTimeout());
         this.inputReader.start();
+
+        // 挂接 pty 异步写：display.submit 只入队，write(2) 在 pty-writer 线程执行。
+        // onDrained 回调发生在写线程——只做 requestRender 入队（合并唤醒），不碰任何 UI 状态。
+        viewport.display().useAsyncWriter(ptyWriter, this::requestRender);
 
         // Register shutdown hook
         this.shutdownHook = new Thread(this::cleanup, "inline-tui-shutdown-hook");
@@ -541,11 +561,80 @@ public final class InlineTuiRunner implements AutoCloseable {
         return scheduler;
     }
 
+    /**
+     * pty 写队列当前是否饱和（软预算耗尽）：上层 UI 据此暂停产出新输出批
+     * （背压门控，见 code-tui 的 CodeTuiView），等「排空唤醒」接续。
+     * 设备死亡后恒 false（无背压可言——写已 no-op，产出只会流进 void，
+     * 门控只会在「设备活着但慢」时真正起作用）。
+     */
+    public boolean isPtyWriteSaturated() {
+        return ptyWriter.isSaturated();
+    }
+
+    /** pty writer 是否已死（写失败/错误探针触发）：上层据此提示用户并有序退出（审核 M-2 UI 层）。 */
+    public boolean isPtyWriterDead() {
+        return ptyWriter.isDead();
+    }
+
+    /**
+     * 把一小段协议字节（OSC 标题 / BEL 等几十字节级）<b>经 pty writer 队列</b>提交
+     * （审核 M-3/P1：这些序列与内容共享同一个 PrintWriter——pty-writer 卡死在
+     * write(2) 时<b>持有 PrintWriter 内部锁</b>，任何直写都会在锁上无限期冻死
+     * 调用线程）。小帧在 writer 的两级预算下走硬预算豁免路径，永不阻塞调用方、
+     * 且与内容字节天然保序。
+     *
+     * <p>被拒（硬预算也满/设备死/已关闭）时静默丢弃——注意提示是锦上添花，
+     * 与「打字回显」不同级；调用方无需感知。
+     */
+    public void submitPtyControlSequence(String sequence) {
+        if (sequence == null || sequence.isEmpty()) {
+            return;
+        }
+        ptyWriter.submit(sequence);
+    }
+
+    /**
+     * 清屏屏障（审核 M-1/P2，委托 {@code InlineDisplay.clearQueuedOutputAndBarrier}）：
+     * 丢弃 display 全部延迟批 + 等 pty writer 在飞队列排空（有界 {@code timeout}）。
+     *
+     * <p>真清屏（/clear、resize 重放）前必须过这道屏障：直写清屏可以跑到更早提交的
+     * scrollback 批之前，实际字节序变成「清屏 → 旧内容复活」且 ESC[3J 无法重发。
+     * 屏障不成立时调用方必须放弃真清屏、降级（分割线/跳过）。
+     *
+     * @return true = 可安全直写清屏；false = 排空超时/设备死亡（无异步层时恒 true）
+     */
+    public boolean establishClearBarrier(long timeout, TimeUnit unit) {
+        return viewport.display().clearQueuedOutputAndBarrier(timeout, unit);
+    }
+
     private static Size readCurrentSize(Backend backend) {
         try {
             return backend.size();
         } catch (IOException e) {
             return new Size(80, 24);
+        }
+    }
+
+    /**
+     * 设备错误探针装配（审核 M-2）：JLine 后端的 {@code writeRaw} 走 PrintWriter——
+     * <b>吞掉 IOException 只置 checkError 标志</b>，写线程永远等不到异常，死终端
+     * （tab 被关、ssh 断开）会静默流失全部内容。探针在每次 drain 后查
+     * {@code PrintWriter.checkError()}，true 即按设备死亡处理。
+     *
+     * <p>反射链失败（非 JLine 后端 / 结构变化）返回 null（无探针，退回只靠
+     * IOException 的旧行为）——与本项目 ScreenCleaner 等反射先例同纪律。
+     */
+    private static java.util.function.BooleanSupplier errorProbeFor(Backend backend) {
+        try {
+            Field writerField = backend.getClass().getDeclaredField("writer");
+            writerField.setAccessible(true);
+            Object writer = writerField.get(backend);
+            if (writer instanceof java.io.PrintWriter printWriter) {
+                return printWriter::checkError;
+            }
+            return null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
         }
     }
 
@@ -606,6 +695,11 @@ public final class InlineTuiRunner implements AutoCloseable {
                 Thread.currentThread().interrupt();
             }
         }
+
+        // pty-writer 有界排空（含 display 的延迟批——先转投再等消化），然后关写线程。
+        // 必须在 cleanup（backend.close）之前：backend 关了写线程只会得到 IOException。
+        viewport.display().flushPendingForClose(1, TimeUnit.SECONDS);
+        ptyWriter.close(1, TimeUnit.SECONDS);
 
         cleanup();
     }

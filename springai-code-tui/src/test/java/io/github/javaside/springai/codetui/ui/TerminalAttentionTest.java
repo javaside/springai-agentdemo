@@ -16,8 +16,12 @@ class TerminalAttentionTest {
 
     @Test
     void reflectionTargets_stillExistInThisTamboUiVersion() throws Exception {
+        // TerminalAttention 已不再反射 backend（改走 submitPtyControlSequence 公开口——
+        // pty writer 队列，审核 M-3/P1：直写会在 pty-writer 持锁卡死时冻死渲染线程）。
+        // 结构钉改为：提交口必须存在（patch shadow 与本模块的 compile 依赖契约）。
         Class<?> tuiRunner = Class.forName("dev.tamboui.tui.InlineTuiRunner");
-        assertNotNull(tuiRunner.getDeclaredField("backend"));
+        assertNotNull(tuiRunner.getMethod("submitPtyControlSequence", String.class),
+                "submitPtyControlSequence 是 TerminalAttention 的新依赖面，签名漂移在此红灯");
     }
 
     @Test

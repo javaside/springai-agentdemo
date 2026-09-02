@@ -135,6 +135,11 @@ final class InlineViewport {
         return display.needsFollowUpFrame();
     }
 
+    /** 直通内部 display（runner 挂接异步写线程用；包私有，不越出 tui 包）。 */
+    InlineDisplay display() {
+        return display;
+    }
+
     private void syncArea(int minHeight) {
         int targetWidth = display.width();
         int targetHeight = Math.max(area.height(), minHeight);
