@@ -33,6 +33,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 | `permission_smoke.py` | 权限模式、面板、ASK 阻塞握手与取消历史。 | 本地 SSE 桩；配置中禁用 MCP，不调用 `npx` |
 | `render_diff_smoke.py` | 局部差分、按需 IME 补帧、完全静止 2s 零终端字节。 | 本地 |
 | `resize_smoke.py` | 真 `SIGWINCH`、generation settle 的 `ESC[3J` 重放与最终画面/光标。 | 本地；pyte 不支持 reflow，视觉 reflow 仍需实机 |
+| `stalled_terminal_smoke.py` | 输出高峰期间读端停摆 3s（pty-writer 卡 write(2)）：完整回显落盘晚于末行输出（顺序判据）、恢复后 2000 行零丢失、排空后零字节。证红：`CODETUI_STALLED_MUTATE_SYNC_WRITE=1` 翻转顺序断言。 | 本地 SSE 桩 |
 | `stream_box_smoke.py` | 流式预览期间无双边框、正文完整、按需 IME 补帧完成。 | 本地 SSE 桩 |
 | `mcp_smoke.py` | 真实 stdio MCP 装配、工具发现、退出及无孤儿进程。 | **需要 `npx`/Node.js，可能联网** |
 | `mcp_manage_smoke.py` | `/mcp` 禁用/启用、配置回写及真实重连。 | **需要 `npx`/Node.js，可能联网** |
@@ -44,6 +45,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/render_diff_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/stream_box_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/resize_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/stalled_terminal_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/permission_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/interjection_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/attachment_smoke.py
