@@ -1383,6 +1383,19 @@ public final class CodeTuiView extends InlineApp {
     private void resetTailDedup() { lastRecordedRaw = null; }
 
     /**
+     * /clear 降级提示（真清屏失败：反射失败或清屏屏障不成立——writer 积压排不空）。
+     * 说明行文案只对「屏障不成立」成因准确（反射失败时无积压、无旧内容晚到），
+     * 但两个成因共用一行是刻意取舍：调用方拿不到成因区分，多打一行无害、少打
+     * 一行会在真实需要时缺席。屏障降级时 writer 在飞旧批仍会晚到——旧内容出现
+     * 在分割线之后，说明行消除「清屏了旧内容又冒出来」的困惑（规格 §7/§10）。
+     * 运行态与测试态两处降级分支共用本 helper，防文案漂移。
+     */
+    private void pushClearDegradedNotice() {
+        state.pushInfo("─── 新会话（上下文已清空）───");
+        state.pushInfo("终端输出积压未排空：上方若浮现旧内容，属上一会话残留");
+    }
+
+    /**
      * resize 停稳后的全量重建：整屏<b>连回滚缓冲一起</b>抹掉（与 /clear 同一条 {@link ScreenCleaner#clear}
      * 路径），再把 {@link #scrollTail} 留底全量按新宽度重放，输入框随下一帧落回对话正下方——
      * 可见屏是对话尾部，「往上翻」是干净重排的最近 {@value #SCROLL_TAIL_CAP} 行。
@@ -2158,11 +2171,11 @@ public final class CodeTuiView extends InlineApp {
                         printer.welcome(onSubmit.currentModel(),
                                 io.github.javaside.springai.codetui.AppInfo.versionLabel());
                     } else {
-                        state.pushInfo("─── 新会话（上下文已清空）───");   // 反射失败降级；pushInfo 经输出批下沉 scrollback
+                        pushClearDegradedNotice();
                     }
                 });
             } else {
-                state.pushInfo("─── 新会话（上下文已清空）───");
+                pushClearDegradedNotice();
             }
             return;
         }
