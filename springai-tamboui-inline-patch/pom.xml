@@ -35,5 +35,16 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+          仅测试期结构钉（InlineTuiRunnerErrorProbeTest）：errorProbeFor 反射
+          dev.tamboui.backend.jline3.JLineBackend 的私有 PrintWriter writer（checkError
+          错误探针），库升级改名在此红灯。版本随根 pom 的 tamboui-bom 统一管理；
+          运行期后端由部署方（code-tui）提供，本模块不对其产生编译/运行依赖。
+        -->
+        <dependency>
+            <groupId>dev.tamboui</groupId>
+            <artifactId>tamboui-jline3-backend</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
