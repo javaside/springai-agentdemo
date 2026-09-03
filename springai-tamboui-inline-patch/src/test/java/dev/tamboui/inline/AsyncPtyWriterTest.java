@@ -252,7 +252,76 @@ class AsyncPtyWriterTest {
             assertTrue(writer.submit(payload(20 * 1024)),
                     "队空豁免：20KiB 批 > 8KiB 软预算，队空时必须接受（前进性）");
             assertTrue(writer.flush().await(2, TimeUnit.SECONDS));
-            assertEquals(1, backend.writtenCount(), "20KiB 批最终必须写出");
+            assertEquals(20 * 1024, backend.totalCharsWritten(), "分片不得丢字（字符级总量）");
+        }
+    }
+
+    /**
+     * 超软预算单批的分片契约（规格 §10 写侧平滑）：对外一次 submit 返回 true；
+     * 队列侧按 ≤软预算切片、按提交序落盘——顺序钉（拼接还原原 payload）防乱序，
+     * 片长钉（每片 ≤ 软预算）防「假分片」。
+     */
+    @Test
+    void oversizedSingleBatchIsShardedInOrderIntoBudgetSizedChunks() throws Exception {
+        RecordingBackend backend = new RecordingBackend();
+        try (AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024)) {
+            String payload = payload(20 * 1024);
+            assertTrue(writer.submit(payload), "队空时超预算单批必须接受（对外语义不变）");
+            writer.flush();
+            assertTrue(writer.awaitFlushed(3, TimeUnit.SECONDS));
+            assertTrue(backend.writtenCount() >= 2,
+                    "20KiB 对 8KiB 预算应分片为多次 writeRaw（实测 " + backend.writtenCount() + " 次）");
+            assertEquals(payload, String.join("", backend.chunks),
+                    "分片必须保序、不丢不重（字节序 = 提交序）");
+            for (String piece : backend.chunks) {
+                assertTrue(piece.length() <= 8 * 1024,
+                        "每片不得超过软预算（实测 " + piece.length() + " chars）");
+            }
+        }
+    }
+
+    /**
+     * 分片边界不得切开 UTF-16 代理对（审核 MAJOR-1）：被切开的两片各自经终端
+     * PrintWriter 编码 UTF-8 时，不成对代理落为替换符 {@code ?}——内容永久损坏。
+     * 奇数 ASCII 前缀 + 重复星面字符构造 >8KiB 批，使 8192 边界必然落在某个代理对中间。
+     *
+     * <p><b>断言必须有分辨力（终审 R5）</b>：RecordingBackend 只记录 String 引用，
+     * char 层切开再拼回 equals 恒真——观测不到损坏。故本例用<b>往返编码桩</b>：
+     * writeRaw 时做一次 UTF-8 编码再解码（new String(data.getBytes(UTF_8), UTF_8)，
+     * 与生产 PrintWriter 的编码路径同损坏语义），孤立代理立即变 ?，拼接立红。
+     * 验证方式：临时删掉实现里的代理对回退（end--）跑本例必须红，恢复后必须绿。
+     */
+    @Test
+    void shardingNeverSplitsSurrogatePairs() throws Exception {
+        RoundTripBackend backend = new RoundTripBackend();
+        try (AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024)) {
+            String astral = "\uD834\uDD1E";   // U+1D11E（𝄞），高+低代理对
+            StringBuilder sb = new StringBuilder("x");   // 奇数前缀：8192 边界落在代理对中间
+            while (sb.length() < 20 * 1024) {
+                sb.append(astral);
+            }
+            String payload = sb.toString();
+            assertTrue(writer.submit(payload));
+            writer.flush();
+            assertTrue(writer.awaitFlushed(3, TimeUnit.SECONDS));
+            assertEquals(payload, String.join("", backend.chunks),
+                    "分片边界切开代理对 → 孤立代理经 UTF-8 往返变 ? → 拼接损坏——"
+                            + "实现必须回退边界避开代理对");
+        }
+    }
+
+    /** 往返编码桩：模拟生产 PrintWriter 的 UTF-8 编码路径（孤立代理 → ?）。 */
+    private static final class RoundTripBackend extends NoopBackend {
+        final java.util.List<String> chunks = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public void writeRaw(String data) {
+            chunks.add(new String(data.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    java.nio.charset.StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public void flush() {
         }
     }
 
@@ -367,10 +436,12 @@ class AsyncPtyWriterTest {
     private static class RecordingBackend extends NoopBackend {
         final List<String> chunks = java.util.Collections.synchronizedList(new ArrayList<>());
         final AtomicInteger flushes = new AtomicInteger();
+        private final AtomicInteger chars = new AtomicInteger();
 
         @Override
         public void writeRaw(String data) {
             chunks.add(data);
+            chars.addAndGet(data.length());
         }
 
         @Override
@@ -381,6 +452,8 @@ class AsyncPtyWriterTest {
         int writtenCount() {
             return chunks.size();
         }
+
+        int totalCharsWritten() { return chars.get(); }
 
         boolean awaitCount(int target, long timeout, TimeUnit unit) throws InterruptedException {
             long deadline = System.nanoTime() + unit.toNanos(timeout);

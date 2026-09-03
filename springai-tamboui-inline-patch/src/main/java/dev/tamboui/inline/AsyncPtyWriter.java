@@ -153,8 +153,23 @@ public final class AsyncPtyWriter implements AutoCloseable {
      *
      * <p><b>队空豁免（前进性保证）</b>：队列已排空（{@code current == 0}）时任何
      * 单批都接受——否则「大于软预算的批」（如延迟批合并产物、超大单批）会
-     * 0 + cost &gt; budget 恒真、<b>永远无法入队</b>，恢复后死锁。豁免的有界性：
-     * 队空才放行 ⇒ 任一时刻至多一个超批在飞，总占用 ≤ 硬预算 + 单批上限。
+     * 0 + cost &gt; budget 恒真、<b>永远无法入队</b>，恢复后死锁。
+     *
+     * <p><b>豁免的分片化（规格 §10 写侧平滑）</b>：cost &gt; 软预算的豁免批按
+     * 软预算切片串行入队——单个超批不再整体占一个队列位，后续小帧可在分片之间
+     * 入队，不被挡到批尾。字节序 = 提交序不变；写线程按片释放计费。
+     *
+     * <p><b>计费不变量（审核 BLOCKER-1）</b>：{@code bytesQueued} 恒等于「已入队
+     * 片的字符和 + 零字节 FLUSH 标记（不占计费）」。分片中途 offer 失败时必须
+     * 即时回滚<b>未入队尾片</b>的计费——否则 bytesQueued 永久虚高、isSaturated
+     * 恒真、上层背压闸永久关死（freeze-forever 回归，且无自愈路径：只有 markDead
+     * 会清零）。失败场景并非只有「4GiB payload 占满条目」：零字节的 FLUSH 标记
+     * 同样占条目数（写线程卡在 flush 时队列可为「计费 0 但条目满」），故回滚是
+     * 必需而非防御。已入队的是本批前缀（写线程照写、保序无害），按已接受返回。
+     *
+     * <p><b>代理对不切分（审核 MAJOR-1）</b>：UTF-16 高/低代理对被边界切开时，
+     * 两片各自经 PrintWriter 编码 UTF-8，不成对代理落为替换符 {@code ?}——
+     * 内容永久损坏（模型输出的 emoji/扩展区 CJK 常见）。边界回退 1 char 避开。
      */
     public boolean submit(String payload) {
         if (payload == null || payload.isEmpty() || closed.get() || dead.get()) {
@@ -173,9 +188,30 @@ public final class AsyncPtyWriter implements AutoCloseable {
                 break;
             }
         }
-        if (!queue.offer(new Chunk(payload))) {
-            bytesQueued.addAndGet(-cost);   // 条目数满：回滚字节预算
-            return false;
+        if (cost <= byteBudget) {
+            if (!queue.offer(new Chunk(payload))) {
+                bytesQueued.addAndGet(-cost);   // 条目数满：回滚字节预算
+                return false;
+            }
+            return true;
+        }
+        // 分片路径：按软预算切片、串行入队；边界避开代理对；失败回滚尾片计费。
+        int offered = 0;
+        for (int at = 0; at < cost; ) {
+            int end = Math.min(cost, at + byteBudget);
+            if (end < cost && Character.isHighSurrogate(payload.charAt(end - 1))
+                    && Character.isLowSurrogate(payload.charAt(end))) {
+                end--;                      // 边界落在代理对中间：回退 1 char（片短 1 char 无碍）
+            }
+            if (end == at) {                // 保险：budget 过小（<2）时仍前进 2 char 防死循环
+                end = Math.min(cost, at + 2);
+            }
+            if (!queue.offer(new Chunk(payload.substring(at, end)))) {
+                bytesQueued.addAndGet(-(cost - offered));   // 回滚未入队尾片计费（审核 BLOCKER-1）
+                return true;   // 罕见部分接受：前缀已入队（保序无害），计费与实际入队严格一致
+            }
+            offered = end;
+            at = end;
         }
         return true;
     }
