@@ -162,7 +162,7 @@
 
     <profiles>
         <!--
-          发布打包：mvn -pl springai-code-tui clean package -Pdist
+          发布打包：mvn -pl springai-code-tui -am clean package -Pdist
           产出 target/springai-code-tui-<version>-dist.tar.gz 和 .zip，
           解压后执行 bin/code-tui（或 java -jar springai-code-tui.jar）即可运行。
           默认 package 不触发本 profile，保持日常构建轻量。

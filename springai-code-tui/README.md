@@ -1,6 +1,6 @@
 # springai-code-tui
 
-基于 Spring AI 2.0 和 [TamboUI](https://github.com/quanticc/tambo-ui) 的命令行编码智能体。它可以在终端中读写代码、运行命令、调用子 agent，并支持 DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI 和 OpenCode Go。
+基于 Spring AI 2.0 和 [TamboUI](https://github.com/tamboui/tamboui) 的命令行编码智能体。它可以在终端中读写代码、运行命令、调用子 agent，并支持 DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI 和 OpenCode Go。
 
 ## 快速开始（下载发布包）
 

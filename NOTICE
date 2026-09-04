@@ -12,7 +12,7 @@ See the LICENSE file in this repository for the full text.
 --------------------------------------------------------------------------------
 Third-party components
 
-The distributable package (produced by `mvn -pl springai-code-tui package -Pdist`)
+The distributable package (produced by `mvn -pl springai-code-tui -am package -Pdist`)
 bundles the following third-party libraries under `lib/`. Each remains governed by
 its own license; this project does not relicense them.
 
