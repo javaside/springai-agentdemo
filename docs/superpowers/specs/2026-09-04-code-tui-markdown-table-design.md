@@ -1,7 +1,7 @@
 # code-tui Markdown 表格渲染 设计
 
 日期：2026-09-04
-状态：**v2**（第 1 轮 subagent 评审的全部结论已改入，见文末评审记录；计划做 3 轮）
+状态：**v2.1**（第 1 轮评审含迟到的报告尾部已全部改入，见文末评审记录；计划做 3 轮）
 参考实现：Claude Code 的表格渲染（表头加粗 + 一条分隔线，不画竖线）
 
 ## 0. 摘要
@@ -175,8 +175,12 @@ code-tui 的 markdown 渲染器**没有表格分支**，表格行原样打印。
 - `List<List<Span>> flush(int inner)`——把缓冲排出来；空缓冲返回空列表（幂等）
 - `boolean hasBuffered()`——缓冲里是否压着东西（候选态也算，见下）。`ScrollbackPrinter` 以
   `hasBufferedTable()` 转发给视图，视图不直接碰渲染器
-- `reset()`（已有）**语义扩展为「连缓冲一起丢」**——它在 `userBlockCursor` 工厂里
-  （`ScrollbackPrinter.java:232`，drain 时刻）调用；不丢的话上一回合的残表会在下一回合中途复活
+- `reset()`（已有）**语义扩展为「连缓冲一起丢」**——它只清围栏三个字段（`:51-55`），
+  唯一调用点是 `userBlockCursor` 工厂（`ScrollbackPrinter.java:232`，**drain 时刻**执行）。
+  不丢就是缓冲跨回合泄漏、上一回合的残表在下一回合中途复活；而丢得安全的**前提**是
+  §3.4 第 2 条已经把 flush cursor 排在 USER 行**前面**——顺序反了就是静默丢内容。
+  （现状下 `onUserMessage` 会先推一条空 ASSISTANT 行（`ConversationState.java:643`），
+  状态机在空行处天然 flush，所以正常路径侥幸不出事；别把正确性建在这个巧合上。）
 
 `renderFinalized` / `renderPreview` 保持原样当**非表格行的原语**（现有 `MarkdownRendererTest`
 不动）。但 `renderFinalized` 继续 public 就是绕过状态机的后门——加注释：**新调用点一律走 `feed`**，
@@ -238,6 +242,15 @@ scrollback 只能追加，**五条**都必须有，漏一条就是内容消失�
    **必须走队列、不能直接 println**：`enqueueOutputLine` 执行在**入队**时刻，此刻它前面那些
    ASSISTANT 行还压在队列里没 drain，直接打会让表格插到**自己前面的正文行上面**去
    （方向是往前插，不是掉到后面）。
+   ⚠ **这条 flush cursor 必须无条件入队，不能写成 `if (printer.hasBufferedTable())`**——
+   同一个理由：入队时刻前面的 ASSISTANT 行还没喂给渲染器，`hasBufferedTable()` 必为 false，
+   条件化就让整条触发点静默失效。它在 drain 时刻若发现缓冲是空的，自然就是个空游标。
+   （反过来，第 4 条的检查在主 drain **之后**，那时才可以看 `hasBufferedTable()`。）
+   附：输出队列有**三个**入口——本条覆盖的 `enqueueOutputLine`（`state.pending` 的唯一消费者）、
+   `enqueueStreamingLines`（`:878`，喂的就是 markdown 正文，无需 flush）、
+   `printPlan`（`:3233`/`:3235`，见第 5 条）。凡本文说「咽喉」都只指第一个。
+   `printer.welcome()` 不走队列、直接 println，但它只在启动与 `/clear` 之后发生
+   （`/clear` 已丢缓冲），不受这条纪律约束。
 3. **豁免：`INFO` / `ERROR` 不 flush、不降级**，通知行照常打、允许它**越过**还在缓冲里的表格。
    这两类是 UI 异步注入的（`/context` 回合中可执行、MCP 就绪回调、`⏱ 后台任务已启动`、
    模态队满 ERROR），它们相对正文的位置本来就不确定；反过来若在这里 flush，就会出现
@@ -297,9 +310,18 @@ continuation 与每圈 render 形成双线程满载空转——`CodeTuiView.java
 也不在留底）。流式一批上限是 `MAX_ROWS_PER_DRAIN`（300 条逻辑行，`CodeTuiView.java:876`）。
 `hasNext()` 当然也要把待吐队列算进去，但那不是雷所在。
 
-**留底原文**：每个物理行的 `PhysicalLine.raw` 必须是**各自独立的 Text 实例**——`record()`
-按 `==` 去重（`CodeTuiView.java:1370-1377`），若实现复用同一个对象（比如缓存那条 `─` 分隔线、
-或两行内容相同就复用），相邻那条会从 resize 留底里掉一条。
+**留底原文（决定 resize 后历史表格是否整块消失）**：`record()` 按引用身份去重——
+`if (line == lastRecordedRaw) return;`（`CodeTuiView.java:1370-1377`）。所以整块 N 行**共享
+同一个单行 raw** 是错的：只会记下 1 条，resize 重放后历史表格只剩 1 行。两个都正确的选择：
+
+- **（推荐）raw = 整块的多行 `Text`**，N 行共享同一引用 → 去重后记 1 条，
+  重放走 `replayAfterResize`（`:1423-1440`）→ `TextWrap.wrap` 按 `text.lines()` 逐行折
+  （`TextWrap.java:28-34`），N 行原样还原。只占 `SCROLL_TAIL_CAP`（400）**1 条**配额，
+  而且这本来就是「一条逻辑单元的多个段共享同一 raw」的既有模式（折行段就是这么用的）
+- 或 raw = 每行各一个独立实例，占 N 条配额
+
+⚠ 两者都不能是「N 行共享一个单行 raw」。实现选哪个必须在计划里写死——它同时决定
+`SCROLL_TAIL_CAP` 的配额账。
 
 **如实声明（要写进代码 javadoc，不只是 spec）**：`OutputCursor` 的 staging 契约
 （`ui/output/OutputCursor.java:12-30`）明确禁止「借机展开整条输出」，允许的上界是「当前正在
@@ -308,8 +330,12 @@ continuation 与每圈 render 形成双线程满载空转——`CodeTuiView.java
 **批中途某个 `next()` 内部**，缓冲**跨游标、跨批、跨 OutputLine 存活**且归属渲染器
 （契约里说的「状态跨调用保持」指 O(1) 的围栏态，不含内容缓冲）。因此要在 `OutputCursor`、
 `PhysicalOutputQueue`、`ScrollbackPrinter.md` 三处 javadoc 补第二条例外，量级由 §3.5 的
-200 行 / 64 K 封顶。顺带一条如实数据：`drain` 的时间预算检查要 `written >= 2` 才生效
-（`:133`），缓冲期间不写行，所以一批可能连喂几百条逻辑行才写出第一行。
+200 行 / 64 K 封顶。
+
+顺带一条**白捡的豁免**（不是设计出来的，但要知道）：`drain` 的时间预算检查要 `written >= 2`
+才生效（`PhysicalOutputQueue.java:133`），而缓冲期间不写行——所以一批可以喂完 600 条 pending
+（`MAX_PENDING_INTAKE_PER_TICK`）+ 300 条流式行而完全不受 `MAX_DRAIN_NANOS`（12ms）约束。
+量级由 §3.5 封顶，可接受。
 
 ### 3.7 流式期间的预览行
 
@@ -375,7 +401,8 @@ CJK 无空格落硬切 / 整列全空按最小宽 4 / 单列表 / 表头比数�
 - 各行列起点的显示偏移一致
 - 内容拼回去一个字不丢
 - **一批 300 条流式行、第一条是 `|` 开头**：断言 300 条逻辑行全部落地（钉 §3.6 那条雷）
-- 每行 `PhysicalLine.raw` 是不同实例
+- **留底 / resize 重放**：一张 N 行表格在 resize 重放后仍是 N 行（钉 §3.6 的 raw 选择——
+  「N 行共享一个单行 raw」这个错法会让重放只剩 1 行）。参照 `ScrollTailRecordingTest`
 
 ### 5.4 视图级（照 `CodeTuiViewEventWiringTest` 的写法）
 
@@ -384,7 +411,11 @@ CJK 无空格落硬切 / 整列全空按最小宽 4 / 单列表 / 表头比数�
   （参照 `CodeTuiViewEventWiringTest.java:648-655`、`:673`）。**不能**用
   `processUpdatesForTest` 连跑几批再断言表格出现——生产只有 `outputRemaining == true`
   才会有下一批，那样写是假绿
-- `TOOL_START` 插在表格中间 → 表格先出、工具行后出（顺序不能反）
+- `TOOL_START` 插在表格中间 → 表格先出、工具行后出（顺序不能反）。用例必须让**表格行与工具行
+  落在同一批**——那正是「`if (hasBufferedTable())` 条件化 flush cursor」会失效的时序
+- 新回合的 USER 行：flush cursor 必须排在它**前面**，断言上一回合末尾的表格没被
+  `md.reset()` 顺手丢掉（把 `onUserMessage` 那条空 ASSISTANT 行去掉也要成立——
+  正确性不能建在它身上）
 - `INFO`（`/context` 那种）插在表格中间 → **通知行先出、表格继续攒**、之后整块对齐落地
   （断言不出现「半张对齐 + 半张原样」）
 - 模态（权限 / 问询）弹出时缓冲排空
@@ -456,4 +487,12 @@ out-of-band 行打断块会拼出「半张对齐 + 半张原样」→ 改为 INF
 
 未采纳一条：把 `hasBufferedTable()` 并进 `outputRemaining`（会双线程满载空转，
 理由写进 §3.4 末尾）。
+
+**第 1 轮补充（迟到的报告尾部，v2.1 已改入）**：`record()` 是按引用去重、且只跟**上一条**比，
+所以「N 行共享一个单行 raw」会让 resize 重放只剩 1 行——改为推荐「整块一个多行 `Text`」
+（只占 1 条 `SCROLL_TAIL_CAP` 配额）；第 2 条的 flush cursor **必须无条件入队**，
+写成 `if (hasBufferedTable())` 会因「入队时刻前面的 ASSISTANT 行还没喂给渲染器」而整条失效；
+`md.reset()` 在 drain 时刻执行，丢缓冲的安全前提是 flush 已排在 USER 行前面（现状靠
+`onUserMessage` 那条空行侥幸不出事）；输出队列有三个入口而非一个（`printPlan` 就是从这里漏的）；
+`drain` 的 12ms 预算在 `written >= 2` 之前不生效，一批可白捡 600 pending + 300 流式行的豁免。
 
