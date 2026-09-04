@@ -1,4 +1,4 @@
-# 从 Spring AI 到编码智能体：Java 后端的 Agent 开发实战教程
+# Java 后端零基础转 Agent 开发实战教程
 
 [![CI](https://github.com/javaside/springai-agentdemo/actions/workflows/ci.yml/badge.svg)](https://github.com/javaside/springai-agentdemo/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/javaside/springai-agentdemo?display_name=tag&sort=semver&label=release)](https://github.com/javaside/springai-agentdemo/releases/latest)
