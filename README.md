@@ -1,4 +1,4 @@
-# Spring AI 2.0 学习示例 & 命令行编码智能体
+# 从 Spring AI 到编码智能体：Java 后端的 Agent 开发实战教程
 
 [![CI](https://github.com/javaside/springai-agentdemo/actions/workflows/ci.yml/badge.svg)](https://github.com/javaside/springai-agentdemo/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/javaside/springai-agentdemo?display_name=tag&sort=semver&label=release)](https://github.com/javaside/springai-agentdemo/releases/latest)
@@ -6,211 +6,197 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
 
-**[⬇️ 下载最新版](https://github.com/javaside/springai-agentdemo/releases/latest)** ·
+**[⬇️ 下载 code-tui](https://github.com/javaside/springai-agentdemo/releases/latest)** ·
 [变更日志](CHANGELOG.md) ·
 [参与贡献](CONTRIBUTING.md) ·
-[安全策略](SECURITY.md) ·
-[code-tui 详细文档](springai-code-tui/README.md)
+[安全策略](SECURITY.md)
 
 ---
 
-## ⭐ springai-code-tui —— 本项目的重点
+这是一个 Java 后端开发者**从零学会 Agent 开发**的实战项目。
 
-一个**真正能用的命令行编码智能体**：在终端里读写代码、跑测试、查资料、派子 agent 干活。仓库里的其他模块是通往它的教学阶梯，**它才是主角**。
+路线只有一条：先从 **Spring AI 2.0** 学起，把 Agent 开发的基本概念一个个跑通——对话、提示词模板、
+流式输出、结构化输出、RAG、工具调用、对话记忆、自动装配、终端界面；再用这些知识去读透一个
+真正的编码智能体 **springai-code-tui**，完成实战。走完这条路，Agent 开发对你来说就不再是黑盒。
 
-### 下载并运行（无需构建）
+全项目只有一个核心公式——**Agent = 模型 + 工具 + 记忆 + 循环**。五个模块按这条路线排列
+（仓库里另有一个构建辅助模块 `springai-tamboui-inline-patch`，用于给 TamboUI 打内联补丁，不在学习路线上）：
 
-**前置条件：JDK 17+，以及至少一家模型服务的 API Key。**
+| 步 | 模块 | 对应公式 | 一句话 |
+|----|------|---------|--------|
+| ① | [springai-core-demo](springai-core-demo/README.md) | 模型 | 对话、模板、流式、结构化输出、RAG |
+| ② | [springai-agent-demo](springai-agent-demo/README.md) | 工具 + 记忆 + 循环 | `@Tool` 工具调用、对话记忆、多步 Agent |
+| ③ | [springai-boot-demo](springai-boot-demo/README.md) | （工程化） | Spring Boot 自动装配、MCP |
+| ④ | [springai-jline-demo](springai-jline-demo/README.md) | （界面） | JLine 3 终端界面基础 |
+| ⑤ | [springai-code-tui](springai-code-tui/README.md) | 全部组装 | 真正的命令行编码智能体 |
 
-从 **[Releases](https://github.com/javaside/springai-agentdemo/releases/latest)** 下载对应平台的自包含运行包。解压后先在安装目录创建配置：
+> **两类读者**：想学 Agent 开发 → 从下方第 1 步开始；只想用终端编码智能体 →
+> [⬇️ 下载 code-tui](https://github.com/javaside/springai-agentdemo/releases/latest)
+> （发布包附 SHA-256 校验和，安装见[模块 README](springai-code-tui/README.md)）。
 
-**macOS / Linux**
+## 学习路线
 
-```bash
-tar xzf springai-code-tui-*-dist.tar.gz
-cd springai-code-tui-*
-cp bin/config.env.example bin/config.env
-# 编辑 bin/config.env，取消一家 *_API_KEY 的注释并填写真实值
-```
+> 全程用 [DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）做对话模型，
+> 一个 API Key 就能跑通全部核心示例（第 3 步的 MCP 示例为可选，需另备 Node.js 环境）。
+> 预期投入：第 1–4 步每步半天左右（第 1 步最长，7 个示例 + 首次启动下载 90MB 模型；第 4 步最短）；
+> API 费用预计在个位数人民币（示例 prompt 都很短）。**第 5 步例外**：默认模型偏强推理、加上子 Agent
+> 并发，重度使用一天的花费是几十元量级——可在 `/model` 切换更便宜的模型、用 `/context` 盯用量。
 
-然后进入智能体要处理的 Git 项目，通过安装目录中的脚本启动：
+### 第 1 步 · springai-core-demo —— 学会「跟模型说话」
 
-```bash
-cd /path/to/disposable-git-project
-/path/to/springai-code-tui-<version>/bin/code-tui
-```
+先把 Spring AI 当成一个普通的 HTTP 客户端库来学。纯 Java、不依赖 Spring Boot，
+所有对象在 `CoreDemoApplication.main` 里手动创建，每一步都看得见：
 
-**Windows**
+| # | 示例 | 你将学到 |
+|---|------|---------|
+| 1 | 基础对话 | `ChatClient` 的 `prompt().user().call().content()` |
+| 2 | 提示词模板 | 用 `{占位符}` + `param()` 组织提示词，`system()` 设定角色 |
+| 3 | 流式输出 | `stream()` 打字机式输出（`Flux`，详见模块 README） |
+| 4 | 结构化输出 | `.entity(...)` 让模型直接返回 Java 对象 |
+| 5 | 文本向量化 | 本地 `EmbeddingModel` 把文字转向量、算相似度 |
+| 6 | RAG 检索增强（手写） | 自己「存知识 → 检索 → 拼上下文 → 提问」，看清 RAG 每一步 |
+| 7 | 模块化 RAG（advisor） | `RetrievalAugmentationAdvisor` 一行接入，对比示例 6 |
 
-解压 `.zip` 后，在安装目录创建并编辑配置：
+示例 5–7 是**选修支线**——给模型喂知识（RAG）。赶时间可先跳过、直奔第 2 步，需要时再回来
+（但仍会在首次启动时下载 90MB 模型）。
 
-```bat
-copy bin\config.env.example bin\config.env
-```
+**本步核心认知**：对话模型的 API 本质是「文本进、文本出」；模板、向量、RAG 都是围绕这一点叠加的工程手段。
 
-再从待处理的 Git 项目目录启动：
+**✅ 自测**：把 `ChatDemo` 里写死的问题换成你自己的问题再跑一次——你的第一个 AI 接口就通了。
 
-```bat
-cd C:\path\to\disposable-git-project
-C:\path\to\springai-code-tui-<version>\bin\code-tui.cmd
-```
+### 第 2 步 · springai-agent-demo —— 学会「让模型干活」
 
-安装目录只存放程序；**启动时所在的目录才是智能体要读写的工作目录**。包内已包含启动脚本、主 JAR、全部依赖、配置示例、使用指南、`LICENSE` 和 `NOTICE`。详细配置、恢复会话和其他 provider 用法见 [code-tui 详细文档](springai-code-tui/README.md)，SHA-256 校验和见对应[发版说明](CHANGELOG.md)。
+有了对话能力，接下来教模型调用你的 Java 代码。依然是纯 Java、手动创建。
 
-> ⚠️ **先读安全声明**：它给智能体开放了本机文件系统与 shell 的实质访问。有副作用的调用会在**执行前**弹审批面板请你确认，但**这不是安全沙箱**——权限层管的是「要不要做这一步」，不是「能做到多远」；你一旦批准，那次调用就以你的用户权限执行、不受目录约束。请只在可随意丢弃、且已被版本控制干净纳管的目录中运行。详见 [模块 README 的安全声明](springai-code-tui/README.md) 与 [SECURITY.md](SECURITY.md)。
+**建议先跑一遍示例 3「多步 Agent」**——看模型自己规划、连续调用工具完成任务，
+直观感受一次「智能」如何发生，再回头拆解零件。
 
-### 能做什么
+核心（Spring AI 原生）：
 
-| | |
+| # | 示例 | 你将学到 |
+|---|------|---------|
+| 1 | 工具调用 | `@Tool` 定义方法、`tools(...)` 注册，模型按需调用 Java 代码 |
+| 2 | 对话记忆 | `MessageWindowChatMemory` + 记忆 Advisor，多轮对话不忘上文 |
+| 3 | 多步 Agent | 模型自动规划、连续调用多个工具完成一个任务（综合题） |
+| 4 | Advisor 顺序 | 记忆与工具 Advisor 的顺序决定中间消息是否入记忆（2 条 vs 6 条，一跑便知） |
+
+进阶（第三方库增强件）：
+
+| # | 示例 | 你将学到 |
+|---|------|---------|
+| 5 | 工具搜索 | `ToolSearchToolCallingAdvisor` 按需发现工具，工具多时省 token |
+| 6 | Skill 技能 | 把「可复用的领域指令」按需注入对话 |
+| 7 | TodoWrite 任务清单 | 让 Agent 显式维护任务列表并实时展示进度 |
+
+**本步核心认知**：工具 + 记忆 + 模型自己的决策循环，就是 Agent 的全部。
+**工程提醒**：模型能「调用」你的代码，不等于它会「使用」你的代码——参数怎么设计、错误怎么反馈，都是工程问题。
+
+**🏅 里程碑**：走到这里，你已经能独立写一个小型业务 Agent 了——模块里的示例工具就是
+请假/会议室/快递查询这类普通业务接口，换成你自己的服务，就是生产雏形。
+
+**✅ 自测**：模仿示例里的 `OfficeTools`，给你自己的业务写一个 `@Tool`（比如查库存、查工单），
+再让模型调用它。
+
+### 第 3 步 · springai-boot-demo —— 搞懂「自动装配替你做了什么」
+
+前两步你手动 `new` 了 `DeepSeekApi → ChatModel → ChatClient`。这一步换用 Spring Boot starter，
+一行 `new` 都不写：
+
+| # | 示例 | 你将学到 |
+|---|------|---------|
+| 1 | 自动配置揭秘（建议先看）| 打印自动配置好的 Bean 来自哪个 jar（零成本，不调模型） |
+| 2 | 极简对话 | 注入即用的 `ChatClient`（由 starter 自动配置的 Builder 构建），底层全自动 |
+| 3 | MCP 客户端 | 几行 properties 即可接入外部 MCP Server（可选，需 Node.js；MCP 是什么见模块 README）|
+
+**本步核心认知**：starter = 原始库 + 自动配置。跑一遍「自动配置揭秘」，对照第 1 步手动创建的对象，
+你就能弄清 Boot 替你做了什么。这也是初学者最容易迷糊的地方。
+
+> 注：第 5 步的 code-tui 出于启动速度与装配可控性选择了**手动装配**（回到第 1、2 步的写法），
+> 它从本步带走的是 MCP；Boot 自动装配的知识用在你自己的业务项目上。
+
+### 第 4 步 · springai-jline-demo —— 学会「做终端界面」
+
+Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `Terminal` 接口 Javadoc 分块
+逐节演示：创建与生命周期、输入输出、能力查询（颜色/控制序列）、原始模式。
+交互块（读一行、等一键）会停下来等你操作。第 5 步的流式输出、计划面板、状态栏，
+建立在本步的原始模式与按键读取上（窗口缩放等信号处理由 TUI 框架的 jline3 后端承担）。
+
+**本步核心认知**：终端是一块可编程的画布——原始模式与按键读取是 TUI 的地基。
+
+### 第 5 步 · springai-code-tui —— 拼成一个真正的 Agent
+
+前四步的零件，在这里以生产级形态组装。**先说清体量**：code-tui 是一个近三万行、
+二十多个功能域的真实工程，不是又一个 demo。第 5 步不是「读完」，而是「边用边读」，请合理安排时间。
+
+| 你学过的概念 | 在 code-tui 里的样子 |
 |---|---|
-| **多 provider** | DeepSeek / 智谱 GLM / 通义千问 / Anthropic / OpenAI / OpenCode Go，`/model` 运行时切换（**选中即记住，下次启动自动恢复**），模型清单可经 `*_MODELS` 自定义 |
-| **工具** | 文件读写、Shell、Grep/Glob、联网抓取（webFetch）、**联网搜索**（博查中文 + Brave 英文，模型按内容语言自选）、向用户反问 |
-| **视觉输入** | 支持视觉的模型**真能看见图**：你自己贴的（输入框里写路径、或把文件从访达/桌面拖进终端）与工具产的（`Read` 一张 png、MCP 截图）。**图片从不进会话记忆**，落盘的只是文本引用，聊多久上下文都不累积；有硬上限（每请求 ≤3 张用户图 + ≤1 张工具图，每回合累计 ≤12 张·次），路径是自动识别的、误附时 `Ctrl+X` 撤销 |
-| **权限管理** | 有副作用的调用**执行前**弹审批面板（允许一次 / 本会话 / 永久 / 拒绝 / 中断），规则写 `permissions.json`，`/permissions` 面板可就地删；另有一层 **任何 allow 规则都盖不住**的内置底线（「跳过权限检查」档例外——那一档只留痕不拦截）。匹配放宽只在 deny 方向（认大小写与符号链接），allow 只认原写法 |
-| **计划模式** | `Shift+Tab` 在「默认 / 自动接受编辑 / 计划模式 / 跳过权限检查」四档间循环，当前档位常驻状态栏。计划模式下只放行只读调查，写与命令一律**拒绝**（不是询问），模型改用 `ExitPlanMode` 交一份计划，经你批准后才动手；也可用 `--permission-mode plan` 启动。**「跳过权限检查」档也在环上，不需要启动参数**；权限模式**不跨进程**，`-c` 恢复会话也一律从默认档起步 |
-| **子 agent** | `Task` 单个委派 / `ParallelTasks` 并发派发，内置 explore / plan / bash / general-purpose 四类 |
-| **MCP** | 接入外部工具：本地 stdio 子进程 + **远程 Streamable HTTP**（headers 支持 `${ENV_VAR}` 插值），`/mcp` 面板运行期启停 |
-| **上下文** | 事件溯源会话记忆 + 回合感知压缩、跨会话长期记忆、项目指令（`AGENTS.md`）、`-c` 恢复上次会话 |
-| **回合中插话** | 回合跑到一半时输入的消息**不用等它跑完**——直接 Enter 即可，不打断回合、不丢弃已跑对的部分，消息随下一次模型调用送达（等待从「剩余整个回合」缩到「当前这一个工具」）。未送达的钉在输入框上方看得见，送达那一刻才随信息流滚动、位置正好在工具结果之后。`/queue` 可显式排到下回合；Esc 取消时未送达的插话**放回输入框**而非丢弃 |
-| **界面** | 单栏对话式 TUI：流式输出、工具活动行、📋 计划面板、⟐ 任务面板、待发消息面板（插话 / 排队）、状态栏 |
+| 工具调用（第 2 步） | 文件读写、Shell、Grep/Glob、联网搜索（需另配搜索 Key）、网页抓取 |
+| 多步 Agent（第 2 步） | 自动规划并连续调用工具完成编码任务 |
+| 对话记忆（第 2 步） | 升级为事件溯源会话（每轮对话当事件追加存储、可重放）+ 自动压缩（接入 Advisor 链），另有跨会话长期记忆与 `AGENTS.md` 项目指令，详见模块 README |
+| MCP（第 3 步） | 本地 stdio + 远程 Streamable HTTP，`/mcp` 面板支持运行期启停 |
+| 终端基础（第 4 步） | 单栏对话式 TUI：流式输出、计划面板、任务面板、状态栏 |
 
----
+另有学习路线之外的进阶能力：多 provider 切换、子 Agent（`Task`/`ParallelTasks` 并发委派）、
+权限审批（四档权限模式 + 任何 allow 规则都盖不住的内置底线）、回合中插话、视觉输入（图片不写入对话记忆）。
+完整功能与配置见[模块 README](springai-code-tui/README.md)。
 
-## 仓库里还有什么
+**怎么学这一步**：先下载发布包，把它当工具用一天；然后对照 [implementation-map.md](springai-code-tui/docs/implementation-map.md)
+（按功能列出「入口 → 关键类 → 实现要点」，主要面向要改代码的读者）阅读源码——你会不断遇到
+前四步学过的概念，只是换成了生产级实现；读不懂的部分可以先跳过。
+这一步的难点更多在终端 UI 与权限工程，而不是新的 Agent 概念。
 
-一个面向初学者的 **Spring AI 2.0** 演示项目，由浅入深分三层：
+**✅ 自测**：用它干一天活后回答——执行前后各看一次 `/context`，占用变化最大的分桶是哪个？为什么长会话没把上下文撑爆？
 
-**① 原理对比层**（核心教学）——同样拿到一个能用的 `ChatClient`，看「自己接线」与「自动装配」的差别：
+> **想直接用它，不想学？** [⬇️ 下载发布包](https://github.com/javaside/springai-agentdemo/releases/latest)
+> （JDK 17+，填一个 API Key 即可用；发布包附 SHA-256 校验和），安装与配置步骤见[模块 README](springai-code-tui/README.md)。
+> ⚠️ 它不是安全沙箱：会给 Agent 开放本机文件系统与 shell 的实质性访问，请只在可随意丢弃、
+> 被 Git 干净纳管的目录中运行（详见[安全策略](SECURITY.md)）。
 
-- `springai-core-demo` / `springai-agent-demo` —— **纯 Java，使用 Spring AI 原始 API**，所有对象都自己手动 `new`，**看得见每一步**；
-- `springai-boot-demo` —— **用 Spring Boot starter 演示「自动装配」**，同样的对象一行 `new` 都不用写。
+## 运行这个项目
 
-两边一对照，你就能彻底搞懂「自动配置（auto-configuration）到底替你做了什么」——这正是大多数初学者最容易犯迷糊的地方。
+### 准备
 
-**② 终端基础层** —— `springai-jline-demo`：JLine 3 `Terminal` 接口入门，为终端界面打底。
+- JDK 17+、Maven 3.9+（只下载发布包的读者可跳过 Maven）
+- 一个 [DeepSeek](https://platform.deepseek.com/) API Key：`export DEEPSEEK_API_KEY=<你的 Key>`
+  （Windows PowerShell：`$env:DEEPSEEK_API_KEY="<你的 Key>"`）
+- 技术栈：Spring AI 2.0.0（教学路线主线）；Spring Boot 4.0.7（仅第 3 步 boot 模块作为依赖使用，父工程用它统一第三方库版本）
 
-**③ 综合应用层** —— `springai-code-tui`：把前两层综合成上面那个编码智能体（[回到顶部](#-springai-code-tui--本项目的重点)）。想学「这些零件怎么拼成一个真东西」，读它的源码。
-
-- **对话模型**：[DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）；`springai-code-tui` 额外支持 智谱 GLM / [通义千问](https://bailian.console.aliyun.com/)（百炼）/ Anthropic / OpenAI / OpenCode Go（各家模型清单可经 `*_MODELS` 环境变量配置，首项为默认模型）
-- **向量模型**：本地 ONNX 模型（无需 API Key，离线运行）—— 因为 DeepSeek 官方 API 只提供对话、不提供向量
-- **运行方式**：core/agent/boot 为控制台菜单（输入数字选示例）；jline/code-tui 为交互式终端程序
-
-## 技术栈
-
-| 组件 | 版本 |
-|------|------|
-| Spring AI | 2.0.0 |
-| Spring Boot | 4.0.7（仅 boot 模块使用） |
-| Java | 17（基线；JDK 21+ 时 jline 自动启用 FFM 终端后端） |
-| Maven | 3.9+ |
-
-## 项目结构
-
-```
-springai-agentdemo                  父工程（聚合 + 版本管理，packaging=pom，不绑定 Spring Boot）
-│
-├── springai-core-demo              【原始 API · 纯 Java】Spring AI 核心能力
-│   └── main 里手动 new：DeepSeekApi → ChatModel → ChatClient → EmbeddingModel
-│       1.对话  2.Prompt模板  3.流式  4.结构化输出  5.本地Embedding  6.RAG
-│
-├── springai-agent-demo            【原始 API · 纯 Java】Spring AI 智能体能力
-│   └── 1.工具调用  2.对话记忆  3.多步 Agent
-│
-├── springai-boot-demo             【自动装配 · Spring Boot】对比演示
-│   └── starter 自动配置好一切，业务代码只需注入
-│       1.自动配置揭秘★  2.极简对话  3.MCP 客户端
-│
-├── springai-jline-demo            【终端基础】JLine 3 Terminal 接口入门
-│   └── 单文件逐节演示：原始/回显模式、光标、颜色、按键读取、窗口尺寸…
-│
-└── springai-code-tui              【综合应用】命令行编码智能体（TUI）
-    └── 多 provider（DeepSeek/智谱/千问/Anthropic/OpenAI/OpenCode Go）+ 子 agent（Task + ParallelTasks 并行）+ 技能
-        + 工具调用（文件/Shell/Grep/Glob/联网/反问）+ MCP（接入外部工具）+ 计划/任务面板 + 会话压缩
-        + 跨会话长期记忆（AutoMemoryTools）+ 项目指令（AGENTS.md）
-        + 权限管理（审批面板 + 规则 + 内置底线 + 计划模式）
-        + 视觉输入（自己贴图/拖拽 + 工具产图，图片不入会话记忆，有硬上限）
-
-```
-
-> **学习路线建议**：先看 `springai-boot-demo` 的「自动配置揭秘」示例，了解 Boot 帮你创建了哪些 Bean；
-> 再去 `springai-core-demo` 的 `CoreDemoApplication.main` 看这些 Bean 手动创建时长什么样。一来一回，概念就通了。
-
-## 「原始 API」与「自动装配」到底差在哪
-
-同样是拿到一个能用的 `ChatClient`：
-
-**core/agent（原始 API，纯 Java）—— 你自己接线：**
-```java
-DeepSeekApi api = DeepSeekApi.builder().apiKey(key).baseUrl("https://api.deepseek.com").build();
-DeepSeekChatModel model = DeepSeekChatModel.builder()
-        .deepSeekApi(api)
-        .options(DeepSeekChatOptions.builder().model(DeepSeekApi.ChatModel.DEEPSEEK_CHAT).temperature(0.7).build())
-        .build();
-ChatClient chatClient = ChatClient.builder(model).defaultSystem("...").build();
-```
-
-**boot（自动装配）—— starter 替你接线，你直接用：**
-```java
-@Component
-class MyDemo {
-    MyDemo(ChatClient.Builder builder) {   // ← 已自动配置好，直接注入
-        ChatClient chatClient = builder.defaultSystem("...").build();
-    }
-}
-```
-配置（api-key、模型名、温度）写在 `application.properties` 的 `spring.ai.deepseek.*`，starter 读取后自动装配。
-
-## 从源码运行教学模块
-
-以下步骤面向要构建源码、学习仓库中各个示例的开发者。只想使用 code-tui 的用户无需执行 Maven，请直接按前面的[下载并运行](#下载并运行无需构建)操作。
-
-### 1. 准备 DeepSeek API Key
-
-到 https://platform.deepseek.com/ 创建 API Key，设置环境变量：
+### 构建并运行
 
 ```bash
-export DEEPSEEK_API_KEY=你的key      # macOS / Linux
-# Windows PowerShell: $env:DEEPSEEK_API_KEY="你的key"
-```
-
-### 2. 构建
-
-```bash
+git clone https://github.com/javaside/springai-agentdemo.git
+cd springai-agentdemo
 mvn clean package
 ```
 
-### 3. 运行
-
 ```bash
-# 原始 API 模块（纯 Java，标准可执行 jar + target/lib 依赖）
+# 第 1–3 步：控制台菜单，输入序号选示例
+# ⚠️ core/boot 首次运行会在菜单出现前静默下载约 90MB 模型（日志级别 WARN，期间无任何输出，请耐心等待）
 java -jar springai-core-demo/target/springai-core-demo.jar
 java -jar springai-agent-demo/target/springai-agent-demo.jar
+java -jar springai-boot-demo/target/springai-boot-demo-<version>.jar    # fat jar，文件名带版本号
 
-# 自动装配模块（Spring Boot，可执行 fat jar；也可用 mvn -pl springai-boot-demo spring-boot:run）
-java -jar springai-boot-demo/target/springai-boot-demo-1.6.0.jar
+# 第 4 步：交互式终端程序，需在真实终端运行（文件名同样带版本号）
+java -jar springai-jline-demo/target/springai-jline-demo-<version>.jar
 
-# 终端基础示例（JLine 3）
-java -jar springai-jline-demo/target/springai-jline-demo.jar
-
-# 综合应用：从源码构建的命令行编码智能体
-# 请先 cd 到可随意丢弃、由 Git 干净纳管的工作目录，再使用构建产物的绝对路径启动：
+# 第 5 步 code-tui：从可随意丢弃、被 Git 干净纳管的项目目录启动（详见该步说明）
+cd /path/to/disposable-git-project
 java -jar /path/to/springai-agentdemo/springai-code-tui/target/springai-code-tui.jar
 ```
 
-core / agent / boot 启动后按菜单输入序号，`0` 退出；jline / code-tui 为交互式终端程序。
+### 常见问题
 
-> **首次运行**涉及本地向量模型的模块（core 的 Embedding/RAG、boot）会下载模型文件（约 90MB）。
-> 若慢，设置 HuggingFace 镜像：`export HF_ENDPOINT=https://hf-mirror.com`
+- **首次启动 core/boot 程序时**会从 GitHub 下载本地模型文件（约 90MB，与是否运行向量/RAG 示例无关）。
+  国内网络慢时可自备代理；也可用配置覆盖下载地址（boot 模块的
+  `spring.ai.embedding.transformer.onnx.model-uri` / `tokenizer.uri`）。
+- **想换模型**：Spring AI 的 API 与模型解耦。原始 API 模块：换掉 `spring-ai-deepseek` 依赖，
+  `main` 里改用对应 `XxxApi`/`XxxChatModel`；boot 模块：换 starter，改 `spring.ai.<model>.*` 配置。
+  业务代码（用 `ChatClient` 的部分）基本不用动。
+- **code-tui 还额外支持**：智谱 GLM / 通义千问 / Anthropic / OpenAI / OpenCode Go，
+  各家模型清单可经 `*_MODELS` 环境变量配置。
+- **示例跑不通**：请附上完整报错信息，提交 [GitHub Issue](https://github.com/javaside/springai-agentdemo/issues)。
 
-## 想换成别的模型？
-
-Spring AI 的 API 与模型解耦。换成 OpenAI / 通义 / Ollama 等：
-- **原始 API 模块**：把 `spring-ai-deepseek` 换成目标模型库，`main` 里改用对应的 `XxxApi`/`XxxChatModel`；
-- **自动装配模块**：把 `spring-ai-starter-model-deepseek` 换成目标 starter，改 `application.properties` 的 `spring.ai.<模型>.*`。
-
-业务代码（用 `ChatClient` 的部分）基本不用动。
-
-## 各模块详细说明
+## 各模块详细文档
 
 - [springai-core-demo/README.md](springai-core-demo/README.md)
 - [springai-agent-demo/README.md](springai-agent-demo/README.md)
@@ -220,18 +206,17 @@ Spring AI 的 API 与模型解耦。换成 OpenAI / 通义 / Ollama 等：
 
 ## 参与与安全
 
-- **变更日志**：[CHANGELOG.md](CHANGELOG.md)（每版发版说明的索引，含下载物与 SHA-256 校验和）
-- **贡献指南**：[CONTRIBUTING.md](CONTRIBUTING.md)（**测试命令必须带 `-pl` 模块作用域**、真机冒烟测试的 env 门控、spec → plan → TDD 的改动流程）
-- **安全策略**：[SECURITY.md](SECURITY.md)。发现漏洞请**不要开公开 issue**，发邮件到 283323279@qq.com。
-  注意其中「已知且被接受的风险」一节——`springai-code-tui` **无沙箱**是设计如此，不作为漏洞受理。
+- **变更日志**：[CHANGELOG.md](CHANGELOG.md)（各版本发布说明的索引，含发布文件与 SHA-256 校验和）
+- **贡献指南**：[CONTRIBUTING.md](CONTRIBUTING.md)（测试命令必须带 `-pl` 模块作用域、真机冒烟测试的 env 门控、spec → plan → TDD 的改动流程）
+- **安全策略**：[SECURITY.md](SECURITY.md)。发现漏洞请**勿提交公开 Issue**，发邮件到 283323279@qq.com。
+  注意其中「已知且被接受的风险」一节——`springai-code-tui` 无沙箱是有意为之，不作为漏洞受理。
 
 ## 许可
 
-本项目以 [Apache License 2.0](LICENSE) 开源（见 [`LICENSE`](LICENSE)、[`NOTICE`](NOTICE)）。
+本项目以 [Apache License 2.0](LICENSE) 开源（另见 [NOTICE](NOTICE)）。
 
-选它的理由：与所依赖的 Spring AI / spring-ai-community 全栈一致（均 Apache 2.0），并附带显式专利授权。
-所依赖的第三方库（Spring AI、Spring Boot、spring-ai-community 为 Apache 2.0，TamboUI 为 MIT）均为宽松许可；
-`springai-code-tui` 的发布包（`-Pdist`）会分发它们的 jar，故包内随附 `LICENSE` 与 `NOTICE`。
+选它的理由：与所依赖的 Spring AI / spring-ai-community 的许可保持一致，附带显式专利授权；
+`springai-code-tui` 的发布包（`-Pdist`）会分发第三方 jar，故包内随附 `LICENSE` 与 `NOTICE`。
 
-> `springai-code-tui` 给智能体开放了对本机文件系统与 shell 的实质访问、且**非安全沙箱**——按 Apache 2.0 «AS IS»
-> 条款不提供任何担保，请阅读该模块 README 的「安全声明」后自担风险使用。
+> `springai-code-tui` 开放了本机文件系统与 shell 的实质性访问，且**不是安全沙箱**——按 Apache 2.0 的
+> 「AS IS」条款不提供任何担保。请先阅读该模块 README 的「安全声明」，再自担风险使用。

@@ -9,14 +9,14 @@
 ```bash
 export DEEPSEEK_API_KEY=你的key
 mvn -pl springai-boot-demo spring-boot:run
-# 或：mvn -pl springai-boot-demo -am package && java -jar springai-boot-demo/target/springai-boot-demo-1.2.0.jar
+# 或：mvn -pl springai-boot-demo -am package && java -jar springai-boot-demo/target/springai-boot-demo-<version>.jar
 ```
 
 ## 示例清单
 
 | 菜单项 | 示例 | 关键类 | 你将学到 |
 |------|------|--------|---------|
-| 1 | 自动配置揭秘 ★建议先看 | `AutoConfigInspectDemo` | 打印各 AI Bean 的实现类/所在 jar/配置方式，证明它们是自动配置出来的（零成本，不调模型） |
+| 1 | 自动配置揭秘（建议先看） | `AutoConfigInspectDemo` | 打印各 AI Bean 的实现类/所在 jar/配置方式，证明它们是自动配置出来的（零成本，不调模型） |
 | 2 | 极简对话 | `BootChatDemo` | 只注入一个 `ChatClient` 就能对话，底层全自动 |
 | 3 | MCP 客户端 | `McpDemo` | 用 starter + 几行 properties 接入外部 MCP Server（默认未连接） |
 
@@ -33,6 +33,10 @@ mvn -pl springai-boot-demo spring-boot:run
 分别来自哪个 jar——这就是 starter 在背后替你做的事。
 
 ## 启用 MCP（可选）
+
+MCP（Model Context Protocol）是一个把外部进程的工具**标准化**暴露给模型的开放协议——
+好比给 Agent 用的「USB 接口」：任何实现了协议的 server（文件系统、数据库、浏览器……）
+都能以统一方式接进来，模型按需调用其工具。
 
 MCP 需要一个外部 MCP Server（通常用 `npx` 启动，依赖 Node.js），默认未连接，不影响其它示例。
 启用步骤见 `application.properties` 中被注释的配置，以及运行 `McpDemo` 时打印的指引。

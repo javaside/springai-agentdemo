@@ -20,7 +20,7 @@ java -jar springai-core-demo/target/springai-core-demo.jar
 |------|------|--------|---------|
 | 1 | 基础对话 | `ChatDemo` | `ChatClient` 的 `prompt().user().call().content()` 同步调用 |
 | 2 | Prompt 模板 | `PromptTemplateDemo` | 用 `{占位符}` + `param()` 组织提示词；`system()` 设定角色 |
-| 3 | 流式输出 | `StreamDemo` | 用 `stream()` 获得打字机式的逐段输出（Flux） |
+| 3 | 流式输出 | `StreamDemo` | 用 `stream()` 获得打字机式的逐段输出（`Flux`，Reactor 的响应式流——逐段到达、逐段打印，不等全文） |
 | 4 | 结构化输出 | `StructuredOutputDemo` | 用 `entity(...)` 让模型直接返回 Java 对象 / List |
 | 5 | 文本向量化 | `EmbeddingDemo` | 用本地 `EmbeddingModel` 把文字转向量，并算余弦相似度 |
 | 6 | RAG 检索增强（手写） | `RagDemo` | 手写「存知识 → 检索 → 拼上下文 → 提问」，看清 RAG 每一步原理 |

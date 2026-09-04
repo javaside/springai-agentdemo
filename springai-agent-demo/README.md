@@ -36,8 +36,8 @@ Spring AI **2.0 已移除 ChatModel 内部的工具执行**（1.x 时工具循�
 | 记忆 order > 工具 order | 内层，处于工具循环之内 | **是**，连“请求调用工具/工具返回”都记下 | 想持久化完整工具轨迹（审计/调试/复盘） |
 
 运行该示例会用同一个问题分别跑两种顺序，并打印各自记忆里实际存了几条消息——
-默认顺序存 2 条，反转顺序存 6 条，眼见为实。参考官方文档
-[Recursive Advisors / ToolCallingAdvisor](https://docs.spring.io/spring-ai/reference/api/advisors-recursive.html#_toolcallingadvisor)。
+默认顺序存 2 条，反转顺序存 6 条，一跑便知。参考官方文档
+[Recursive Advisors / ToolCallingAdvisor](https://docs.spring.io/spring-ai/reference/api/advisors-recursive.html#toolcallingadvisor)。
 
 ## 示例 5 详解：工具搜索 / 动态工具发现（ToolSearchToolCallingAdvisor）
 
@@ -84,7 +84,7 @@ Spring AI **2.0 已移除 ChatModel 内部的工具执行**（1.x 时工具循�
 - `RoundLoggingAdvisor` 是示例自带的一个简单 `CallAdvisor`，放在工具搜索 advisor 的**内层**（order 更大）
   才能拦截到循环里每一轮；用 `System.out` 打印，输出整齐、无日志前缀。
 - 参考官方文档
-  [Tool Calling / Tool Search Tool](https://docs.spring.io/spring-ai/reference/api/tools.html#tool-search-tool)。
+  [Tool Calling / Tool Search Tool](https://docs.spring.io/spring-ai/reference/api/tools/tool-search-tool.html)。
 
 ## 示例 6 详解：Skill 技能（SkillsTool）
 
