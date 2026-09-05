@@ -13,4 +13,15 @@ public class MarkdownTableTest {
         assertFalse(MarkdownTable.looksLikeRow(""));
         assertFalse(MarkdownTable.looksLikeRow(null));         // null 守卫
     }
+
+    @Test
+    void isSeparator_recognizesSeparatorRow() {
+        assertTrue(MarkdownTable.isSeparator("|------|------|"));
+        assertTrue(MarkdownTable.isSeparator("| :--- | ---: |"));   // 对齐冒号
+        assertTrue(MarkdownTable.isSeparator("| :--: | ---- |"));   // 居中
+        assertTrue(MarkdownTable.isSeparator("|  -  |  --  |"));   // 空格
+        assertFalse(MarkdownTable.isSeparator("| a | b |"));        // 含非法字符
+        assertFalse(MarkdownTable.isSeparator("|     |     |"));    // 无破折号
+        assertFalse(MarkdownTable.isSeparator(null));
+    }
 }
