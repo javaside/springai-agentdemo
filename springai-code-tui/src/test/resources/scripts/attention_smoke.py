@@ -49,10 +49,13 @@ spec.loader.exec_module(rs)
 ROWS, COLS = 30, 80
 MODEL_ID = "deepseek-chat"
 
-# 原始字节流断言用的标记（TerminalAttention 写的文案）
+# 原始字节流断言用的标记（TerminalAttention 写的文案）。
+# 标题带启动目录名（tab 区分多开项目用）：本脚本的 cwd 是 mkdtemp 随机目录
+# （codetui-attention-smoke-XXXX），故默认标题断言用子串 "Code TUI"
+# （新格式「<目录名> · Code TUI」含它，写死目录名做不到）。
 DONE_TITLE = "已完成".encode()
 WAITING_TITLE = "等待你的输入".encode()
-DEFAULT_TITLE = "Spring AI Code TUI".encode()
+DEFAULT_TITLE = "Code TUI".encode()
 BEL = b"\x07"
 OSC_DONE = b"\x1b]0;"            # 任意 OSC 0 写头的前缀（文案另判）
 REPLY = "回合内容输出完毕。"

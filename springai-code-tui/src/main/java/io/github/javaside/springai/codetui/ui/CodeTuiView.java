@@ -156,8 +156,9 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 「需要你看一眼」的边沿检测（BEL + tab 标题），见 {@link AttentionTracker}。
      * 与 {@link #bgPending} 一样只在 UI 线程（更新批 / 按键事件）读写。
+     * 构造需 {@link #root}（项目名取目录最后一段），故在构造器体内赋值而非字段初始化器。
      */
-    private final AttentionTracker attention = new AttentionTracker();
+    private final AttentionTracker attention;
     /**
      * 上一批到本批之间用户是否主动按 Esc 取消了回合（抑制「完成」铃声——他刚按过键，必然在场）。
      * 按键线程置位、UI 批消费后复位；volatile：按键与 UI 批可能不在同一线程。
@@ -364,6 +365,11 @@ public final class CodeTuiView extends InlineApp {
         this.state = state;
         this.onSubmit = onSubmit;
         this.root = root;
+        // tab 标题的项目名：工作目录最后一段（如 springai-agentdemo）。root 是根路径（"/"）或
+        // getFileName() 为 null 时退化为无项目名形式（AttentionTracker 内兜底）。多开 code-tui
+        // 时 tab 靠它区分「哪个窗口在跑哪个项目」——这正是本参数存在的理由。
+        this.attention = new AttentionTracker(
+                root != null && root.getFileName() != null ? root.getFileName().toString() : "");
         // 惰性桥接 runner()：构造时不解引用。判空与 InlineApp.println 自身一致——UI 批里的
         // 计划正文下沉在测试态（未 start，runner()==null）也会跑到，不判空就是每个用例一发 NPE。
         ScrollbackPrinter.Sink sink = testSink != null ? testSink : new ScrollbackPrinter.Sink() {
@@ -701,6 +707,11 @@ public final class CodeTuiView extends InlineApp {
             printer.welcome(onSubmit.currentModel(),
                     io.github.javaside.springai.codetui.AppInfo.versionLabel());
             welcomePrinted = true;
+            // 初始 tab 标题（启动即设，不等第一次 alert）：多开 code-tui 时 tab 一打开就能区分
+            // 哪个窗口在跑哪个项目。复用 restore()——它就是「写标题但不响 BEL」，语义正好；
+            // 失败静默降级（TerminalAttention 契约）。退出不恢复：退出后残留的项目名反而有信息量
+            // （回顾这个 tab 刚跑过什么），也省一条 OSC。
+            TerminalAttention.restore(runner(), attention.defaultTitle());
         });
         // ── 初始全量同步（设计 §13.1 第 5 步）──
         // MCP / 恢复历史 / 权限提示可能在 View 运行前写入 state（绑定虽在构造期，但生产路径
@@ -1198,8 +1209,8 @@ public final class CodeTuiView extends InlineApp {
      * {@code state.isBusy()} 含「有模态」，直接用它会把 WAITING_USER 拍成 BUSY，故这里用
      * {@code state.isIdle() && !onSubmit.hasInFlightSubagents() && !state.isCompacting()} 取反。
      *
-     * <p><b>标题文案</b>：等待用户 = 「⏳ Code TUI 等待你的输入」，完成 = 「✓ Code TUI 已完成」。
-     * 前缀符号让多 tab 并排时一眼分得出是哪种状态（macOS 会把 tab 标题截短，符号在最前才保得住）。
+     * <p><b>标题文案</b>：三种标题由 {@link AttentionTracker} 按项目名拼出（见其类注释），
+     * 状态符号与项目名都在最前——macOS 会把 tab 标题截短，靠前的字符才保得住。
      * 写入失败（反射 / IO）静默降级——提示是锦上添花，绝不拖垮主流程（见 TerminalAttention 契约）。
      */
     private void advanceAttention(boolean modalWaiting) {
@@ -1207,9 +1218,9 @@ public final class CodeTuiView extends InlineApp {
         boolean cancelled = userCancelledSinceLastTick;
         userCancelledSinceLastTick = false;
         switch (attention.advance(modalWaiting, busy, cancelled)) {
-            case ALERT_WAITING -> TerminalAttention.alert(runner(), "⏳ Code TUI 等待你的输入");
-            case ALERT_DONE -> TerminalAttention.alert(runner(), "✓ Code TUI 已完成");
-            case RESTORE -> TerminalAttention.restore(runner(), AttentionTracker.DEFAULT_TITLE);
+            case ALERT_WAITING -> TerminalAttention.alert(runner(), attention.waitingTitle());
+            case ALERT_DONE -> TerminalAttention.alert(runner(), attention.doneTitle());
+            case RESTORE -> TerminalAttention.restore(runner(), attention.defaultTitle());
             case NONE -> { /* 平态 */ }
         }
     }
