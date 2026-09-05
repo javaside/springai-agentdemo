@@ -33,6 +33,7 @@ class ConversationStateRetryTest {
         assertEquals(ConversationState.Status.RETRYING, state.status());
         assertFalse(state.isIdle());
         assertEquals("↻ 重试中 1/2·续跑", state.retryLabel());
+        assertTrue(CharWidth.of(state.retryLabel()) <= 17);
         assertEquals("1.0s", state.retryBackoffText());
 
         state.onAssistantToken(1L, "新");
@@ -52,6 +53,7 @@ class ConversationStateRetryTest {
         assertEquals(OutputLine.Kind.INFO, lines.get(0).kind());
         assertTrue(lines.get(0).text().contains("(2/5·传输)"));
         assertEquals("↻ 重试中 2/5·传输", state.retryLabel());
+        assertTrue(CharWidth.of(state.retryLabel()) <= 17);
         assertEquals("0.5s", state.retryBackoffText());
     }
 
@@ -68,13 +70,42 @@ class ConversationStateRetryTest {
     }
 
     @Test
-    void toolFinishMovesRetryingBackToThinking() {
-        ConversationState state = started(1L);
-        state.onRetryScheduled(1L, 1, 2, 1000L, "断流");
+    void toolLifecycleClearsRetryState() {
+        ConversationState state = retrying(1L);
 
+        state.onToolStarted(1L, "Read", "{}");
+
+        assertNotRetrying(state, ConversationState.Status.RUNNING_TOOL);
+
+        state.onRetryScheduled(1L, 1, 2, 1000L, "又断流");
         state.onToolFinished(1L, "Read", "ok", true);
 
-        assertEquals(ConversationState.Status.THINKING, state.status());
+        assertNotRetrying(state, ConversationState.Status.THINKING);
+    }
+
+    @Test
+    void terminalTurnEventsClearRetryState() {
+        ConversationState errored = retrying(1L);
+        errored.onError(1L, new RuntimeException("boom"));
+        assertNotRetrying(errored, ConversationState.Status.IDLE);
+
+        ConversationState completed = retrying(1L);
+        completed.onTurnComplete(1L);
+        assertNotRetrying(completed, ConversationState.Status.IDLE);
+
+        ConversationState cancelled = retrying(1L);
+        cancelled.cancelCurrent();
+        assertNotRetrying(cancelled, ConversationState.Status.IDLE);
+    }
+
+    @Test
+    void newTurnClearsRetryStateAndAcceptsNewTurn() {
+        ConversationState state = retrying(1L);
+
+        state.onTurnStarted(2L);
+
+        assertNotRetrying(state, ConversationState.Status.THINKING);
+        assertEquals(2L, state.acceptingTurnId());
     }
 
     @Test
@@ -118,6 +149,18 @@ class ConversationStateRetryTest {
         state.onTurnStarted(turnId);
         state.drainPending();
         return state;
+    }
+
+    private static ConversationState retrying(long turnId) {
+        ConversationState state = started(turnId);
+        state.onRetryScheduled(turnId, 1, 2, 1000L, "断流");
+        return state;
+    }
+
+    private static void assertNotRetrying(ConversationState state, ConversationState.Status expectedStatus) {
+        assertEquals(expectedStatus, state.status());
+        assertNull(state.retryLabel());
+        assertNull(state.retryBackoffText());
     }
 
     private static int indexOf(List<OutputLine> lines, OutputLine.Kind kind, String text) {

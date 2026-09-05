@@ -613,6 +613,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
                 activeTool = "";
                 activeToolSummary = "";
                 status = Status.IDLE;
+                clearRetryState();
                 bits |= UiDirty.VIEW | UiDirty.CONTROL;   // 回合终止本身就要重估控制流
                 change = changed(bits);
             }
@@ -629,6 +630,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         synchronized (this) {
             acceptingTurnId = turnId;
             status = Status.THINKING;
+            clearRetryState();
             streaming.setLength(0);
             // 新回合清空上一份计划：面板内容变空（用完即走）。这只是清内容、不改 live 高度，
             // 不触发 InlineDisplay 收缩(deleteLines)的漂移，因此不会复现「面板消失」。
@@ -658,8 +660,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
             if (turnId != acceptingTurnId) return;
             if (status == Status.RETRYING) {
                 status = Status.THINKING;
-                retryLabel = null;
-                retryBackoffText = null;
+                clearRetryState();
             }
             streaming.append(token);
             if (streaming.length() > MAX_STREAMING_PREVIEW) {
@@ -690,6 +691,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
             if (turnId != acceptingTurnId) return;
             flushStreaming();
             status = Status.RUNNING_TOOL;
+            clearRetryState();
             activeTool = toolName;
             activeToolSummary = summarize(toolInput);
             String line = "⏺ " + toolName + (activeToolSummary.isEmpty() ? "" : "  " + activeToolSummary);
@@ -707,6 +709,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         synchronized (this) {
             if (turnId != acceptingTurnId) return;
             status = Status.THINKING;
+            clearRetryState();
             activeTool = "";
             activeToolSummary = "";
             pending.add(new OutputLine("  ⎿ " + toolName + (ok ? " ✓" : " ✗"),
@@ -995,6 +998,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
                 activeTool = "";
                 activeToolSummary = "";
                 status = Status.IDLE;
+                clearRetryState();
                 bits |= UiDirty.ALL;   // 回合终止：状态、控制流、可送达输出都要重估（bits 是提示，宁多勿漏）
             }
             if (bits != UiDirty.NONE) change = changed(bits);  // 迟到且无账可汇：no-op
@@ -1012,6 +1016,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
             activeTool = "";
             activeToolSummary = "";
             status = Status.IDLE;
+            clearRetryState();
             change = changed(UiDirty.ALL);
         }
         publish(change);
@@ -1230,6 +1235,15 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);
         if (CharWidth.of(oneLine) <= 80) return oneLine;
         return CharWidth.substringByWidth(oneLine, 79) + "…";
+    }
+
+    /**
+     * 清空重试瞬态字段。<b>仅在持有本类监视器时调用</b>；嵌套 helper 不自行 publish。
+     * {@code retryLabel == null} 是公开的「当前非重试」契约，所有离开或初始化重试状态的路径必须调用。
+     */
+    private void clearRetryState() {
+        retryLabel = null;
+        retryBackoffText = null;
     }
 
     private static String retryTag(int attempt, int maxAttempts) {
