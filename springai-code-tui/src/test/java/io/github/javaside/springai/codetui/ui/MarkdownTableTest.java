@@ -521,22 +521,55 @@ public class MarkdownTableTest {
         assertDoesNotThrow(() -> MarkdownTable.render(List.of("| a |", "|---|", ""), 78));
     }
 
+    /**
+     * 产出侧 600 行上限：超限退回原样。
+     *
+     * <p>⚠ 两个坑，都会让这条断言为<b>错误的理由</b>变绿（把 {@code MAX_OUTPUT_LINES} 改成
+     * {@code Integer.MAX_VALUE} 也照样通过）：
+     * <ul>
+     *   <li>{@code inner < 6} 与「削列迭代超 10000 次」都会<b>先</b>退回原样。想靠「一个超长格子
+     *       折出几百行」触发上限是做不到的：单元格越长，削列迭代数就越大，先撞的永远是削列上限。
+     *       所以要靠<b>行数</b>而不是靠格内折行。</li>
+     *   <li>退回原样返回的行数 = 块行数，与「上限没了、正常排版」的行数<b>恰好相同</b>
+     *       （每行输入 → 每行输出）。只断言 size 的话两条路径撞在同一个数上，变异杀不掉。
+     *       必须断言<b>内容</b>：退回原样保留原文竖线，正常排版不含竖线。</li>
+     * </ul>
+     */
     @Test
     void render_fallsBackWhenOutputExceeds600Lines() {
         List<String> block = new java.util.ArrayList<>();
-        block.add("| A |");
-        block.add("|---|");
-
-        // 构造能产生 >600 行的输入
-        StringBuilder longCell = new StringBuilder();
-        for (int i = 0; i < 3000; i++) {
-            longCell.append("word ");
+        block.add("| 参数 |");
+        block.add("|------|");
+        for (int i = 0; i < 599; i++) {   // 1 表头 + 1 分隔线 + 599 → 第 599 条数据行处 size 已达 600
+            block.add("| 值 |");
         }
-        block.add("| " + longCell.toString() + " |");
 
-        List<List<Span>> result = MarkdownTable.render(block, 4); // 最小宽度，最大折行
+        List<List<Span>> result = MarkdownTable.render(block, 78);
 
-        // 应该退回原样（3 行），不是 >600 行
-        assertEquals(3, result.size());
+        assertEquals(block.size(), result.size(), "退回原样：每行输入一行输出");
+        assertTrue(join(result.get(0)).contains("|"),
+                "必须是<b>退回原样</b>（保留原文竖线），不是照常排版：" + join(result.get(0)));
+    }
+
+    @Test
+    void render_staysAlignedJustUnderTheOutputCap() {
+        List<String> block = new java.util.ArrayList<>();
+        block.add("| 参数 |");
+        block.add("|------|");
+        for (int i = 0; i < 598; i++) {   // 合计正好 600 行，不该触发上限
+            block.add("| 值 |");
+        }
+
+        List<List<Span>> result = MarkdownTable.render(block, 78);
+
+        assertEquals(600, result.size());
+        assertFalse(join(result.get(0)).contains("|"),
+                "边界内必须照常排版（不含原文竖线）：" + join(result.get(0)));
+    }
+
+    private static String join(List<Span> spans) {
+        StringBuilder sb = new StringBuilder();
+        spans.forEach(s -> sb.append(s.content()));
+        return sb.toString();
     }
 }

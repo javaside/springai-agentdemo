@@ -1,5 +1,24 @@
 # code-tui Markdown 表格渲染 实施计划
 
+> **状态（2026-09-05）：已完成，但不是按本文的步骤序完成的。**
+>
+> 第一轮实现虽然「测试全绿」却在真机上仍然乱码，实测扒出 5 处产品缺陷 + 3 处规格缺项：
+> `MdLineCursor` 丢续段、每游标一次的自动 flush 架空了整个缓冲设计、自造的
+> `displayWidth` 漏掉 CJK 标点/谚文/emoji、围栏内 `|` 被当表格、`parseCells` 丢掉
+> 中间空格子（内容整体左移一列），以及缺 DEGRADED 态、缺缓冲上限、缺第 4/5/6 条 flush
+> 触发点。这些是**重建**出来的，不是照下面的 Step 逐条走出来的，所以下方复选框保持未勾
+> ——照勾等于谎报执行过程。真正的完成判据是下面这份验收证据：
+>
+> - `mvn -pl springai-code-tui test`：1911 项全绿（表格相关新增 39 + 20 + 20 + 12 项）。
+> - `springai-code-tui/src/test/resources/scripts/table_render_smoke.py`：真 pty，SMOKE PASS
+>   （不按任何键自己落地、无残留 `|`、单条分隔线、列起点按显示宽一致）。
+> - `dev/table_mutation_check.py`：15 条变异逐条改坏，**全部变红**，未被守住 0 条。
+>   过程中还揪出一条**为错误的理由变绿**的旧断言（600 行上限用例实际测的是 `inner < 6`
+>   宽度守卫），已重写。
+>
+> 与本文的偏差，以 `docs/superpowers/specs/2026-09-04-code-tui-markdown-table-design.md`
+> （v4，权威契约）为准；本文只作为思路留档。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 给 code-tui 的 markdown 渲染器添加表格块渲染，按显示宽度对齐列、支持 CJK 字符、超宽时削列+格内折行不丢字。

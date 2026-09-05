@@ -4,7 +4,7 @@
       "id": "task-0",
       "title": "可见性前置改动",
       "description": "修改 MarkdownRenderer 和 ScrollbackPrinter 的成员可见性，将 private 改为 package-private",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownRenderer.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ScrollbackPrinter.java"
@@ -14,7 +14,7 @@
       "id": "task-1",
       "title": "MarkdownTable 基础结构（TDD）",
       "description": "创建 MarkdownTable 类和测试，实现 looksLikeRow 方法",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -24,7 +24,7 @@
       "id": "task-2",
       "title": "分隔行识别与对齐解析",
       "description": "实现 isSeparator 和 alignments 方法",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -34,7 +34,7 @@
       "id": "task-3",
       "title": "单元格解析（转义、补空、并入）",
       "description": "实现 parseCells 和 adjustCellCount 方法，支持转义处理",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -44,7 +44,7 @@
       "id": "task-4",
       "title": "列宽计算与显示宽度测量",
       "description": "实现 displayWidth、spansDisplayWidth、calculateColumnWidths 方法，支持 CJK",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -54,7 +54,7 @@
       "id": "task-5",
       "title": "削列算法（超宽处理）",
       "description": "实现 reduceColumnWidths 方法，含 10000 次迭代上限",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -64,7 +64,7 @@
       "id": "task-6",
       "title": "格内折行算法",
       "description": "实现 wrapCellContent 方法，空格优先+硬切",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -74,7 +74,7 @@
       "id": "task-7",
       "title": "render 入口守卫与退回原样",
       "description": "实现 render 方法骨架，含入口守卫和 fallbackToRaw",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -84,7 +84,7 @@
       "id": "task-8",
       "title": "render 解析表头与数据行",
       "description": "实现 render 方法的解析部分",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -94,7 +94,7 @@
       "id": "task-9",
       "title": "render 核心排版逻辑",
       "description": "完成 render 方法：列宽计算、削列、格内折行、600行上限",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownTable.java"
@@ -104,7 +104,7 @@
       "id": "task-10",
       "title": "状态机字段声明与初始化",
       "description": "在 MarkdownRenderer 中添加状态机字段、hasBuffered 方法、feed 方法骨架",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownRendererTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownRenderer.java"
@@ -114,7 +114,7 @@
       "id": "task-11",
       "title": "状态机完整转移逻辑",
       "description": "实现 CANDIDATE、IN_BLOCK、DEGRADED 状态转移",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownRendererTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownRenderer.java"
@@ -124,7 +124,7 @@
       "id": "task-12",
       "title": "flush 方法与 reset 扩展",
       "description": "实现 flush 方法，扩展 reset 方法",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/MarkdownRendererTableTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/MarkdownRenderer.java"
@@ -134,8 +134,10 @@
       "id": "task-13",
       "title": "MdLineCursor 与 tableFlushCursor",
       "description": "实现 MdLineCursor 内部类、tableFlushCursor 和 hasBufferedTable 方法",
-      "status": "pending",
-      "dependencies": ["task-12"],
+      "status": "completed",
+      "dependencies": [
+        "task-12"
+      ],
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/ScrollbackPrinterTest.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ScrollbackPrinter.java"
@@ -145,7 +147,7 @@
       "id": "task-14-javadoc",
       "title": "javadoc 补充第二条例外声明",
       "description": "在 OutputCursor、PhysicalOutputQueue、ScrollbackPrinter.md 中补充表格缓冲说明",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/output/OutputCursor.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/output/PhysicalOutputQueue.java",
@@ -156,7 +158,7 @@
       "id": "task-14-flush-1",
       "title": "第 1 条 flush 触发点",
       "description": "在 assistant(String) 一次性入口末尾添加 flush",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ScrollbackPrinter.java"
       ]
@@ -165,7 +167,7 @@
       "id": "task-15",
       "title": "第 2 条 flush 触发点",
       "description": "在 enqueueOutputLine 的 USER/TOOL_START/TOOL_OK/TOOL_FAIL/ERROR case 前置 flush",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/CodeTuiView.java"
       ]
@@ -174,7 +176,7 @@
       "id": "task-16",
       "title": "第 4 条 flush 触发点",
       "description": "在主 drain 之后添加回合结束兜底 flush",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/CodeTuiView.java"
       ]
@@ -183,7 +185,7 @@
       "id": "task-17",
       "title": "第 5 条 flush 触发点",
       "description": "在 printPlan 收尾添加 flush，/clear 同步丢缓冲",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/CodeTuiView.java",
         "springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ScrollbackPrinter.java"
@@ -193,7 +195,7 @@
       "id": "task-18",
       "title": "视图级测试",
       "description": "补充 CodeTuiViewEventWiringTest 视图级表格渲染测试",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/java/io/github/javaside/springai/codetui/CodeTuiViewEventWiringTest.java"
       ]
@@ -202,7 +204,7 @@
       "id": "task-19",
       "title": "pty 冒烟测试",
       "description": "创建 pty 冒烟测试脚本",
-      "status": "pending",
+      "status": "completed",
       "files": [
         "springai-code-tui/src/test/python/table_rendering_smoke.py"
       ]
@@ -211,14 +213,14 @@
       "id": "task-20",
       "title": "变异测试与回归验证",
       "description": "执行变异测试，修正既有测试期望值",
-      "status": "pending",
+      "status": "completed",
       "files": []
     },
     {
       "id": "task-21",
       "title": "最终验证与文档",
       "description": "完整功能验证、性能验证、最终 commit 和推送",
-      "status": "pending",
+      "status": "completed",
       "files": []
     }
   ]
