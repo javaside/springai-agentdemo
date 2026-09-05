@@ -17,6 +17,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntConsumer;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 
 import org.junit.jupiter.api.Test;
 
@@ -27,6 +29,7 @@ import dev.tamboui.layout.Size;
 import dev.tamboui.terminal.Backend;
 import dev.tamboui.terminal.Frame;
 import dev.tamboui.style.Style;
+import dev.tamboui.testutil.ExpectedLog;
 import dev.tamboui.tui.event.ResizeEvent;
 
 class InlineTuiRunnerEventDrivenTest {
@@ -129,9 +132,15 @@ class InlineTuiRunnerEventDrivenTest {
         }
     }
 
+    /**
+     * 事件循环吞掉 UI action 异常后必须继续存活，且把异常完整交给 SEVERE 日志
+     * （「记录并继续」策略的记录侧）。日志经 {@link ExpectedLog} 断言式接管：
+     * 预期的 SEVERE 不泼进构建输出，且「确实打了这条日志」本身成为被测契约。
+     */
     @Test
     void actionFailureDoesNotKillFollowingActions() throws Exception {
-        try (RunnerFixture fixture = startRunner(POLL_TIMEOUT)) {
+        try (RunnerFixture fixture = startRunner(POLL_TIMEOUT);
+                ExpectedLog runnerLog = ExpectedLog.capture(InlineTuiRunner.class)) {
             assertTrue(fixture.initialDraw.await(1, TimeUnit.SECONDS));
             CountDownLatch followingAction = new CountDownLatch(1);
             CountDownLatch updateDraw = fixture.drawNumber(2);
@@ -144,6 +153,10 @@ class InlineTuiRunnerEventDrivenTest {
             assertTrue(followingAction.await(1, TimeUnit.SECONDS));
             assertTrue(updateDraw.await(1, TimeUnit.SECONDS));
             assertTrue(fixture.thread.isAlive());
+            LogRecord logged = runnerLog.awaitRecord(Level.SEVERE,
+                    "InlineTuiRunner 事件循环捕获到未处理异常", 1, TimeUnit.SECONDS);
+            assertEquals("expected test failure", logged.getThrown().getMessage(),
+                    "handleThrowable 必须完整记录异常（类型、消息、堆栈供诊断）");
         }
     }
 

@@ -11,8 +11,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 
 import org.junit.jupiter.api.Test;
+
+import dev.tamboui.testutil.ExpectedLog;
 
 /**
  * {@link AsyncPtyWriter} 的行为契约测试：渲染线程的 write/flush 必须永不阻塞在慢 pty 上。
@@ -185,25 +189,35 @@ class AsyncPtyWriterTest {
 
     // ── 契约 5：设备死亡族（审核 M1/M-2 的回归钉） ────────────────────
 
-    /** IOException 转设备死亡：isDead、isSaturated 恒 false（防 freeze-forever）、后续提交 no-op。 */
+    /**
+     * IOException 转设备死亡：isDead、isSaturated 恒 false（防 freeze-forever）、后续提交 no-op。
+     * 死亡必须留下 WARNING 诊断记录（含根因异常）——经 {@link ExpectedLog} 断言式接管，
+     * 不泼进构建输出。
+     */
     @Test
     void ioFailureMarksDeadAndSaturatedNeverTrue() throws Exception {
         ThrowingBackend backend = new ThrowingBackend();
-        AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024);
-        writer.submit(payload(1024));
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!writer.isDead() && System.nanoTime() < deadline) {
-            TimeUnit.MILLISECONDS.sleep(10);
+        try (ExpectedLog writerLog = ExpectedLog.capture(AsyncPtyWriter.class);
+                AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024)) {
+            writer.submit(payload(1024));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!writer.isDead() && System.nanoTime() < deadline) {
+                TimeUnit.MILLISECONDS.sleep(10);
+            }
+            assertTrue(writer.isDead(), "writeRaw 抛 IOException 必须转设备死亡");
+            LogRecord logged = writerLog.awaitRecord(Level.WARNING,
+                    "pty 写失败，异步写线程转入设备死亡态", 1, TimeUnit.SECONDS);
+            assertEquals("simulated pty failure", logged.getThrown().getMessage(),
+                    "markDead 必须携带根因 IOException（供诊断）");
+            assertFalse(writer.isSaturated(), "死亡后 isSaturated 必须恒 false（否则上层闸永久关死，审核 M1）");
+            assertTrue(writer.submit(payload(1024)), "死亡后提交按已接受（no-op）处理");
+            writer.close(1, TimeUnit.SECONDS);
+            int atDeath = backend.writtenCount();
+            writer.submit(payload(1024));   // 死亡后再提交：必须 no-op
+            writer.flush();
+            TimeUnit.MILLISECONDS.sleep(100);
+            assertEquals(atDeath, backend.writtenCount(), "死亡后不得再写出任何字节（只有触发死亡的那一次）");
         }
-        assertTrue(writer.isDead(), "writeRaw 抛 IOException 必须转设备死亡");
-        assertFalse(writer.isSaturated(), "死亡后 isSaturated 必须恒 false（否则上层闸永久关死，审核 M1）");
-        assertTrue(writer.submit(payload(1024)), "死亡后提交按已接受（no-op）处理");
-        writer.close(1, TimeUnit.SECONDS);
-        int atDeath = backend.writtenCount();
-        writer.submit(payload(1024));   // 死亡后再提交：必须 no-op
-        writer.flush();
-        TimeUnit.MILLISECONDS.sleep(100);
-        assertEquals(atDeath, backend.writtenCount(), "死亡后不得再写出任何字节（只有触发死亡的那一次）");
     }
 
     /** 错误探针（PrintWriter.checkError 语义）触发设备死亡：markDead 不再依赖 IOException。 */
@@ -211,7 +225,8 @@ class AsyncPtyWriterTest {
     void errorProbeTriggersMarkDead() throws Exception {
         RecordingBackend backend = new RecordingBackend();
         AtomicBoolean probeFlag = new AtomicBoolean();
-        try (AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024, probeFlag::get)) {
+        try (ExpectedLog writerLog = ExpectedLog.capture(AsyncPtyWriter.class);
+                AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024, probeFlag::get)) {
             writer.submit(payload(1024));
             writer.flush();
             writer.awaitFlushed(2, TimeUnit.SECONDS);
@@ -222,6 +237,10 @@ class AsyncPtyWriterTest {
                 TimeUnit.MILLISECONDS.sleep(10);
             }
             assertTrue(writer.isDead(), "探针为真必须触发设备死亡（PrintWriter 吞异常的补偿，审核 M-2）");
+            LogRecord logged = writerLog.awaitRecord(Level.WARNING,
+                    "pty 写失败，异步写线程转入设备死亡态", 1, TimeUnit.SECONDS);
+            assertEquals("pty error probe reported failure (checkError)", logged.getThrown().getMessage(),
+                    "探针路径的 markDead 必须携带说明性异常（checkError 无原始异常可带）");
         }
     }
 
@@ -229,17 +248,23 @@ class AsyncPtyWriterTest {
     @Test
     void flushAfterDeathCompletesImmediately() throws Exception {
         ThrowingBackend backend = new ThrowingBackend();
-        AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024);
-        writer.submit(payload(1024));
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!writer.isDead() && System.nanoTime() < deadline) {
-            TimeUnit.MILLISECONDS.sleep(10);
+        try (ExpectedLog writerLog = ExpectedLog.capture(AsyncPtyWriter.class);
+                AsyncPtyWriter writer = new AsyncPtyWriter(backend, 8 * 1024)) {
+            writer.submit(payload(1024));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!writer.isDead() && System.nanoTime() < deadline) {
+                TimeUnit.MILLISECONDS.sleep(10);
+            }
+            // 不另行断言消息/异常——与 ioFailureMarksDead 用例钉的是同一条 WARNING；
+            // 此处消费掉预期记录只为过 close 绊线（ExpectedLog 纪律：预期噪音必须显式声明）。
+            writerLog.awaitRecord(Level.WARNING,
+                    "pty 写失败，异步写线程转入设备死亡态", 1, TimeUnit.SECONDS);
+            long t0 = System.nanoTime();
+            boolean ok = writer.flush().await(200, TimeUnit.MILLISECONDS);
+            assertTrue(ok, "死亡后 flush 必须立即通过");
+            assertTrue((System.nanoTime() - t0) < TimeUnit.MILLISECONDS.toNanos(200));
+            writer.close(1, TimeUnit.SECONDS);
         }
-        long t0 = System.nanoTime();
-        boolean ok = writer.flush().await(200, TimeUnit.MILLISECONDS);
-        assertTrue(ok, "死亡后 flush 必须立即通过");
-        assertTrue((System.nanoTime() - t0) < TimeUnit.MILLISECONDS.toNanos(200));
-        writer.close(1, TimeUnit.SECONDS);
     }
 
     // ── 契约 6：队空豁免前进性（修复新增行为的锚） ──────────────────────
