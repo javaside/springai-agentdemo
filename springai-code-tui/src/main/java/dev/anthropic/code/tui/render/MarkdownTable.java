@@ -11,4 +11,11 @@ public final class MarkdownTable {
         this.markdownRenderer = markdownRenderer;
         this.scrollbackPrinter = scrollbackPrinter;
     }
+
+    static boolean looksLikeRow(String line) {
+        if (line == null || line.isEmpty()) {
+            return false;
+        }
+        return line.trim().startsWith("|");
+    }
 }
