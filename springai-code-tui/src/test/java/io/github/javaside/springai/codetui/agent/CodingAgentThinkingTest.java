@@ -17,6 +17,7 @@ import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -26,7 +27,7 @@ import io.github.javaside.springai.codetui.agent.seam.StubListener;
 class CodingAgentThinkingTest {
 
     @Test
-    void submitUsesActiveSelectionSnapshot() {
+    void submitUsesActiveSelectionSnapshot() throws Exception {
         AtomicReference<ChatOptions> captured = new AtomicReference<>();
         ChatModel model = new ChatModel() {
             @Override public ChatResponse call(Prompt prompt) { return null; }
@@ -45,6 +46,11 @@ class CodingAgentThinkingTest {
         CodingAgent agent = new CodingAgent(registry, Map.of("openai", client), new StubListener(),
                 "s", new AtomicLong(), null, null, null, List.of(), null, null, null);
         agent.submit("hi");
+        // 组装/订阅移入 defer+subscribeOn 后模型调用异步发生：等桩模型抓到 prompt 再断言其 options。
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (captured.get() == null && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
         assertEquals("high", ((OpenAiChatOptions) captured.get()).getReasoningEffort());
     }
 }
