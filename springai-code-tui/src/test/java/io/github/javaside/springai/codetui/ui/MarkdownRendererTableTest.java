@@ -113,4 +113,27 @@ class MarkdownRendererTableTest {
         assertEquals(0, result.size());
         assertFalse(md.hasBuffered());
     }
+
+    @Test
+    void reset_clearsBufferAndState() {
+        md.feed("| A | B |", 80);
+        md.feed("|---|---|", 80);
+
+        assertTrue(md.hasBuffered());
+
+        md.reset();
+
+        // 缓冲清空，状态回 IDLE
+        assertFalse(md.hasBuffered());
+
+        // 下一张表能正常识别
+        md.feed("| C | D |", 80);
+        assertTrue(md.hasBuffered());
+    }
+
+    @Test
+    void feed_handlesNull() {
+        assertDoesNotThrow(() -> md.feed(null, 80));
+        assertEquals(List.of(), md.feed(null, 80));
+    }
 }
