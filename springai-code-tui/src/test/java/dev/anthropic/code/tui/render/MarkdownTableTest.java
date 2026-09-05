@@ -4,8 +4,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import dev.anthropic.code.tui.render.MarkdownTable.Alignment;
-import io.github.javaside.springai.codetui.ui.styled.Span;
-import io.github.javaside.springai.codetui.ui.styled.Style;
+import dev.tamboui.text.Span;
+import dev.tamboui.style.Style;
 
 public class MarkdownTableTest {
 
@@ -112,16 +112,16 @@ public class MarkdownTableTest {
     void spansDisplayWidth_measuresAfterJoining() {
         // ASCII spans
         List<Span> spans = List.of(
-            Span.text("hello"),
-            Span.styled("world", Style.BOLD)
+            Span.raw("hello"),
+            Span.styled("world", Style.create().bold())
         );
 
         assertEquals(10, MarkdownTable.spansDisplayWidth(spans)); // "helloworld"
 
         // 含 CJK
         spans = List.of(
-            Span.text("你好"),
-            Span.text("abc")
+            Span.raw("你好"),
+            Span.raw("abc")
         );
         assertEquals(7, MarkdownTable.spansDisplayWidth(spans)); // 2×2 + 3 = 7
     }

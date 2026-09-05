@@ -2,6 +2,7 @@ package dev.anthropic.code.tui.render;
 
 import io.github.javaside.springai.codetui.ui.MarkdownRenderer;
 import io.github.javaside.springai.codetui.ui.ScrollbackPrinter;
+import dev.tamboui.text.Span;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -155,5 +156,58 @@ public final class MarkdownTable {
         }
 
         return result;
+    }
+
+    /**
+     * 计算字符串的显示宽度（CJK 字符算 2 列）。
+     */
+    static int displayWidth(String s) {
+        if (s == null || s.isEmpty()) {
+            return 0;
+        }
+
+        int width = 0;
+        for (int i = 0; i < s.length(); i++) {
+            int codePoint = s.codePointAt(i);
+            if (Character.isSupplementaryCodePoint(codePoint)) {
+                i++; // 跳过低代理项
+            }
+
+            // CJK 统一表意文字、全角字符等占 2 列
+            if ((codePoint >= 0x4E00 && codePoint <= 0x9FFF) ||   // CJK 统一表意文字
+                (codePoint >= 0x3400 && codePoint <= 0x4DBF) ||   // CJK 扩展 A
+                (codePoint >= 0x20000 && codePoint <= 0x2A6DF) || // CJK 扩展 B
+                (codePoint >= 0x2A700 && codePoint <= 0x2B73F) || // CJK 扩展 C
+                (codePoint >= 0x2B740 && codePoint <= 0x2B81F) || // CJK 扩展 D
+                (codePoint >= 0x2B820 && codePoint <= 0x2CEAF) || // CJK 扩展 E
+                (codePoint >= 0xF900 && codePoint <= 0xFAFF) ||   // CJK 兼容表意文字
+                (codePoint >= 0x2F800 && codePoint <= 0x2FA1F) || // CJK 兼容表意文字补充
+                (codePoint >= 0x3040 && codePoint <= 0x309F) ||   // 平假名
+                (codePoint >= 0x30A0 && codePoint <= 0x30FF) ||   // 片假名
+                (codePoint >= 0xFF00 && codePoint <= 0xFFEF)) {   // 全角字符
+                width += 2;
+            } else {
+                width += 1;
+            }
+        }
+
+        return width;
+    }
+
+    /**
+     * 测量 spans 拼接后的显示宽度。
+     * 必须拼接后测量，因为 ZWJ/组合字符按整簇算。
+     */
+    static int spansDisplayWidth(List<Span> spans) {
+        if (spans == null || spans.isEmpty()) {
+            return 0;
+        }
+
+        StringBuilder joined = new StringBuilder();
+        for (Span span : spans) {
+            joined.append(span.content());
+        }
+
+        return displayWidth(joined.toString());
     }
 }
