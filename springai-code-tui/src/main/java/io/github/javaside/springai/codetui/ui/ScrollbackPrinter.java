@@ -436,28 +436,63 @@ public final class ScrollbackPrinter {
         private int at;
         private SegmentedWrap.Styled segs;   // 当前逻辑行的段推进器（折行源 = 未缩进渲染）
         private Text raw;                    // 当前逻辑行的整行渲染（含缩进；留底原文）
+        private final java.util.Queue<List<Span>> pendingOutput = new java.util.LinkedList<>();
 
         MdLineCursor(String[] logicals) { this.logicals = logicals; }
 
         @Override public boolean hasNext() {
-            return (segs != null && segs.hasNextSegment()) || at < logicals.length;
+            return !pendingOutput.isEmpty() || (segs != null && segs.hasNextSegment()) || at < logicals.length;
         }
 
         @Override public PhysicalLine next() {
             try {
-                if (segs == null || !segs.hasNextSegment()) {
-                    if (at >= logicals.length) return null;
-                    List<Span> rendered = md.renderFinalized(logicals[at++]);   // 状态推进在渲染时发生
-                    raw = indented(rendered);                                  // 留底原文（折行前整行，含缩进）
-                    segs = SegmentedWrap.styled(rendered, innerWidth());        // 折行源 = 未缩进渲染
+                // 先消费 pending 队列
+                while (pendingOutput.isEmpty() && at < logicals.length) {
+                    // feed 返回空列表 ≠ 游标耗尽，需要内部循环
+                    List<List<Span>> feedResult = md.feed(logicals[at++], innerWidth());
+                    pendingOutput.addAll(feedResult);
+
+                    // 如果到达末尾且有缓冲，flush
+                    if (at >= logicals.length && md.hasBuffered()) {
+                        List<List<Span>> flushed = md.flush(innerWidth());
+                        pendingOutput.addAll(flushed);
+                    }
+
+                    // 如果有输出就跳出
+                    if (!pendingOutput.isEmpty()) {
+                        break;
+                    }
                 }
-                List<Span> piece = segs.nextSegment();
-                if (piece == null) return null;
-                // wrap-then-indent：每一段（含续段）前置缩进——续段对齐首段内容，即悬挂缩进
-                List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
-                indentedSeg.add(Span.raw(INDENT));
-                indentedSeg.addAll(piece);
-                return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), raw);
+
+                if (pendingOutput.isEmpty()) {
+                    // 仍然没有输出，检查折行段
+                    if (segs == null || !segs.hasNextSegment()) {
+                        return null;
+                    }
+                }
+
+                // 优先输出 pending
+                if (!pendingOutput.isEmpty()) {
+                    List<Span> line = pendingOutput.poll();
+
+                    // 为这一行创建 raw 和折行段
+                    raw = indented(line);
+                    segs = SegmentedWrap.styled(line, innerWidth());
+                }
+
+                // 输出折行段
+                if (segs != null && segs.hasNextSegment()) {
+                    List<Span> piece = segs.nextSegment();
+                    if (piece == null) return null;
+
+                    // wrap-then-indent：每一段（含续段）前置缩进——续段对齐首段内容，即悬挂缩进
+                    List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
+                    indentedSeg.add(Span.raw(INDENT));
+                    indentedSeg.addAll(piece);
+                    return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), raw);
+                }
+
+                return null;
             } catch (RuntimeException e) {
                 return null;   // 渲染降级：一条逻辑行失败不打断批次（md 渲染器自身「不抛」契约的兜底）
             }

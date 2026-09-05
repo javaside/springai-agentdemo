@@ -308,4 +308,26 @@ class ScrollbackPrinterTest {
                             + body.substring(0, Math.min(12, body.length())) + "…）——续段缩进/宽度语义必须一致");
         }
     }
+
+    @Test
+    void assistantCursor_outputsAlignedTable() {
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = printerOver(sink);
+
+        String input = "| Name | Age |\n|------|-----|\n| Alice | 30 |";
+        io.github.javaside.springai.codetui.ui.output.OutputCursor cursor = p.assistantCursor(input);
+
+        List<String> output = new ArrayList<>();
+        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine line;
+        while ((line = cursor.next()) != null) {
+            output.add(line.styled().rawContent());
+        }
+
+        // 3 行输出（表头 + 分隔线 + 数据）
+        assertEquals(3, output.size(), "表格应输出 3 行");
+
+        // 验证包含表格内容
+        assertTrue(output.stream().anyMatch(l -> l.contains("Name")), "应包含表头");
+        assertTrue(output.stream().anyMatch(l -> l.contains("Alice")), "应包含数据行");
+    }
 }
