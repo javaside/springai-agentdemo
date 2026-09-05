@@ -74,4 +74,32 @@ public final class MarkdownTable {
 
         return result;
     }
+
+    /**
+     * 解析单元格，按未转义的 | 切分。
+     * 首尾 trim 后为空的单元格丢弃。
+     */
+    static List<String> parseCells(String line) {
+        if (line == null) {
+            return List.of();
+        }
+
+        String[] rawCells = line.split("\\|", -1);
+        List<String> result = new ArrayList<>();
+
+        for (int i = 0; i < rawCells.length; i++) {
+            String trimmed = rawCells[i].trim();
+
+            // 首尾空单元格丢弃
+            if (trimmed.isEmpty() && (i == 0 || i == rawCells.length - 1)) {
+                continue;
+            }
+
+            if (!trimmed.isEmpty()) {
+                result.add(trimmed);
+            }
+        }
+
+        return result;
+    }
 }
