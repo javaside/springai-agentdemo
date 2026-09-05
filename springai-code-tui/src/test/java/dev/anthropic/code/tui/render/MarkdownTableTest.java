@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import dev.anthropic.code.tui.render.MarkdownTable.Alignment;
+import io.github.javaside.springai.codetui.ui.styled.Span;
+import io.github.javaside.springai.codetui.ui.styled.Style;
 
 public class MarkdownTableTest {
 
@@ -88,5 +90,39 @@ public class MarkdownTableTest {
         // 多出来的并入最后一列（用 " | " 拼接）
         List<String> adjusted = MarkdownTable.adjustCellCount(row, header.size());
         assertEquals(List.of("1", "2 | 3 | 4"), adjusted);
+    }
+
+    @Test
+    void displayWidth_calculatesCJKCorrectly() {
+        // ASCII 字符宽度为 1
+        assertEquals(5, MarkdownTable.displayWidth("hello"));
+
+        // CJK 字符宽度为 2
+        assertEquals(4, MarkdownTable.displayWidth("你好")); // 2个字符 × 2
+
+        // 混合
+        assertEquals(7, MarkdownTable.displayWidth("你好abc")); // 2×2 + 3×1 = 7
+
+        // 空串
+        assertEquals(0, MarkdownTable.displayWidth(""));
+        assertEquals(0, MarkdownTable.displayWidth(null));
+    }
+
+    @Test
+    void spansDisplayWidth_measuresAfterJoining() {
+        // ASCII spans
+        List<Span> spans = List.of(
+            Span.text("hello"),
+            Span.styled("world", Style.BOLD)
+        );
+
+        assertEquals(10, MarkdownTable.spansDisplayWidth(spans)); // "helloworld"
+
+        // 含 CJK
+        spans = List.of(
+            Span.text("你好"),
+            Span.text("abc")
+        );
+        assertEquals(7, MarkdownTable.spansDisplayWidth(spans)); // 2×2 + 3 = 7
     }
 }
