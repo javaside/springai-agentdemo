@@ -235,4 +235,46 @@ public class MarkdownTableTest {
         // "你" (2列) + "b" (1列) → "你" 单独一行，"b" 下一行
         assertEquals(List.of("a", "你", "b"), lines);
     }
+
+    @Test
+    void render_fallsBackOnNarrowTerminal() {
+        List<String> block = List.of(
+            "| A | B |",
+            "|---|---|",
+            "| 1 | 2 |"
+        );
+
+        // inner < 6 直接退回原样（走 renderInline）
+        List<List<Span>> result = MarkdownTable.render(block, 5);
+
+        // 期望 3 行原样输出（带内联样式）
+        assertEquals(3, result.size());
+        // 第一行应该包含原始内容（简化验证：检查行数）
+    }
+
+    @Test
+    void render_fallsBackWhenTooManyColumns() {
+        // 列数太多，连最小宽度都装不下
+        List<String> block = List.of(
+            "| A | B | C | D | E | F | G | H |",
+            "|---|---|---|---|---|---|---|---|"
+        );
+
+        int inner = 20; // 8列 × 4 + 7×2 = 46 > 20
+        List<List<Span>> result = MarkdownTable.render(block, inner);
+
+        // 退回原样
+        assertEquals(2, result.size());
+    }
+
+    @Test
+    void render_handlesNullInput() {
+        assertDoesNotThrow(() -> MarkdownTable.render(null, 80));
+        assertEquals(List.of(), MarkdownTable.render(null, 80));
+    }
+
+    @Test
+    void render_handlesEmptyBlock() {
+        assertEquals(List.of(), MarkdownTable.render(List.of(), 80));
+    }
 }
