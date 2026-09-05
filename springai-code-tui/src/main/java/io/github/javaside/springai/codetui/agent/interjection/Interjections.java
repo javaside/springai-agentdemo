@@ -53,6 +53,9 @@ public final class Interjections implements UiChangeSource {
     /** 已随 prompt 送达、但尚未补进会话历史的文本（回合末由 {@link #takeForHistory} 取走）。 */
     private String delivered;
 
+    /** 流式重试恢复时一次性注入的系统通知；不进入 delivered / 会话历史。 */
+    private volatile String resumeNotice;
+
     // ── 变化通知（事件驱动 UI；见类注释「变化通知纪律」） ──────────────────
     private volatile UiChangeListener uiChangeListener = UiChangeListener.noop();
 
@@ -104,6 +107,23 @@ public final class Interjections implements UiChangeSource {
             version = changed();
         }
         publish(version);
+    }
+
+    /** 设置下一次模型调用要消费的恢复通知。 */
+    public synchronized void setResumeNotice(String text) {
+        resumeNotice = text;
+    }
+
+    /** 原子取走并清空恢复通知；这是生产代码唯一读通道。 */
+    public synchronized String takeResumeNotice() {
+        String notice = resumeNotice;
+        resumeNotice = null;
+        return notice;
+    }
+
+    /** 测试钩子：只读恢复通知，不消费。 */
+    public synchronized String peekResumeNoticeForTest() {
+        return resumeNotice;
     }
 
     /** 还有几条没送到模型手里（状态栏用）。 */
@@ -196,12 +216,36 @@ public final class Interjections implements UiChangeSource {
                 out.add(delivered);
             }
             out.addAll(pending);
+            resumeNotice = null;
             if (!out.isEmpty()) {                 // 两边都空是 no-op：不通知
                 pending.clear();
                 delivered = null;
                 anchorToolCallId = null;
                 version = changed();
             }
+        }
+        publish(version);
+        return out;
+    }
+
+    /**
+     * 流式重试前把已送达插话整体放回 pending 头部，确保早于退避期新输入。
+     *
+     * @return 本次回填的元素列表，供恢复 prompt 组装；无 delivered 时为空
+     */
+    public List<String> refillForResume() {
+        List<String> out;
+        long version = 0L;
+        synchronized (this) {
+            if (delivered == null) {
+                return List.of();
+            }
+            String refilled = delivered;
+            pending.addFirst(refilled);
+            delivered = null;
+            anchorToolCallId = null;
+            out = List.of(refilled);
+            version = changed();
         }
         publish(version);
         return out;

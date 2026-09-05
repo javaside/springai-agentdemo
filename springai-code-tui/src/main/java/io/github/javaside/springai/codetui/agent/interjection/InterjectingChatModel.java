@@ -99,16 +99,28 @@ public final class InterjectingChatModel implements ChatModel {
 
     private Prompt inject(Prompt prompt) {
         List<Message> messages = prompt.getInstructions();
-        Optional<String> text = interjections.drainForInjection(lastToolCallId(messages));
-        if (text.isEmpty()) {
+        Optional<String> interjection = interjections.drainForInjection(lastToolCallId(messages));
+        if (interjection.isPresent()) {
+            String rawText = interjection.get();
+            log.info("插话随本次调用送达（{} 字）", rawText.length());
+            // 必须在 drainForInjection 返回后（锁外）通知，且只交出用户插话原文。
+            interjections.fireDelivered(rawText);
+        }
+        String notice = interjections.takeResumeNotice();
+        if (interjection.isEmpty() && notice == null) {
             return prompt;
         }
+
+        String injectedText;
+        if (interjection.isPresent() && notice != null) {
+            injectedText = wrapText(interjection.get()) + "\n\n" + notice;
+        } else if (interjection.isPresent()) {
+            injectedText = wrapText(interjection.get());
+        } else {
+            injectedText = notice;
+        }
         List<Message> merged = new ArrayList<>(messages);
-        merged.add(new UserMessage(wrapText(text.get())));
-        log.info("插话随本次调用送达（{} 字）", text.get().length());
-        // 通知 UI 把它打进信息流。⚠ 必须在 drainForInjection <b>返回之后</b>调（锁外），
-        // 且交出的是<b>原文</b>——包裹后的文本含给模型的行为指引，那不是用户说的话。
-        interjections.fireDelivered(text.get());
+        merged.add(new UserMessage(injectedText));
         return new Prompt(merged, prompt.getOptions());
     }
 
