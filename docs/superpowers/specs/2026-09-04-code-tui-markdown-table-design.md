@@ -1,7 +1,7 @@
 # code-tui Markdown 表格渲染 设计
 
 日期：2026-09-04
-状态：**v3**（第 1、2 轮 subagent 评审的全部结论已改入，见文末评审记录；计划做 3 轮）
+状态：**v4**（第 1、2、3 轮 subagent 评审的全部结论已改入，见文末评审记录）
 参考实现：Claude Code 的表格渲染（表头加粗 + 一条分隔线，不画竖线）
 
 ## 0. 摘要
@@ -114,17 +114,37 @@ code-tui 的 markdown 渲染器**没有表格分支**，表格行原样打印。
 **超宽处理**：表格总宽 > inner 时：
 
 1. 反复削当前最宽的列（每次削 1 列）直到装下；**并列最宽时削索引小的那列**——确定性优先于对称，
-   否则测试期望值无法写
+   否则测试期望值无法写。
+   **削列迭代次数上限**：**10000 次**。超过上限立刻中止排版、整块退回原样。理由：§3.5 的
+   200 行 / 64 K 只封输入量，不封削列循环本身——极端输入（单列单行 64 K 字符）需削减 ~64 K 次
+   （复杂度 O(削减总次数 × 列数)），发生在**排版之前**、产出侧 600 行上限尚未生效，
+   会让单次 `next()` 耗时远超 12ms 预算
 2. 每列最小宽度 **4**（容得下 2 个 CJK 字符或 4 个 ASCII 字符）。表头所在列同样可被削到 4，
    表头文字按下面的规则折行；`─` 分隔线仍是一条，跟在表头的**最后一段**下面
 3. 格子内容按列宽折成多行：**优先在空格处断**，单个词比列宽还长才按显示宽度硬切
-   （不切半个宽字符）。CJK 无空格的格子必然落到硬切分支——设计如此，不是遗漏
-4. 连每列 4 列都装不下（`4×列数 + 2×(列数−1) > inner`）→ **整块退回原样输出**，诚实降级
+   （不切半个宽字符）。CJK 无空格的格子必然落到硬切分支——设计如此，不是遗漏。
+   **格内折行伪代码**：
+   ```
+   for each cell content:
+       remaining = content
+       while remaining 不为空:
+           找到 [0, columnWidth] 范围内最后一个空格
+           if 找到空格:
+               在空格处断开（空格本身丢弃，下一段 trim 开头）
+           else:
+               按显示宽度硬切到 columnWidth（不切半个宽字符）
+   ```
+4. 连每列 4 列都装不下 → **整块退回原样输出**，诚实降级。判定公式：
+   - **多列**：`4×列数 + 2×(列数−1) > inner`
+   - **单列**（列间项退化为 0）：`4 > inner`，即 inner < 4 时退回
+   实现时统一为 `列间宽 = max(0, 2×(列数−1))`，避免分支判定顺序错误
 5. **产出侧上限**：排版过程中一旦产出行数超过 **600**，立刻中止排版、整块退回原样。
    §3.5 的 200 行 / 64 K 只封了**输入**——13 列（inner=78 时的列数上限）+ 单格 6 万字符
    完全在输入限内，削到最小宽 4 后格内折行能产出上万物理行，而这些行是在**一次 `next()` 里**
    物化的（`written >= 2` 之前时间检查还没生效，见 §3.6），等于把「整块物化」又请回来一次。
-   中止式判定（边排边数、超了就放弃）才能同时封住工作量与产出量
+   中止式判定（边排边数、超了就放弃）才能同时封住工作量与产出量。
+   600 的推导：输入上限 200 行，单列削到最小宽 4 后，每行平均 320 字符（64K / 200）
+   折成 80 行是极端，预期最大折行倍数 3× → 200 × 3 = 600
 
 ⚠ 格内折行是本仓的**第三套**折行语义（`SegmentedWrap` / `TextWrap` /
 `CodeTuiView.wrapSegments` 全是按显示宽度硬切、没有空格感知）。`SegmentedWrap` 的 javadoc
@@ -152,7 +172,10 @@ code-tui 的 markdown 渲染器**没有表格分支**，表格行原样打印。
 - `static boolean isSeparator(String line)`——单元格全由 `-` / `:` / 空格组成且至少一个 `-`
 - `static List<Alignment> alignments(String separatorLine)`——`Alignment` 是本类内的 enum
   （`LEFT` / `CENTER` / `RIGHT`）
-- `static List<List<Span>> render(List<String> block, int inner)`——块原文 → 排好的若干行 spans
+- `static List<List<Span>> render(List<String> block, int inner)`——块原文 → 排好的若干行 spans。
+  **返回值结构**：外层 List 是物理行，内层 List 是每行的 spans（格内折行后一个格子变多行，
+  体现为外层 List 的多个元素）。**入口卫式条件**：`if (inner < 6) 直接返回原样行`
+  （6 = 单列最小宽 4 + 2 缩进；零/负宽时任何非空行都违反 §3.1 硬不变量，可能除零或死循环）
 
 **契约：对任意输入不抛异常**（与 `MarkdownRenderer` / `DiffRenderer` 同），**含 `null`**——
 上面四个方法与 `MarkdownRenderer.feed` 首行都要有 null 守卫。今天 `renderFinalized(null)`
@@ -163,15 +186,22 @@ code-tui 的 markdown 渲染器**没有表格分支**，表格行原样打印。
 
 解析细节：
 
-- 按**未转义**的 `|` 切分；`\|` 还原成字面 `|` 且不作分隔符
-- 首尾的空单元格（行首行尾竖线产生的）丢弃
+- 按**未转义**的 `|` 切分；`\|` 还原成字面 `|` 且不作分隔符。转义规则：
+  - `\|` → 输出 `|`，不分隔
+  - `\\|` → 输出 `\`，然后 `|` 作为分隔符
+  - `\\\|` → 输出 `\|`，不分隔
+  - 行末单 `\`（如 `| a\`）视为字面字符，不转义换行
+- 首尾单元格若 trim 后为空则丢弃（即：行 `| a | b |` 的首尾空串不算列——
+  这是 GFM 标准写法产生的，不是真的空列）
+- **分隔行列数必须 ≥ 表头列数**，否则候选行按普通行输出（GFM 识别规则）
 - 单元格**少于**表头 → 补空
 - 单元格**多于**表头 → **多出来的并入最后一列**（用 ` | ` 拼回去），**不丢**。
   GFM 的默认行为是丢弃，但 GFM 是文档渲染器、本项目是终端渲染器，
   丢内容与 §1.3「不丢字」和 §5.3「拼回去一个字不丢」直接冲突。
   典型触发：格子里有带管道的行内代码，如 `` `ps aux | grep java` ``
 - 「表头 + 分隔行、零数据行」是合法块（GFM 认），排成表头 + 一条 `─`
-- 每个格子先过内联解析拿 spans，列宽按 spans 内容拼接后测量（见 §3.1）
+- 每个格子先过内联解析拿 spans（调用 `MarkdownRenderer.renderInline(cellContent)`，
+  见下面的可见性前置改动），列宽按 spans 内容拼接后测量（见 §3.1）
 
 **前置改动（可见性）**：`MarkdownRenderer.BOLD`（`:25`）、`DIM`（`:23`）、`renderInline`（`:149`）
 和 `ScrollbackPrinter.INDENT`（`:51`）目前**都是 private**，同包新类也访问不到。
@@ -204,6 +234,15 @@ code-tui 的 markdown 渲染器**没有表格分支**，表格行原样打印。
 状态机放在 `MarkdownRenderer` 里而不是外面，理由是**围栏内的 `|` 不能当表格**，而围栏开合状态
 只有它有。表格块状态与围栏状态同属「块上下文」，放一起才不会撕裂。宽度作为参数传入（不存字段），
 排版本身无状态。
+
+**状态机存储字段**：
+
+```java
+private enum TableState { IDLE, CANDIDATE, IN_BLOCK, DEGRADED }
+private TableState tableState = TableState.IDLE;
+private List<String> bufferedLines = new ArrayList<>();
+private int bufferedCharCount = 0;
+```
 
 四个状态、`feed` 的转移（**降级**是正式状态，不是补丁）：
 
@@ -289,6 +328,8 @@ scrollback 只能追加，下面 **5 条触发点 + 1 条豁免**（编号 3 是
    紧跟一次 `drainQueuedOutput(剩余预算)` 在**同一批**里打完（照 `:922` 计划正文那段的写法）。
    「输入已排空」= 输出队列空 + 没有待转入的 pending + 没有已成行的流式行
    （谓词沿用 `computeFollowUpFlags` 里现成的那几个，实施时对齐命名）。
+   **插入位置明确**：在 `:978-984` 判定 `outputRemaining` **之后**、`:1014-1021` continuation
+   调度**之前**（即在本批主 drain 完成、判定是否需要下一批的时刻）。
    - **「输入已排空」这一半不能省**：drain 有 300 行 + 12ms 双预算、pending 转入还有
      600 条/批上限，一批完全可能**停在表格中间**。三个真实场景：`-c` 回放
      （`replayHistory` 一次性把整段历史塞进 pending，全程 IDLE）、`onTurnComplete` 在同一个
@@ -355,6 +396,69 @@ continuation 与每圈 render 形成双线程满载空转——`CodeTuiView.java
 也不在留底）。流式一批上限是 `MAX_ROWS_PER_DRAIN`（300 条逻辑行，`CodeTuiView.java:876`）。
 `hasNext()` 当然也要把待吐队列算进去，但那不是雷所在。
 
+**`MdLineCursor` 完整数据结构**：
+
+```java
+class MdLineCursor extends OutputCursor {
+    private final Iterator<String> logicalLineSource;  // 来源逻辑行迭代器
+    private final Queue<List<Span>> pendingOutput;     // 待吐队列，元素是已渲染好的物理行
+    private final Text raw;                            // 留底原文（整块的多行 Text，推荐）
+    private final MarkdownRenderer md;                 // 渲染器实例（持有状态机）
+    private final IntSupplier terminalWidth;           // 终端宽度供应器
+    
+    @Override
+    public PhysicalLine next() {
+        while (pendingOutput.isEmpty() && logicalLineSource.hasNext()) {
+            String line = logicalLineSource.next();
+            List<List<Span>> rendered = md.feed(line, terminalWidth.getAsInt() - 2);
+            pendingOutput.addAll(rendered);
+        }
+        if (pendingOutput.isEmpty()) {
+            return null;  // 真正耗尽
+        }
+        return new PhysicalLine(pendingOutput.poll(), raw);
+    }
+    
+    @Override
+    public boolean hasNext() {
+        return !pendingOutput.isEmpty() || logicalLineSource.hasNext();
+    }
+}
+```
+
+**`tableFlushCursor()` 工厂方法**：
+
+```java
+// 在 ScrollbackPrinter 中添加
+OutputCursor tableFlushCursor() {
+    return new OutputCursor() {
+        private List<List<Span>> flushed = null;
+        
+        @Override
+        public PhysicalLine next() {
+            if (flushed == null) {
+                flushed = md.flush(innerWidth());
+                if (flushed.isEmpty()) {
+                    return null;  // 幂等：空缓冲返回空列表
+                }
+            }
+            if (flushed.isEmpty()) {
+                return null;
+            }
+            List<Span> line = flushed.remove(0);
+            // 多行 Text 构造：Text.of(String.join("\n", 所有逻辑行原文))
+            Text raw = ...;  // 留底原文，见下面留底部分
+            return new PhysicalLine(line, raw);
+        }
+        
+        @Override
+        public boolean hasNext() {
+            return flushed != null && !flushed.isEmpty();
+        }
+    };
+}
+```
+
 **留底原文（决定 resize 后历史表格是否整块消失）**：`record()` 按引用身份去重——
 `if (line == lastRecordedRaw) return;`（`CodeTuiView.java:1370-1377`）。所以整块 N 行**共享
 同一个单行 raw** 是错的：只会记下 1 条，resize 重放后历史表格只剩 1 行。两个都正确的选择：
@@ -362,7 +466,8 @@ continuation 与每圈 render 形成双线程满载空转——`CodeTuiView.java
 - **（推荐）raw = 整块的多行 `Text`**，N 行共享同一引用 → 去重后记 1 条，
   重放走 `replayAfterResize`（`:1423-1440`）→ `TextWrap.wrap` 按 `text.lines()` 逐行折
   （`TextWrap.java:28-34`），N 行原样还原。只占 `SCROLL_TAIL_CAP`（400）**1 条**配额，
-  而且这本来就是「一条逻辑单元的多个段共享同一 raw」的既有模式（折行段就是这么用的）
+  而且这本来就是「一条逻辑单元的多个段共享同一 raw」的既有模式（折行段就是这么用的）。
+  **多行 `Text` 构造**：`Text.of(String.join("\n", blockLines))`
 - 或 raw = 每行各一个独立实例，占 N 条配额
 
 ⚠ 两者都不能是「N 行共享一个单行 raw」。实现选哪个必须在计划里写死——它同时决定
@@ -415,11 +520,12 @@ TDD，先红后绿。**每一条 flush 触发点、每一条状态转移都要�
 
 ### 5.1 `MarkdownTableTest`（纯单测）
 
-列宽 / 三种对齐冒号 / CJK 双宽 / `\|` 转义 / 单元格少于表头补空 / **多于表头并入最后一列
-（内容守恒）** / 内联标记不计入宽度 / spans 拼接后测量（放一个 ZWJ 或组合字符用例）/
-超宽削列（含并列最宽削索引小的那列）/ 格内按空格折行 / 单词超列宽硬切且不切半个宽字符 /
-CJK 无空格落硬切 / 整列全空按最小宽 4 / 单列表 / 表头比数据长且被削 / 列数太多退回原样 /
-**`render` 对畸形输入不抛**（负宽度、只有分隔行、空块、全是 `|`）。
+列宽 / 三种对齐冒号 / CJK 双宽 / `\|` 转义（含 `\\|` / `\\\|` / 行末单 `\`）/ 单元格少于表头补空 / 
+**多于表头并入最后一列（内容守恒）** / 内联标记不计入宽度 / spans 拼接后测量（放一个 ZWJ 或组合字符用例）/
+超宽削列（含并列最宽削索引小的那列）/ **削列迭代次数上限（10000 次）超限退回原样** / 
+格内按空格折行 / 单词超列宽硬切且不切半个宽字符 / CJK 无空格落硬切 / 整列全空按最小宽 4 / 
+单列表 / 表头比数据长且被削 / 列数太多退回原样 / **零宽/负宽终端（inner < 6）退回原样** / 
+**分隔行列数 < 表头列数不识别为表格** / **`render` 对畸形输入不抛**（负宽度、只有分隔行、空块、全是 `|`）。
 另加一条**交叉单测**：无空格可断时，格内折行与 `SegmentedWrap` 产出逐字相等。
 
 ### 5.2 `MarkdownRendererTableTest`
@@ -448,13 +554,20 @@ CJK 无空格落硬切 / 整列全空按最小宽 4 / 单列表 / 表头比数�
   `SegmentedWrap` 撕成两段
 - 各行列起点的显示偏移一致
 - 内容拼回去一个字不丢
-- **一批 300 条流式行、第一条是 `|` 开头**：断言 300 条逻辑行全部落地（钉 §3.6 那条雷）
+- **一批 200 条流式行（不超上限）、第一条是 `|` 开头、最后一条非 `|`（触发整块输出）**：
+  断言 200 条逻辑行全部落地（钉 §3.6 那条雷）。注意不能用 300 行——§3.5 的上限是 200 行，
+  300 行会在第 200 行转降级并开始输出（待吐队列非空，`next()` 不会返回 null），
+  测的是「200 行缓冲 + 100 行降级都不丢」而非 §3.6 的雷
 - **留底 / resize 重放**：一张 N 行表格在 resize 重放后仍是 N 行（钉 §3.6 的 raw 选择——
   「N 行共享一个单行 raw」这个错法会让重放只剩 1 行）。参照 `ScrollTailRecordingTest`
 
 ### 5.4 视图级（照 `CodeTuiViewEventWiringTest` 的写法）
 
-- **不变量**（§3.4 末尾那条**条件式**的写法，别写成永真式）
+- **不变量**（§3.4 末尾那条**条件式**的写法，别写成永真式）。构造方法：
+  - 正面用例 1：回合以表格结尾 + IDLE → `!hasBufferedTable()` 为真（表格已排空）
+  - 正面用例 2：THINKING + `hasBufferedTable()` → `outputRemaining` 为真（续批保证活性）
+  - 反面构造：如果注掉第 4 条兜底 flush，「IDLE + 输入未排空 + `hasBufferedTable()`」
+    会违反不变量（`outputRemaining` 为 false 但缓冲非空）
 - 回合以表格结尾：断言 `UpdateResult` / `hasContinuationScheduledForTest()`
   （参照 `CodeTuiViewEventWiringTest.java:648-655`、`:673`）。**不能**用
   `processUpdatesForTest` 连跑几批再断言表格出现——生产只有 `outputRemaining == true`
@@ -518,8 +631,9 @@ INFO 分割线（`ConversationState.java:303-304`），天然把缓冲顶出来�
    `ScrollbackPrinter.INDENT` 改 package-private（`renderInline` 提成 static）
 1. `MarkdownTable`（解析 + 列宽 + 削列 + 格内折行 + 不抛契约）+ §5.1 单测——纯函数，可独立完成
 2. `MarkdownRenderer.feed/flush/hasBuffered` 状态机（含降级态、重投喂、`reset` 丢缓冲）+ §5.2 单测
-3. `MdLineCursor`：待吐队列 + **`next()` 内部循环** + `hasNext()` 修正 + 独立 `raw` 实例
-   + `tableFlushCursor()` + §5.3 增补测试；同步补 `OutputCursor` / `PhysicalOutputQueue` /
+3. `MdLineCursor`：待吐队列 + **`next()` 内部循环** + `hasNext()` 修正 + 
+   **raw 选择：整块一个多行 `Text`（推荐，占 1 条配额）**，构造方式 `Text.of(String.join("\n", blockLines))` +
+   `tableFlushCursor()` + §5.3 增补测试；同步补 `OutputCursor` / `PhysicalOutputQueue` /
    `ScrollbackPrinter.md` 三处 javadoc 的第二条例外声明
 4. 视图接线：`enqueueOutputLine` 分 kind 前置 flush（INFO/ERROR 豁免）、主 drain 之后的
    兜底 flush + 补一次 drain、`printPlan` 收尾 flush、`/clear` 同步丢缓冲 + §5.4 视图级测试
@@ -584,4 +698,50 @@ out-of-band 行打断块会拼出「半张对齐 + 半张原样」→ 改为 INF
 判据句对 `SUBAGENT_*`（异步发出，真实理由是父 `TOOL_START` 已先 flush）与 `TODO`
 （全仓零生产者，是死分支）并不直接成立、`default` 分支的测试覆盖要能抓住两种变异、
 居中/右对齐的补白规则、`enqueueOutputLine` 建议改穷尽 switch。
+
+### 第 3 轮（2026-09-05，两个 subagent 并行，审的是 v3）
+
+**实现者视角**（implementer-r3）发现 **5 个阻塞性缺陷**（数据结构和方法签名缺失）：
+
+1. **`MdLineCursor` 完整字段定义缺失**——逻辑行来源类型、待吐队列元素类型、raw 字段、
+   如何判断"还有未消费的逻辑行"全未定义，子任务 3 无法开工。→ §3.6 补完整数据结构伪代码。
+2. **`MarkdownTable.render` 返回值语义不明**——嵌套 List 含义模糊（是物理行还是逻辑行？
+   格内折行如何体现？）。→ §3.2 明确：外层是物理行，内层是每行的 spans。
+3. **格内折行算法缺伪代码**——"优先在空格处断"的具体算法、空格处理方式、断点选择策略均未说明。
+   → §3.1 补完整伪代码。
+4. **`tableFlushCursor()` 工厂方法实现细节缺失**——返回类型、签名、幂等处理均未定义。
+   → §3.6 补完整实现伪代码。
+5. **多行 `Text` 构造方式未定义**——§3.6 推荐"整块一个多行 Text"但未说明如何构造。
+   → §3.6 与 §7 补充：`Text.of(String.join("\n", blockLines))`。
+
+实现建议另采纳：状态机存储字段定义（§3.3 补 `TableState` enum 与缓冲字段）、
+转义处理完整规则（§3.2 补 `\\|` / `\\\|` / 行末单 `\` 的处理）、
+内联解析调用方式（§3.2 明确调用 `MarkdownRenderer.renderInline`）、
+列宽为 0 的处理（§3.1 已有"整列全空按最小宽 4"）。
+
+**对抗性视角**（adversarial-r3）发现 **3 个严重问题**、**7 个次要问题**和 **4 个文档质量问题**：
+
+严重问题全部采纳：
+
+1. **削列算法性能陷阱未封顶**——极端输入（单列 64 K 字符）需削减 ~64 K 次，复杂度
+   O(削减次数 × 列数)，发生在排版之前、产出侧 600 行上限尚未生效，耗时远超 12ms 预算。
+   → §3.1 补削列迭代次数上限 **10000 次**，超限中止并退回原样。
+2. **单列表退回判定公式有歧义**——单列情况（列间项 = 0）需读者自己推导，实现时容易因判定顺序
+   错误在 inner=5 左右误判。→ §3.1 明确单列公式 `4 > inner` 与统一写法 `列间宽 = max(0, 2×(列数−1))`。
+3. **零宽/负宽终端的硬不变量必然破裂**——终端宽 ≤ 2 时 inner ≤ 0，任何非空行都违反不变量，
+   可能除零或死循环。→ §3.2 补 `render` 入口卫式条件：`if (inner < 6) 直接返回原样行`。
+
+次要问题采纳：分隔行列数不匹配识别规则（§3.2 补"分隔行列数必须 ≥ 表头列数"）、
+行末未闭合转义处理（§3.2 补"行末单 `\` 视为字面字符"）、首尾空单元格描述澄清
+（§3.2 改为"trim 后为空则丢弃"）、产出侧 600 行上限推导依据（§3.1 补推导过程）、
+§5.3 的 300 行用例修正（改为 200 行，因 200 行上限会让 300 行先转降级）、
+第 4 条 flush 插入位置明确（§3.4 补"在 `:978-984` 之后、`:1014-1021` 之前"）、
+不变量测试构造方法（§5.4 补正反面用例）。
+
+文档质量问题采纳：§3.1 关于"一次 flush 只读一次宽度"的描述澄清（调用方读一次传给所有 feed/flush）、
+§7 实施计划补 raw 选择决策（"整块一个多行 Text，占 1 条配额"）。
+
+未采纳两条次要问题：第 2 条与 §5.4 的穷尽 switch 建议冲突（保留 default 分支 + 要求两种变异都测到）、
+§5.3 关于一次性入口的警告与 §5.6 改动预告（改后能用，但测试仍必须按 `\n` 拆行喂游标，
+不能用未拆的多行字符串）。
 

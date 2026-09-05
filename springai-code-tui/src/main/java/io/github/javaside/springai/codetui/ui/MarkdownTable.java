@@ -1,7 +1,5 @@
-package dev.anthropic.code.tui.render;
+package io.github.javaside.springai.codetui.ui;
 
-import io.github.javaside.springai.codetui.ui.MarkdownRenderer;
-import io.github.javaside.springai.codetui.ui.ScrollbackPrinter;
 import dev.tamboui.text.Span;
 import java.util.ArrayList;
 import java.util.List;
@@ -355,6 +353,43 @@ public final class MarkdownTable {
             }
         }
 
+        return result;
+    }
+
+    /**
+     * 表格块渲染主入口。
+     *
+     * @param block 表格块（包含头行、分隔符、体行）
+     * @param inner 终端内宽（列）
+     * @return 渲染后的行（每行是 Span 列表），退回原样时走 renderInline
+     */
+    static List<List<Span>> render(List<String> block, int inner) {
+        // 守卫：null 或空块
+        if (block == null || block.isEmpty()) {
+            return List.of();
+        }
+
+        // 守卫：终端过窄（< 6 列）
+        if (inner < 6) {
+            return fallbackToRaw(block);
+        }
+
+        // 暂时退回原样（Task 8-9 实现完整排版逻辑）
+        return fallbackToRaw(block);
+    }
+
+    /**
+     * 退回原样：每行走 MarkdownRenderer.renderInline。
+     */
+    private static List<List<Span>> fallbackToRaw(List<String> block) {
+        if (block == null || block.isEmpty()) {
+            return List.of();
+        }
+
+        List<List<Span>> result = new ArrayList<>();
+        for (String line : block) {
+            result.add(MarkdownRenderer.renderInline(line));
+        }
         return result;
     }
 }

@@ -1,9 +1,9 @@
-package dev.anthropic.code.tui.render;
+package io.github.javaside.springai.codetui.ui;
 
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
-import dev.anthropic.code.tui.render.MarkdownTable.Alignment;
+import io.github.javaside.springai.codetui.ui.MarkdownTable.Alignment;
 import dev.tamboui.text.Span;
 import dev.tamboui.style.Style;
 
