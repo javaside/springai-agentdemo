@@ -125,4 +125,34 @@ public class MarkdownTableTest {
         );
         assertEquals(7, MarkdownTable.spansDisplayWidth(spans)); // 2×2 + 3 = 7
     }
+
+    @Test
+    void calculateColumnWidths_findsMaxWidthPerColumn() {
+        List<List<String>> rows = List.of(
+            List.of("A", "BB", "CCC"),
+            List.of("1", "22222", "3")
+        );
+
+        int[] widths = MarkdownTable.calculateColumnWidths(rows);
+        assertArrayEquals(new int[]{1, 5, 3}, widths);
+
+        // 含 CJK
+        rows = List.of(
+            List.of("参数", "类型"),
+            List.of("codetui.syncOutput", "String")
+        );
+        widths = MarkdownTable.calculateColumnWidths(rows);
+        assertArrayEquals(new int[]{18, 6}, widths); // "codetui.syncOutput"=18, "参数"=4, "类型"=4, "String"=6
+    }
+
+    @Test
+    void calculateColumnWidths_usesMinWidth4ForEmptyColumn() {
+        List<List<String>> rows = List.of(
+            List.of("A", "", "C"),
+            List.of("1", "", "3")
+        );
+
+        int[] widths = MarkdownTable.calculateColumnWidths(rows);
+        assertArrayEquals(new int[]{1, 4, 1}, widths); // 空列最小宽度 4
+    }
 }
