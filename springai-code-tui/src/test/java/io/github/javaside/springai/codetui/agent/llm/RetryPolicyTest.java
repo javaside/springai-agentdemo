@@ -58,6 +58,13 @@ class RetryPolicyTest {
         // 网关 5xx
         WebClientResponseException badGateway = WebClientResponseException.create(502, "Bad Gateway", null, null, null);
         cases.add(new RuntimeException("upstream failed", badGateway));
+        // 流式专属瞬态（Task 1 引入、Task 2 的 L1 依赖）：空闲超时 / 空流——
+        // 追加进等价性集合，钉住 RetryingChatModel 委托对新类型也生效（Task 1 评审 Minor ①）
+        cases.add(new StreamIdleTimeoutException("等待模型流数据超时"));
+        cases.add(new EmptyStreamException("LLM 流式响应为空（无文本、无工具调用）——疑似网关空响应"));
+        // 429 限流（Task 2 补）：WCRE 状态 429——「请求没病、服务端在节流」的唯一可重试 4xx
+        // （spec §5 L1 行「零下发 429 → 重试成功」点名；文案含 rate limit 的旧口径不变）
+        cases.add(WebClientResponseException.create(429, "Too Many Requests", null, null, null));
         return cases;
     }
 
@@ -75,6 +82,11 @@ class RetryPolicyTest {
         cases.add(cancelled);
         cases.add(new RuntimeException("outer", new InterruptedException("sleep interrupted")));
         cases.add(new IllegalStateException("bad api key"));
+        // StreamInterruptedException 红线（Task 2 补）：L1 的 mid-stream 出口包装类型——
+        // 它本身携带「已下发 chunk」语义（重试 = 向下游重放已见内容），且必须原样穿透 L1 的
+        // retryWhen 命中 L2 白名单（spec §3.2 类型穿透）；cause 是瞬态也不得因此被重试
+        cases.add(new StreamInterruptedException(2,
+                new RuntimeException(new java.io.EOFException("EOF reached while reading"))));
         return cases;
     }
 

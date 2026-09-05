@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent.llm;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.io.IOException;
@@ -52,20 +53,27 @@ public final class RetryPolicy {
      *       IoException 结尾（openai-java 的 OpenAIIoException，同法不引新依赖）；
      *   <li>流中途断开：message 含 "EOF reached while reading"（WebClientResponseException 把
      *       EOFException 摊平进顶层 message、cause 链上只剩自身的场景）；
-     *   <li>限流：message 含 "rate limit"（大小写不敏感；覆盖 200-wrapped 的 SseException 与 429）；
+     *   <li>限流：message 含 "rate limit"（大小写不敏感；覆盖 200-wrapped 的 SseException 与 429 文案）
+     *       或 {@link WebClientResponseException} 状态 429——429 虽是 4xx，但它是唯一的
+     *       「请求没病、服务端在节流」4xx（Retry-After 语义），spec §5 L1 行「零下发 429 →
+     *       重试成功」点名（Task 2 补，见该任务报告的偏差记录）；
      *   <li>网关 5xx：cause 链上的 WebClientResponseException 且 is5xxServerError；
      *   <li>流式专属：{@link StreamIdleTimeoutException}（空闲超时）与 {@link EmptyStreamException}
      *       （空流）——网关坏窗口在流式路径上的两副面孔。
      * </ul>
      *
-     * <p><b>红线不重试</b>：401/403（欠费、密钥错——重试只会更慢更花钱）、其余 4xx（请求本身有病）、
-     * 中断/取消。把 IOException 全家族视为瞬态有理论误伤面（证书错误等），但误伤代价只是几次
-     * 快速失败，漏掉代价是整个子 agent 报废重跑。纯函数，便于单测。
+     * <p><b>红线不重试</b>：401/403（欠费、密钥错——重试只会更慢更花钱）、其余 4xx（除 429 限流；
+     * 请求本身有病）、中断/取消——含 {@link StreamInterruptedException}（L1 的 mid-stream 出口
+     * 包装类型：它<b>本身携带</b>「已下发 chunk」语义，重试等于向下游重放已见内容；且它必须
+     * 原样穿透 L1 的 retryWhen 才能命中 L2 白名单，spec §3.2 类型穿透要求）。把 IOException
+     * 全家族视为瞬态有理论误伤面（证书错误等），但误伤代价只是几次快速失败，漏掉代价是
+     * 整个子 agent 报废重跑。纯函数，便于单测。
      */
     public static boolean shouldRetry(Throwable ex) {
         boolean transientFailure = false;
         for (Throwable t = ex; t != null; t = t.getCause()) {
-            if (t instanceof InterruptedException || t instanceof CancellationException) {
+            if (t instanceof InterruptedException || t instanceof CancellationException
+                    || t instanceof StreamInterruptedException) {
                 return false;
             }
             String cls = t.getClass().getSimpleName();
@@ -75,10 +83,11 @@ public final class RetryPolicy {
                 transientFailure = true;
             }
             if (t instanceof WebClientResponseException wcre) {
-                if (wcre.getStatusCode().is5xxServerError()) {
+                if (wcre.getStatusCode().is5xxServerError()
+                        || wcre.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
                     transientFailure = true;
                 } else if (wcre.getStatusCode().is4xxClientError()) {
-                    // 4xx（401/403/400…）是确定态：重试无意义且欠费场景下更花钱。
+                    // 其余 4xx（401/403/400…）是确定态：重试无意义且欠费场景下更花钱。
                     // 2xx 不在此列——「200 OK 但 body 坏」正是网关坏窗口的形态，交给 EOF/解析特征判定。
                     return false;
                 }
