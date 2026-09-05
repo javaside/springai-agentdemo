@@ -37,4 +37,18 @@ public class MarkdownTableTest {
                      MarkdownTable.alignments("| :--: | ---- |"));
         assertEquals(List.of(), MarkdownTable.alignments(null));
     }
+
+    @Test
+    void parseCells_splitsAndTrimsCorrectly() {
+        List<String> cells = MarkdownTable.parseCells("| a | b | c |");
+        assertEquals(List.of("a", "b", "c"), cells);
+
+        // 首尾空单元格丢弃
+        cells = MarkdownTable.parseCells("| a | b |");
+        assertEquals(List.of("a", "b"), cells);
+
+        // 空表格行
+        cells = MarkdownTable.parseCells("||");
+        assertEquals(List.of(), cells);
+    }
 }
