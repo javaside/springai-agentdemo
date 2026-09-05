@@ -4,6 +4,11 @@ import io.github.javaside.springai.codetui.ui.MarkdownRenderer;
 import io.github.javaside.springai.codetui.ui.ScrollbackPrinter;
 
 public final class MarkdownTable {
+
+    enum Alignment {
+        LEFT, CENTER, RIGHT
+    }
+
     private final MarkdownRenderer markdownRenderer;
     private final ScrollbackPrinter scrollbackPrinter;
 
