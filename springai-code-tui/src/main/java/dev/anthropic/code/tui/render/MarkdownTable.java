@@ -286,4 +286,75 @@ public final class MarkdownTable {
 
         return result;
     }
+
+    /**
+     * 格内折行：优先在空格处断，无空格则硬切（不切半个宽字符）。
+     */
+    static List<String> wrapCellContent(String content, int columnWidth) {
+        if (content == null || content.isEmpty()) {
+            return List.of("");
+        }
+
+        List<String> result = new ArrayList<>();
+        String remaining = content;
+
+        while (!remaining.isEmpty()) {
+            // 整行适配，直接返回
+            if (displayWidth(remaining) <= columnWidth) {
+                result.add(remaining);
+                break;
+            }
+
+            // 尝试在空格处断
+            int lastSpaceIdx = -1;
+            int widthUpToSpace = 0;
+
+            for (int i = 0; i < remaining.length(); i++) {
+                char c = remaining.charAt(i);
+                int charWidth = displayWidth(String.valueOf(c));
+
+                if (widthUpToSpace + charWidth > columnWidth) {
+                    break;
+                }
+
+                widthUpToSpace += charWidth;
+
+                if (c == ' ') {
+                    lastSpaceIdx = i;
+                }
+            }
+
+            if (lastSpaceIdx > 0) {
+                // 在空格处断，空格丢弃
+                result.add(remaining.substring(0, lastSpaceIdx));
+                remaining = remaining.substring(lastSpaceIdx + 1).trim();
+            } else {
+                // 硬切（不切半个宽字符）
+                int cutIdx = 0;
+                int accumulatedWidth = 0;
+
+                for (int i = 0; i < remaining.length(); i++) {
+                    String charStr = String.valueOf(remaining.charAt(i));
+                    int charWidth = displayWidth(charStr);
+
+                    if (accumulatedWidth + charWidth > columnWidth) {
+                        break;
+                    }
+
+                    accumulatedWidth += charWidth;
+                    cutIdx = i + 1;
+                }
+
+                if (cutIdx == 0) {
+                    // 单个字符就超宽，强制取 1 个字符
+                    cutIdx = 1;
+                }
+
+                result.add(remaining.substring(0, cutIdx));
+                remaining = remaining.substring(cutIdx);
+            }
+        }
+
+        return result;
+    }
 }
