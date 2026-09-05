@@ -238,4 +238,52 @@ public final class MarkdownTable {
 
         return widths;
     }
+
+    /**
+     * 削列算法：每次削减最宽列 1 个字符宽，直到适配目标宽度或所有列达最小宽 4。
+     * 超过 10000 次迭代返回 null（触发 fallback）。
+     */
+    static int[] reduceColumnWidths(int[] widths, int targetTotalWidth) {
+        int[] result = widths.clone();
+        int iterations = 0;
+        final int MAX_ITERATIONS = 10000;
+
+        while (iterations < MAX_ITERATIONS) {
+            // 计算列间宽度
+            int separatorWidth = Math.max(0, 2 * (result.length - 1));
+            int currentTotalWidth = separatorWidth;
+            for (int w : result) {
+                currentTotalWidth += w;
+            }
+
+            if (currentTotalWidth <= targetTotalWidth) {
+                break;
+            }
+
+            // 找最宽列（并列时取索引小的）
+            int widestIdx = 0;
+            int maxWidth = result[0];
+            for (int i = 1; i < result.length; i++) {
+                if (result[i] > maxWidth) {
+                    maxWidth = result[i];
+                    widestIdx = i;
+                }
+            }
+
+            // 已达最小宽度，无法继续削减
+            if (maxWidth <= 4) {
+                break;
+            }
+
+            result[widestIdx]--;
+            iterations++;
+        }
+
+        // 超限返回 null（触发 fallback）
+        if (iterations >= MAX_ITERATIONS) {
+            return null;
+        }
+
+        return result;
+    }
 }

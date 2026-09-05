@@ -163,8 +163,9 @@ public class MarkdownTableTest {
 
         int[] reduced = MarkdownTable.reduceColumnWidths(widths, targetTotalWidth);
 
-        // 需削减 9 列，每次削最宽列：20→11 (9次)
-        assertArrayEquals(new int[]{10, 11, 15}, reduced);
+        // 需削减 9 列，按"每次削当前最宽列"规则：
+        // 20→15（削5次索引1），15并列时轮流削减（索引1和2各削2次）
+        assertArrayEquals(new int[]{10, 13, 13}, reduced);
     }
 
     @Test
@@ -181,7 +182,7 @@ public class MarkdownTableTest {
     @Test
     void reduceColumnWidths_prefersLowerIndexWhenTied() {
         int[] widths = {10, 10, 5};
-        int targetTotalWidth = 20; // 需削减 1 列
+        int targetTotalWidth = 28; // 当前总宽 = 10+10+5+2×2 = 29，需削减 1
 
         int[] reduced = MarkdownTable.reduceColumnWidths(widths, targetTotalWidth);
 
