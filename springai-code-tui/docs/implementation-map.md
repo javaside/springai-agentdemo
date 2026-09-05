@@ -238,6 +238,12 @@ UI 批 `processUpdates` 调 `takeCompleteStreamingLines()`（按真实 `\n` 切�
 漏一条的后果不是崩溃而是**静默丢内容或顺序错乱**，所以每条都有用例
 （`CodeTuiViewTableFlushTest`）。
 
+改这一块必须做两件事，别只跑单测：真 pty 实机验证
+（`src/test/resources/scripts/table_render_smoke.py`，需先重新 `package`），以及
+`dev/table_mutation_check.py`（15 条变异逐条改坏，必须全红）。第一轮实现就是「单测全绿、
+真机照样乱」——`MdLineCursor` 丢续段、自动 flush 架空缓冲、自造 `displayWidth` 漏 CJK 标点，
+这三条单测一条都没看住。
+
 ### 回合结束与取消
 
 `handleComplete`：`persistInterjection()` **必须先于** `onTurnComplete`——UI 出队钩子靠 `!busy()`

@@ -361,8 +361,29 @@ class CodeTuiViewTableFlushTest {
         assertTrue(hasTableSeparator(sink.lines), "表格应已落地：" + tail(sink.lines, 8));
     }
 
-    // ── 第 6 条：/clear ───────────────────────────────────────────────────
+    @Test
+    @DisplayName("Esc 取消：半张表也要排空（cancelCurrent 把残行定稿 + 置 IDLE）")
+    void escapeCancelDrainsBufferedTable(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        Recording sink = new Recording();
+        s.onTurnStarted(1L);
+        CodeTuiView v = view(s, root, sink);
+        streamTable(s, 1L);   // 末行还是在建残行
+        v.processUpdatesForTest(UiDirty.ALL);
+        assertTrue(v.printerForTest().hasBufferedTable(), "前置：表格压在缓冲里（THINKING 态第 4 条不介入）");
+        assertFalse(hasTableSeparator(sink.lines), "前置：此刻还没排出来");
 
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));   // cancelCurrent：flushStreaming + IDLE
+
+        drainBatches(v);
+
+        assertFalse(v.printerForTest().hasBufferedTable(),
+                "取消不能把已收到的表格连同回合一起吞掉——用户看到的会是「回复到一半凭空少了一段」");
+        assertEquals(1, sink.lines.stream().filter(CodeTuiViewTableFlushTest::isTableSeparator).count(),
+                "整张表一次排出：" + tail(sink.lines, 10));
+    }
+
+    // ── 第 6 条：/clear ───────────────────────────────────────────────────
     @Test
     @DisplayName("/clear 丢缓冲且状态机回空闲（测试态 runner 为空也要成立）")
     void clearDropsBufferedTable(@TempDir Path root) {
