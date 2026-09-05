@@ -277,4 +277,37 @@ public class MarkdownTableTest {
     void render_handlesEmptyBlock() {
         assertEquals(List.of(), MarkdownTable.render(List.of(), 80));
     }
+
+    @Test
+    void render_parsesHeaderAndDataRows() {
+        List<String> block = List.of(
+            "| A | B |",
+            "|---|---|",
+            "| 1 | 2 |",
+            "| 3 | 4 |"
+        );
+
+        List<List<Span>> result = MarkdownTable.render(block, 80);
+
+        // 表头 + 分隔线 + 2 行数据 = 4 行
+        assertEquals(4, result.size());
+
+        // 验证表头加粗（第一行应包含 BOLD 样式）
+        assertTrue(result.get(0).stream().anyMatch(s -> s.style().toString().contains("bold")));
+    }
+
+    @Test
+    void render_adjustsCellCountToHeader() {
+        List<String> block = List.of(
+            "| A | B | C |",
+            "|---|---|---|",
+            "| 1 | 2 |",           // 少一列
+            "| 3 | 4 | 5 | 6 |"   // 多一列
+        );
+
+        List<List<Span>> result = MarkdownTable.render(block, 80);
+
+        // 应该成功排版，不抛异常
+        assertEquals(4, result.size());
+    }
 }
