@@ -66,8 +66,70 @@ public final class MarkdownRenderer {
         return !tableBuffer.isEmpty();
     }
 
+    /**
+     * 喂入一行，返回零到多行排好的 spans。
+     * 表格块会被缓冲，feed 返回空列表 ≠ 无输出。
+     */
+    public List<List<Span>> feed(String line, int inner) {
+        if (line == null) {
+            return List.of();
+        }
+
+        switch (tableState) {
+            case IDLE:
+                if (MarkdownTable.looksLikeRow(line)) {
+                    // 进候选态
+                    tableState = TableState.CANDIDATE;
+                    tableBuffer.add(line);
+                    return List.of();
+                } else {
+                    // 非表格行直接输出
+                    return List.of(renderFinalized(line));
+                }
+
+            case CANDIDATE:
+                if (MarkdownTable.isSeparator(line)) {
+                    // 进块内态
+                    tableState = TableState.CONFIRMED;
+                    tableBuffer.add(line);
+                    return List.of();
+                } else {
+                    // 非分隔行：吐候选行，回空闲，重新投喂当前行
+                    tableState = TableState.IDLE;
+                    String candidateLine = tableBuffer.get(0);
+                    tableBuffer.clear();
+
+                    List<List<Span>> output = new ArrayList<>();
+                    output.add(renderFinalized(candidateLine));
+
+                    // 重新投喂当前行
+                    output.addAll(feed(line, inner));
+                    return output;
+                }
+
+            case CONFIRMED:
+                if (MarkdownTable.looksLikeRow(line)) {
+                    // 块内继续收集
+                    tableBuffer.add(line);
+                    return List.of();
+                } else {
+                    // 非表格行：整块输出，回空闲，重新投喂当前行
+                    List<List<Span>> tableOutput = MarkdownTable.render(tableBuffer, inner);
+                    tableState = TableState.IDLE;
+                    tableBuffer.clear();
+
+                    List<List<Span>> output = new ArrayList<>(tableOutput);
+                    output.addAll(feed(line, inner));
+                    return output;
+                }
+
+            default:
+                return List.of(renderFinalized(line));
+        }
+    }
+
     /** 处理一条「定稿」行：更新内部状态并返回带样式 span。 */
-    public List<Span> renderFinalized(String line) {
+    List<Span> renderFinalized(String line) {
         if (line == null) {
             return List.of(Span.raw(""));
         }
