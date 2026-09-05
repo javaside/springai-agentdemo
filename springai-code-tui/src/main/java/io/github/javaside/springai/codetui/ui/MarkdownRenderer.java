@@ -128,6 +128,41 @@ public final class MarkdownRenderer {
         }
     }
 
+    /**
+     * 强制输出缓冲区内容并清空。
+     * 候选态按普通行输出，块内态对齐输出。
+     */
+    public List<List<Span>> flush(int inner) {
+        if (tableBuffer.isEmpty()) {
+            return List.of();
+        }
+
+        List<List<Span>> output = new ArrayList<>();
+
+        switch (tableState) {
+            case CANDIDATE:
+                // 候选行按普通行输出
+                for (String line : tableBuffer) {
+                    output.add(renderFinalized(line));
+                }
+                tableBuffer.clear();
+                tableState = TableState.IDLE;
+                break;
+
+            case CONFIRMED:
+                // 对齐排出整块
+                output.addAll(MarkdownTable.render(tableBuffer, inner));
+                tableBuffer.clear();
+                tableState = TableState.IDLE;
+                break;
+
+            default:
+                break;
+        }
+
+        return output;
+    }
+
     /** 处理一条「定稿」行：更新内部状态并返回带样式 span。 */
     List<Span> renderFinalized(String line) {
         if (line == null) {

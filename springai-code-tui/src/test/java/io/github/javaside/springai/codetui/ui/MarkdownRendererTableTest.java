@@ -77,4 +77,40 @@ class MarkdownRendererTableTest {
         assertEquals(2, result.size());
         assertFalse(md.hasBuffered());
     }
+
+    @Test
+    void flush_outputsCandidateAsNormalLine() {
+        md.feed("| not a table", 80); // 候选态
+
+        List<List<Span>> result = md.flush(80);
+
+        // 候选行按普通行输出
+        assertEquals(1, result.size());
+        assertFalse(md.hasBuffered());
+    }
+
+    @Test
+    void flush_outputsAlignedBlock() {
+        md.feed("| A | B |", 80);
+        md.feed("|---|---|", 80);
+        md.feed("| 1 | 2 |", 80);
+
+        List<List<Span>> result = md.flush(80);
+
+        // 对齐输出
+        assertTrue(result.size() >= 3);
+        assertFalse(md.hasBuffered());
+    }
+
+    @Test
+    void flush_idempotent() {
+        md.feed("| A | B |", 80);
+        md.flush(80);
+
+        List<List<Span>> result = md.flush(80);
+
+        // 第二次 flush 返回空
+        assertEquals(0, result.size());
+        assertFalse(md.hasBuffered());
+    }
 }
