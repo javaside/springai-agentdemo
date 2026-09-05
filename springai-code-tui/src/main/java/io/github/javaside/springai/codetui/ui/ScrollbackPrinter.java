@@ -40,7 +40,7 @@ import static io.github.javaside.springai.codetui.ui.Theme.*;
  * 逻辑行的<b>原文</b>挂在 {@code PhysicalLine.raw} 上供留底（fix round I-2）——消费方逐行预算提交，
  * 单个大输出不再能独占 UI 线程。
  */
-final class ScrollbackPrinter {
+public final class ScrollbackPrinter {
 
     /** 输出接缝：真实=终端 scrollback（视图桥接 runner().println），测试=内存列表。 */
     interface Sink {
