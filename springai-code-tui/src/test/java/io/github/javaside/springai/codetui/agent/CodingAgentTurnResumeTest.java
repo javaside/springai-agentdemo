@@ -212,6 +212,16 @@ class CodingAgentTurnResumeTest {
         assertTrue(l.retries.size() >= n, "只收到 " + l.retries.size() + " 次 onRetryScheduled，期望 " + n);
     }
 
+    /** C5（Task 8 review I2）：L2 续跑 onRetryScheduled 载荷整段断言——attempt=续跑序号 1..2、maxAttempts=2、
+     *  backoffMs=resumeBackoffMs 现算（1s×2ⁿ，jitter(0) 下与真实 delay 严格相等）、reason=「流中断」。 */
+    static void assertRetryPayload(Object[] r, long turnId, int attempt, int maxAttempts, long backoffMs, String reason) {
+        assertEquals(turnId, r[0], "turnId");
+        assertEquals(attempt, r[1], "attempt（续跑序号）");
+        assertEquals(maxAttempts, r[2], "maxAttempts（UI 拼文案用）");
+        assertEquals(backoffMs, r[3], "backoffMs（resumeBackoffMs 现算，jitter(0) 下与真实 delay 严格相等）");
+        assertEquals(reason, r[4], "reason");
+    }
+
     static Message lastMsg(Prompt p) {
         List<Message> msgs = p.getInstructions();
         assertFalse(msgs.isEmpty(), "prompt 无任何消息");
@@ -455,7 +465,11 @@ class CodingAgentTurnResumeTest {
         assertNotNull(msg);
         assertTrue(msg.contains("已自动重试"), "文案应含已自动重试，实际：" + msg);
         assertTrue(msg.contains("net down"), "文案应含根因 message，实际：" + msg);
+        // C5（Task 8 review I2）：两次续跑载荷序列 [{attempt:1,max:2,backoffMs:1000,reason:"流中断"},
+        // {attempt:2,max:2,backoffMs:2000,reason:"流中断"}]——doBeforeRetry 现算、jitter(0) 下与真实 delay 严格相等。
         assertEquals(2, lis.retries.size(), "2 次续跑各排定一次");
+        assertRetryPayload(lis.retries.get(0), 1L, 1, 2, 1000L, "流中断");
+        assertRetryPayload(lis.retries.get(1), 1L, 2, 2, 2000L, "流中断");
         assertEquals(0, emptyUserCount(sessions, sid),
                 "耗尽失败路径的 blank 必须在 handleErrorWithRetryPrefix 末尾被清");
     }

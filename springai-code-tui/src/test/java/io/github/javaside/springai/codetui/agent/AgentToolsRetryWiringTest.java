@@ -12,6 +12,7 @@ import io.github.javaside.springai.codetui.agent.llm.RetryingStreamChatModel;
 import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
 import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig.StreamRetryMode;
 import io.github.javaside.springai.codetui.agent.media.VisionMaterializingChatModel;
+import io.github.javaside.springai.codetui.agent.seam.StubListener;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -23,12 +24,16 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -229,6 +234,70 @@ class AgentToolsRetryWiringTest {
         cursor = delegate(cursor, RetryingChatModel.class);
         assertSame(provider.spy, cursor,
                 "RetryingChatModel 底下必须正是 provider.chatModel() 原样——子 agent 不会被 RetryStream 双重重试");
+    }
+
+    // ── 5 wireL1 组合（Task 8 review M-1）：生产形全装配端到端 ──────────────
+
+    /**
+     * 拦「{@code CodeTuiApplication} 漏调 {@link AgentTools#wireL1} 或 bind 目标错」的失败面：
+     * build(注入 ALL) → 全参 {@code CodingAgent}（CodeTuiApplication 形装配，agent 包内可直构）→
+     * {@code wireL1(rt, agent)} → submit（安装本回合 L1 sink）→ {@code rt.bridge().report(2, 500, "x")}
+     * → 记录型 listener 必须收到 {@code onRetryScheduled(turnId=1, attempt=2, maxAttempts=5, backoffMs=500, reason="x")}。
+     * 漏调 wireL1 → bridge.sink 恒 null → report no-op → 断言红；bind 目标错（非 agent::onL1Retry）同样红。
+     * （L1 链序/reporter 同桥实例已由 mainChain 用例断言；本用例补「桥 → 事件」的最后一跳。）
+     */
+    @Test
+    void wireL1_combo_fullAssemblyDeliversL1Event(@TempDir Path root) throws Exception {
+        SpyProvider provider = spyRegistry();
+        ProviderRegistry registry = new ProviderRegistry(List.of(provider));
+        AgentTools.AgentRuntime rt =
+                AgentTools.build(registry, root, new RecordingListener(), null, AgentTools.testEngine(root),
+                        cfg(StreamRetryMode.ALL));
+        RecordingListener lis = new RecordingListener();
+        // CodeTuiApplication 形装配：runtime 组件逐一喂给全参构造（mcpRegistry/usageAccumulator 测试为 null，
+        // retryConfig 注入 ALL 而非 fromEnv——env 不能安全改且本机真实变量会让 L2 开关随机红）。
+        CodingAgent agent = new CodingAgent(registry, rt.clients(), lis, "combo", new AtomicLong(),
+                rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator(), rt.skills(), rt.skillTool(),
+                rt.sessionRepository(), rt.reloadableSkill(), rt.subagentRunner(), rt.fileExternalizer(),
+                null, rt.permissionEngine(), rt.visionModels(), rt.backgroundRegistry(), rt.backgroundResults(),
+                rt.interjections(), null, rt.systemPromptTokens(), cfg(StreamRetryMode.ALL));
+        AgentTools.wireL1(rt, agent);
+
+        // submit 使 CodingAgent 安装本回合 L1 sink（activeTurnL1Sink 只在 submit 内赋值，构造后 wireL1 前 report no-op）。
+        Disposable d = agent.submit("问题");
+        // bridge.report 同步透传：sink 在 submit 返回前已装好，事件必先于任何异步回合终态、无需等待。
+        rt.bridge().report(2, 500, "x");
+
+        assertEquals(1, lis.retries.size(), "wireL1 后 bridge.report 必须经 onL1Retry 到达 listener：retries=" + lis.retries);
+        Object[] e = lis.retries.get(0);
+        assertEquals(1L, e[0], "turnId 必须绑定当前回合");
+        assertEquals(2, e[1], "attempt 透传");
+        assertEquals(5, e[2], "L1 maxAttempts=5（UI 拼「/5·传输」文案）");
+        assertEquals(500L, e[3], "backoffMs 透传");
+        assertEquals("x", e[4], "reason 透传");
+
+        // 等桩模型回合正常完成，避免在飞的 boundedElastic 订阅泄漏到下一个用例。
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (lis.completed.isEmpty() && lis.errors.isEmpty() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertTrue(!lis.errors.isEmpty() || !lis.completed.isEmpty(), "回合 15s 内无终态");
+        assertTrue(lis.errors.isEmpty(), "正常装配路径不应 onError：" + lis.errors);
+        assertTrue(lis.completed.contains(1L), "回合应 onTurnComplete");
+        d.dispose();
+    }
+
+    /** 记录 onRetryScheduled/completed/errors 的 listener（本类不依赖其它测试类的私有桩）。 */
+    static final class RecordingListener extends StubListener {
+        final List<Object[]> retries = new CopyOnWriteArrayList<>();     // [turnId, attempt, maxAttempts, backoffMs, reason]
+        final List<Long> completed = new CopyOnWriteArrayList<>();
+        final List<Object[]> errors = new CopyOnWriteArrayList<>();      // [turnId, throwable]
+
+        @Override public void onRetryScheduled(long turnId, int attempt, int maxAttempts, long backoffMs, String reason) {
+            retries.add(new Object[]{turnId, attempt, maxAttempts, backoffMs, reason});
+        }
+        @Override public void onTurnComplete(long turnId) { completed.add(turnId); }
+        @Override public void onError(long turnId, Throwable error) { errors.add(new Object[]{turnId, error}); }
     }
 
     // ── L1ReporterBridge 形状（两段式桥本身） ───────────────────────────────

@@ -498,6 +498,10 @@ public final class CodingAgent implements SubmitHandler {
             perRequestOptions = DeepSeekChatOptions.builder().model(model).build();
             modelGrounding = model;
         }
+        // capabilitiesSnapshot 与上方 provider 快照段同纪律：**有意归同步语义**（Task 8 review I1）。
+        // 它不在 defer 体内、不进 pipeline——若 registry 状态异常导致这里抛错，是**同步**抛给 submit 的
+        // 调用方（与 client==null 的 IllegalStateException 一处），不会变成 error 信号经 doOnError 处理，
+        // 也就绝不会与 handleErrorWithRetryPrefix 双发 listener.onError。别为「优雅」把它挪进 defer。
         ModelCapabilities capabilities = capabilitiesSnapshot();
         String effectiveOutbound = effectiveText;   // 重放表达式恒从 submit 闭包原始值重建（composeResumeUser 唯一输入）
         // 组装/订阅整体移入 defer：续跑重订阅 = 每轮经 defer 重建 spec（同一 chatClientResponse Flux 实例二次
@@ -733,6 +737,8 @@ public final class CodingAgent implements SubmitHandler {
         if (err instanceof CancellationException) {
             return;
         }
+        String sid = sessionId;   // 快照（纪律同 trimDanglingToolCalls）：本方法跑在 reactive 线程，clearContext 会在
+                                  // UI 线程换掉 volatile sessionId——末尾 purge 必须落在与 doOnError 同一会话上。
         String prefix = retryFailurePrefix(l1Retries, l2Retries);
         if (prefix.isEmpty()) {
             handleError(err, turnId);
@@ -741,7 +747,7 @@ public final class CodingAgent implements SubmitHandler {
         }
         // 耗尽失败路径的 blank 清除点：末轮若断在 FROM_TOOLS（blank 已随 before() 落库），这里清掉；
         // 否则末轮 blank 会因「tc落库→工具结果落库→断」而成中部事件永久残留。no-change 不写回，同 trim 模式。
-        purgeBlankUserEvents(sessionId);
+        purgeBlankUserEvents(sid);
     }
 
     /** 根因串：沿 cause 链取首个非空 message，兜底类名（与 reasonOf 共用兜底规则，两套推导勿漂移）；不做宽截断。 */
@@ -1301,7 +1307,8 @@ public final class CodingAgent implements SubmitHandler {
         persistInterjection();          // ⚠ 必须在 onTurnComplete 之前，见该方法注释
         // 最后一轮续跑成功后不再有 prepareResume：成功路径的 blank 伪影（FROM_TOOLS 轮 before() 落下的
         // 空 user）只能在这里清。onTurnComplete 之前完成，-c 恢复/压缩读取到的都是干净历史。
-        purgeBlankUserEvents(sessionId);
+        String sid = sessionId;   // 快照（纪律同 trimDanglingToolCalls）：本方法跑在 reactive 线程，/clear 在 UI 线程换 volatile
+        purgeBlankUserEvents(sid);
         listener.onTurnComplete(turnId);
     }
 
