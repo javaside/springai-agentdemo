@@ -312,4 +312,59 @@ public class MarkdownTableTest {
         // 应该成功排版，不抛异常
         assertEquals(4, result.size());
     }
+
+    @Test
+    void render_reducesWidthWhenExceedsInner() {
+        List<String> block = List.of(
+            "| VeryLongHeaderAAAAAAAA | VeryLongHeaderBBBBBBBB | VeryLongHeaderCCCCCCCC |",
+            "|------------------------|------------------------|------------------------|",
+            "| Data1 | Data2 | Data3 |"
+        );
+
+        int inner = 40; // 远小于表格自然宽度
+        List<List<Span>> result = MarkdownTable.render(block, inner);
+
+        // 应该削列后输出，不是退回原样
+        assertTrue(result.size() >= 3);
+
+        // 验证每行不超宽
+        for (List<Span> line : result) {
+            int width = MarkdownTable.spansDisplayWidth(line);
+            assertTrue(width <= inner, "Line width " + width + " exceeds inner " + inner);
+        }
+    }
+
+    @Test
+    void render_wrapsLongCellContent() {
+        List<String> block = List.of(
+            "| Short | Long |",
+            "|-------|------|",
+            "| A | This is a very long content that should be wrapped |"
+        );
+
+        int inner = 20;
+        List<List<Span>> result = MarkdownTable.render(block, inner);
+
+        // 格内折行后应该多于 3 行
+        assertTrue(result.size() > 3);
+    }
+
+    @Test
+    void render_fallsBackWhenOutputExceeds600Lines() {
+        List<String> block = new java.util.ArrayList<>();
+        block.add("| A |");
+        block.add("|---|");
+
+        // 构造能产生 >600 行的输入
+        StringBuilder longCell = new StringBuilder();
+        for (int i = 0; i < 3000; i++) {
+            longCell.append("word ");
+        }
+        block.add("| " + longCell.toString() + " |");
+
+        List<List<Span>> result = MarkdownTable.render(block, 4); // 最小宽度，最大折行
+
+        // 应该退回原样（3 行），不是 >600 行
+        assertEquals(3, result.size());
+    }
 }
