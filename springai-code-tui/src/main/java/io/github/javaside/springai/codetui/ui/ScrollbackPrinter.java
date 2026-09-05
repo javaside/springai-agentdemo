@@ -48,7 +48,7 @@ final class ScrollbackPrinter {
         void println(String line);
     }
 
-    private static final String INDENT = "  ";   // 对话内容缩进；工具/计划行自带前缀
+    static final String INDENT = "  ";   // 对话内容缩进；工具/计划行自带前缀
     private static final int GUTTER = 4;         // 行号列宽（右对齐到 4 位，够 9999 行）
 
     private final Sink sink;                                        // 输出接缝（视图惰性桥接 runner）

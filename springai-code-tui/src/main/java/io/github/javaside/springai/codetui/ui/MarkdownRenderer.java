@@ -20,9 +20,9 @@ import java.util.List;
 public final class MarkdownRenderer {
 
     // ---- 样式常量 ----
-    private static final Style DIM = Style.create().fg(Theme.GRAY_MUTED);
+    static final Style DIM = Style.create().fg(Theme.GRAY_MUTED);
     private static final Style HEADER = Style.create().fg(Color.LIGHT_CYAN).bold();
-    private static final Style BOLD = Style.create().bold();
+    static final Style BOLD = Style.create().bold();
     private static final Style ITALIC = Style.create().italic();
     private static final Style INLINE_CODE = Style.create().fg(Color.LIGHT_GREEN);
     // 引用块是模型回复的<b>正文内容</b>，不是界面装饰：与信息行同级（GRAY_INFO），
@@ -146,7 +146,7 @@ public final class MarkdownRenderer {
     }
 
     /** 解析一段文本中的内联样式：**bold**、`code`、*italic*，其余为默认。 */
-    private List<Span> renderInline(String text) {
+    static List<Span> renderInline(String text) {
         List<Span> spans = new ArrayList<>();
         StringBuilder plain = new StringBuilder();
         int i = 0;
