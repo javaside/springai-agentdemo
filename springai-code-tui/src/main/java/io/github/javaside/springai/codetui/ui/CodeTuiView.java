@@ -514,11 +514,26 @@ public final class CodeTuiView extends InlineApp {
      * 只做一次）。drain 输出段的 kind 分派与旧实现逐字对应。
      */
     private void enqueueOutputLine(OutputLine ol) {
-        // 转角处插入 flush cursor（规范 §3.4 第 2 条：USER/TOOL_START/TOOL_OK/TOOL_FAIL/ERROR 前 flush；INFO 豁免）
+        // ── 第 2 条 flush 触发点（设计 §3.4）：模型流水线上的行入队前，先把缓冲里的表格排出来 ──
+        // 判据：这一块不会再有行进来。流里文本与工具调用串行，工具行之后模型不会回来补同一张表的下半截。
+        // · SUBAGENT_* 由子 agent 线程异步发出、不满足「流里串行」，它安全的真实理由是父 TOOL_START
+        //   （Task 工具）已经先 flush 过，此刻主模型阻塞在工具调用上、不可能在攒表格
+        // · TODO 全仓零生产者（onTodoUpdated 只更新面板），列在这里纯属防御，是死分支
+        // · ERROR 归这里而不是豁免：两个来源都意味着正文块已结束（turn 级 onError 发生在
+        //   flushStreaming() 之后；模态队满 ERROR 由最外层 PermissionCallback 在工具调用时发出）。
+        //   放进豁免的后果是「⚠ 出错」排在它要解释的那张表<b>之前</b>
+        // · 豁免只有 INFO：UI 异步注入（/context、MCP 就绪、⏱ 后台任务、⚙ 使用模型 X），相对正文的
+        //   位置本来就不确定；在这里 flush 会拼出「按只看过两行算出的列宽排好的半张表 + 原样的下半张」
+        // ⚠ 必须<b>无条件</b>入队，不能写成 if (printer.hasBufferedTable())：入队时刻它前面那些
+        //   ASSISTANT 行还压在队列里没喂给渲染器，此刻 hasBufferedTable() 必为 false，
+        //   条件化就让整条触发点静默失效。它在 drain 时刻若发现缓冲是空的，自然就是个空游标。
+        // ⚠ 必须走队列、不能直接 println：enqueueOutputLine 执行在<b>入队</b>时刻，直接打会让表格
+        //   插到自己前面那些正文行<b>上面</b>去（方向是往前插，不是掉到后面）。
         switch (ol.kind()) {
-            case USER, TOOL_START, TOOL_OK, TOOL_FAIL, ERROR ->
-                outputQueue.enqueue(v -> printer.tableFlushCursor());
-            default -> { /* INFO 等豁免不 flush */ }
+            case USER, TOOL_START, TOOL_OK, TOOL_FAIL, ERROR,
+                 SUBAGENT_START, SUBAGENT_TOOL, SUBAGENT_END, TODO ->
+                    outputQueue.enqueue(v -> printer.tableFlushCursor());
+            default -> { /* ASSISTANT 是正文本身、INFO 是豁免：都不 flush */ }
         }
 
         switch (ol.kind()) {
@@ -982,9 +997,30 @@ public final class CodeTuiView extends InlineApp {
      * {@code ctxUsageController.markDirty()}（Task 6），保持 View 私有。
      */
     private UiUpdateCoordinator.UpdateResult computeFollowUpFlags() {
-        boolean outputRemaining = !outputQueue.isEmpty()
+        // 「输入已排空」= 输出队列空 + 没有待转入的 pending + 没有已成行的流式行。
+        // 第 4 条 flush 触发点与 continuation 退避判定共用这三项（见下）。
+        boolean localWorkRemaining = !outputQueue.isEmpty()
                 || state.hasPendingOutput()
-                || state.hasCompleteStreamingLine()
+                || state.hasCompleteStreamingLine();
+        // ── 第 4 条 flush 触发点（设计 §3.4）：回合结束，或 UI 为用户暂停 ──
+        // 检查点必须在本批<b>主 drain 之后</b>：放在取流式行那一带（drain 之前）时，最后一批的时序是
+        // 「pending 刚把表格尾行转入 → 队列非空 → 闸门 false → drain 把它喂进缓冲」，而批尾
+        // outputRemaining 的四项全 false、IDLE 且无后台任务/在飞子 agent 时 animationDemandActive()
+        // 也 false，于是<b>不再排下一批</b>：表格要么靠 ctxUsage 的 500ms 防抖偶然救回（晚半秒），
+        // 要么一直不出、直到用户按键。
+        // 「输入已排空」这一半不能省：drain 有 300 行 + 12ms 双预算、pending 转入还有 600 条/批上限，
+        // 一批完全可能停在表格中间（-c 回放全程 IDLE、onTurnComplete 同锁窗口置 IDLE 后大段残行
+        // 跨批消费、计划面板期间 hasModal() 恒真而正文按 300 行分批）。少了它就是把第 3 条豁免
+        // 要避免的「半张对齐 + 半张原样」从这里重新放进来。
+        // hasModal() 这一半是给权限/问询/计划用的：PermissionCallback 是最外层装饰器，审批请求早于
+        // onToolStarted → 早于 flushStreaming()，面板弹出时表格还压在缓冲里，而此刻 status 不是 IDLE。
+        if (!localWorkRemaining && (state.isIdle() || state.hasModal()) && printer.hasBufferedTable()) {
+            outputQueue.enqueue(v -> printer.tableFlushCursor());
+            // 紧跟一次 drain 在<b>同一批</b>里打完（照计划正文那段的写法，与本批前段共用行/时间预算）
+            batchRowsUsed += drainQueuedOutput(Math.max(0, MAX_ROWS_PER_DRAIN - batchRowsUsed));
+            localWorkRemaining = !outputQueue.isEmpty();   // 预算用完没打完的行留给下一批
+        }
+        boolean outputRemaining = localWorkRemaining
                 // pty 写背压（「输出时打字卡死」根治配套）：writer 饱和 ⇒ display 侧可能有
                 // 延迟批在途——保持 continuation 链，下一批（排空唤醒后）重投/接续。
                 // 不依赖 state/queue 的非空（它们可能已空而延迟批仍在），防断链滞留。
@@ -1021,9 +1057,6 @@ public final class CodeTuiView extends InlineApp {
         // 背压退避（终审 e）：outputRemaining 的唯一成因是 pty 饱和（应用闸已关、
         // 本地 queue/pending/streaming 全空）时，continuation 用退避而非 ZERO——
         // ZERO 与每圈 render 形成双线程满载空转。真实存量（本地非空）仍用 ZERO 接续。
-        boolean localWorkRemaining = !outputQueue.isEmpty()
-                || state.hasPendingOutput()
-                || state.hasCompleteStreamingLine();
         java.time.Duration continuationDelay = (!localWorkRemaining && ptyBackpressured())
                 ? PTY_BACKPRESSURE_BACKOFF : java.time.Duration.ZERO;
         return new UiUpdateCoordinator.UpdateResult(outputRemaining, animationActive, continuationDelay);
@@ -1331,6 +1364,9 @@ public final class CodeTuiView extends InlineApp {
     AskRequest activeAskForTest() { return activeAsk; }
 
     /** 测试专用：直接驱动上下文用量刷新（测试里没有事件循环，refresh 经 markDirty 防抖异步调度，测试需要同步结果）。 */
+    /** 测试专用：View 内部的 scrollback printer（表格缓冲状态、游标工厂的观测点）。 */
+    ScrollbackPrinter printerForTest() { return printer; }
+
     ContextUsage ctxUsageForTest() { return ctxUsage; }
 
     /** 测试专用：当前正在审批的计划（null=非计划态）。 */
@@ -2166,6 +2202,11 @@ public final class CodeTuiView extends InlineApp {
             onSubmit.clearContext();                 // (A) 换 sessionId
             state.resetForNewSession();              // 复位面板/排队/提示
             outputQueue.clear();                     // 严格分批后大输出可能还压在队列里没打完：与 pending 同语义一并丢弃
+            // ── 第 6 条 flush 触发点（设计 §3.4）：/clear 丢表格缓冲 ──
+            // 必须<b>同步</b>做在这里，不能塞进下面的 runOnRenderThread lambda——那段只在 runner
+            // 非空时跑，测试态走不到。resetMarkdown 连状态机一起复位：只丢缓冲不复位，降级态会活过
+            // 清屏，下一张表在遇到第一个非 `|` 行之前全部原样输出。
+            printer.resetMarkdown();
             lastShownModel = "";                     // 新会话首个回合重新打「⚙ 使用模型 X」
             pendingSkill = null;                      // 清掉未发送的技能挂载：新会话不继承
             var r = runner();
@@ -3241,6 +3282,11 @@ public final class CodeTuiView extends InlineApp {
         for (String line : plan.split("\n", -1)) {
             outputQueue.enqueue(v -> printer.assistantCursor(line));
         }
+        // ── 第 5 条 flush 触发点（设计 §3.4）：整篇 ASSISTANT 文档灌完时收尾 flush ──
+        // 这里<b>绕过</b> enqueueOutputLine，第 2 条一条都不经过；而 onPlanSubmitted 不改状态
+        // （此刻是 RUNNING_TOOL）。计划正文以表格结尾很常见，不补这一条用户就要在<b>看不见那张表</b>
+        // 的情况下批准计划。规则一般化：任何往队列灌整篇 ASSISTANT 文档的地方，收尾必须 flush。
+        outputQueue.enqueue(v -> printer.tableFlushCursor());
     }
 
     /**
