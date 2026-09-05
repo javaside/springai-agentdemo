@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -27,6 +28,21 @@ class ScrollbackPrinterTest {
     /** 造一个 printer：固定 80 列，root=/work（折行由 printer 内部完成，无需注入）。 */
     private static ScrollbackPrinter printerOver(RecordingSink sink) {
         return new ScrollbackPrinter(sink, Path.of("/work"), () -> 80);
+    }
+
+    /** 造一个指定终端宽的 printer（表格排版对宽度敏感，120 / 80 两档都要验）。 */
+    private static ScrollbackPrinter printerOver(RecordingSink sink, int width) {
+        return new ScrollbackPrinter(sink, Path.of("/work"), () -> width);
+    }
+
+    /** 把游标抽干，返回每个物理段的纯文本。 */
+    private static List<String> drain(io.github.javaside.springai.codetui.ui.output.OutputCursor cursor) {
+        List<String> out = new ArrayList<>();
+        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine line;
+        while ((line = cursor.next()) != null) {
+            out.add(line.styled().rawContent());
+        }
+        return out;
     }
 
     @Test
@@ -314,20 +330,149 @@ class ScrollbackPrinterTest {
         RecordingSink sink = new RecordingSink();
         ScrollbackPrinter p = printerOver(sink);
 
-        String input = "| Name | Age |\n|------|-----|\n| Alice | 30 |";
-        io.github.javaside.springai.codetui.ui.output.OutputCursor cursor = p.assistantCursor(input);
+        String input = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n";
+        List<String> output = drain(p.assistantCursor(input));
 
-        List<String> output = new ArrayList<>();
-        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine line;
-        while ((line = cursor.next()) != null) {
-            output.add(line.styled().rawContent());
-        }
-
-        // 3 行输出（表头 + 分隔线 + 数据）
-        assertEquals(3, output.size(), "表格应输出 3 行");
-
-        // 验证包含表格内容
+        // 表头 + 分隔线 + 数据 + 末尾空行
+        assertEquals(4, output.size(), "表格应输出 3 行 + 收尾空行");
         assertTrue(output.stream().anyMatch(l -> l.contains("Name")), "应包含表头");
         assertTrue(output.stream().anyMatch(l -> l.contains("Alice")), "应包含数据行");
+    }
+
+    @Test
+    void mdCursor_emitsOneSegmentPerTableRow_noSecondaryWrapping() {
+        // §3.1 硬不变量：排出的行必须 ≤ inner，否则被 SegmentedWrap 撕成两段、续段再加一层缩进。
+        // 只断言「每行 ≤ 终端宽」会假绿（宽 inner+1 的行照样 ≤ 终端宽），必须断言段数 == 表格行数。
+        List<String> block = List.of(
+                "| 参数 | 类型 | 默认值 | 说明 |",
+                "|------|------|--------|------|",
+                "| codetui.syncOutput | String | auto | 控制是否使用终端同步输出扩展，取值 never/auto。|",
+                "| codetui.hardwareCursor | String | auto | 控制硬件光标可见性，IME 路径需要 always。|");
+
+        for (int width : new int[]{120, 80}) {
+            RecordingSink sink = new RecordingSink();
+            ScrollbackPrinter p = printerOver(sink, width);
+            List<String> out = drain(p.streamingLinesCursor(concat(block, "")));
+
+            int expected = MarkdownTable.render(block, width - 2).size() + 1;   // +1 = 收尾空行
+            assertEquals(expected, out.size(),
+                    "%d 列：物理段数必须等于表格行数（二次折行必须是 no-op），实际 %s".formatted(width, out));
+            for (String l : out) {
+                assertTrue(dev.tamboui.text.CharWidth.of(l) <= width,
+                        "%d 列下行宽 %d 超限：%s".formatted(width, dev.tamboui.text.CharWidth.of(l), l));
+            }
+        }
+    }
+
+    @Test
+    void mdCursor_keepsColumnStartsAligned() {
+        List<String> block = List.of(
+                "| 参数 | 类型 |",
+                "|------|------|",
+                "| a | String |",
+                "| 中文键 | int |");
+
+        RecordingSink sink = new RecordingSink();
+        List<String> out = drain(printerOver(sink, 80).streamingLinesCursor(concat(block, "")));
+
+        // 第 2 列的起点显示偏移在表头与所有数据行上必须一致
+        int headerStart = secondColumnStart(out.get(0));
+        assertTrue(headerStart > 0, "应能定位表头第 2 列：" + out.get(0));
+        for (int i = 2; i < out.size() - 1; i++) {
+            assertEquals(headerStart, secondColumnStart(out.get(i)),
+                    "第 2 列起点必须与表头一致：" + out.get(i));
+        }
+    }
+
+    @Test
+    void mdCursor_wrappedLineKeepsAllSegmentsWhenMoreLogicalLinesFollow() {
+        // 一批流式行里，前一条逻辑行的续段必须先吐完再推进到下一条逻辑行。
+        // 推进抢在续段之前 = 长行只剩第一段，其余静默消失。
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = printerOver(sink, 80);
+
+        List<String> out = drain(p.streamingLinesCursor(List.of("y".repeat(200), "第二行", "第三行")));
+
+        String joined = String.join("", out);
+        assertEquals(200, joined.chars().filter(c -> c == 'y').count(),
+                "长行折出的每一段都要落地，一个字不丢：" + out);
+        assertTrue(joined.contains("第二行") && joined.contains("第三行"), "后续逻辑行也不能丢");
+    }
+
+    @Test
+    void mdCursor_200RowBatchStartingWithPipeLosesNothing() {
+        // §3.6 的雷：feed 返回空列表 ≠ 游标耗尽。next() 不内部循环时，首行是 `|` 的一批
+        // 会让 next() 立刻返回 null → 整个游标被丢弃 → 后面最多 299 条逻辑行永久消失。
+        List<String> rows = new ArrayList<>();
+        rows.add("| k | v |");
+        rows.add("|---|---|");
+        for (int i = 0; i < 197; i++) {
+            rows.add("| k" + i + " | v" + i + " |");
+        }
+        rows.add("");   // 非表格行触发整块输出（199 行缓冲，未越 200 上限）
+
+        RecordingSink sink = new RecordingSink();
+        List<String> out = drain(printerOver(sink, 80).streamingLinesCursor(rows));
+
+        String joined = String.join("\n", out);
+        for (int i = 0; i < 197; i++) {
+            assertTrue(joined.contains("k" + i), "第 " + i + " 条数据行丢了");
+        }
+    }
+
+    @Test
+    void tableFlushCursor_emitsBufferedBlockAndIsIdempotent() {
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = printerOver(sink, 80);
+
+        // 只喂表头 + 分隔行 + 数据行，不喂结束行 → 整块压在缓冲里
+        List<String> streamed = drain(p.streamingLinesCursor(List.of("| k | v |", "|---|---|", "| a | b |")));
+        assertEquals(List.of(), streamed, "块未结束时游标不应吐出任何东西");
+        assertTrue(p.hasBufferedTable(), "整块应压在缓冲里");
+
+        List<String> flushed = drain(p.tableFlushCursor());
+        assertEquals(3, flushed.size(), "flush 应排出表头 + 分隔线 + 数据行");
+        assertFalse(p.hasBufferedTable());
+
+        assertEquals(List.of(), drain(p.tableFlushCursor()), "空缓冲 flush 必须幂等");
+    }
+
+    @Test
+    void tableFlushCursor_sharesOneMultiLineRawForResizeReplay() {
+        // record() 按引用身份去重、且只跟上一条比：N 行共享同一个<b>单行</b> raw 会让
+        // resize 重放后历史表格只剩 1 行。整块一个多行 Text 才对（只占 1 条 SCROLL_TAIL_CAP 配额）。
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = printerOver(sink, 80);
+        drain(p.streamingLinesCursor(List.of("| k | v |", "|---|---|", "| a | b |")));
+
+        io.github.javaside.springai.codetui.ui.output.OutputCursor cursor = p.tableFlushCursor();
+        List<Object> raws = new ArrayList<>();
+        io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine line;
+        while ((line = cursor.next()) != null) {
+            raws.add(line.raw());
+        }
+
+        assertEquals(3, raws.size());
+        for (Object raw : raws) {
+            assertSame(raws.get(0), raw, "整块必须共享同一个 raw 实例（去重后只记 1 条）");
+        }
+        assertEquals(3, ((Text) raws.get(0)).lines().size(),
+                "共享的 raw 必须是多行 Text，重放才能还原 3 行");
+    }
+
+    private static List<String> concat(List<String> rows, String extra) {
+        List<String> all = new ArrayList<>(rows);
+        all.add(extra);
+        return all;
+    }
+
+    /** 第 2 列起点的显示偏移：跳过缩进与第 1 列，找到「2 空格 + 非空格」的位置。 */
+    private static int secondColumnStart(String line) {
+        String body = line.substring(2);   // 去掉行首缩进
+        int idx = body.indexOf("  ");
+        if (idx < 0) return -1;
+        int j = idx;
+        while (j < body.length() && body.charAt(j) == ' ') j++;
+        return dev.tamboui.text.CharWidth.of(body.substring(0, j));
     }
 }

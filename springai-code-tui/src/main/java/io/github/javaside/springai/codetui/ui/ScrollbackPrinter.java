@@ -180,24 +180,34 @@ public final class ScrollbackPrinter {
         run(userBlockCursor(text));
     }
 
-    /** AI 正文：markdown/语法高亮 + 缩进 + 按终端宽折行，下沉 scrollback。严格分批版见 {@link #assistantCursor(String)}。 */
+    /**
+     * AI 正文：markdown/语法高亮 + 缩进 + 按终端宽折行，下沉 scrollback。
+     * 严格分批版见 {@link #assistantCursor(String)}。
+     *
+     * <p>与游标路径<b>同源</b>：按 {@code \n} 拆成逻辑行逐条 {@code feed}，收尾 {@code flush}
+     * （设计 §3.4 第 1 条触发点）。不拆的话多行文本会变成一条带内嵌换行的逻辑行，
+     * 产出与生产路径不同——测试据此诊断会拿到假象。
+     */
     void assistant(String text) {
-        // 走 feed 路径（支持表格块缓冲）
-        List<List<Span>> lines = md.feed(text, innerWidth());
-        for (List<Span> line : lines) {
-            printWrapped(line);
-        }
-
-        // 收尾 flush（第 1 条 flush 触发点）
-        List<List<Span>> flushed = md.flush(innerWidth());
-        for (List<Span> line : flushed) {
-            printWrapped(line);
-        }
+        feedAndFlush(text == null ? new String[]{""} : text.split("\n", -1));
     }
 
     /** 流式完整行：同 assistant。严格分批版见 {@link #streamingLinesCursor(List)}。 */
     void streamingLine(String row) {
-        printWrapped(md.renderFinalized(row));
+        feedAndFlush(new String[]{row});
+    }
+
+    /** 一次性入口共用：逐条 feed + 收尾 flush，逐行 printWrapped。 */
+    private void feedAndFlush(String[] logicals) {
+        int inner = innerWidth();
+        for (String logical : logicals) {
+            for (List<Span> line : md.feed(logical, inner)) {
+                printWrapped(line);
+            }
+        }
+        for (List<Span> line : md.flush(inner)) {
+            printWrapped(line);
+        }
     }
 
     /**
@@ -283,80 +293,77 @@ public final class ScrollbackPrinter {
     }
 
     /**
-     * 表格 flush 游标：强制输出 MarkdownRenderer 缓冲的表格块。
-     * 在转角处插入（工具开始前、错误前、回合结束时）。
+     * 表格 flush 游标：把渲染器缓冲里的表格块排出来。<b>无条件入队</b>、在 drain 时刻才真正
+     * 取缓冲——入队时刻它前面那些 ASSISTANT 行还压在队列里没喂给渲染器，此刻
+     * {@link #hasBufferedTable()} 必为 false，写成条件化就让整条触发点静默失效。
+     * 缓冲为空时第一次 {@code next()} 就返回 null，是个空游标（幂等）。
+     *
+     * <p>触发点见设计 §3.4：模型流水线上的行入队前、回合结束/UI 为用户暂停、整篇文档灌完收尾。
      */
     OutputCursor tableFlushCursor() {
         return new OutputCursor() {
-            private List<List<Span>> flushed = null;
-            private Text rawBlock = null;
-            private int index = 0;
-            private SegmentedWrap.Styled segs = null;
+            private List<List<Span>> flushed;     // null = 还没 flush 过
+            private int at;
+            private SegmentedWrap.Styled segs;    // 当前行的段推进器
+            private Text raw;                     // 整块共享的多行留底原文
 
-            @Override
-            public boolean hasNext() {
-                return flushed == null || (segs != null && segs.hasNextSegment()) || index < flushed.size();
+            @Override public boolean hasNext() {
+                if (flushed == null) return true;   // 有没有内容要等 next() 真去 flush 才知道
+                return (segs != null && segs.hasNextSegment()) || at < flushed.size();
             }
 
-            @Override
-            public PhysicalLine next() {
-                if (flushed == null) {
-                    flushed = md.flush(innerWidth());
-                    if (flushed.isEmpty()) {
-                        return null; // 幂等：空缓冲
+            @Override public PhysicalLine next() {
+                try {
+                    if (flushed == null) {
+                        flushed = md.flush(innerWidth());
+                        raw = blockRaw(flushed);
                     }
-
-                    // 构造 raw（所有行共享）
-                    StringBuilder sb = new StringBuilder();
-                    for (int i = 0; i < flushed.size(); i++) {
-                        if (i > 0) sb.append("\n");
-                        for (Span span : flushed.get(i)) {
-                            sb.append(span.content());
-                        }
+                    if (segs == null || !segs.hasNextSegment()) {
+                        if (at >= flushed.size()) return null;   // 耗尽（空缓冲时首次即耗尽）
+                        segs = SegmentedWrap.styled(flushed.get(at++), innerWidth());
                     }
-                    rawBlock = Text.raw(sb.toString());
-                }
-
-                // 先吐完当前行的折行段
-                if (segs != null && segs.hasNextSegment()) {
                     List<Span> piece = segs.nextSegment();
-                    if (piece != null) {
-                        List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
-                        indentedSeg.add(Span.raw(INDENT));
-                        indentedSeg.addAll(piece);
-                        return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), rawBlock);
-                    }
+                    if (piece == null) return null;
+                    // wrap-then-indent：与 MdLineCursor 同一缩进时机
+                    List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
+                    indentedSeg.add(Span.raw(INDENT));
+                    indentedSeg.addAll(piece);
+                    return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), raw);
+                } catch (RuntimeException e) {
+                    return null;   // 与 MdLineCursor 一致的渲染降级兜底
                 }
-
-                // 取下一行
-                if (index >= flushed.size()) {
-                    return null;
-                }
-
-                List<Span> line = flushed.get(index++);
-                segs = SegmentedWrap.styled(line, innerWidth());
-
-                // 输出首段
-                if (segs.hasNextSegment()) {
-                    List<Span> piece = segs.nextSegment();
-                    if (piece != null) {
-                        List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
-                        indentedSeg.add(Span.raw(INDENT));
-                        indentedSeg.addAll(piece);
-                        return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), rawBlock);
-                    }
-                }
-
-                return null;
             }
         };
     }
 
     /**
-     * 缓冲里是否压着表格（候选态也算）。
+     * 整块一个<b>多行</b> {@link Text} 作留底原文。
+     *
+     * <p>{@code record()} 按引用身份去重且只跟上一条比，所以整块 N 行共享同一引用 → 去重后
+     * 只记 1 条（占 {@code SCROLL_TAIL_CAP} 一条配额），resize 重放时 {@code TextWrap} 按
+     * {@code text.lines()} 逐行折、N 行原样还原。「N 行共享一个<b>单行</b> raw」是错的——
+     * 重放后历史表格只剩 1 行。
      */
+    private Text blockRaw(List<List<Span>> rows) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < rows.size(); i++) {
+            if (i > 0) sb.append('\n');
+            sb.append(INDENT);
+            for (Span span : rows.get(i)) {
+                sb.append(span.content());
+            }
+        }
+        return Text.raw(sb.toString());
+    }
+
+    /** 缓冲里是否压着表格（候选态也算）。视图经此转发，不直接碰渲染器。 */
     public boolean hasBufferedTable() {
         return md.hasBuffered();
+    }
+
+    /** {@code /clear}：连同状态机一起丢掉表格缓冲（只丢缓冲不复位状态会让降级态活过清屏）。 */
+    public void resetMarkdown() {
+        md.reset();
     }
 
     /**
@@ -533,53 +540,30 @@ public final class ScrollbackPrinter {
 
         @Override public PhysicalLine next() {
             try {
-                // 先消费 pending 队列
-                while (pendingOutput.isEmpty() && at < logicals.length) {
-                    // feed 返回空列表 ≠ 游标耗尽，需要内部循环
-                    List<List<Span>> feedResult = md.feed(logicals[at++], innerWidth());
-                    pendingOutput.addAll(feedResult);
-
-                    // 如果到达末尾且有缓冲，flush
-                    if (at >= logicals.length && md.hasBuffered()) {
-                        List<List<Span>> flushed = md.flush(innerWidth());
-                        pendingOutput.addAll(flushed);
+                // 续段优先：当前逻辑行的折行段没吐完，绝不能推进到下一条逻辑行——
+                // 推进抢在续段之前，长行就只剩第一段，其余静默消失。
+                if (segs == null || !segs.hasNextSegment()) {
+                    // feed 返回空列表 ≠ 游标耗尽（表格块正在缓冲里攒），所以必须内部循环：
+                    // 只有逻辑行真正耗尽时才返回 null。照「空列表就返回 null」实现，一批里
+                    // 只要首条是 `|` 开头，整个游标就被 dropActive() 丢掉、后面最多 299 条
+                    // 逻辑行永久消失（规范 §3.6 的雷）。
+                    while (pendingOutput.isEmpty() && at < logicals.length) {
+                        pendingOutput.addAll(md.feed(logicals[at++], innerWidth()));
                     }
+                    // 缓冲里可能还压着未结束的表格块：那不属于本游标，留给 flush 触发点排出
+                    if (pendingOutput.isEmpty()) return null;
 
-                    // 如果有输出就跳出
-                    if (!pendingOutput.isEmpty()) {
-                        break;
-                    }
+                    List<Span> rendered = pendingOutput.poll();
+                    raw = indented(rendered);                              // 留底原文（折行前整行，含缩进）
+                    segs = SegmentedWrap.styled(rendered, innerWidth());   // 折行源 = 未缩进渲染
                 }
-
-                if (pendingOutput.isEmpty()) {
-                    // 仍然没有输出，检查折行段
-                    if (segs == null || !segs.hasNextSegment()) {
-                        return null;
-                    }
-                }
-
-                // 优先输出 pending
-                if (!pendingOutput.isEmpty()) {
-                    List<Span> line = pendingOutput.poll();
-
-                    // 为这一行创建 raw 和折行段
-                    raw = indented(line);
-                    segs = SegmentedWrap.styled(line, innerWidth());
-                }
-
-                // 输出折行段
-                if (segs != null && segs.hasNextSegment()) {
-                    List<Span> piece = segs.nextSegment();
-                    if (piece == null) return null;
-
-                    // wrap-then-indent：每一段（含续段）前置缩进——续段对齐首段内容，即悬挂缩进
-                    List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
-                    indentedSeg.add(Span.raw(INDENT));
-                    indentedSeg.addAll(piece);
-                    return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), raw);
-                }
-
-                return null;
+                List<Span> piece = segs.nextSegment();
+                if (piece == null) return null;
+                // wrap-then-indent：每一段（含续段）前置缩进——续段对齐首段内容，即悬挂缩进
+                List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
+                indentedSeg.add(Span.raw(INDENT));
+                indentedSeg.addAll(piece);
+                return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), raw);
             } catch (RuntimeException e) {
                 return null;   // 渲染降级：一条逻辑行失败不打断批次（md 渲染器自身「不抛」契约的兜底）
             }
