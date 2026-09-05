@@ -100,6 +100,13 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- StepVerifier.withVirtualTime（L1 退避序列用例）：验证 Retry.backoff 的退避 delay
+             被虚拟时间接管。版本随 spring-boot-dependencies BOM（reactor-test 与 reactor-core 同版）。 -->
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

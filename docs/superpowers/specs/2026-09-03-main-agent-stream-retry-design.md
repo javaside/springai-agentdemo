@@ -1,7 +1,10 @@
 # 主 Agent 流式重试与界面重试提示 设计
 
 日期：2026-09-03
-状态：**终稿 v11**（10 轮 subagent 评审全部完成，终审裁决 READY，可交 writing-plans）
+状态：**终稿 v11**（10 轮 subagent 评审全部完成，终审裁决 READY，可交 writing-plans）→ **已按
+实现计划 Task 0-8 实施并回写（2026-09-05）**：Task 8 已把全部已知偏离（§3.5 签名 5 参、
+§3.3 catch 删除、装配层三元不包装等）回写正文，**正文以此为准**；历史清单见文末
+「回写记录（Task 8）」（①-㉑ + C1-C3）与「回写记录（终审 fix wave）」（合并前落位，2026-09-05）。
 参考实现：Claude Code（Anthropic 官方 CLI）的行为语义
 关联：`docs/superpowers/specs/2026-08-18-subagent-retry-transient-expansion-design.md`（子 agent 重试，已交付）
 
@@ -56,11 +59,15 @@ InterjectingChatModel        插话注入（最外；AgentTools 装配）
 因此 mid-stream 失败必须**回到回合层**重走完整管线（advisor 链从头跑，聚合器重建）。
 这正是 Claude Code 的结构：SDK 内传输重试 + CLI 层回合重试。
 
-**冷流前提（已确证）**：Spring AI 2.0 的 `.stream().chatClientResponse()` =
-`Flux.deferContextual(...)` 包 `advisorChain.nextStream(request)`
-（`DefaultChatClient` 源码），每次订阅从链头重跑：SessionMemoryAdvisor.before()
-重执行、ChatModel.stream() 重新发 HTTP、Interjecting 重注入插话。重订阅即完整重走，
-这是 L2 的地基。
+**冷流前提（Task 0 V1 实测，2026-09-04 纠偏；回写 ⑱）**：Spring AI 2.0 的
+`.stream().chatClientResponse()` **每次调用都从链头新建**——但 advisor 链是
+`ConcurrentLinkedDeque` 破坏性消费（`DefaultAroundAdvisorChain.nextStream` 每次
+`pop()`），链在每次 `.stream()` 调用时构建一次。**「重订阅即完整重走」只在 defer 内
+重建 spec 的形态下成立**（每次重订阅重调 `.stream()` 建新链：SessionMemoryAdvisor.before()
+重执行、ChatModel.stream() 重新发 HTTP、Interjecting 重注入插话）；**同一
+`chatClientResponse` Flux 实例二次订阅会让 advisor 队列耗尽、抛
+`IllegalStateException("No StreamAdvisors available to execute")`**（V1 断言 3
+实测）——这正是 L2 必须在 defer 内重建 spec（§3.3 伪码）的实证理由。
 
 ### 1.3 断流时的会话尾部形状（现状事实）
 
@@ -118,8 +125,16 @@ mid-stream 断流（`handleError` 触发前）会话尾部有两种形状，取�
 从 `RetryingChatModel` 原样搬移 `shouldRetry`（cause 链逐层：类名后缀
 `InvalidDataException`/`IoException`、`IOException` 家族、message 含
 `no content to map`/`eof reached while reading`/`rate limit`、
-`WebClientResponseException` 5xx；4xx/中断/取消红线不重试）与
+`WebClientResponseException` 5xx；**WCRE 状态 429 为瞬态（回写 ⑲）**——429 虽是 4xx，
+但是唯一的「请求没病、服务端在节流」4xx（Retry-After 语义），**其余 4xx
+（401/403/400…）红线不变**；中断/取消红线不重试）与
 `backoffMsAfter`。`RetryingChatModel` 改为委托，行为零变化（既有测试全绿为验收）。
+
+**红线清单里的 `StreamInterruptedException`（回写 ⑳）**：SII 是 L1 classify **自产**的
+mid-stream 包装（携带「已下发 chunk」语义，对 `shouldRetry` 恒为红线、任何重试层都不得
+重试）——但它**必须放行给 L2**：classify 在 filter **之后**才生成 SII，SII 不经 L1
+retryWhen 的 filter、直接沿链上抛，命中 L2 白名单（见 §3.2 classify 判定树）。判据
+（RetryPolicy）与 L2 白名单是两层不同的门，勿混为一谈。
 
 **新增两条判据**：
 - `StreamIdleTimeoutException`（新类型，见下）→ 瞬态。否则「网关挂起不回数据」这个
@@ -135,11 +150,17 @@ mid-stream 断流（`handleError` 触发前）会话尾部有两种形状，取�
 新增环境变量 `CODETUI_STREAM_RETRY`，取值 `all`（默认）| `l1` | `l2` | `off`：
 - `all`：两层全开；
 - `l1`：仅传输层重试（L2 续跑关闭：retryWhen 白名单恒 false）；
-- `l2`：仅回合级续跑（L1 不包装：`RetryingStreamChatModel.wrap` 直通返回 delegate）；
+- `l2`：仅回合级续跑（L1 不包装——装配层三元不包装：`l1Enabled() ? RetryingStreamChatModel.wrap(delegate, bridge) : delegate` 直通原链，**无 passthrough API**）；
 - `off`：两层全关（回到现状行为）。
 
+> **⚠ `l2` 档当前真实链 ≈ off（终审 I1-l2，2026-09-05 落位）**：`StreamInterruptedException`（L2
+> 白名单判据）的<b>唯一生产源是 L1 的 classify 出口 2</b>（mid-stream 瞬态失败包装）。本档 L1 不
+> 包装 → 主链原始错误<b>不含</b> SII → L2 的 `retryWhen` filter（`instanceof`）永不命中——档位
+> 保留为 API 前瞻，真正生效需「classify-only 的 L1 变体」（只把原始错误包装成 SII 放行、不做
+> 重订阅，<b>待办</b>）；落地前请勿宣传「l2 独立可用」。
+
 实现照抄 `LlmTimeouts.from(env)` 先例形态（装配期一次读取、非法值回退默认 +
-warn）。测试补「off 时不包装/直通」「非法值回退 all」。注意：Claude Code 并无
+warn）。测试补「off 时三元不包装（链中无 RetryingStreamChatModel）」「非法值回退 all」。注意：Claude Code 并无
 重试开关先例（`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 只管非必要流量：
 更新/遥测/错误上报；社区正请求可配重试 anthropics/claude-code#23115）——本开关
 是本项目自己的补齐，不借 CC 背书。
@@ -212,14 +233,21 @@ Vision/Interjecting（后两者纯委托无错误映射）才能命中 L2 白名
 **L1 的 UI 可见性**：构造注入可选 `RetryReporter`（接口
 `void report(int attempt, long backoffMs, String reason)`；**attempt = 即将进行的
 第几次尝试，取值 2..5**（与 UI 文案 `(2/5·传输)` 的尝试序号一致）；无绑定为 no-op）。装配层
-把它桥到 CodingAgent → `listener.onRetryScheduled(activeTurnId.get(), attempt,
-backoffMs, reason)`。**钩子纪律（R6-m3）**：report 经
+把它桥到 CodingAgent → `listener.onRetryScheduled(activeTurnId.get(), attempt, 5,
+backoffMs, reason)`（**5 参事件**，回写 ①：L1 的 maxAttempts 恒 5、由装配侧固定传入，
+UI 据此拼「x/5·传输」）。**钩子纪律（R6-m3）**：report 经
 `Retry.backoff(...).doBeforeRetry(...)` 触发（doBeforeRetry 在退避 delay 之前、错误
 信号线程上同步执行 → onRetryScheduled 严格早于新 chunk，UI 时序不可能乱序）；
 backoffMs 用与退避同公式现算（jitter(0) 后与真实 delay 严格相等）。**turnId 绑定
 纪律**：桥接闭包在 submit 时携带本回合 turnId，reporter 回调比对「在飞回合 ==
 携带值」才发事件——旧链迟到的 ↻ 行不会记到新回合头上（共享 `activeTurnId` 比对
 天然够用，无需终态清空）。L1 零下发时屏幕无内容，UI 侧清残为 no-op，只加提示行。
+
+**reason 推导规则（全局唯一，回写 ⑫）**：reason 由 `RetryingStreamChatModel.reasonOf(Throwable)`
+产出——沿 cause 链取<b>首个非空 message</b>（同 formatError 口径），兜底
+`failure.getClass().getSimpleName()`，显示宽截 60 字符尾加 `…`（reason 直接流入 UI ↻ 行，
+工人不得自行发明生成逻辑）。reasonOf 的 60 列与 UI 侧 `summarize()` 预算（≈54 列）是
+<b>叠加双截断</b>、不冲突：先由 reasonOf 压到 60 列，UI 再按 ↻ 行宽预算二次截断。
 接缝纪律不破坏：装饰器只依赖自己的接口，桥接发生在装配层。**装配时序**：装饰器
 在 AgentTools per-provider 循环装配、早于 CodingAgent 存在——用两段式持有者
 （装配期建桥对象 → CodingAgent 构造后接线）。
@@ -231,8 +259,9 @@ backoffMs 用与退避同公式现算（jitter(0) 后与真实 delay 严格相�
 
 **触发白名单**：白名单 = retryWhen 的 `filter(ex -> ex instanceof
 StreamInterruptedException)`；上限 = `Retry.backoff(2, …)`（2 次续跑 + 首次 = 共 3
-次完整流）；`emitted>0` 由 classify 出口 2 的**不变式**保证。终态错误经 `doOnError`
-走原 `handleError`，不挂第二层判定。
+次完整流）；`emitted>0` 由 classify 出口 2 的**不变式**保证。终态错误经 `doOnError` →
+`handleErrorWithRetryPrefix`（解包 + 拼「已自动重试…」前缀 + CE 静默 + 末尾 purge，
+内部委托原 `handleError`，见 §3.6），不挂第二层判定。
 
 **实现形态——续跑必须是原链内部的 retryWhen，不得另起订阅**：
 
@@ -256,12 +285,13 @@ Flux<ChatClientResponse> pipeline = Flux.defer(() -> {
         if (resub == 1) {
             outboundUser = effectiveText;
         } else {
-            ResumeShape shape = prepareResume();          // 返回形状①/②，见下
+            ResumeShape shape = prepareResume(sessionId, disposed);  // 两参签名，见下
             if (shape == ResumeShape.FROM_TEXT) {
-                outboundUser = composeResumeUser(effectiveText, interjections);
+                outboundUser = composeResumeUser(effectiveText,
+                        interjections.takeAllForResumeUser());  // 原子取走 delivered+pending（步骤 5）
                 // 形状①：把 pending 插话与 notice 一并并进同一条 .user()（第 5 轮 B1：
-                // refill 后 Interjecting 若再注入插话，出站将出现两条连续 user → 400；
-                // 并进 .user() 后 Interjecting 该轮 pending 已清空，早退分支天然不触发）
+                // takeAllForResumeUser 后 Interjecting 该轮 pending 已清空，早退分支天然
+                // 不触发——不会出现两条连续 user → 400）
             }
             // 形状②（FROM_TOOLS）：outboundUser=null，不调 .user()——notice 走
             // Interjecting 通道（§3.4）
@@ -280,24 +310,39 @@ Flux<ChatClientResponse> pipeline = Flux.defer(() -> {
         // L2 提示行触发点（与 L1 同款 doBeforeRetry 纪律；退避 delay 前同步执行，
         // onRetryScheduled 严格早于新 chunk）：
         .doBeforeRetry(sig -> listener.onRetryScheduled(turnId,
-                (int) sig.totalRetries() + 1,        // attempt = 续跑序号（1..2，与文案「续跑 1/2」一致）
+                (int) sig.totalRetries() + 1,        // attempt = 续跑序号（1..2，与文案「1/2·续跑」一致）
+                2,                                   // maxAttempts=2（UI 据此拼「x/2·续跑」）
                 RESUME_BACKOFF_AFTER((int) sig.totalRetries()),   // 现算，jitter(0) 下与真实 delay 严格相等
                 "流中断")))
     .doOnNext(resp -> handleChunk(resp, turnId))
-    .doOnError(err -> handleError(unwrapL2(err), turnId))  // 最终失败一次（解包）
+    .doOnError(err -> handleErrorWithRetryPrefix(unwrapL2(err), turnId, …))  // 最终失败一次：
+        // 解包 → 拼「已自动重试（…）仍失败」前缀 → CE 静默 → 末尾 purge（见 §3.6）。
+        // ⚠ 现行 submit 的外层 catch(RuntimeException) 已删除（回写 ⑥）——defer+subscribeOn
+        // 后组装异常变成 error 信号统一走 doOnError；保留 catch 会与 doOnError 双发
+        // listener.onError（双 trim、双终态事件）。provider 快照段（defer 外）的
+        // IllegalStateException 仍同步抛给 submit 调用方（维持现状）。
     .doOnComplete(() -> handleComplete(turnId))
     .doOnCancel(this::trimDanglingToolCalls);
 ```
 
-- **provider/options 快照留在 submit 一次性取**（现行 `registry.activeRequestSelection()`
-  快照语义不变）：spec 构造进 defer，但选择不随之延迟——否则退避等待期 `/model`
-  切换会让续跑打到另一家 provider + 错误 options（同回合模型漂移）；
+- **快照纪律细化（回写 ⑭）**：provider/client/options/modelGrounding 与
+  `capabilitiesSnapshot()`（能力快照）全部由同一 provider 派生、**冻结在 defer 外**——
+  若随每轮重订阅重取，退避等待期 `/model` 切换会让续跑轮能力快照与冻结的 provider 漂移
+  （同回合模型漂移的小号版）；`permissionMode()` 是运行期值（Shift+Tab），**留在 defer 内**
+  每轮现取合理。该段（defer 外）异常是**同步**抛给 submit 调用方，不进 pipeline、不达
+  doOnError——不与 doOnError 双发 onError（回写 C4/① 口径）；
 - **retryWhen 位于 doOnNext/doOnError 之上**：中间失败被吞掉续跑，doOnError 只见
   最终失败——否则每次尝试都把状态打成 IDLE；
-- **同一 Disposable**：退避 delay 挂在原链上，`Disposables.composite(reactive,
-  () -> { disposed.set(true); cancelTurn(turnId); })` 的 dispose 同时取消 timer、
-  重订阅、置 disposed 标志（防 boundedElastic 上残跑的 defer 体再发起一轮
-  无谓请求），Esc 在任何等待期都立即终止且不漏 `cancelTurn`；
+- **retryWhen 位于 doOnNext/doOnError 之上**：中间失败被吞掉续跑，doOnError 只见
+  最终失败——否则每次尝试都把状态打成 IDLE；
+- **同一 Disposable（composite 参数顺序是安全性前提，回写 ⑮）**：CompositeDisposable
+  按**添加序** dispose——**reactive 在前、置位 runnable 在后**：先 cancel（信号下传/订阅
+  取消）后置位，此后 defer 体即使返回 CancellationException 也是 cancelled 后的 dropped
+  信号（不达 doOnError）；**反序会打开 error-beats-cancel 窗口**：置位后、cancel 前
+  error 可先到 doOnError → Esc 后屏幕出现「⚠ 出错：回合已取消」。退避 delay 挂在原链上，
+  `Disposables.composite(reactive, () -> { disposed.set(true); cancelTurn(turnId); })`
+  的 dispose 同时取消 timer、重订阅、置 disposed 标志（防 boundedElastic 上残跑的 defer
+  体再发起一轮无谓请求），Esc 在任何等待期都立即终止且不漏 `cancelTurn`；
 - **取消语义的 Reactor 保证（第 9 轮字节码级验证）**：幽灵请求
   不存在——`RetryWhenMainSubscriber.cancel()` 先取消 companion（退避 timer）再
   取消上游；`resubscribe()`/`MultiSubscriptionSubscriber.set()` 首行查 cancelled 短路；
@@ -306,14 +351,18 @@ Flux<ChatClientResponse> pipeline = Flux.defer(() -> {
 - **L1 重订阅无连接泄漏**：重订阅 ⇔ 旧订阅已 error 终态（Reactive
   Streams 终态语义，连接随之释放）；两条路径（L1 内部重试/
   StreamInterruptedException 放行）推演一致，不存在旧订阅仍活着的重叠窗口；
-- **`unwrapL2`**：L2 自身耗尽时 doOnError 收到 `Exceptions$RetryExhaustedException`
-  （英文样板 message），解包取 `getCause()`（= 最后一次 StreamInterruptedException，
-  其 cause=原始网络异常；message 置空 → `formatError` 落到根因文案）再进 handleError。
+- **`unwrapL2`（剥穿口径，回写 ⑦）**：包装集合写死 = `reactor
+  Exceptions.isRetryExhausted(ex)==true` 或 `ex instanceof StreamInterruptedException`，
+  沿 cause 链**剥穿 SII 到首个不属于集合的根因异常**再进 handleError——用户可见文案与
+  spec 原文「停在 SII」等价（根因串另沿 cause 链取首个非空 message），但 **Throwable
+  身份不同**：listener.onError 收到的是根因异常而非 SII（SII message 置空；文案拼接见 §3.6）。
 
 **续跑退避**：1s×2ⁿ 封顶 4s（mid-stream 断流常伴网关深部故障，比 L1 略宽）。
 
-**`prepareResume()`（仅续跑轮执行；返回 `ResumeShape` 枚举：`FROM_TEXT`=形状①/
-`FROM_TOOLS`=形状②）**——执行序（第 5 轮 M2 重排：**判定必须在 trim 之后**——形状②
+**`prepareResume(String sid, AtomicBoolean disposed)`（实际签名两参，回写 C1：
+`sid`=会话 id（快照语义）、`disposed`=Esc 标志，供步骤 6 的 set 前复查；仅续跑轮执行；
+返回 `ResumeShape` 枚举：`FROM_TEXT`=形状①/`FROM_TOOLS`=形状②）**——执行序
+（第 5 轮 M2 重排：**判定必须在 trim 之后**——形状②
 断在 assistant(tool_calls) 时 trim 前尾部是悬空 tool_calls、trim 后才是 tool 结果，
 先判会把形状②误判成形状①）：
 
@@ -330,15 +379,34 @@ Flux<ChatClientResponse> pipeline = Flux.defer(() -> {
    事件（不限于尾部）。安全性：合法回合不可能产生空 user（提交闸门挡空输入、offer
    挡空插话——UI isBlank 早退/`/queue` 空 body 拒绝/`/continue` 恒非空/offer isBlank
    不入队/skill 注入非空前缀；守卫测试点名这些闸门，防未来新增空提交路径被静默
-   误删）。**时机两处**（第 5 轮 M1）：prepareResume 内一次 + `handleComplete` 内
-   一次（最后一轮续跑成功后不再有 prepareResume，成功路径的伪影靠 handleComplete
-   清）；
-5. `interjections.refillForResume()`：把 delivered 中已注入但回合未完成的插话
-   **addFirst 移回 pending**（旧插话不得被退避期新 offer 的插话插队）；首次尝试
-   注入了它们但流报废，模型从未消费，不回填则插话静默丢失。**形状①轮 refill 出的 pending 由 composeResumeUser 并进 .user()（见伪码 defer 分支与 composeResumeUser 段），不走 Interjecting**；
-   形状②轮的 pending 仍走 Interjecting 注入；
-6. **notice 分流**（第 5 轮 m2）：**仅形状②**调 `interjections.setResumeNotice(NOTICE)`（若会话尾部 user 已含 `<system-notice>` 标记则跳过——形状①→②混变时
-   notice 已随 user 落历史，避免双份）；形状①的 notice 已并入 .user() 文本。
+   误删）。**清除时机三处（回写 ⑩）**：prepareResume 内一次 + `handleComplete` 内一次
+   （成功路径：最后一轮续跑成功后不再有 prepareResume）+ 终态失败路径一次
+   （`handleErrorWithRetryPrefix` 末尾——耗尽时末轮若断在 FROM_TOOLS，blank 会因
+   「tc 落库→工具结果落库→断」而成中部事件永久残留，成功路径的清除点够不到）；
+5. **按续跑形状调用单锁原子 API（回写 ㉑；各自只做一件事、均不操作 resumeNotice，
+   禁止用两次锁模拟）**：
+   - **形状①（FROM_TEXT）→ `interjections.takeAllForResumeUser()`**：单个 synchronized
+     块内按时序构造 `[delivered（若非 null）, pending 全部]` 原子取走并清空，返回列表交
+     `composeResumeUser` 并进同一条 .user()（见伪码 defer 分支与 composeResumeUser 段）——
+     **返回后 pending 必空**，Interjecting 该轮早退、不再注入第二条 user，**不走
+     Interjecting**。**实际调用落点（终审 fix wave ①）**：取走由 **defer 调用方在
+     `prepareResume` 返回后**调用（`ResumeShape` 返回值携带判定结果，先判形状再取走的
+     顺序约束不变；prepareResume 自身在形状①只做到 trim→strip→purge、不触碰队列取走类
+     操作），与「步骤 5 在 prepareResume 内执行」的简化表述<b>行为等价</b>；
+   - **形状②（FROM_TOOLS）→ `interjections.refillForResume()`**：单个 synchronized 块内
+     把整个 delivered String 作为**单元素 addFirst 回 pending**（不拆行、保留原 pending；
+     旧插话不得被退避期新 offer 的插话插队），由 Interjecting 注入——首次尝试注入了它们
+     但流报废，模型从未消费，不回填则插话静默丢失；
+   ⚠ **禁止用 `refillForResume() + takePendingOnly()` 两步模拟 takeAllForResumeUser**：
+   两次锁之间有 offer 竞态窗口（插话可漏/重发），组合错序还会留下连续双 user 400；
+6. **notice 分流**（第 5 轮 m2）：**仅形状②**调 `interjections.setResumeNotice(NOTICE)`。
+   **防双份判据对象 = 会话内最后一条 UserMessage（回写 ⑪：自尾部向前扫——此刻尾部是
+   tool 结果而非 user，查尾部事件恒 false；且判定须在步骤 4 purge 之后做——否则 ②→②
+   场景会误命中上一轮的 blank user）**，其文本已含 `<system-notice>` 标记则跳过
+   （形状①→②混变时 notice 已随 user 落历史，避免双份）；形状①的 notice 已并入
+   .user() 文本。**set 前 disposed 二次检查（回写 ⑰）**：`if (disposed.get()) return`
+   一行关窗——Esc 的 drainForRefill 若在 prepareResume 跑中先跑过（notice 尚未 set，
+   清了个寂寞），不复查会把 notice 落进一次性通道 → 跨回合泄漏进下一回合 prompt。
 
 **形状①/② 续跑出站形状对比**：
 
@@ -418,6 +486,14 @@ takeForHistory/drainForRefill/persistInterjection**——形状②路径的 noti
 `-c` 回放不含它。Esc 取消（`takeBackInterjections` 回填输入框）也碰不到它——系统
 提示绝不会「还给」用户输入框。
 
+**已知竞态（终审 fix wave M5，已接受残留）**：形状①路径中「defer 调
+`takeAllForResumeUser` 取走（pending 清空）之后 → 组装 spec → 订阅 → Interjecting 该轮
+`inject`」之间有一个毫秒级窗口；若退避期用户 Enter 的插话（UI 线程 offer）恰落其中，
+`inject` 会在重放的 .user() 之后再 append 一条 user（inject 恒 append 新 UserMessage，
+早退只认「pending 空」）——连续双 user 的 400 让该轮走白名单外错误路径（不续跑、直接
+onError），代价是单轮失败、无数据损坏。接受残留（窗口极窄、与「inject 前兜底再取一次」
+或「RETRYING 挡插话」的复杂度不成比例），记录在案；若 V2 实测高发再评估加固。
+
 **Esc 清理纪律**：`drainForRefill()` 锁内一并清 `resumeNotice`——Esc 取消与
 `/clear` 都经 drainForRefill，一处覆盖两条清理路径。防泄漏窗口：setResumeNotice
 之后、inject 消费之前若被 dispose（如 preflight compaction 阻塞期间按 Esc），
@@ -430,8 +506,10 @@ notice 会残留到下一回合的 inject 被误注入；drainForRefill 清空�
 
 ```java
 /** 重试已排定。L1=零下发透明重试（屏幕无内容，清残为 no-op）；L2=mid-stream 续跑。
- *  UI 应落定流式残行、显示重试提示；reason 为已本地化的短语。 */
-default void onRetryScheduled(long turnId, int attempt, long backoffMs, String reason) { }
+ *  UI 应落定流式残行、显示重试提示。maxAttempts 区分 L1（=5，文案「x/5·传输」）与 L2
+ *  （=2，文案「x/2·续跑」）；reason 为根因异常的推导文本（RetryReporter.reasonOf 产出，
+ *  见 §3.2；回写 ⑫——非「已本地化的短语」）。 */
+default void onRetryScheduled(long turnId, int attempt, int maxAttempts, long backoffMs, String reason) { }
 ```
 
 **`ConversationState.onRetryScheduled`**（同步锁内，与 onError 同款迟到过滤）：
@@ -444,7 +522,7 @@ default void onRetryScheduled(long turnId, int attempt, long backoffMs, String r
 2. 追加提示行（Kind.INFO，前缀 ↻）。**文案与序号**：
    - L1：`↻ 重试中 (2/5·传输)：{reason}，0.5s 后重发`——带「传输」限定词，与 L2
      对仗，避免续跑轮 L1 计数归零后的「2/5 → 1/5 回跳」读起来像 bug；
-   - L2：`↻ 重试中 (续跑 1/2)：{reason}，1.0s 后重发`；
+   - L2：`↻ 重试中 (1/2·续跑)：{reason}，1.0s 后重发`（标签格式统一为 `attempt/max·续跑`，回写 ⑧）；
    - **reason 单行化**：入文案前经 `summarize()` 式截断（显示宽 ≤80）——超长
      WebClientResponseException message 会把 ↻ 行折成 2-3 行，放大堆积观感；
    - 退避时间为**静态文本**（scrollback println 后不可变，物理上无法倒计时；
@@ -464,7 +542,7 @@ scrollback）与 status 行（live 区重绘）同帧上屏；busy 期间 pendin
 **RETRYING 状态行渲染与宽度预算（R7-M4——80 列必截尾，有前科）**：
 - 渲染：`statusLine()` 穷尽 switch 强制补 RETRYING 分支——**复用 `StatusBar.shimmer`
   波光**（与 THINKING/RUNNING_TOOL 同设计语言），静态 `↻` 字符 + 波光，无需旋转动画；
-- **宽度算术**：label 固定短格式 `↻ 重试中 2/5·传输` / `↻ 重试中 续跑 1/2`
+- **宽度算术**：label 固定短格式 `↻ 重试中 2/5·传输` / `↻ 重试中 1/2·续跑`
   （≤17 列）；`· 退避 1.0s` 只在 `terminalWidth() ≥ 100` 时附加；**RETRYING 分支
   省略 cacheHit 后缀**（重试期间最不相关），保留 `· Esc 取消`。测算依据：IDLE 行
   前科 98 列 80 列截尾（CacheHitStatusBarWidthTest）；modeTag 最长 ≈19 + label 17 +
@@ -499,7 +577,7 @@ onCompactionStarted/Finished **不写 status**；RETRYING 期间压缩照常显�
   ⎿ Read src/main/Foo.java ✓
   （……半截 assistant 输出落定保留……）
 （空行分隔）
-↻ 重试中 (续跑 1/2)：流中断，1.0s 后重发
+↻ 重试中 (1/2·续跑)：流中断，1.0s 后重发
   （新流 chunks 重新流入，状态栏 ↻ 重试中 · 波光 → spinner）
 ```
 
@@ -524,8 +602,12 @@ Claude Code 为自绘转录区单行就地刷新，与本架构不可比。可�
   的包装：`已自动重试（传输 a 次/续跑 b 次）仍失败：{根因文案}`（根因自行做一遍
   formatError 式 cause 链遍历——不能经两层包装靠 formatError 取 message，它只取
   首个非空会停在包装层，置空 StreamInterruptedException message 的设计就白做了）。
-  零重试错误原样透传。屏幕上早前的 ↻ 行与末行失败文案自然呼应（「重试中 (续跑
-  2/2)」→「已自动重试（续跑 2 次）仍失败」，保留不删）。
+  零重试错误原样透传。屏幕上早前的 ↻ 行与末行失败文案自然呼应（「重试中
+  (2/2·续跑)」→「已自动重试（续跑 2 次）仍失败」，保留不删）。
+  **取消静默语义（回写 ⑯）**：`handleErrorWithRetryPrefix` 入口对 `CancellationException`
+  直接 return——该 CE 全仓唯一生产者是 defer 体的 disposed 检查（§3.3 伪码），Esc 后屏幕
+  不得出现「⚠ 出错：回合已取消」（防 composite 参数反序等未来改动打开
+  error-beats-cancel 窗口）。
 
 ### 3.7 装配（AgentTools 主链）与装饰链顺序
 
@@ -537,7 +619,10 @@ InterjectingChatModel.wrap(visionModel, interjections)          ← 最外（不
 ```
 
 即 `Interjecting(Vision(RetryStream(Usage(IdleTimeout(raw)))))`。
-（开关 `CODETUI_STREAM_RETRY=off/l2` 时 RetryStream 不包装/直通，见 §3.1 末总闸。）
+（开关 `CODETUI_STREAM_RETRY=off/l2` 时 RetryStream 在**装配层三元不包装**——
+`l1Enabled() ? RetryingStreamChatModel.wrap(delegate, bridge) : delegate` 直通原链，**无
+passthrough API**，见 §3.1 末总闸与回写 ④。其中 `l2` 档的语义警示见 §3.1：L1 不包装则主链
+无 SII 源、L2 filter 永不命中，当前真实链 ≈ off——档位为 API 前瞻，待 classify-only 的 L1 变体。）
 
 **位置论证**：
 - **RetryStream 在 IdleTimeout 外**：空闲超时（含首字节超时）必须可重试；
@@ -566,19 +651,19 @@ InterjectingChatModel.wrap(visionModel, interjections)          ← 最外（不
 
 | # | 验证 | 方法 | 状态/结论 |
 |---|---|---|---|
-| V1 | 形状② 续跑时 before() 追加空 user、出站不含它；**含成功路径：两轮续跑（最后一轮成功）后会话无任何 blank UserMessage（handleComplete 清除生效）**；形状① 续跑出站首条 user 含本轮问题文本 | 单测：伪造 advisor/会话记录 append 内容 + 断言出站与会话形状 | 第 3 轮字节码推演已给出 before() 结论，**单测钉死三断言** |
+| V1 | 形状② 续跑时 before() 追加空 user、出站不含它；**含成功路径：两轮续跑（最后一轮成功）后会话无任何 blank UserMessage（handleComplete 清除生效）**；形状① 续跑出站首条 user 含本轮问题文本 | 单测：真实 SessionMemoryAdvisor + 假 ChatModel（`AdvisorResubscribeBehaviorTest`，装配照抄 SessionIdStreamGuardAdvisorTest） | **已验证（Task 0，回写 ②）**：断言 ①② 与推演一致（before() 无条件 append 本回合 user；不调 .user() 时落空文本 UserMessage("") 且出站不含——noneMatch 写法）；断言 ③ **实测纠偏**——同一 chatClientResponse Flux 二订阅抛 IllegalStateException（advisor 链破坏性消费），重订阅安全唯一形态是 defer 内重建 spec（§1.2）。成功路径 blank 清除落位 CodingAgentTurnResumeTest 用例 4 |
 | V2 | 断流后会话尾部实际形状（形状①/②）；工具结果落库时机（决定步骤 2 边界误判率） | 真机：kill 网关连接制造 mid-stream 断流，dump 会话 JSON | 待做；校准 §1.3/§3.3 覆盖面与 R11 |
-| V3 | usage-only / finish-only 收尾 chunk 形态；DeepSeek thinking-only chunk 是否进 `AssistantMessage.getText()` | 抓 SSE 原始帧 | 待做；校准 §3.2 hasContent 口径 |
+| V3 | usage-only / finish-only 收尾 chunk 形态；DeepSeek thinking-only chunk 是否进 `AssistantMessage.getText()` | 抓 SSE 原始帧 + spring-ai 2.0.0 字节码核验（`AdvisorResubscribeBehaviorTest` V3 结论区） | **已验证（Task 0，回写 ②）**：usage-only/finish-only 收尾 chunk 的 `AssistantMessage.getText()` 为 **null（非 ""）**——不进 hasContent；DeepSeek `reasoning_content` 映射到独立字段（`DeepSeekAssistantMessage.reasoningContent`），thinking-only chunk 不进 `getText()`——「零下发 = 下游零观测」不变式成立，§3.2 hasContent 口径维持原样 |
 
 ## 5. 测试策略
 
 | 层 | 测试类 | 关键用例 |
 |---|---|---|
 | 判据 | `RetryPolicyTest` | 迁移判据用例；`StreamIdleTimeoutException/EmptyStreamException → 重试`；与 RetryingChatModel 旧行为等价 |
-| L1 | `RetryingStreamChatModelTest` | 零下发 429 → 重试成功；零下发 400/401 → 放行不重试；首字节超时 → 重试；mid-stream 断流 → 不重试、包装 StreamInterruptedException(emitted>0, message 空)——**断言 emittedChunks==k（可观察出口）**；**类型穿透（经真实 DefaultChatClient + SessionMemoryAdvisor 装配，桩 ChatModel 抛 StreamInterruptedException，断言 CodingAgent.doOnError 收到原类型）**；filter 拒绝路径 → emittedChunks 断言；**空白-only chunk 流断流 → 仍判 mid-stream（text 非空口径）**；usage-only 空收尾后断流 → 仍判零下发；空流 → EmptyStreamException → 重试；**空流(带 usage)→重试成功：TokenUsageAccumulator 记 2 笔、cacheHitPercent 仍正确（如实记账声明）**；L1 耗尽出口形状（isRetryExhausted 解包放行原始异常）；emitted 跨重试重置；取消 → 不重试；**退避序列 0.5/1/2/4（jitter(0) + StepVerifier.withVirtualTime + RetryBackoffSpec.scheduler 注入虚拟调度器）**；RetryReporter 收到 (attempt, backoff, reason)（经 doBeforeRetry，backoffMs 与真实 delay 严格相等） |
-| L2 | `CodingAgentTurnResumeTest` | **形状①：续跑出站首条 user = 问题+插话+notice 一条（composeResumeUser 合并）**；**形状①+refill → Interjecting 不再注入（pending 已清空）→ 出站仅一条 user**；形状②：续跑请求不带 user + 会话形状断言；**多轮续跑（最后一轮成功）后无任何 blank user（handleComplete 清除）**；**①→②混变：尾部 user 已含 notice 标记 → 不再 setResumeNotice（防双份）**；**②→①边界误判（trim 裁回空 user）：重放问题，会话含两份问题，形状合法、不丢数据（R11 声明行为）**；resubscriptions 局部性；prepareResume 门控（首轮无 notice/无 strip）；**执行序经对抗性夹具断言后果**（尾部=「悬空 tool_calls+user」时若判定先于 trim 必误判 → 断言出站形状；需直测则抽 package-private `prepareResumeForTest` 返回形状/事件快照）；refill addFirst；refill + notice → 出站仅一条尾部 user；白名单外 → 不续跑直接 handleError；**续跑上限 → 耗尽走 handleError 且文案为「已自动重试（…）仍失败：根因」（局部计数拼接式，非两层包装）**；**零重试错误（401）→ 文案无前缀**；Esc 退避等待期 dispose → 无后续事件、cancelTurn 被调；**Esc 在 setResumeNotice→inject 窗口 → notice 不泄漏进下一回合（latch 桩确定性开窗，禁 sleep 竞态写法）**；同 turnId |
+| L1 | `RetryingStreamChatModelTest` | 零下发 429 → 重试成功；零下发 400/401 → 放行不重试；首字节超时 → 重试；mid-stream 断流 → 不重试、包装 StreamInterruptedException(emitted>0, message 空)——**断言 emittedChunks==k（可观察出口）**；**类型穿透（经真实 DefaultChatClient + SessionMemoryAdvisor 装配，桩 ChatModel 抛 StreamInterruptedException，断言 CodingAgent.doOnError 收到原类型）**（**完整版落位 Task 6 CodingAgentTurnResumeTest 用例 3**——SII 穿真实 SessionMemoryAdvisor 命中 L2 白名单并续跑；本类用例 13 留最小标记版；回写 ⑤）；filter 拒绝路径 → emittedChunks 断言；**空白-only chunk 流断流 → 仍判 mid-stream（text 非空口径）**；usage-only 空收尾后断流 → 仍判零下发；空流 → EmptyStreamException → 重试；**空流(带 usage)→重试成功：TokenUsageAccumulator 记 2 笔、cacheHitPercent 仍正确（如实记账声明）**；L1 耗尽出口形状（isRetryExhausted 解包放行原始异常）；emitted 跨重试重置（用例 10=**回归钉子，非机制证明**——filter 恒等式使带内容尝试永不重试，doOnSubscribe 重置公开不可观测，纯防御；回写 ⑤）；取消 → 不重试；**退避序列 0.5/1/2/4（jitter(0) 显式关闭；VTS 全局接管——`StepVerifier.withVirtualTime(() -> model.stream(p))` 在 supplier 求值前接管 Retry.backoff 默认 parallel，实测无需 `.scheduler()` 注入；回写 ⑤）**；RetryReporter 收到 (attempt, backoff, reason)（经 doBeforeRetry，backoffMs 与真实 delay 严格相等） |
+| L2 | `CodingAgentTurnResumeTest` | **形状①：续跑出站首条 user = 问题+插话+notice 一条（composeResumeUser 合并）**；**形状①+refill → Interjecting 不再注入（pending 已清空）→ 出站仅一条 user**；形状②：续跑请求不带 user + 会话形状断言；**多轮续跑（最后一轮成功）后无任何 blank user（handleComplete 清除；用例 4=成功路径 / 用例 5=耗尽路径的 handleErrorWithRetryPrefix 末尾清除点；回写 ⑩）**；**①→②混变：会话内最后一条 UserMessage（purge 后）已含 notice 标记 → 不再 setResumeNotice（防双份；回写 ⑪）**；**②→①边界误判 = 用例 14（trim 裁回空 user）：重放问题、会话含两份问题、形状合法、不丢数据（R11 声明行为）**——机制实证（回写 C3）：SessionMemoryAdvisor 只在 doOnComplete 落盘 assistant，SII 中段错误**不**落盘悬空 tool_calls，trim 对悬空 tc 实为 no-op；resubscriptions 局部性；prepareResume 门控（首轮无 notice/无 strip）；**执行序经对抗性夹具断言后果 = 用例 17（断在首个 tool_call、无任何 tool 结果落库；回写 ⑬）**：trim 裁掉悬空 tc 后尾部=user(问题) → 判① strip+重放 → 续跑轮出站恰一条 UserMessage 且含 notice；若判定先于 trim，尾部=悬空 tc → 判② → 历史 user + 注入条两条 user——「恰一条」断言即编码 trim→判定 执行序；refillForResume addFirst（形状②：delivered 整元素回 pending）；takeAllForResumeUser 原子取走（形状①：delivered+pending 交 composeResumeUser 并进单条 user；两原子 API 均不操作 notice，回写 ㉑）；白名单外 → 不续跑直接 handleError；**续跑上限 → 耗尽走 handleError 且文案为「已自动重试（…）仍失败：根因」（局部计数拼接式，非两层包装）**；**零重试错误（401）→ 文案无前缀**；Esc 退避等待期 dispose → 无后续事件、cancelTurn 被调；**Esc 在 setResumeNotice→inject 窗口 → notice 不泄漏进下一回合（latch 桩确定性开窗，禁 sleep 竞态写法）**；同 turnId |
 | UI | `ConversationStateRetryTest` + `RetryStatusBarWidthTest`（新） | 残行落定且半截整行保留；**L2 残行非空时 ↻ 前有空行、L1 无**；**reason 经单行化（≤80 显示宽）**；**发布 UiDirty.ALL**；RETRYING 进 busy 闸门；onAssistantToken RETRYING→THINKING；RETRYING 下 onToolStarted/Finished 现有迁移不炸；迟到 turnId 过滤；L1/L2 文案区分（·传输/续跑前缀）；RETRYING 期间 onCompactionStarted 不破坏后续迁移；**80 列下 RETRYING 状态行 `↻ 重试中` 与 `Esc 取消` 完整可见（克隆 CacheHitStatusBarWidthTest 断言法）** |
-| 装配 | 新建 `AgentToolsRetryWiringTest`（对齐 AgentToolsMediaWiringTest 家族命名）+ `AuxClientNotRetryWrappedTest` + blank-user 闸门守卫 | 装饰链顺序断言；aux/子 agent 路径不含 RetryingStreamChatModel；**空 user 唯一来源是续跑伪影**（点名提交闸门/offer isBlank/skill 前缀，防未来新增空提交路径被全域清除误删）；**CODETUI_STREAM_RETRY 开关**（off 不包装直通 / l1 仅 L2 关（白名单恒 false，mid-stream 直走 handleError 不续跑）/ l2 仅 L1 关 / 非法值回退 all+warn / **dispose 后 boundedElastic 不再 replaceEvents**） |
+| 装配 | 新建 `AgentToolsRetryWiringTest`（对齐 AgentToolsMediaWiringTest 家族命名）+ `AuxClientNotRetryWrappedTest` + blank-user 闸门守卫 | 装饰链顺序断言；aux/子 agent 路径不含 RetryingStreamChatModel；**空 user 唯一来源是续跑伪影**（点名提交闸门/offer isBlank/skill 前缀，防未来新增空提交路径被全域清除误删）；**CODETUI_STREAM_RETRY 开关**（off / l2：**装配层三元不包装**——`l1Enabled() ? wrap : delegate`、无 passthrough API，链中无 RetryingStreamChatModel（回写 ④）；l1 仅 L2 关——白名单恒 false，mid-stream 直走 handleError 不续跑；非法值回退 all+warn；dispose 守卫**实际落位 CodingAgentTurnResumeTest 用例 7**（repository 桩计数，Task 6 已实现；回写 ⑨）——装配行只留说明不重复） |
 
 ## 6. 风险与开放问题
 
@@ -598,15 +683,15 @@ InterjectingChatModel.wrap(visionModel, interjections)          ← 最外（不
 | R12 | 空串用户消息的合法路径未来出现，被全域清除误删 | 守卫测试点名全部空输入闸门；清除条件严格 isEmpty() 不含纯空白 |
 | R13 | 自动重试透明花钱（最坏 15 次请求）无用户闸 | `CODETUI_STREAM_RETRY` 总开关（all/l1/l2/off，§3.1 末），照抄 LlmTimeouts.from(env) 先例 |
 
-## 7. 实施切分（供 writing-plans 展开）
+## 7. 实施切分（供 writing-plans 展开；**已按本计划 Task 0-7 全部实施完毕**，Task 8 回写本文——回写 ③）
 
 0. **前置验证 V1–V3**（结论写回 §4）；
 0b. **`CODETUI_STREAM_RETRY` 开关**（LlmTimeouts 同款 env 解析）——先于一切装配生效；
 1. `RetryPolicy` 提取 + `StreamIdleTimeoutException`/`EmptyStreamException` 入判据 + `RetryingChatModel` 改委托；
 2. `RetryingStreamChatModel` + `RetryReporter`（含 classify 判定树、类型穿透）+ 测试；
 3. `AgentListener.onRetryScheduled` + `ConversationState`（残行落定/INFO 行/RETRYING/出路三条）+ 测试；
-4. `Interjections.resumeNotice/refillForResume(addFirst)/drainForRefill 清 notice` + `InterjectingChatModel` 早退重构 + 合并纪律 + 测试；
-5. CodingAgent 续跑（defer 内重建 spec + 形状分流（ResumeShape 返回值：composeResumeUser 单条 vs 不重放）+ 快照留 submit + retryWhen 白名单 + **L2 doBeforeRetry 触发 onRetryScheduled** + prepareResume 执行序 trim→判定→strip→全域清→refill→notice + handleComplete 清伪影 + boundedElastic + 取消语义）+ 测试；
+4. `Interjections.resumeNotice/refillForResume(addFirst)/takeAllForResumeUser(原子取走 delivered+pending)/drainForRefill 清 notice` + `InterjectingChatModel` 早退重构 + 合并纪律 + 测试；
+5. CodingAgent 续跑（defer 内重建 spec + 形状分流（ResumeShape 返回值：composeResumeUser 单条 vs 不重放）+ 快照留 submit + retryWhen 白名单 + **L2 doBeforeRetry 触发 onRetryScheduled** + prepareResume 执行序 trim→判定→strip→全域清 blank→**按形状调单锁原子 API（形状① takeAllForResumeUser 由 defer 返回后调用 / 形状② refillForResume + setResumeNotice 前 disposed 复查）** + **blank 清除三处（prepareResume/handleComplete/handleErrorWithRetryPrefix 末尾）** + boundedElastic + 取消语义）+ 测试；
 6. 装配（AgentTools 主链插入 RetryStream、l1Reporter 两段式桥接）+ 链序守卫 + aux/子 agent 守卫 + blank-user 闸门守卫测试。
 
 ## 评审记录
@@ -621,3 +706,42 @@ InterjectingChatModel.wrap(visionModel, interjections)          ← 最外（不
 - **第 8 轮**（全文一致性审计）：14 处，已修：#1 ↛ 行上限矛盾（6→14，L1 随重订阅归零）；#2 L2 提示行触发点缺失（retryWhen 补 doBeforeRetry→onRetryScheduled，attempt 口径 2..3）；#3 \n\n 先例引用失实（drainForInjection 实为单换行，改为「升双换行隔离」表述）；#4 resumeFromText 死参数（改 ResumeShape 枚举返回值）；#5 步骤 5 引用错位；#6 AgentToolsWiringTest 孤儿名（改新建 AgentToolsRetryWiringTest）；#7 评审编号对不上账（Q1→实名引用）；#8 RetryReporter.attempt 口径（2..5 尝试序号）；#9 SmartWebFetch→SmartWebFetchTool；#10 strip「本回合 user」识别依据（尾部即本回合）；#11 composeResumeUser 空插话退化规则；#12 wrap 引文改转述；#13 行内代码换行截断；#14 L1 计数载体（submit 闭包局部 AtomicInteger，不得为桥实例字段）。审计确认：表格/参数数值/遗留术语/§引用/评审落实抽查 8/8 命中。
 - **第 9 轮**（安全/资源/极端场景）：0 Blocker + 2 Major + 5 Minor，已修：M1 defer 体内 disposed 检查（防取消后 boundedElastic 残跑一轮无谓会话写；幽灵请求经 Reactor 三重护栏字节码级验证确认不存在，写进取消语义）；M2 `CODETUI_STREAM_RETRY` 计费总闸（all/l1/l2/off，照抄 LlmTimeouts.from(env) 先例；CC 无重试开关先例已核实——DISABLE_NONESSENTIAL_TRAFFIC 只管非必要流量）；m1 L1 重订阅无连接泄漏声明（重订阅⇔旧订阅已 error 终态）；m2 子 agent 事件不打断 RETRYING（onSubagentFinished 不写 status，写进出路清单）；m3 单写者窗口显式前提（+可选 CAS 加固；会话文件无损坏路径：compute bin 锁+原子 move）；m4 巨大 effectiveText 不设阈值、超 200KB 对账 warn。另验证：Esc 退避期 dispose 行为与现状等价。
 - **第 10 轮**（终审）：裁决 **READY-WITH-CONDITIONS→条件已全部落实**。收敛轨迹确认（Blocker 3→1→1→2→1→0→0→0→0→0，无翻烧饼，历轮关键决策存续）；完备性终判 5/5 全勾（签名/依据/测试可展开/切分无倒挂/开放问题有路径）；实现期前 3 风险点名（R4 jitter 双处必带验收断言、R1 的 V1 为硬门、R9 的 V3 前置）。条件修补：N1 L2 伪码补 .jitter(0d)；N2 attempt 注释改续跑序号 1..2；N3 装配测试补 l1 取值用例；顺手：§3.7 开关交叉引用、「幽灵」乱字 ×2。
+
+## 回写记录（Task 8，实施后；2026-09-05）
+
+计划 14 轮评审裁决 + Task 6/7 评审 follow-up 的全部落点已就地写回正文。各条目核对：
+
+- **①** §3.5 `onRetryScheduled` 5 参签名（+ maxAttempts），scope 扩至 §3.2 桥接句（L1 maxAttempts=5）与 §3.3 doBeforeRetry 伪码（maxAttempts=2）；ConversationState 侧同签名（5 参）。
+- **②** §4 V1/V3 状态列「已验证（Task 0）」+ 一句话结论；V2 仍为人工验证（真机断流 dump，自动化计划不覆盖）。
+- **③** §7 切分标注「已按本计划 Task 0-7 实施」。
+- **④** §3.1（`l2` 取值描述）/§3.7/§5 装配行的「wrap 直通」改为「装配层三元不包装」（`l1Enabled() ? wrap : delegate`，无 passthrough API）。
+- **⑤** §5 L1 行三项落位：类型穿透完整版 = `CodingAgentTurnResumeTest` 用例 3（本类用例 13 最小标记版）；退避序列改 VTS 全局接管（supplier 内调用，无需 .scheduler()）；用例 10 为回归钉子非机制证明。
+- **⑥** §3.3 补「外层 catch(RuntimeException) 删除、组装异常转 error 信号统一走 doOnError」（防按 spec 直实现双发 onError）。
+- **⑦** §3.3 `unwrapL2` 剥穿口径：剥穿 SII 到首个非集合根因异常；用户可见文案等价但 Throwable 身份不同。
+- **⑧** L2 标签统一为 `attempt/max·续跑`（「1/2·续跑」）；spec 内旧「续跑 1/2」四处（§3.5 文案/宽度算术 label/显示效果示例/§3.6 呼应句）全部跟随。
+- **⑨** §5 装配行 dispose 守卫落位注明 = `CodingAgentTurnResumeTest` 用例 7。
+- **⑩** §3.3 blank user 清除时机两处 → **三处**（prepareResume + handleComplete + handleErrorWithRetryPrefix 耗尽路径）；§5 L2 行同步。
+- **⑪** §3.3 步骤 6 防双份检查对象明确为「会话内最后一条 UserMessage（purge 之后）」。
+- **⑫** §3.2 补 reasonOf 推导规则（cause 链首个非空 message → 类名兜底 → 60 列截断；与 UI ≈54 列是叠加双截断）；§3.5 javadoc「reason 为已本地化的短语」改为「根因异常的推导文本」。
+- **⑬** §5 L2 行执行序夹具按用例 17 细化（断在首个 tool_call、无 tool 结果落库），删除未采纳的「抽 prepareResumeForTest」建议。
+- **⑭** §3.3 快照纪律细化：capabilitiesSnapshot 冻结 defer 外、permissionMode 留 defer 内。
+- **⑮** §3.3 补 composite dispose 顺序安全性前提（reactive 在前、置位 runnable 在后；反序开 error-beats-cancel 窗口）。
+- **⑯** §3.6 补 handleErrorWithRetryPrefix 入口 CancellationException 直接 return 的取消静默语义（CE 唯一生产者 = defer 体 disposed 检查）。
+- **⑰** §3.3 步骤 6 补 setResumeNotice 前 disposed 二次检查（防 Esc 竞态 notice 跨回合泄漏）。
+- **⑱** §1.2 冷流表述更正：「每次调用 .stream() 从链头新建；重订阅安全前提是 defer 内重建 spec」，同一 Flux 二订阅抛 IllegalStateException（V1 断言 3 实测）。
+- **⑲** §3.1 限流判据明确 WCRE 状态 429 为瞬态（其余 4xx 红线不变）。
+- **⑳** §3.1 红线清单补 StreamInterruptedException（L1 自产包装，必须放行给 L2）。
+- **㉑** §3.3 步骤 5 按形状拆两个单锁原子 API（takeAllForResumeUser / refillForResume），不操作 notice；禁止 refill+takePendingOnly 两步模拟。
+- **C1**（Task 6 review ①）计划与 Spec 标注 `prepareResume(String sid, AtomicBoolean disposed)` 两参签名。
+- **C2**（Files 外延）`CodingAgentSubmitErrorTest` / `CodingAgentThinkingTest` 的语义适配（defer+subscribeOn 后错误异步化：submit 不逃逸、轮询等异步终态）已在 Task 6 commit 内登记；见计划 Task 6 Files 增补。
+- **C3**（spec §5）case14/17 机制改写登记：SessionMemoryAdvisor 只在 doOnComplete 落盘 assistant；SII 中段错误不落盘悬空 tool_calls；trim 对悬空 tc 为 no-op。
+
+## 回写记录（终审 fix wave，合并前落位；2026-09-05）
+
+终审裁决 READY-TO-MERGE 后的合并前落位与建议修项（代码 + 本文档），各条目核对：
+
+- **I1-l2**（文档语义警示）`l2` 档「当前真实链 ≈ off」标注落四处：spec §3.1 开关档说明（blockquote）、spec §3.7 off/l2 装配句、CHANGELOG v1.20.0 行、docs/release-notes/v1.20.0.md 关键机制点。原因：SII 唯一生产源是 L1 classify，L1 不包装则主链无 SII、L2 filter 永不命中；档位保留为 API 前瞻，真正生效需 classify-only 的 L1 变体（待办）。
+- **①** §3.3 步骤 5 形状①补 takeAllForResumeUser「由 defer 在 prepareResume 返回后调用」的落点（行为等价说明）。
+- **②** 头部「已知偏离以计划为准」措辞改为「Task 8 已把全部已知偏离回写正文，正文以此为准」。
+- **③** §7 切分摘要同步：双原子 API（takeAllForResumeUser/refillForResume）、blank 清除三处、setResumeNotice 前 disposed 复查。
+- **M5** §3.4 补已知竞态记录（退避期 Enter 插话落在 takeAll 之后/inject 之前窗口 → Interjecting 追加第二条 user 的已接受残留）。

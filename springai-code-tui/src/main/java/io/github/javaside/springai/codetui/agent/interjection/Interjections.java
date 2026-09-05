@@ -53,6 +53,9 @@ public final class Interjections implements UiChangeSource {
     /** 已随 prompt 送达、但尚未补进会话历史的文本（回合末由 {@link #takeForHistory} 取走）。 */
     private String delivered;
 
+    /** 流式重试恢复时一次性注入的系统通知；不进入 delivered / 会话历史。 */
+    private volatile String resumeNotice;
+
     // ── 变化通知（事件驱动 UI；见类注释「变化通知纪律」） ──────────────────
     private volatile UiChangeListener uiChangeListener = UiChangeListener.noop();
 
@@ -104,6 +107,23 @@ public final class Interjections implements UiChangeSource {
             version = changed();
         }
         publish(version);
+    }
+
+    /** 设置下一次模型调用要消费的恢复通知。 */
+    public synchronized void setResumeNotice(String text) {
+        resumeNotice = text;
+    }
+
+    /** 原子取走并清空恢复通知；这是生产代码唯一读通道。 */
+    public synchronized String takeResumeNotice() {
+        String notice = resumeNotice;
+        resumeNotice = null;
+        return notice;
+    }
+
+    /** 测试钩子：只读恢复通知，不消费。 */
+    public synchronized String peekResumeNoticeForTest() {
+        return resumeNotice;
     }
 
     /** 还有几条没送到模型手里（状态栏用）。 */
@@ -196,6 +216,7 @@ public final class Interjections implements UiChangeSource {
                 out.add(delivered);
             }
             out.addAll(pending);
+            resumeNotice = null;
             if (!out.isEmpty()) {                 // 两边都空是 no-op：不通知
                 pending.clear();
                 delivered = null;
@@ -205,6 +226,53 @@ public final class Interjections implements UiChangeSource {
         }
         publish(version);
         return out;
+    }
+
+    /**
+     * 文本形状续跑时原子取走全部插话，供恢复 user 统一组装。
+     *
+     * <p>必须在同一个监视器临界区内完成 delivered + pending 的时序快照与清空，不能先回填再调用
+     * {@link #takePendingOnly()}：两次加锁之间的 {@link #offer} 会制造竞态窗口，导致重复或漏发。
+     * resumeNotice 是独立一次性通道，本方法不触碰。
+     */
+    public List<String> takeAllForResumeUser() {
+        List<String> out;
+        long version = 0L;
+        synchronized (this) {
+            out = new ArrayList<>();
+            if (delivered != null) {
+                out.add(delivered);
+            }
+            out.addAll(pending);
+            if (!out.isEmpty()) {
+                pending.clear();
+                delivered = null;
+                anchorToolCallId = null;
+                version = changed();
+            }
+        }
+        publish(version);
+        return out;
+    }
+
+    /**
+     * 工具形状续跑前把已送达插话整体放回 pending 头部，确保早于退避期新输入。
+     *
+     * <p>整个 delivered String 作为一个元素回填，不按换行拆分；原 pending 保留，由
+     * {@link InterjectingChatModel} 在下一次模型调用时统一注入。resumeNotice 是独立一次性通道，
+     * 本方法不触碰。
+     */
+    public void refillForResume() {
+        long version = 0L;
+        synchronized (this) {
+            if (delivered != null) {
+                pending.addFirst(delivered);
+                delivered = null;
+                anchorToolCallId = null;
+                version = changed();
+            }
+        }
+        publish(version);
     }
 
     /**

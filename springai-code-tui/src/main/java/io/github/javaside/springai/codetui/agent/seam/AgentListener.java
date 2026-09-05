@@ -78,6 +78,9 @@ public interface AgentListener {
     void onTurnComplete(long turnId);
     void onError(long turnId, Throwable error);
 
+    /** 流式请求已安排重试；默认空实现，便于无需展示重试状态的 listener 保持兼容。 */
+    default void onRetryScheduled(long turnId, int attempt, int maxAttempts, long backoffMs, String reason) { }
+
     /**
      * 模型经 AskUserQuestionTool 发问：UI 应弹出作答面板并最终经 {@code request.responder()} 应答。
      * 与其它方法一样带 turnId 供迟到过滤。落地端会阻塞工具线程直到 UI 应答（见 UserQuestionBridge）。

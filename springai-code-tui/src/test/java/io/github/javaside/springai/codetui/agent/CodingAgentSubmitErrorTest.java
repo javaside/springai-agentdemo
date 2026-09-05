@@ -20,10 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 回归：CodingAgent.submit 在响应式装配/订阅<b>同步抛异常</b>时，
- * 必须手动复位状态（onError → IDLE）并返回已 dispose 的句柄，
+ * 回归：CodingAgent.submit 在响应式装配/订阅抛异常时，必须经 onError 把状态复位到 IDLE，
  * 而不是让异常逃逸、把 UI 永远卡在 THINKING（无终态事件）。
- * （整体评审 SHOULD-FIX #1）
+ *
+ * <p>⚠ 语义随 Task 6 调整：submit 的 prompt 组装已移入 {@code Flux.defer + subscribeOn}，
+ * 装配异常变成 error 信号由 doOnError 统一处理（外层同步 catch 已删除——保留会与 doOnError
+ * 双发 listener.onError，双 trim、双终态事件）。故「同步抛异常 → 返回已 dispose 句柄」的
+ * 旧断言改为「submit 不逃逸 → 异步 error → IDLE」。
  */
 class CodingAgentSubmitErrorTest {
 
@@ -41,18 +44,24 @@ class CodingAgentSubmitErrorTest {
     }
 
     @Test
-    void syncAssemblyException_isReportedAndStateReset_notLeaked() {
+    void syncAssemblyException_isReportedAndStateReset_notLeaked() throws Exception {
         ConversationState state = new ConversationState();   // implements AgentListener
         CodingAgent agent = new CodingAgent(throwingOnPrompt("assembly-boom"), state, "s", new AtomicLong(),
                 null, null, null);   // 本测试不触发 /compact，压缩句柄用不到
 
         Disposable d = assertDoesNotThrow(() -> agent.submit("hi"),
-                "同步装配异常不应逃逸出 submit");
+                "装配异常不得同步逃逸出 submit：defer+subscribeOn 后变成异步 error 信号");
 
+        // 异步到达：错误在 boundedElastic worker 上经 doOnError 处理，等它把状态复位到 IDLE。
+        long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+        while (!state.isIdle() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
         assertTrue(state.isIdle(), "onError 应把状态复位到 IDLE（不卡在 THINKING）");
-        assertTrue(d.isDisposed(), "同步失败应返回已 dispose 的句柄");
         assertTrue(state.drainPending().stream().anyMatch(l -> l.text().contains("assembly-boom")),
                 "错误信息应经 onError 落进 pending（滚入 scrollback）");
+        d.dispose();
+        assertTrue(d.isDisposed(), "返回句柄 dispose 后应 isDisposed");
     }
 
     @Test

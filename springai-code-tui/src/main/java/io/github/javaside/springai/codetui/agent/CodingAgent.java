@@ -17,13 +17,21 @@ import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.tokenizer.TokenCountEstimator;
+import reactor.core.publisher.Flux;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
+import reactor.core.scheduler.Schedulers;
+import reactor.util.retry.Retry;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
 import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionStrategy;
 import io.github.javaside.springai.codetui.agent.llm.ModelOption;
+import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
+import io.github.javaside.springai.codetui.agent.llm.RetryReporter;
+import io.github.javaside.springai.codetui.agent.llm.StreamInterruptedException;
+import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
+import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig.StreamRetryMode;
 import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.interjection.Interjections;
@@ -51,9 +59,12 @@ import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -113,6 +124,15 @@ public final class CodingAgent implements SubmitHandler {
     private final long systemPromptTokens;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
 
+    /** L2 开关（全参构造注入；旧 telescoping 重载默认 ALL——测试必须可控，不读环境变量）。 */
+    private final StreamRetryConfig retryConfig;
+
+    /**
+     * L1 重试计数桥载体：submit 开头<b>整体替换</b>（闭包捕获局部 l1Retries 与 turnId）；
+     * 旧闭包失配即丢弃，回合终态不清空也无害。包私有方法 {@link #onL1Retry} 只读本 volatile。
+     */
+    private volatile RetryReporter activeTurnL1Sink;
+
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。
      *
      * @param chatClient          单个 ChatClient（桩路径，无多 provider 路由）
@@ -171,6 +191,7 @@ public final class CodingAgent implements SubmitHandler {
         this.interjections = null;       // 单-client 桩路径：无插话队列（插话门面全 no-op、回合末不补历史）
         this.usageAccumulator = null;    // 单-client 桩路径：无采集（缓存列恒 0/null）
         this.systemPromptTokens = 0L;    // 单-client 桩路径：无装配期估算（分类列恒 0）
+        this.retryConfig = new StreamRetryConfig(StreamRetryMode.ALL);
     }
 
     /**
@@ -339,6 +360,32 @@ public final class CodingAgent implements SubmitHandler {
                        Interjections interjections,
                        TokenUsageAccumulator usageAccumulator,
                        long systemPromptTokens) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, mcpRegistry, permissionEngine, visionModels, backgroundRegistry,
+                backgroundResults, interjections, usageAccumulator, systemPromptTokens,
+                new StreamRetryConfig(StreamRetryMode.ALL));
+    }
+
+    /**
+     * 多 provider 生产构造（全参，含 L2 开关）：其余 telescoping 重载一律默认
+     * {@code new StreamRetryConfig(StreamRetryMode.ALL)} 委托到本构造——不读环境变量，测试必须可控。
+     */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
+                       PermissionEngine permissionEngine,
+                       java.util.Map<String, VisionMaterializingChatModel> visionModels,
+                       io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
+                       io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults,
+                       Interjections interjections,
+                       TokenUsageAccumulator usageAccumulator,
+                       long systemPromptTokens,
+                       StreamRetryConfig retryConfig) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -362,6 +409,7 @@ public final class CodingAgent implements SubmitHandler {
         this.interjections = interjections;
         this.usageAccumulator = usageAccumulator;
         this.systemPromptTokens = systemPromptTokens;
+        this.retryConfig = retryConfig;
         // 送达 → 信息流。刻意复用 onUserMessage 而不是新开一路回调：插话本来就是一条用户消息，
         // 走这条路它渲出来与排队消息出队时一模一样（› 原话 + Kind.USER），还白送 turnId 迟到过滤
         // （Esc 之后迟到的送达自动被挡）。另起一路就得把这两件事各自重写一遍。
@@ -404,6 +452,20 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public Disposable submit(String text, String skillName) {
         long turnId = activeTurnId.incrementAndGet();
+        // 本回合局部状态：resubscriptions / disposed / l1Retries 都是 submit 局部（⚠ 不得为实例字段——
+        // 跨回合残留会让下一回合健康首轮误执行 prepareResume，spec §3.3 首轮纪律）。
+        AtomicInteger resubscriptions = new AtomicInteger();
+        AtomicBoolean disposed = new AtomicBoolean();
+        AtomicInteger l1Retries = new AtomicInteger();
+        boolean l2Enabled = retryConfig.l2Enabled();   // filter 闭包捕获该局部快照
+        // L1 桥计数载体：submit 开头整体替换。turnId 比对（long 基本类型）在 sink 闭包内——
+        // RetryReporter 签名无 turnId，onL1Retry 层没有可比对的值；旧闭包失配即丢弃，终态不清空无害。
+        activeTurnL1Sink = (attempt, backoffMs, reason) -> {
+            if (activeTurnId.get() == turnId) {
+                l1Retries.incrementAndGet();
+                listener.onRetryScheduled(turnId, attempt, 5, backoffMs, reason);
+            }
+        };
         // 出站净化（层①）：发请求前先把会话裁到合法前缀。上一回合若被取消、且有迟到的子 agent 写入漏进会话
         // （留下悬空 assistant(tool_calls) 或孤儿 tool 结果），只有 doOnCancel/handleError/磁盘加载三处净化，
         // 活进程会话常驻内存永不重载 → 坏数据会一直发出去、每条请求都 400。这里在每个回合出站前再净化一次兜底，
@@ -418,12 +480,9 @@ public final class CodingAgent implements SubmitHandler {
         // 新 user → 两条连续 user → DeepSeek 400（模型都没跑，出站 sanitize 与流式守卫都够不到）。此处把尾部残留 user
         // 折进出站消息、并从会话删除，断开该 400 循环。sanitize 已把任何尾部连续 user 折成一条，故最多折一次即净。
         effectiveText = foldTrailingUserIntoOutbound(sessionId, effectiveText);
-        // 中断（Esc 取消 / 报错）时只裁掉「悬空尾巴」——末尾带 tool_calls 却无配对 tool 结果的消息——
-        // 而保留已完成任务与计划（见 trimDanglingToolCalls）。否则中途取消会留下「带 tool_calls 无结果」的
-        // 悬空 assistant，下一次请求发给 DeepSeek 会 400（insufficient tool messages following tool_calls）；
-        // 而整段回滚又会连「任务 1..N 已完成、计划是什么」一起抹掉，导致无法续跑原计划。
-        // 一次性快照激活 provider：client / options / grounding 全部由同一个 provider 派生，
-        // 避免与并发 /model 切换交错（虽当前 submit 与 selectModel 同在 UI 线程，快照更自洽）。
+        // 一次性快照激活 provider：client / options / grounding / 能力全部由同一个 provider 派生并<b>留在 defer 外</b>
+        // （若随每轮重订阅重取，退避等待期 /model 切换会让续跑轮能力快照与冻结的 provider 漂移——同回合模型漂移的小号版）；
+        // permissionMode() 是运行期值（Shift+Tab），留在 defer 内每轮现取。
         ChatClient client;
         org.springframework.ai.chat.prompt.ChatOptions perRequestOptions;
         String modelGrounding;
@@ -440,20 +499,47 @@ public final class CodingAgent implements SubmitHandler {
             perRequestOptions = DeepSeekChatOptions.builder().model(model).build();
             modelGrounding = model;
         }
-        try {
-            var builder = client.prompt()
-                    .user(effectiveText);
-            // MCP 工具每回合快照注入：与 defaultTools 合并（Spring AI 2.0 per-request tools 语义），
-            // /mcp 启停在下一回合即生效；mcp__ 前缀保证不与内置工具重名。
-            // ⚠ 只在 MCP 工具<b>非空</b>时才调 .tools()：传空数组在 Spring AI 2.0 下会覆盖 defaultTools，
-            //    使内置工具（BochaWebSearch 等）在本次请求的 tool 解析器里不可见——MCP 尚在后台连接
-            //    （启动后头几秒 activeTools() 为空）时，模型一调内置工具就报
-            //    "No ToolCallback found for tool name: X"。空时不传，defaultTools 原样生效。
+        // capabilitiesSnapshot 与上方 provider 快照段同纪律：**有意归同步语义**（Task 8 review I1）。
+        // 它不在 defer 体内、不进 pipeline——若 registry 状态异常导致这里抛错，是**同步**抛给 submit 的
+        // 调用方（与 client==null 的 IllegalStateException 一处），不会变成 error 信号经 doOnError 处理，
+        // 也就绝不会与 handleErrorWithRetryPrefix 双发 listener.onError。别为「优雅」把它挪进 defer。
+        ModelCapabilities capabilities = capabilitiesSnapshot();
+        String effectiveOutbound = effectiveText;   // 重放表达式恒从 submit 闭包原始值重建（composeResumeUser 唯一输入）
+        // 组装/订阅整体移入 defer：续跑重订阅 = 每轮经 defer 重建 spec（同一 chatClientResponse Flux 实例二次
+        // 订阅抛 IllegalStateException: No StreamAdvisors——defer 内重建是重订阅安全的唯一形态，V1 实证）。
+        // ⚠ 不再有外层 catch：组装异常变成 error 信号由 doOnError 统一处理（保留 catch 会双发 listener.onError）。
+        Flux<ChatClientResponse> pipeline = Flux.defer(() -> {
+            // disposed 检查：dispose 不能中断 boundedElastic worker 上已在跑的 defer 体——
+            // 不查的话取消后仍会跑完一轮无谓的 prepareResume 会话写。cancel-先-置位保证 Esc 完成后标志必可见。
+            if (disposed.get()) {
+                return Flux.error(new CancellationException("回合已取消"));
+            }
+            int resub = resubscriptions.incrementAndGet();
+            String outboundUser;
+            if (resub == 1) {
+                outboundUser = effectiveOutbound;
+            } else {
+                ResumeShape shape = prepareResume(sessionId, disposed);
+                if (shape == ResumeShape.FROM_TEXT) {
+                    // 原子取走 delivered+pending 全部原文（单锁）；返回后 pending 必空 → Interjecting 该轮早退，
+                    // 不会在 compose 出的 user 之后再注入第二条 user（连续双 user 400）。
+                    outboundUser = composeResumeUser(effectiveOutbound,
+                            interjections == null ? List.of() : interjections.takeAllForResumeUser());
+                } else {
+                    // FROM_TOOLS：不调 .user()（V1 断言 2 口径：空 user 落库、出站不含），notice/插话走 Interjecting。
+                    outboundUser = null;
+                }
+            }
+            var spec = client.prompt();
+            if (outboundUser != null) {
+                spec = spec.user(outboundUser);
+            }
+            // MCP 工具快照注入（每轮重取 activeTools——与冷流重走语义一致，/mcp 启停即时生效）。
             Object[] mcpTools = mcpRegistry == null ? null : mcpRegistry.activeTools().toArray();
             if (mcpTools != null && mcpTools.length > 0) {
-                builder = builder.tools(mcpTools);
+                spec = spec.tools(mcpTools);
             }
-            Disposable reactive = builder
+            return spec
                     .options(perRequestOptions.mutate())   // 每次请求按当前所选模型覆盖（mutate 回 native builder，保留 maxTokens 等）
                     // 同步覆盖系统提示里的 {AGENT_MODEL} grounding，使模型自报身份与实际所选一致（其余 param 沿用默认，merge 语义）；
                     // {PERMISSION_MODE} 必须每回合重算——模式随 Shift+Tab 运行期变化，而 defaultSystem 是 build 期烘焙的。
@@ -461,32 +547,215 @@ public final class CodingAgent implements SubmitHandler {
                             .param(AgentTools.PERMISSION_MODE_KEY, PermissionModePrompt.of(permissionMode())))
                     .toolContext(Map.of(
                             "turnId", turnId,
-                            MediaExternalizingCallback.CAPABILITIES_KEY, capabilitiesSnapshot()))   // 冻结「发起本回合的模型」能力
+                            MediaExternalizingCallback.CAPABILITIES_KEY, capabilities))   // 冻结「发起本回合的模型」能力
                     // 会话记忆键：SessionMemoryAdvisor 按此解析/自动创建会话（值即 chat_memory_conversation_id）
                     .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
-                    .stream().chatClientResponse()
-                    .doOnNext(resp -> handleChunk(resp, turnId))
-                    .doOnError(err -> handleError(err, turnId))
-                    .doOnComplete(() -> handleComplete(turnId))
-                    // 仅在「被取消」时触发（正常 complete/error 不触发）：裁掉悬空 tool_calls 尾巴，保留干净前缀。
-                    .doOnCancel(this::trimDanglingToolCalls)
-                    // 错误已由 doOnError 处理；此处加空 errorConsumer 防止 Reactor 把未消费错误
-                    // 再次打印到日志（onErrorDropped / ErrorCallbackNotImplemented 噪音）。
-                    .subscribe(null, err -> {});
-            // 组合取消（层②）：dispose() 既取消 reactive 链，也对本回合在飞的并行子 agent shutdownNow。
-            // Reactor 取消不 interrupt 阻塞在网络 IO 的子 agent 工具线程，若不显式拆池，取消后子 agent 仍会跑完、
-            // 其迟到写入会污染会话并与随后的 /continue 竞态。cancelTurn 立即返回、不 await，不拖慢回 IDLE。
-            if (subagentRunner == null) {
-                return reactive;
+                    .stream().chatClientResponse();
+        })
+                // 阻塞准备段与 advisor 链不跑在 parallel 调度器；位置必须在 defer 与 retryWhen 之间（覆盖重订阅）。
+                .subscribeOn(Schedulers.boundedElastic())
+                // L2 回合级续跑：白名单 = StreamInterruptedException；上限 = 2 次续跑 + 首次 = 共 3 次完整流。
+                .retryWhen(Retry.backoff(2, Duration.ofSeconds(1))
+                        .maxBackoff(Duration.ofSeconds(4))
+                        .jitter(0d)   // 与 L1 同款显式关闭（jitter 会让真实 delay 与 resumeBackoffMs 不符）
+                        .filter(ex -> l2Enabled && ex instanceof StreamInterruptedException)
+                        // L2 提示行触发点（与 L1 同款 doBeforeRetry 纪律；退避 delay 前同步执行）：
+                        // attempt = 续跑序号（1..2）；maxAttempts 传 2 供 UI 拼「续跑 b/2」文案。
+                        .doBeforeRetry(sig -> listener.onRetryScheduled(turnId,
+                                (int) sig.totalRetries() + 1,
+                                2,
+                                resumeBackoffMs((int) sig.totalRetries()),
+                                "流中断")))
+                .doOnNext(resp -> handleChunk(resp, turnId))
+                // 终态错误一次（解包 L2 包装 + 拼重试前缀文案；l2 计数 = resubscriptions-1）。
+                .doOnError(err -> handleErrorWithRetryPrefix(unwrapL2(err), turnId,
+                        l1Retries.get(), resubscriptions.get() - 1))
+                .doOnComplete(() -> handleComplete(turnId))
+                // 仅在「被取消」时触发（正常 complete/error 不触发）：裁掉悬空 tool_calls 尾巴，保留干净前缀。
+                .doOnCancel(this::trimDanglingToolCalls);
+        // 错误已由 doOnError 处理；此处加空 errorConsumer 防止 Reactor 把未消费错误
+        // 再次打印到日志（onErrorDropped / ErrorCallbackNotImplemented 噪音）。
+        Disposable reactive = pipeline.subscribe(null, err -> {});
+        // 组合取消（层②）：参数顺序是安全性前提——CompositeDisposable 按添加序 dispose，
+        // reactive 在前、置位 disposed 的 runnable 在后：先 cancel（信号下传/订阅取消）后置位——
+        // 此后 defer 体即使返回 CancellationException 也是 cancelled 后的 dropped 信号（不达 doOnError）。
+        // 反序会打开 error-beats-cancel 窗口：置位后、cancel 前 error 可先到 doOnError → Esc 后屏幕出现
+        // 「⚠ 出错：回合已取消」。cancelTurn 立即返回、不 await，不拖慢回 IDLE。
+        return Disposables.composite(reactive, () -> {
+            disposed.set(true);
+            if (subagentRunner != null) {
+                subagentRunner.cancelTurn(turnId);
             }
-            return Disposables.composite(reactive, () -> subagentRunner.cancelTurn(turnId));
-        } catch (RuntimeException ex) {
-            // 同步组装/订阅异常不走 doOnError：手动复位状态（onError → IDLE），
-            // 否则 UI 会永远卡在 THINKING（无终态事件），且异常会逃逸出 View.handle。
-            log.error("回合 {} 同步组装出错", turnId, ex);
-            listener.onError(turnId, ex);
-            return Disposables.disposed();
+        });
+    }
+
+    /** 续跑恢复的形状：尾部 user → 重放 .user()；尾部 tool/其他 → 走 Interjecting 注入通道。 */
+    private enum ResumeShape { FROM_TEXT, FROM_TOOLS }
+
+    /** 续跑通知文本：形状①并入恢复 user、形状②经 Interjecting 一次性通道注入（spec §3.3）。 */
+    private static final String RESUME_NOTICE = "<system-notice>\n"
+            + "网络中断，你的上一段输出未被保留。请从中断处继续完成回答，不要重复已输出的内容。\n"
+            + "</system-notice>";
+
+    /**
+     * 续跑轮出站前的会话重整（仅 resub&gt;1 执行）。执行序（spec §3.3 步骤 1-6）：
+     * trim → 分流判定（trim 后尾部是 UserMessage → 形状①；否则②——先判会把悬空 tool_calls 误判成②的兄弟场景判错）
+     * → strip（仅①）→ 全域清 blank user → 形状② refill（delivered 整元素 addFirst）→ set 前复查 disposed →
+     * 形状② setResumeNotice（会话内最后一条 UserMessage 已含 {@code <system-notice>} 则跳过——防 ①→② 混变双份）。
+     * 形状①的 takeAllForResumeUser 由调用方（defer）在 prepareResume 返回后调用，本方法不触碰队列取走类操作。
+     */
+    private ResumeShape prepareResume(String sid, AtomicBoolean disposed) {
+        trimDanglingToolCalls();
+        List<SessionEvent> events = sessionService.getEvents(sid);
+        boolean tailIsUser = !events.isEmpty() && events.get(events.size() - 1).getMessage() instanceof UserMessage;
+        ResumeShape shape = tailIsUser ? ResumeShape.FROM_TEXT : ResumeShape.FROM_TOOLS;
+        if (shape == ResumeShape.FROM_TEXT) {
+            stripTrailingTurnUser(sid);
         }
+        purgeBlankUserEvents(sid);
+        if (shape == ResumeShape.FROM_TOOLS && interjections != null) {
+            interjections.refillForResume();   // 已送达插话 addFirst 回 pending（保留 pending，由 Interjecting 注入）
+            // set 前再查一次 disposed：Esc 的 drainForRefill 若在 prepareResume 跑中先跑过（notice 尚未 set，
+            // 清了个寂寞），此处不复查会把 notice 落进一次性通道 → 跨回合泄漏进下一回合 prompt。一行关窗。
+            if (disposed.get()) {
+                return ResumeShape.FROM_TOOLS;
+            }
+            if (!lastUserHasResumeNotice(sid)) {
+                interjections.setResumeNotice(RESUME_NOTICE);
+            }
+        }
+        return shape;
+    }
+
+    /**
+     * 形状①的恢复 user：{@code effectiveText + "\n\n" + 合并插话 + "\n\n" + NOTICE}，纯函数、每轮从 submit
+     * 闭包原始值重建（多轮续跑不叠加 notice：strip 先删上一轮含 notice 的那条再重放）。空插话退化为两段。
+     */
+    private String composeResumeUser(String effectiveText, List<String> resumeTexts) {
+        // resumeTexts 恒非 null：调用方以 List.of() 归一（interjections == null 时），takeAllForResumeUser 亦保证非 null。
+        if (resumeTexts.isEmpty()) {
+            return effectiveText + "\n\n" + RESUME_NOTICE;
+        }
+        return effectiveText + "\n\n" + String.join("\n", resumeTexts) + "\n\n" + RESUME_NOTICE;
+    }
+
+    /** 形状①：删掉会话尾部本回合 user（重走 advisor 链时 before() 必然再 append，删+重追加 = 恰好一条）。 */
+    private void stripTrailingTurnUser(String sid) {
+        if (sessionService == null || sessionRepository == null) {
+            return;
+        }
+        List<SessionEvent> events = sessionService.getEvents(sid);
+        if (events.isEmpty() || !(events.get(events.size() - 1).getMessage() instanceof UserMessage)) {
+            return;
+        }
+        sessionRepository.replaceEvents(sid, List.copyOf(events.subList(0, events.size() - 1)));
+    }
+
+    /**
+     * 全域删除 content 为空串的 UserMessage 事件（严格 {@code isEmpty()}，不用 isBlank——留出「纯空白用户消息」的
+     * 将来语义）。合法性前提：提交/插话/skill 各闸门挡空输入（守卫测试点名）；本方法只清续跑伪影。
+     * no-change 不写回（同 trim 模式）。清除点：prepareResume 内 + handleComplete + handleErrorWithRetryPrefix 尾部。
+     */
+    private void purgeBlankUserEvents(String sid) {
+        if (sessionService == null || sessionRepository == null) {
+            return;
+        }
+        List<SessionEvent> events = sessionService.getEvents(sid);
+        List<SessionEvent> kept = new java.util.ArrayList<>(events.size());
+        boolean changed = false;
+        for (SessionEvent e : events) {
+            Message m = e.getMessage();
+            if (m instanceof UserMessage um && um.getText() != null && um.getText().isEmpty()) {
+                changed = true;   // 续跑伪影 blank user：丢弃
+            } else {
+                kept.add(e);
+            }
+        }
+        if (changed) {
+            sessionRepository.replaceEvents(sid, List.copyOf(kept));
+        }
+    }
+
+    /** 自尾部向前扫：会话内最后一条 UserMessage 文本是否已含 {@code <system-notice>}（形状②防双份的判据）。 */
+    private boolean lastUserHasResumeNotice(String sid) {
+        List<SessionEvent> events = sessionService.getEvents(sid);
+        for (int i = events.size() - 1; i >= 0; i--) {
+            Message m = events.get(i).getMessage();
+            if (m instanceof UserMessage um) {
+                return um.getText() != null && um.getText().contains("<system-notice>");
+            }
+        }
+        return false;
+    }
+
+    /**
+     * L1 桥接入口：只读 volatile {@link #activeTurnL1Sink}，null 直接 return（首回合前的防御）。
+     * 真正的 turnId 比对发生在 submit 写入的 sink 闭包内（见该处注释）——本方法无参数可作比对。
+     */
+    void onL1Retry(int attempt, long backoffMs, String reason) {
+        RetryReporter sink = activeTurnL1Sink;
+        if (sink != null) {
+            sink.report(attempt, backoffMs, reason);
+        }
+    }
+
+    /**
+     * L2 自身耗尽/穿透异常的解包：沿 cause 链剥掉包装集合（reactor 的 retryExhausted 或
+     * StreamInterruptedException）到首个不属于集合的异常；SII message 为 null 无妨——文案拼接另取首个非空 message。
+     */
+    static Throwable unwrapL2(Throwable err) {
+        Throwable cur = err;
+        while (cur != null
+                && (reactor.core.Exceptions.isRetryExhausted(cur) || cur instanceof StreamInterruptedException)) {
+            Throwable cause = cur.getCause();
+            if (cause == null) {
+                return cur;
+            }
+            cur = cause;
+        }
+        return cur;
+    }
+
+    /** 失败文案前缀：全 0 → 空串（零重试错误原样直传，不得出现「已自动重试…仍失败」）。 */
+    static String retryFailurePrefix(int l1Retries, int l2Retries) {
+        if (l1Retries == 0 && l2Retries == 0) {
+            return "";
+        }
+        return "已自动重试（传输 " + l1Retries + " 次/续跑 " + l2Retries + " 次）仍失败：";
+    }
+
+    /** 续跑退避纯函数：1s×2ⁿ 封顶 4s，与 Retry.backoff(2,1s) 同公式，jitter(0) 下与真实 delay 严格相等。 */
+    static long resumeBackoffMs(int totalRetries) {
+        return Math.min(1000L << Math.min(totalRetries, 2), 4000L);
+    }
+
+    /**
+     * 终态错误入口：包装（而非复制）——前缀非空时构造 {@code RuntimeException(prefix + 根因串, err)} 后
+     * 委托 {@link #handleError}（复用 log/onError/trim 三件事，禁止复制方法体）；前缀空则原样直传。
+     * 入口对 CancellationException 直接 return（本 CE 全仓唯一生产者是 disposed 检查；防 composite 参数反序等
+     * 未来改动打开 error-beats-cancel 窗口，Esc 后屏幕不得出现「⚠ 出错：回合已取消」）。末尾补一次 blank 清除。
+     */
+    private void handleErrorWithRetryPrefix(Throwable err, long turnId, int l1Retries, int l2Retries) {
+        if (err instanceof CancellationException) {
+            return;
+        }
+        String sid = sessionId;   // 快照（纪律同 trimDanglingToolCalls）：本方法跑在 reactive 线程，clearContext 会在
+                                  // UI 线程换掉 volatile sessionId——末尾 purge 必须落在与 doOnError 同一会话上。
+        String prefix = retryFailurePrefix(l1Retries, l2Retries);
+        if (prefix.isEmpty()) {
+            handleError(err, turnId);
+        } else {
+            handleError(new RuntimeException(prefix + rootCauseText(err), err), turnId);
+        }
+        // 耗尽失败路径的 blank 清除点：末轮若断在 FROM_TOOLS（blank 已随 before() 落库），这里清掉；
+        // 否则末轮 blank 会因「tc落库→工具结果落库→断」而成中部事件永久残留。no-change 不写回，同 trim 模式。
+        purgeBlankUserEvents(sid);
+    }
+
+    /** 根因串：沿 cause 链取首个非空 message，兜底类名——推导委托 {@link RetryPolicy#firstNonBlankMessage}
+     * （与 reasonOf 同源，防两处漂移）；不做宽截断（与 reasonOf 的显示宽 60 截断语义区分）。 */
+    private static String rootCauseText(Throwable err) {
+        return RetryPolicy.firstNonBlankMessage(err, err.getClass().getSimpleName());
     }
 
     /**
@@ -1034,6 +1303,10 @@ public final class CodingAgent implements SubmitHandler {
 
     private void handleComplete(long turnId) {
         persistInterjection();          // ⚠ 必须在 onTurnComplete 之前，见该方法注释
+        // 最后一轮续跑成功后不再有 prepareResume：成功路径的 blank 伪影（FROM_TOOLS 轮 before() 落下的
+        // 空 user）只能在这里清。onTurnComplete 之前完成，-c 恢复/压缩读取到的都是干净历史。
+        String sid = sessionId;   // 快照（纪律同 trimDanglingToolCalls）：本方法跑在 reactive 线程，/clear 在 UI 线程换 volatile
+        purgeBlankUserEvents(sid);
         listener.onTurnComplete(turnId);
     }
 

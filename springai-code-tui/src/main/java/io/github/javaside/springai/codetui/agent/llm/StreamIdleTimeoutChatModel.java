@@ -30,7 +30,7 @@ public final class StreamIdleTimeoutChatModel implements ChatModel {
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         return delegate.stream(prompt)
-                .timeout(idleTimeout, Flux.error(() -> new RuntimeException(
+                .timeout(idleTimeout, Flux.error(() -> new StreamIdleTimeoutException(
                         "等待模型流数据超时（" + formatSeconds(idleTimeout) + " 秒无新数据）。"
                                 + "可通过 " + LlmTimeouts.READ_TIMEOUT_ENV + " 调整。")));
     }
