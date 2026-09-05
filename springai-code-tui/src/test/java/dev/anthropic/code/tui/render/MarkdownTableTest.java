@@ -51,4 +51,23 @@ public class MarkdownTableTest {
         cells = MarkdownTable.parseCells("||");
         assertEquals(List.of(), cells);
     }
+
+    @Test
+    void parseCells_handlesEscaping() {
+        // \| 转义为字面 |
+        List<String> cells = MarkdownTable.parseCells("| a\\|b | c |");
+        assertEquals(List.of("a|b", "c"), cells);
+
+        // \\| 是字面 \ + 分隔符
+        cells = MarkdownTable.parseCells("| a\\\\| b |");
+        assertEquals(List.of("a\\", "b"), cells);
+
+        // \\\| 是字面 \|
+        cells = MarkdownTable.parseCells("| a\\\\\\| |");
+        assertEquals(List.of("a\\|"), cells);
+
+        // 行末单 \ 视为字面
+        cells = MarkdownTable.parseCells("| a\\ |");
+        assertEquals(List.of("a\\"), cells);
+    }
 }
