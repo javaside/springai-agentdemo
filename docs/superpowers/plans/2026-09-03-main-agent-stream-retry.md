@@ -488,6 +488,7 @@ git commit -m "feat(interjection): resumeNotice 一次性通道 + refillForResum
 **Files:**
 - Modify: `springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/CodingAgent.java`（submit 重构 + prepareResume/composeResumeUser/stripTrailingTurnUser/unwrapL2/失败文案拼接 + handleComplete 清伪影 + l1RetryCounter 桥）
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/CodingAgentTurnResumeTest.java`（新）
+- Modify: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/CodingAgentSubmitErrorTest.java` + `CodingAgentThinkingTest.java`（**Files 外延，Task 6 review ② / Task 8 回写 C2**——submit 组装移入 defer+subscribeOn 后，装配/订阅异常从「同步逃逸 → 返回已 dispose 句柄」变成「异步 error 信号经 doOnError 复位 IDLE」：两测试的旧同步语义断言随之适配（submit 不逃逸、轮询等异步终态），随 Task 6 commit 一并提交）
 
 **Interfaces:**
 - Consumes: `StreamInterruptedException`（Task 2）、`RetryReporter`（Task 2）、`onRetryScheduled(5参)`（Task 4）、`Interjections.setResumeNotice/takeAllForResumeUser/refillForResume`（Task 5）、`StreamRetryConfig`（Task 3）。
@@ -496,7 +497,7 @@ git commit -m "feat(interjection): resumeNotice 一次性通道 + refillForResum
     1. CodingAgent 新增全参构造器入参 `StreamRetryConfig retryConfig`；**所有旧 telescoping 重载委托时默认 `new StreamRetryConfig(StreamRetryMode.ALL)`**（不读环境变量——测试必须可控）；
     2. L1 桥计数载体 = submit 开头**整体替换**的 `private volatile RetryReporter activeTurnL1Sink`（闭包捕获局部 `AtomicInteger l1Retries` 与 turnId）。CodingAgent 包私有方法 `void onL1Retry(int attempt, long backoffMs, String reason)`：**只读 volatile sink，null 直接 return**（首回合前的防御）；turnId 比对（`activeTurnId.get() == turnId`，long 基本类型无装箱）在 **sink 闭包内**（RetryReporter 签名无 turnId，onL1Retry 层没有可比对的值）。旧闭包失配即丢弃，回合终态不清空也无害。
   - `private enum ResumeShape { FROM_TEXT, FROM_TOOLS }`（嵌套于 CodingAgent）
-  - `private ResumeShape prepareResume(String sid)`（执行序：trim → 分流判定 → strip → 全域清 blank user → 按形状调用原子插话 API → notice；返回形状及 FROM_TEXT 的已取走插话列表所需结果）
+  - `private ResumeShape prepareResume(String sid, AtomicBoolean disposed)`（**实际签名两参，Task 6 review ① / Task 8 回写 C1**：`sid`=会话 id（快照语义）；`disposed`=Esc 标志，供 setResumeNotice 前的 disposed 复查——见下方实现要点 9。执行序：trim → 分流判定 → strip → 全域清 blank user → 按形状调用原子插话 API → disposed 复查 → notice；返回形状及 FROM_TEXT 的已取走插话列表所需结果）
   - `private String composeResumeUser(String effectiveText, List<String> resumeTexts)`（**入参 = FROM_TEXT 分支调用 `takeAllForResumeUser()` 的返回列表**；该 API 原子取走 delivered+pending，返回后 pending 必空，Interjecting 该轮早退，不产生连续双 user 400；拼接 `text + "\n\n" + String.join("\n", resumeTexts) + "\n\n" + NOTICE`，空列表退化为两段；重放表达式恒从 submit 闭包原始值重建。FROM_TOOLS 不调用 compose，改调 `refillForResume()` 保留 pending 供 Interjecting 注入）
   - `private void stripTrailingTurnUser(String sid)` / `private void purgeBlankUserEvents(String sid)`
   - `static Throwable unwrapL2(Throwable err)`（**包装异常集合写死 = `reactor Exceptions.isRetryExhausted(ex)==true` 或 `ex instanceof StreamInterruptedException`**——沿 cause 链剥到首个不属于集合的异常；SII 的 message 为 null 无妨，retryFailurePrefix 的文案拼接自行沿 cause 链取首个**非空** message）
@@ -618,7 +619,9 @@ Expected: BUILD SUCCESS。
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/agent/CodingAgent.java \
-  springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/CodingAgentTurnResumeTest.java
+  springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/CodingAgentTurnResumeTest.java \
+  springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/CodingAgentSubmitErrorTest.java \
+  springai-code-tui/src/test/java/io/github/javaside/springai/codetui/agent/CodingAgentThinkingTest.java   # Files 外延（语义适配，Task 8 回写 C2）
 git commit -m "feat(agent): CodingAgent 回合级续跑——形状分流/prepareResume/retryWhen 白名单/取消语义"
 ```
 
