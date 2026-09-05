@@ -126,4 +126,34 @@ public final class MarkdownTable {
 
         return trimmed;
     }
+
+    /**
+     * 调整单元格数量：不足补空串，过多并入最后列。
+     */
+    static List<String> adjustCellCount(List<String> cells, int targetCount) {
+        if (cells.size() == targetCount) {
+            return cells;
+        }
+
+        List<String> result = new ArrayList<>(cells);
+
+        // 补空串
+        while (result.size() < targetCount) {
+            result.add("");
+        }
+
+        // 并入最后一列
+        if (result.size() > targetCount) {
+            StringBuilder lastCell = new StringBuilder(result.get(targetCount - 1));
+            for (int i = targetCount; i < result.size(); i++) {
+                lastCell.append(" | ").append(result.get(i));
+            }
+            // 创建新 list 而非使用 subList（subList 返回的是不可变视图）
+            List<String> adjusted = new ArrayList<>(result.subList(0, targetCount));
+            adjusted.set(targetCount - 1, lastCell.toString());
+            return adjusted;
+        }
+
+        return result;
+    }
 }
