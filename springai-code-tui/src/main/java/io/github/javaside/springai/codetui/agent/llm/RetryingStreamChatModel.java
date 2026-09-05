@@ -136,23 +136,15 @@ public final class RetryingStreamChatModel implements ChatModel {
     }
 
     /**
-     * 根因摘要（直接流入 UI ↻ 行，规则钉死不得自行发明）：沿 cause 链取首个非空 message
-     * （同 UI {@code formatError} 口径），兜底 {@code failure.getClass().getSimpleName()}，
-     * 显示宽超 {@value #REASON_MAX_WIDTH} 尾加 …。
+     * 根因摘要（直接流入 UI ↻ 行，规则钉死不得自行发明）：沿 cause 链取首个非空 message——推导委托
+     * {@link RetryPolicy#firstNonBlankMessage}（与 CodingAgent rootCauseText 同源，防两处漂移），
+     * 类名兜底，显示宽超 {@value #REASON_MAX_WIDTH} 尾加 …。
      */
     static String reasonOf(Throwable failure) {
         if (failure == null) return "unknown";
-        String msg = null;
-        for (Throwable t = failure; t != null; t = t.getCause()) {
-            if (t.getMessage() != null && !t.getMessage().isBlank()) {
-                msg = t.getMessage();
-                break;
-            }
-        }
-        if (msg == null) {
-            msg = failure.getClass().getSimpleName();
-        }
-        return CharWidth.truncateWithEllipsis(msg, REASON_MAX_WIDTH, "…", CharWidth.TruncatePosition.END);
+        return CharWidth.truncateWithEllipsis(
+                RetryPolicy.firstNonBlankMessage(failure, failure.getClass().getSimpleName()),
+                REASON_MAX_WIDTH, "…", CharWidth.TruncatePosition.END);
     }
 
     /** 主 agent 不用 call()；原样委托（与 stream 路径的重试语义无关）。 */

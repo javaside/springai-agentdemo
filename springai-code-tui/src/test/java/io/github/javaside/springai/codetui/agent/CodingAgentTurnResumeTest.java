@@ -4,6 +4,7 @@ import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatMo
 import io.github.javaside.springai.codetui.agent.interjection.Interjections;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
 import io.github.javaside.springai.codetui.agent.llm.RetryReporter;
 import io.github.javaside.springai.codetui.agent.llm.RetryingStreamChatModel;
 import io.github.javaside.springai.codetui.agent.llm.StreamInterruptedException;
@@ -64,7 +65,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * CodingAgent 回合级续跑（L2 主体）的端到端契约，spec §3.3 / 计划 Task 6 的 17 用例。
+ * CodingAgent 回合级续跑（L2 主体）的端到端契约，spec §3.3 / 计划 Task 6 的 17 用例
+ * + 终审补测 18/19（①→① 连断 notice 不叠加；L1-only 耗尽桥路径计数文案）。
  *
  * <p>装配：全参构造（registry + 单 entry clientsByProvider + 记录型 listener + 真实
  * DefaultSessionService + InMemory/包装桩 SessionRepository + 桩 SubagentRunner——先例
@@ -933,6 +935,94 @@ class CodingAgentTurnResumeTest {
                 "续跑轮出站必须恰一条 UserMessage（trim→判定→strip→重放，无悬空 tc 干扰）");
         assertTrue(lastMsg(got.get(1)).getText().contains("<system-notice>"),
                 "重放的 user 必须含 <system-notice>");
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // 18 ①→① 连断两轮 FROM_TEXT 后成功：notice 不叠加——每次 strip 删旧 + 原始值重建 → 会话内恰 1 次
+    // ════════════════════════════════════════════════════════════════════════════
+    @Test
+    @DisplayName("18 ①→① 连断两轮后成功：会话内 <system-notice> 恰出现 1 次（notice 不叠加）")
+    void case18_doubleFromTextNoticeNotStacked() throws Exception {
+        SessionRepository repo = InMemorySessionRepository.builder().build();
+        SessionService sessions = sessions(repo);
+        String sid = "case18";
+        Interjections interjections = new Interjections();
+        RecordingListener lis = new RecordingListener();
+        List<Prompt> prompts = new CopyOnWriteArrayList<>();
+        ChatModel model = stubModel(prompts, script(
+                () -> textThenSii("半一", "net down"),    // attempt1 文本断 → ①
+                () -> textThenSii("半二", "net down"),    // attempt2（重放 user+notice）文本再断 → ①
+                () -> Flux.just(chunk("收尾"))));         // attempt3 成功
+        CodingAgent agent = agent(sessions, repo, client(model, sessions, interjections), lis, sid,
+                new AtomicLong(), interjections, null, CFG_ALL, null);
+
+        agent.submit("问题");
+        List<Prompt> got = awaitPrompts(prompts, 3);
+        awaitTurnEnd(lis);
+
+        assertTrue(lis.completed.contains(1L), "两轮续跑后应成功完成");
+        assertTrue(lis.errors.isEmpty(), "成功路径不应 onError：" + lis.errors);
+        assertEquals(2, lis.retries.size(), "应排定 2 次续跑");
+        // 会话收敛到与 case01 相同形态：唯一 user = 原始问题重放 + 一份 notice
+        assertEquals(List.of("问题\n\n" + NOTICE, "收尾"), sessionTexts(sessions, sid),
+                "连断两轮后会话内 user 恰一条（strip 删旧 + 原始值重建，无历史残留）");
+        String joined = String.join("\n", sessionTexts(sessions, sid));
+        assertEquals(1, occurrences(joined, "<system-notice>"),
+                "notice 不得随续跑轮叠加，会话内必须恰 1 次");
+        UserMessage resumed = assertInstanceOf(UserMessage.class, lastMsg(got.get(2)),
+                "末轮（attempt3）尾部必须是重放的 user");
+        assertEquals("问题\n\n" + NOTICE, resumed.getText(), "末轮重放 user 与首轮同构（原始值重建）");
+        assertEquals(1, userCount(got.get(2)), "末轮出站必须恰一条 user");
+        String attempt3Text = String.join("\n",
+                got.get(2).getInstructions().stream().map(Message::getText).toList());
+        assertEquals(1, occurrences(attempt3Text, "<system-notice>"), "末轮出站 notice 恰 1 次");
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // 19 L1-only 耗尽：桥路径 4 次 onL1Retry 后仍终败（L2 关）→ onError 文案按 retryFailurePrefix
+    //    拼「传输 4 次/续跑 0 次」（真实 Retry.backoff 退避 ~7.5s，桥与耗尽语义为被测主体）
+    // ════════════════════════════════════════════════════════════════════════════
+    @Test
+    @DisplayName("19 L1-only 耗尽：桥路径 4 次 onL1Retry 后终败；onError 含「传输 4 次/续跑 0 次」")
+    void case19_l1OnlyExhaustionPrefix() throws Exception {
+        SessionRepository repo = InMemorySessionRepository.builder().build();
+        SessionService sessions = sessions(repo);
+        String sid = "case19";
+        Interjections interjections = new Interjections();
+        RecordingListener lis = new RecordingListener();
+        List<Prompt> prompts = new CopyOnWriteArrayList<>();
+        ChatModel stub = stubModel(prompts, script(
+                () -> Flux.error(new RuntimeException("Request failed", new java.io.EOFException("read failed"))),
+                () -> Flux.error(new RuntimeException("Request failed", new java.io.EOFException("read failed"))),
+                () -> Flux.error(new RuntimeException("Request failed", new java.io.EOFException("read failed"))),
+                () -> Flux.error(new RuntimeException("Request failed", new java.io.EOFException("read failed"))),
+                () -> Flux.error(new RuntimeException("Request failed", new java.io.EOFException("read failed")))));
+        SinkHolder bridge = new SinkHolder();
+        ChatModel l1 = RetryingStreamChatModel.wrap(stub, bridge);
+        AtomicLong turnIds = new AtomicLong();
+        StreamRetryConfig cfgL1Only = new StreamRetryConfig(StreamRetryMode.L1_ONLY);
+        CodingAgent agent = agent(sessions, repo, client(l1, sessions, interjections), lis, sid,
+                turnIds, interjections, null, cfgL1Only, null);
+        bridge.sink = (attempt, backoffMs, reason) -> agent.onL1Retry(attempt, backoffMs, reason);
+
+        agent.submit("问题");
+        awaitPrompts(prompts, 1);
+        awaitRetries(lis, 4);
+        awaitTurnEnd(lis);
+
+        assertEquals(1, prompts.size(), "L1 重订阅发生在模型层内部，ChatClient 只调用一次 stream");
+        assertTrue(lis.completed.isEmpty(), "耗尽不得 onTurnComplete");
+        assertEquals(4, lis.retries.size(), "L1 4 次重试各上报一次（总尝试 5 次）");
+        for (int i = 0; i < 4; i++) {
+            assertRetryPayload(lis.retries.get(i), 1L, i + 2, 5,
+                    RetryPolicy.backoffMsAfter(i + 1), "Request failed");
+        }
+        assertEquals(1, lis.errors.size(), "耗尽只报一次 onError");
+        Throwable err = (Throwable) lis.errors.get(0)[1];
+        assertNotNull(err.getMessage());
+        String msg = err.getMessage();
+        assertTrue(msg.contains("已自动重试（传输 4 次/续跑 0 次）"), "终败文案应按 retryFailurePrefix 拼计数，实际：" + msg);
+        assertTrue(msg.contains("Request failed"), "文案应含根因 message，实际：" + msg);
     }
 
     // ── SessionRepository 包装桩 ───────────────────────────────────────────────

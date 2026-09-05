@@ -114,17 +114,18 @@ public class CodeTuiApplication {
         // init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
         int exitCode = 0;
         try {
+            // 唯一一次读 CODETUI_STREAM_RETRY：同一 cfg 同时喂给 build（L1 三元）与 CodingAgent 构造
+            // （L2 白名单），结构上保证两层开关永不漂移（勿在此处或 build 内再 fromEnv 一次）。
+            StreamRetryConfig cfg = StreamRetryConfig.fromEnv();
             AgentTools.AgentRuntime runtime =
-                    AgentTools.build(registry, root, state, mcpRegistry, permissionEngine);
-            // 与 AgentTools.build 内部的默认一致：同一进程读一次 CODETUI_STREAM_RETRY（fromEnv），
-            // 同时喂给装配层（L1 三元）与 CodingAgent（L2 白名单），保证两层开关永不漂移。
+                    AgentTools.build(registry, root, state, mcpRegistry, permissionEngine, cfg);
             CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
                     runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
                     runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer(),
                     mcpRegistry, runtime.permissionEngine(), runtime.visionModels(),
                     runtime.backgroundRegistry(), runtime.backgroundResults(), runtime.interjections(),
-                    usageAccumulator, runtime.systemPromptTokens(), StreamRetryConfig.fromEnv());
+                    usageAccumulator, runtime.systemPromptTokens(), cfg);
             // L1 两段式桥接线：装配期 build 已把 runtime.bridge() 包进主链 RetryingStreamChatModel，
             // 这里在 CodingAgent 构造完成后 bind（agent::onL1Retry 是包私有方法，跨包方法引用编译失败，
             // 故必须经 AgentTools.wireL1 在 agent 包内接线——见 wireL1 javadoc）。

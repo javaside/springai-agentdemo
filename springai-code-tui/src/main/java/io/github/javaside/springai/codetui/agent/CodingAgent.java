@@ -27,6 +27,7 @@ import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
 import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionStrategy;
 import io.github.javaside.springai.codetui.agent.llm.ModelOption;
+import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
 import io.github.javaside.springai.codetui.agent.llm.RetryReporter;
 import io.github.javaside.springai.codetui.agent.llm.StreamInterruptedException;
 import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
@@ -631,7 +632,8 @@ public final class CodingAgent implements SubmitHandler {
      * 闭包原始值重建（多轮续跑不叠加 notice：strip 先删上一轮含 notice 的那条再重放）。空插话退化为两段。
      */
     private String composeResumeUser(String effectiveText, List<String> resumeTexts) {
-        if (resumeTexts == null || resumeTexts.isEmpty()) {
+        // resumeTexts 恒非 null：调用方以 List.of() 归一（interjections == null 时），takeAllForResumeUser 亦保证非 null。
+        if (resumeTexts.isEmpty()) {
             return effectiveText + "\n\n" + RESUME_NOTICE;
         }
         return effectiveText + "\n\n" + String.join("\n", resumeTexts) + "\n\n" + RESUME_NOTICE;
@@ -750,14 +752,10 @@ public final class CodingAgent implements SubmitHandler {
         purgeBlankUserEvents(sid);
     }
 
-    /** 根因串：沿 cause 链取首个非空 message，兜底类名（与 reasonOf 共用兜底规则，两套推导勿漂移）；不做宽截断。 */
+    /** 根因串：沿 cause 链取首个非空 message，兜底类名——推导委托 {@link RetryPolicy#firstNonBlankMessage}
+     * （与 reasonOf 同源，防两处漂移）；不做宽截断（与 reasonOf 的显示宽 60 截断语义区分）。 */
     private static String rootCauseText(Throwable err) {
-        for (Throwable t = err; t != null; t = t.getCause()) {
-            if (t.getMessage() != null && !t.getMessage().isBlank()) {
-                return t.getMessage();
-            }
-        }
-        return err == null ? "" : err.getClass().getSimpleName();
+        return RetryPolicy.firstNonBlankMessage(err, err.getClass().getSimpleName());
     }
 
     /**

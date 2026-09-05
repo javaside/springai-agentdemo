@@ -239,15 +239,17 @@ class AgentToolsRetryWiringTest {
     // ── 5 wireL1 组合（Task 8 review M-1）：生产形全装配端到端 ──────────────
 
     /**
-     * 拦「{@code CodeTuiApplication} 漏调 {@link AgentTools#wireL1} 或 bind 目标错」的失败面：
+     * 拦「wireL1 / bind / sink 链任一环失效」的失败面（不再是单一「CodeTuiApplication 漏调
+     * wireL1」的措辞——链上有三个环节，任一处断都让 L1 事件到不了 UI，本用例把三者捆在一起拦）：
      * build(注入 ALL) → 全参 {@code CodingAgent}（CodeTuiApplication 形装配，agent 包内可直构）→
      * {@code wireL1(rt, agent)} → submit（安装本回合 L1 sink）→ {@code rt.bridge().report(2, 500, "x")}
      * → 记录型 listener 必须收到 {@code onRetryScheduled(turnId=1, attempt=2, maxAttempts=5, backoffMs=500, reason="x")}。
-     * 漏调 wireL1 → bridge.sink 恒 null → report no-op → 断言红；bind 目标错（非 agent::onL1Retry）同样红。
+     * 链上任一环掉链子都红：漏调 wireL1 → bridge 的 sink 恒 null → report no-op；bind 目标错
+     * （非 {@code agent::onL1Retry}）→ 事件进错接收方；submit 前 report / sink 跨回合失配 → turnId 比对不中 no-op。
      * （L1 链序/reporter 同桥实例已由 mainChain 用例断言；本用例补「桥 → 事件」的最后一跳。）
      */
     @Test
-    void wireL1_combo_fullAssemblyDeliversL1Event(@TempDir Path root) throws Exception {
+    void wireL1_combo_anyLinkOfBridgeChainFails_red(@TempDir Path root) throws Exception {
         SpyProvider provider = spyRegistry();
         ProviderRegistry registry = new ProviderRegistry(List.of(provider));
         AgentTools.AgentRuntime rt =

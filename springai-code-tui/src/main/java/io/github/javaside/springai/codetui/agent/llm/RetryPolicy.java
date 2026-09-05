@@ -8,9 +8,9 @@ import java.util.Locale;
 import java.util.concurrent.CancellationException;
 
 /**
- * LLM 重试策略的<b>唯一真相源</b>：瞬态判据（{@link #shouldRetry}）与指数退避（{@link #backoffMsAfter}）
- * 的全部逻辑都在这里。{@link RetryingChatModel} 与后续的 RetryingStreamChatModel <b>共用</b>本类，
- * 各自只保留同名静态方法做纯委托——判据改动只允许发生在此处。
+ * LLM 重试策略的<b>唯一真相源</b>：瞬态判据（{@link #shouldRetry}）、指数退避（{@link #backoffMsAfter}）
+ * 与失败文案的根因推导（{@link #firstNonBlankMessage}）的全部逻辑都在这里。{@link RetryingChatModel}
+ * 与 RetryingStreamChatModel <b>共用</b>本类，各自只保留同名静态方法做纯委托——判据改动只允许发生在此处。
  *
  * <p><b>红线（4xx/中断/取消）不动</b>：401/403（欠费、密钥错——重试只会更慢更花钱）、其余 4xx
  * （请求本身有病）、中断/取消（Esc 回合取消的伴生，绝不重试）一律否决。
@@ -102,5 +102,22 @@ public final class RetryPolicy {
             }
         }
         return transientFailure;
+    }
+
+    /**
+     * 失败文案的根因推导（唯一真相源，防多处复制漂移）：沿 cause 链取首个非空 message
+     * （与 UI {@code formatError} 口径一致），全链无（含 {@code ex == null}）则返回 {@code fallback}
+     * （调用方一般传 {@code ex.getClass().getSimpleName()} 类名兜底）。纯函数。
+     *
+     * <p><b>消费方</b>：{@link RetryingStreamChatModel#reasonOf}（在此基础上做显示宽截 60）与
+     * CodingAgent 的 rootCauseText（不截断）都委托这里。
+     */
+    public static String firstNonBlankMessage(Throwable ex, String fallback) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t.getMessage() != null && !t.getMessage().isBlank()) {
+                return t.getMessage();
+            }
+        }
+        return fallback;
     }
 }
