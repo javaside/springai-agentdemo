@@ -156,9 +156,14 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 「需要你看一眼」的边沿检测（BEL + tab 标题），见 {@link AttentionTracker}。
      * 与 {@link #bgPending} 一样只在 UI 线程（更新批 / 按键事件）读写。
-     * 构造需 {@link #root}（项目名取目录最后一段），故在构造器体内赋值而非字段初始化器。
      */
-    private final AttentionTracker attention;
+    private final AttentionTracker attention = new AttentionTracker();
+    /**
+     * 状态行行尾的常驻项目名后缀（{@code " · <目录名>"}；目录名超宽截断、取不到为空串）。
+     * 多开 code-tui 窗口靠它区分「哪个窗口在跑哪个项目」——tab 标题被终端截短靠不住
+     * （v1.20.1 方案实测被推翻，定位见 {@link AttentionTracker} 类注释）。构造后不变。
+     */
+    private final String projectSuffix;
     /**
      * 上一批到本批之间用户是否主动按 Esc 取消了回合（抑制「完成」铃声——他刚按过键，必然在场）。
      * 按键线程置位、UI 批消费后复位；volatile：按键与 UI 批可能不在同一线程。
@@ -365,11 +370,9 @@ public final class CodeTuiView extends InlineApp {
         this.state = state;
         this.onSubmit = onSubmit;
         this.root = root;
-        // tab 标题的项目名：工作目录最后一段（如 springai-agentdemo）。root 是根路径（"/"）或
-        // getFileName() 为 null 时退化为无项目名形式（AttentionTracker 内兜底）。多开 code-tui
-        // 时 tab 靠它区分「哪个窗口在跑哪个项目」——这正是本参数存在的理由。
-        this.attention = new AttentionTracker(
-                root != null && root.getFileName() != null ? root.getFileName().toString() : "");
+        // 状态行项目名后缀：目录最后一段，超 24 显示宽截断加 …（80 列窄终端下不能挤掉
+        // 「Esc 取消」等关键提示）；根路径/取不到为空串（后缀整体为空，不占位）。
+        this.projectSuffix = buildProjectSuffix(root);
         // 惰性桥接 runner()：构造时不解引用。判空与 InlineApp.println 自身一致——UI 批里的
         // 计划正文下沉在测试态（未 start，runner()==null）也会跑到，不判空就是每个用例一发 NPE。
         ScrollbackPrinter.Sink sink = testSink != null ? testSink : new ScrollbackPrinter.Sink() {
@@ -707,11 +710,8 @@ public final class CodeTuiView extends InlineApp {
             printer.welcome(onSubmit.currentModel(),
                     io.github.javaside.springai.codetui.AppInfo.versionLabel());
             welcomePrinted = true;
-            // 初始 tab 标题（启动即设，不等第一次 alert）：多开 code-tui 时 tab 一打开就能区分
-            // 哪个窗口在跑哪个项目。复用 restore()——它就是「写标题但不响 BEL」，语义正好；
-            // 失败静默降级（TerminalAttention 契约）。退出不恢复：退出后残留的项目名反而有信息量
-            // （回顾这个 tab 刚跑过什么），也省一条 OSC。
-            TerminalAttention.restore(runner(), attention.defaultTitle());
+            // 不在此写初始 tab 标题：v1.21 口径 tab 只承担提醒（等待/完成瞬间 + BEL），
+            // 项目名的常驻展示在状态行行尾（projectSuffix），启动即见、不受终端截 tab 影响。
         });
         // ── 初始全量同步（设计 §13.1 第 5 步）──
         // MCP / 恢复历史 / 权限提示可能在 View 运行前写入 state（绑定虽在构造期，但生产路径
@@ -1209,8 +1209,8 @@ public final class CodeTuiView extends InlineApp {
      * {@code state.isBusy()} 含「有模态」，直接用它会把 WAITING_USER 拍成 BUSY，故这里用
      * {@code state.isIdle() && !onSubmit.hasInFlightSubagents() && !state.isCompacting()} 取反。
      *
-     * <p><b>标题文案</b>：三种标题由 {@link AttentionTracker} 按项目名拼出（见其类注释），
-     * 状态符号与项目名都在最前——macOS 会把 tab 标题截短，靠前的字符才保得住。
+     * <p><b>标题文案</b>：三种标题由 {@link AttentionTracker} 拼出——tab 只承担提醒（v1.21 口径），
+     * 状态符号在最前（macOS 截短 tab 时符号保得住）。项目名不进 tab，常驻状态行行尾（projectSuffix）。
      * 写入失败（反射 / IO）静默降级——提示是锦上添花，绝不拖垮主流程（见 TerminalAttention 契约）。
      */
     private void advanceAttention(boolean modalWaiting) {
@@ -1218,9 +1218,9 @@ public final class CodeTuiView extends InlineApp {
         boolean cancelled = userCancelledSinceLastTick;
         userCancelledSinceLastTick = false;
         switch (attention.advance(modalWaiting, busy, cancelled)) {
-            case ALERT_WAITING -> TerminalAttention.alert(runner(), attention.waitingTitle());
-            case ALERT_DONE -> TerminalAttention.alert(runner(), attention.doneTitle());
-            case RESTORE -> TerminalAttention.restore(runner(), attention.defaultTitle());
+            case ALERT_WAITING -> TerminalAttention.alert(runner(), AttentionTracker.waitingTitle());
+            case ALERT_DONE -> TerminalAttention.alert(runner(), AttentionTracker.doneTitle());
+            case RESTORE -> TerminalAttention.restore(runner(), AttentionTracker.defaultTitle());
             case NONE -> { /* 平态 */ }
         }
     }
@@ -3932,7 +3932,12 @@ public final class CodeTuiView extends InlineApp {
         // 忙时的 notice 后缀。<b>空串必须判</b>：不判会渲染出一段悬空的 " · "。
         String ns = notice.isEmpty() ? "" : " · " + notice;
         Span mode = modeTag(onSubmit.permissionMode());
-        if (draining != null) return richText(statusBar.shimmer(draining, qs + ijs + ns + " · Ctrl+C 退出", THINK, animTick, mode));
+        // 项目名 projectSuffix 一律拼在<b>最后</b>、不进任何宽度预算：空间不够时终端先截它
+        //（行尾被动挨截，同 backgroundStatusSuffix 的纪律反向版——modeTag 靠行首保，项目名靠行尾让）。
+        // 绝不能塞进 idleHint 的 dynamicSuffix 或 fitToolSummary 的 overhead：那会把
+        // 「Enter 发送 / Esc 取消」挤掉——80 列下这些键位提示是既有测试钉死的保障。
+        if (draining != null) return richText(statusBar.shimmer(draining,
+                qs + ijs + ns + " · Ctrl+C 退出" + projectSuffix, THINK, animTick, mode));
         String cacheHit = ctxUsage.cacheHitSuffix();
         return switch (state.status()) {
             case IDLE -> {
@@ -3940,24 +3945,27 @@ public final class CodeTuiView extends InlineApp {
                 String hint = idleHint(statusModelLabel(),
                         ctxUsage.suffix() + backgroundStatusSuffix(),
                         terminalWidth() - modeWidth);
+                // 项目名接在 idleHint 降级结果之后：帮助组/Enter 让位时它不受影响，超宽由终端截尾。
                 yield mode == null
-                        ? richText(Text.from(Line.from(StatusBar.cacheHitSpans(hint, HINT))))
-                        : richText(Text.from(Line.from(withLeading(mode, StatusBar.cacheHitSpans(hint, HINT)))));
+                        ? richText(Text.from(Line.from(StatusBar.cacheHitSpans(hint + projectSuffix, HINT))))
+                        : richText(Text.from(Line.from(withLeading(mode, StatusBar.cacheHitSpans(hint + projectSuffix, HINT)))));
             }
             case THINKING -> richText(statusBar.shimmer("● 思考中…",
-                    qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
+                    qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出" + projectSuffix, THINK, animTick, mode));
             case RETRYING -> {
                 String label = state.retryLabel() == null ? "↻ 重试中" : state.retryLabel();
                 String backoff = state.retryBackoffText();
                 String backoffTail = terminalWidth() >= 100 && backoff != null ? " · 退避 " + backoff : "";
-                String suffix = qs + ijs + ns + backoffTail + " · Esc 取消";
+                String suffix = qs + ijs + ns + backoffTail + " · Esc 取消" + projectSuffix;
                 yield richText(statusBar.shimmer(label, suffix, THINK, animTick, mode));
             }
             case RUNNING_TOOL -> {
+                // fitToolSummary 的 overhead 只算「Esc 取消」段——项目名是要被终端截尾的让位者，
+                // 把它算进预算会过度收窄工具摘要（保护一个可牺牲的东西）。
                 String suffix = qs + ijs + ns + cacheHit + " · Esc 取消";
                 String s = fitToolSummary(state.activeToolSummary(), state.activeTool(), suffix, mode);
                 yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
-                        suffix, RUNNING, animTick, mode));
+                        suffix + projectSuffix, RUNNING, animTick, mode));
             }
         };
     }
@@ -4068,6 +4076,31 @@ public final class CodeTuiView extends InlineApp {
         spans.add(leading);
         spans.addAll(rest);
         return spans;
+    }
+
+    /**
+     * 状态行行尾的常驻项目名后缀：{@code " · <目录名>"}。
+     *
+     * <p><b>截断纪律</b>：目录名超 24 <b>显示宽</b>（东亚字符占 2 列，经 CharWidth 计）
+     * 截到 23 列 + {@code …}。24 是权衡值：常见 Maven 仓库目录名（springai-agentdemo、
+     * gateway-service 之类）普遍 ≤20 列，不触发截断；而 80 列终端上状态行常态内容
+     * （转轮 + 队列/缓存命中 + Esc 取消）已达 ~50 列，项目名再宽就该它让位——
+     * 「项目名可辨」不能挤掉「你现在能做什么」。空名/根路径返回<b>空串</b>（不是 " · "，
+     * 悬空分隔符是渲染事故，同 {@link #statusLine} 对 qs/ijs 的空串纪律）。
+     *
+     * <p>纯函数（不读实例态），单测直接喂路径断言（CodeTuiViewProjectNameStatusTest）。
+     */
+    static String buildProjectSuffix(Path root) {
+        if (root == null) return "";
+        Path name = root.getFileName();
+        if (name == null) return "";                     // 根路径 "/"：无目录名可示
+        String dir = name.toString();
+        int width = dev.tamboui.text.CharWidth.of(dir);
+        if (width == 0) return "";
+        if (width > 24) {
+            dir = dev.tamboui.text.CharWidth.substringByWidth(dir, 23) + "…";
+        }
+        return " · " + dir;
     }
 
     // ── 内部工具 ─────────────────────────────────────────────────────────

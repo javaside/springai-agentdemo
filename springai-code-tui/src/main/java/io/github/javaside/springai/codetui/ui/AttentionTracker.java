@@ -21,9 +21,10 @@ package io.github.javaside.springai.codetui.ui;
  * <p><b>抑制规则</b>：用户主动按 Esc 取消回合的那次「忙→闲」不算完成——他刚按过键，必然在场，
  * 再响铃是打扰。
  *
- * <p><b>标题里的项目名</b>：多开 code-tui 时 tab 全是同一句品牌文案，分不清哪个窗口在跑哪个项目。
- * 构造时把工作目录名传进来，三种标题都以项目名开头（macOS 会截短 tab 标题，靠前的字符才保得住）。
- * 项目名取不到（空/根路径）时退化为无项目名形式。
+ * <p><b>标题定位（v1.21 口径）：tab 只承担「提醒」</b>，不带项目名——终端普遍截短 tab 标题，
+ * 项目名多数场景保不住，还与提醒文案互相挤压（v1.20.1 的 tab 项目名方案实测被推翻）。
+ * 项目名的常驻展示在状态行行尾（{@code CodeTuiView} 的 projectSuffix），两者分工：
+ * tab 说「现在需要你看一眼」，状态行说「这个窗口在跑哪个项目」。
  */
 final class AttentionTracker {
 
@@ -32,35 +33,27 @@ final class AttentionTracker {
     /** 一个 UI 批要执行的动作；NONE=什么都不做。 */
     enum Action { NONE, ALERT_WAITING, ALERT_DONE, RESTORE }
 
-    /** 品牌段（默认标题里跟在项目名后面的部分）。 */
     private static final String BRAND = "Code TUI";
-
-    private final String projectName;
-
-    /** @param projectName 工作目录最后一段；空白则标题退化为无项目名形式 */
-    AttentionTracker(String projectName) {
-        this.projectName = projectName == null ? "" : projectName.trim();
-    }
-
-    /** 平态（默认）标题：{@code 项目名 · Code TUI}；无项目名时只剩品牌段。 */
-    String defaultTitle() {
-        return projectName.isEmpty() ? BRAND : projectName + " · " + BRAND;
-    }
-
-    /** 等待用户标题（模态在场）。 */
-    String waitingTitle() {
-        return projectName.isEmpty() ? "⏳ " + BRAND + " 等待输入" : "⏳ " + projectName + " 等待输入";
-    }
-
-    /** 回合完成标题。 */
-    String doneTitle() {
-        return projectName.isEmpty() ? "✓ " + BRAND + " 已完成" : "✓ " + projectName + " 已完成";
-    }
 
     private Phase phase = Phase.IDLE;
 
     /** 用户按过键（人在场）。置标志不直接改相位——标题写回必须留在渲染线程（UI 批），见 userActed。 */
     private boolean userActed;
+
+    /** 平态（默认）标题；恢复时用它。纯品牌串，无项目名（定位见类注释）。 */
+    static String defaultTitle() {
+        return BRAND;
+    }
+
+    /** 等待用户标题（模态在场）。 */
+    static String waitingTitle() {
+        return "⏳ " + BRAND + " 等待输入";
+    }
+
+    /** 回合完成标题。 */
+    static String doneTitle() {
+        return "✓ " + BRAND + " 已完成";
+    }
 
     Phase phase() {
         return phase;

@@ -50,12 +50,13 @@ ROWS, COLS = 30, 80
 MODEL_ID = "deepseek-chat"
 
 # 原始字节流断言用的标记（TerminalAttention 写的文案）。
-# 标题带启动目录名（tab 区分多开项目用）：本脚本的 cwd 是 mkdtemp 随机目录
-# （codetui-attention-smoke-XXXX），故默认标题断言用子串 "Code TUI"
-# （新格式「<目录名> · Code TUI」含它，写死目录名做不到）。
+# v1.21 口径：tab 标题只承担提醒——平态是纯品牌串 "Code TUI"（无项目名，项目名常驻状态行行尾）。
+# ⚠ 恢复断言必须整条精确匹配（b"0;" + DEFAULT_TITLE + ST 终止）：DEFAULT_TITLE 是 DONE 标题
+# （✓ Code TUI 已完成）的子串，宽松 contains 会把 DONE 标题误认成恢复标题。
 DONE_TITLE = "已完成".encode()
 WAITING_TITLE = "等待你的输入".encode()
 DEFAULT_TITLE = "Code TUI".encode()
+RESTORED_OSC = b"\x1b]0;" + DEFAULT_TITLE + b"\x1b\\"      # 整条恢复写（OSC 0 + ST）
 BEL = b"\x07"
 OSC_DONE = b"\x1b]0;"            # 任意 OSC 0 写头的前缀（文案另判）
 REPLY = "回合内容输出完毕。"
@@ -174,12 +175,13 @@ def main():
         titles1 = osc_titles(seg1)
         done_titles = [t for t in titles1 if DONE_TITLE in t]
         if done_titles:
-            # 取消没赶上（回合先完成了）：那 DONE 之后必须已恢复默认标题（Esc 在场清掉提示）
-            restored1 = [t for t in titles1 if DEFAULT_TITLE in t]
+            # 取消没赶上（回合先完成了）：那 DONE 之后必须已恢复默认标题（Esc 在场清掉提示）。
+            # 整条 OSC 精确匹配（RESTORED_OSC）：contains 会撞上 DONE 标题里的 "Code TUI" 子串。
+            restored1 = [t for t in titles1 if t == b"0;" + DEFAULT_TITLE]
             if not restored1:
                 die("DONE 后用户按 Esc 却未恢复默认标题；本段标题: %r" % titles1, seg1)
             # 且默认标题的写入必须在 DONE 之后（顺序：DONE → 恢复）
-            if seg1.find(DEFAULT_TITLE) < seg1.find(DONE_TITLE):
+            if seg1.find(RESTORED_OSC) < seg1.find(DONE_TITLE):
                 die("默认标题出现在 DONE 之前（顺序异常）", seg1)
             print("Esc arrived after completion: DONE title was written then restored (acceptable).")
         else:
@@ -211,7 +213,7 @@ def main():
         session.write(b"a")                       # 任意按键
         session.pump(1.0)
         seg2 = session.raw[mark2:]
-        restored = [t for t in osc_titles(seg2) if DEFAULT_TITLE in t]
+        restored = [t for t in osc_titles(seg2) if t == b"0;" + DEFAULT_TITLE]
         if not restored:
             die("用户按键后没有恢复默认标题；本段标题: %r" % osc_titles(seg2), seg2)
         print("Restore OK (default title written back).")
