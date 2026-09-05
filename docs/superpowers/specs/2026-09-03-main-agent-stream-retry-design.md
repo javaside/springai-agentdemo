@@ -2,8 +2,9 @@
 
 日期：2026-09-03
 状态：**终稿 v11**（10 轮 subagent 评审全部完成，终审裁决 READY，可交 writing-plans）→ **已按
-实现计划 Task 0-8 实施并回写（2026-09-05）**：正文就地更新（见文末「回写记录（Task 8）」①-㉑ +
-C1-C3）；已知偏离以计划为准（§3.5 签名 5 参、§3.3 catch 删除、装配层三元不包装等）。
+实现计划 Task 0-8 实施并回写（2026-09-05）**：Task 8 已把全部已知偏离（§3.5 签名 5 参、
+§3.3 catch 删除、装配层三元不包装等）回写正文，**正文以此为准**；历史清单见文末
+「回写记录（Task 8）」（①-㉑ + C1-C3）与「回写记录（终审 fix wave）」（合并前落位，2026-09-05）。
 参考实现：Claude Code（Anthropic 官方 CLI）的行为语义
 关联：`docs/superpowers/specs/2026-08-18-subagent-retry-transient-expansion-design.md`（子 agent 重试，已交付）
 
@@ -151,6 +152,12 @@ retryWhen 的 filter、直接沿链上抛，命中 L2 白名单（见 §3.2 clas
 - `l1`：仅传输层重试（L2 续跑关闭：retryWhen 白名单恒 false）；
 - `l2`：仅回合级续跑（L1 不包装——装配层三元不包装：`l1Enabled() ? RetryingStreamChatModel.wrap(delegate, bridge) : delegate` 直通原链，**无 passthrough API**）；
 - `off`：两层全关（回到现状行为）。
+
+> **⚠ `l2` 档当前真实链 ≈ off（终审 I1-l2，2026-09-05 落位）**：`StreamInterruptedException`（L2
+> 白名单判据）的<b>唯一生产源是 L1 的 classify 出口 2</b>（mid-stream 瞬态失败包装）。本档 L1 不
+> 包装 → 主链原始错误<b>不含</b> SII → L2 的 `retryWhen` filter（`instanceof`）永不命中——档位
+> 保留为 API 前瞻，真正生效需「classify-only 的 L1 变体」（只把原始错误包装成 SII 放行、不做
+> 重订阅，<b>待办</b>）；落地前请勿宣传「l2 独立可用」。
 
 实现照抄 `LlmTimeouts.from(env)` 先例形态（装配期一次读取、非法值回退默认 +
 warn）。测试补「off 时三元不包装（链中无 RetryingStreamChatModel）」「非法值回退 all」。注意：Claude Code 并无
@@ -382,7 +389,10 @@ Flux<ChatClientResponse> pipeline = Flux.defer(() -> {
      块内按时序构造 `[delivered（若非 null）, pending 全部]` 原子取走并清空，返回列表交
      `composeResumeUser` 并进同一条 .user()（见伪码 defer 分支与 composeResumeUser 段）——
      **返回后 pending 必空**，Interjecting 该轮早退、不再注入第二条 user，**不走
-     Interjecting**；
+     Interjecting**。**实际调用落点（终审 fix wave ①）**：取走由 **defer 调用方在
+     `prepareResume` 返回后**调用（`ResumeShape` 返回值携带判定结果，先判形状再取走的
+     顺序约束不变；prepareResume 自身在形状①只做到 trim→strip→purge、不触碰队列取走类
+     操作），与「步骤 5 在 prepareResume 内执行」的简化表述<b>行为等价</b>；
    - **形状②（FROM_TOOLS）→ `interjections.refillForResume()`**：单个 synchronized 块内
      把整个 delivered String 作为**单元素 addFirst 回 pending**（不拆行、保留原 pending；
      旧插话不得被退避期新 offer 的插话插队），由 Interjecting 注入——首次尝试注入了它们
@@ -475,6 +485,14 @@ void setResumeNotice(String text);
 takeForHistory/drainForRefill/persistInterjection**——形状②路径的 notice 不落会话、
 `-c` 回放不含它。Esc 取消（`takeBackInterjections` 回填输入框）也碰不到它——系统
 提示绝不会「还给」用户输入框。
+
+**已知竞态（终审 fix wave M5，已接受残留）**：形状①路径中「defer 调
+`takeAllForResumeUser` 取走（pending 清空）之后 → 组装 spec → 订阅 → Interjecting 该轮
+`inject`」之间有一个毫秒级窗口；若退避期用户 Enter 的插话（UI 线程 offer）恰落其中，
+`inject` 会在重放的 .user() 之后再 append 一条 user（inject 恒 append 新 UserMessage，
+早退只认「pending 空」）——连续双 user 的 400 让该轮走白名单外错误路径（不续跑、直接
+onError），代价是单轮失败、无数据损坏。接受残留（窗口极窄、与「inject 前兜底再取一次」
+或「RETRYING 挡插话」的复杂度不成比例），记录在案；若 V2 实测高发再评估加固。
 
 **Esc 清理纪律**：`drainForRefill()` 锁内一并清 `resumeNotice`——Esc 取消与
 `/clear` 都经 drainForRefill，一处覆盖两条清理路径。防泄漏窗口：setResumeNotice
@@ -603,7 +621,8 @@ InterjectingChatModel.wrap(visionModel, interjections)          ← 最外（不
 即 `Interjecting(Vision(RetryStream(Usage(IdleTimeout(raw)))))`。
 （开关 `CODETUI_STREAM_RETRY=off/l2` 时 RetryStream 在**装配层三元不包装**——
 `l1Enabled() ? RetryingStreamChatModel.wrap(delegate, bridge) : delegate` 直通原链，**无
-passthrough API**，见 §3.1 末总闸与回写 ④。）
+passthrough API**，见 §3.1 末总闸与回写 ④。其中 `l2` 档的语义警示见 §3.1：L1 不包装则主链
+无 SII 源、L2 filter 永不命中，当前真实链 ≈ off——档位为 API 前瞻，待 classify-only 的 L1 变体。）
 
 **位置论证**：
 - **RetryStream 在 IdleTimeout 外**：空闲超时（含首字节超时）必须可重试；
@@ -671,8 +690,8 @@ passthrough API**，见 §3.1 末总闸与回写 ④。）
 1. `RetryPolicy` 提取 + `StreamIdleTimeoutException`/`EmptyStreamException` 入判据 + `RetryingChatModel` 改委托；
 2. `RetryingStreamChatModel` + `RetryReporter`（含 classify 判定树、类型穿透）+ 测试；
 3. `AgentListener.onRetryScheduled` + `ConversationState`（残行落定/INFO 行/RETRYING/出路三条）+ 测试；
-4. `Interjections.resumeNotice/refillForResume(addFirst)/drainForRefill 清 notice` + `InterjectingChatModel` 早退重构 + 合并纪律 + 测试；
-5. CodingAgent 续跑（defer 内重建 spec + 形状分流（ResumeShape 返回值：composeResumeUser 单条 vs 不重放）+ 快照留 submit + retryWhen 白名单 + **L2 doBeforeRetry 触发 onRetryScheduled** + prepareResume 执行序 trim→判定→strip→全域清→refill→notice + handleComplete 清伪影 + boundedElastic + 取消语义）+ 测试；
+4. `Interjections.resumeNotice/refillForResume(addFirst)/takeAllForResumeUser(原子取走 delivered+pending)/drainForRefill 清 notice` + `InterjectingChatModel` 早退重构 + 合并纪律 + 测试；
+5. CodingAgent 续跑（defer 内重建 spec + 形状分流（ResumeShape 返回值：composeResumeUser 单条 vs 不重放）+ 快照留 submit + retryWhen 白名单 + **L2 doBeforeRetry 触发 onRetryScheduled** + prepareResume 执行序 trim→判定→strip→全域清 blank→**按形状调单锁原子 API（形状① takeAllForResumeUser 由 defer 返回后调用 / 形状② refillForResume + setResumeNotice 前 disposed 复查）** + **blank 清除三处（prepareResume/handleComplete/handleErrorWithRetryPrefix 末尾）** + boundedElastic + 取消语义）+ 测试；
 6. 装配（AgentTools 主链插入 RetryStream、l1Reporter 两段式桥接）+ 链序守卫 + aux/子 agent 守卫 + blank-user 闸门守卫测试。
 
 ## 评审记录
@@ -716,3 +735,13 @@ passthrough API**，见 §3.1 末总闸与回写 ④。）
 - **C1**（Task 6 review ①）计划与 Spec 标注 `prepareResume(String sid, AtomicBoolean disposed)` 两参签名。
 - **C2**（Files 外延）`CodingAgentSubmitErrorTest` / `CodingAgentThinkingTest` 的语义适配（defer+subscribeOn 后错误异步化：submit 不逃逸、轮询等异步终态）已在 Task 6 commit 内登记；见计划 Task 6 Files 增补。
 - **C3**（spec §5）case14/17 机制改写登记：SessionMemoryAdvisor 只在 doOnComplete 落盘 assistant；SII 中段错误不落盘悬空 tool_calls；trim 对悬空 tc 为 no-op。
+
+## 回写记录（终审 fix wave，合并前落位；2026-09-05）
+
+终审裁决 READY-TO-MERGE 后的合并前落位与建议修项（代码 + 本文档），各条目核对：
+
+- **I1-l2**（文档语义警示）`l2` 档「当前真实链 ≈ off」标注落四处：spec §3.1 开关档说明（blockquote）、spec §3.7 off/l2 装配句、CHANGELOG v1.20.0 行、docs/release-notes/v1.20.0.md 关键机制点。原因：SII 唯一生产源是 L1 classify，L1 不包装则主链无 SII、L2 filter 永不命中；档位保留为 API 前瞻，真正生效需 classify-only 的 L1 变体（待办）。
+- **①** §3.3 步骤 5 形状①补 takeAllForResumeUser「由 defer 在 prepareResume 返回后调用」的落点（行为等价说明）。
+- **②** 头部「已知偏离以计划为准」措辞改为「Task 8 已把全部已知偏离回写正文，正文以此为准」。
+- **③** §7 切分摘要同步：双原子 API（takeAllForResumeUser/refillForResume）、blank 清除三处、setResumeNotice 前 disposed 复查。
+- **M5** §3.4 补已知竞态记录（退避期 Enter 插话落在 takeAll 之后/inject 之前窗口 → Interjecting 追加第二条 user 的已接受残留）。
