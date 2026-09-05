@@ -186,6 +186,8 @@ public final class CodeTuiView extends InlineApp {
      * 只在渲染线程读写（onStart 种基线、全局 handler 更新）。
      */
     private int lastSeenWidth;
+    /** 包私有测试覆盖；生产保持 null，terminalWidth() 读取真实终端宽度。 */
+    private Integer terminalWidthOverride;
     /**
      * 残行预览节流：流式输出中残行连续变化，若每次重绘都重画预览行，Terminal.app 的
      * 输入法合成（中文打字）会被高频 ANSI 打断而崩溃（EXC_BAD_ACCESS，崩溃栈在
@@ -1444,8 +1446,14 @@ public final class CodeTuiView extends InlineApp {
         return Math.max(8, terminalWidth());
     }
 
+    /** 包私有宽度测试注入口；ViewScreen 的 buffer 宽度不会改变视图内部终端宽度。 */
+    void terminalWidthForTest(int width) {
+        terminalWidthOverride = width;
+    }
+
     /** 终端列数；拿不到时退化为 80。 */
     private int terminalWidth() {
+        if (terminalWidthOverride != null) return terminalWidthOverride;
         try {
             int w = runner().tuiRunner().width();
             return w > 0 ? w : 80;
@@ -3874,6 +3882,13 @@ public final class CodeTuiView extends InlineApp {
             }
             case THINKING -> richText(statusBar.shimmer("● 思考中…",
                     qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出", THINK, animTick, mode));
+            case RETRYING -> {
+                String label = state.retryLabel() == null ? "↻ 重试中" : state.retryLabel();
+                String backoff = state.retryBackoffText();
+                String backoffTail = terminalWidth() >= 100 && backoff != null ? " · 退避 " + backoff : "";
+                String suffix = qs + ijs + ns + backoffTail + " · Esc 取消";
+                yield richText(statusBar.shimmer(label, suffix, THINK, animTick, mode));
+            }
             case RUNNING_TOOL -> {
                 String suffix = qs + ijs + ns + cacheHit + " · Esc 取消";
                 String s = fitToolSummary(state.activeToolSummary(), state.activeTool(), suffix, mode);

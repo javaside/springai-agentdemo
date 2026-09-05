@@ -64,7 +64,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     /** 日志只落文件（logback 无 CONSOLE appender）——任何 stdout 输出都会撕裂内联 TUI 画面。 */
     private static final Logger log = LoggerFactory.getLogger(ConversationState.class);
 
-    public enum Status { IDLE, THINKING, RUNNING_TOOL }
+    public enum Status { IDLE, THINKING, RUNNING_TOOL, RETRYING }
 
     /**
      * 一条定稿输出行 + 其语义类型（UI 据此上色）。
@@ -242,6 +242,8 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     private volatile boolean compacting = false;
     private volatile long compactStartNanos = 0L;
     private volatile String compactReason = "";
+    private volatile String retryLabel;
+    private volatile String retryBackoffText;
 
     // ── 模态请求队列（问询 + 审批共用；渲染线程读、工具线程写；迟到过滤后置入） ──
     // 为何是队列而非单字段：ParallelTasks 下多个子 agent 线程可能同时判出 ASK，
@@ -414,6 +416,8 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     public String activeTool() { return activeTool; }
     public String activeToolSummary() { return activeToolSummary; }
     public long acceptingTurnId() { return acceptingTurnId; }
+    public String retryLabel() { return retryLabel; }
+    public String retryBackoffText() { return retryBackoffText; }
 
     /** 队首模态请求（无则 null）；渲染线程读，<b>不出队</b>。 */
     public synchronized ModalRequest peekModal() { return modals.peek(); }
@@ -652,6 +656,11 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         Change change = null;
         synchronized (this) {
             if (turnId != acceptingTurnId) return;
+            if (status == Status.RETRYING) {
+                status = Status.THINKING;
+                retryLabel = null;
+                retryBackoffText = null;
+            }
             streaming.append(token);
             if (streaming.length() > MAX_STREAMING_PREVIEW) {
                 // 残行超上限：把超出部分切行下沉（一次性定稿），残行预览回到上限内。
@@ -1008,6 +1017,28 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         publish(change);
     }
 
+    @Override
+    public void onRetryScheduled(long turnId, int attempt, int maxAttempts, long backoffMs, String reason) {
+        Change change = null;
+        synchronized (this) {
+            if (turnId != acceptingTurnId) return;
+            int bits = flushStreaming();
+            if ((bits & UiDirty.OUTPUT) != 0) {
+                pending.add(new OutputLine("", OutputLine.Kind.INFO));
+            }
+            String tag = retryTag(attempt, maxAttempts);
+            String prefix = "↻ 重试中 (" + tag + ")：";
+            String suffix = "，" + formatBackoff(backoffMs) + " 后重发";
+            pending.add(new OutputLine(prefix + summarizeRetryReason(reason, 80 - CharWidth.of(prefix) - CharWidth.of(suffix))
+                    + suffix, OutputLine.Kind.INFO));
+            status = Status.RETRYING;
+            retryLabel = "↻ 重试中 " + tag;
+            retryBackoffText = formatBackoff(backoffMs);
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
+    }
+
     /**
      * 问询请求入队。迟到 / 队满当场 {@code cancel()}（锁外），<b>不发通知</b>——状态没变。
      *
@@ -1199,6 +1230,22 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);
         if (CharWidth.of(oneLine) <= 80) return oneLine;
         return CharWidth.substringByWidth(oneLine, 79) + "…";
+    }
+
+    private static String retryTag(int attempt, int maxAttempts) {
+        return attempt + "/" + maxAttempts + (maxAttempts == 5 ? "·传输" : "·续跑");
+    }
+
+    private static String formatBackoff(long backoffMs) {
+        return String.format(java.util.Locale.ROOT, "%.1fs", backoffMs / 1000.0);
+    }
+
+    private static String summarizeRetryReason(String reason, int budget) {
+        String oneLine = reason == null ? "" : reason.replaceAll("\\s+", " ").trim();
+        int safeBudget = Math.max(0, budget);
+        if (CharWidth.of(oneLine) <= safeBudget) return oneLine;
+        if (safeBudget == 0) return "";
+        return CharWidth.substringByWidth(oneLine, safeBudget - 1) + "…";
     }
 
     /** 取首行 + 超长按显示宽度截断（子 agent 结论行用）。 */
