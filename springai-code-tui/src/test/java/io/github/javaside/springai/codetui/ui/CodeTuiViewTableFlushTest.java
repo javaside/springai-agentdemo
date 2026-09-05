@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
+import io.github.javaside.springai.codetui.agent.seam.PermissionRequest;
 import io.github.javaside.springai.codetui.agent.seam.PlanOutcome;
 import io.github.javaside.springai.codetui.agent.seam.PlanRequest;
 import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
@@ -59,9 +60,26 @@ class CodeTuiViewTableFlushTest {
         return v;
     }
 
-    /** 把一张表当作流式 token 灌进去（每行以 \n 结尾即定稿）。 */
+    /**
+     * 把一张表当作流式 token 灌进去。<b>末行不带换行</b>：表格是回复的最后一块内容、后面没有空行，
+     * 于是块结束只能靠显式 flush 触发点——带上尾部空行的话状态机自己就把块排出来了，
+     * 「flush cursor 条件化」这类变异会被那条空行掩盖。
+     */
     private static void streamTable(ConversationState s, long turnId) {
-        s.onAssistantToken(turnId, String.join("\n", TABLE) + "\n");
+        s.onAssistantToken(turnId, String.join("\n", TABLE));
+    }
+
+    /**
+     * 让整张表<b>先落进渲染器缓冲</b>：末行带换行 → 本批被 takeCompleteStreamingLines 取走喂进
+     * 渲染器，块因「后面还没有非表格行」停在 IN_BLOCK 态。用于测那些<b>不</b> flushStreaming 的
+     * 生产者事件（TOOL_OK / SUBAGENT_END）：它们的行进 pending 时缓冲已非空，
+     * 于是「该 kind 在不在 flush 集合里」是唯一变量。
+     */
+    private static void bufferTableIntoRenderer(ConversationState s, CodeTuiView v, Recording sink) {
+        s.onAssistantToken(1L, String.join("\n", TABLE) + "\n");
+        v.processUpdatesForTest(UiDirty.ALL);
+        assertTrue(v.printerForTest().hasBufferedTable(), "前置：整块已在缓冲里");
+        assertFalse(hasTableSeparator(sink.lines), "前置：此刻还没排出来");
     }
 
     /** 排空：反复跑批直到不再声明 outputRemaining（有上限防死循环）。 */
@@ -147,8 +165,11 @@ class CodeTuiViewTableFlushTest {
         ConversationState s = new ConversationState();
         Recording sink = new Recording();
         s.onTurnStarted(1L);
-        streamTable(s, 1L);
         CodeTuiView v = view(s, root, sink);
+        // ⚠ 先建视图再灌表格：表格行与工具行落在<b>同一批</b> pending，flush cursor 入队时刻
+        // 前面那些 ASSISTANT 行还没喂给渲染器、hasBufferedTable() 必为 false——
+        // 写成 if (hasBufferedTable()) 就在这个时序上整条失效。
+        streamTable(s, 1L);
         s.onToolStarted(1L, "Read", "{\"path\":\"a.txt\"}");   // 内部会先 flushStreaming
 
         drainBatches(v);
@@ -167,8 +188,8 @@ class CodeTuiViewTableFlushTest {
         ConversationState s = new ConversationState();
         Recording sink = new Recording();
         s.onTurnStarted(1L);
-        streamTable(s, 1L);
         CodeTuiView v = view(s, root, sink);
+        streamTable(s, 1L);
         s.onError(1L, new IllegalStateException("boom"));
 
         drainBatches(v);
@@ -185,22 +206,28 @@ class CodeTuiViewTableFlushTest {
         ConversationState s = new ConversationState();
         Recording sink = new Recording();
         s.onTurnStarted(1L);
-        streamTable(s, 1L);
         CodeTuiView v = view(s, root, sink);
-        s.onToolFinished(1L, "Read", "ok", true);
+        bufferTableIntoRenderer(s, v, sink);
+        s.onToolFinished(1L, "Read", "ok", true);   // ⚠ 与 onToolStarted 不同，它<b>不</b> flushStreaming
 
         drainBatches(v);
-        assertTrue(indexOfSeparator(sink.lines) >= 0, "TOOL_OK 前必须 flush：" + sink.lines);
+        int sepAt = indexOfSeparator(sink.lines);
+        assertTrue(sepAt >= 0, "TOOL_OK 前必须 flush：" + sink.lines);
+        assertTrue(sepAt < indexOfContaining(sink.lines, "Read ✓"),
+                "表格必须排在工具结果行之前：" + sink.lines);
 
         ConversationState s2 = new ConversationState();
         Recording sink2 = new Recording();
         s2.onTurnStarted(1L);
-        streamTable(s2, 1L);
         CodeTuiView v2 = view(s2, root, sink2);
+        bufferTableIntoRenderer(s2, v2, sink2);
         s2.onSubagentFinished(1L, "t1", "子任务结论");
 
         drainBatches(v2);
-        assertTrue(indexOfSeparator(sink2.lines) >= 0, "SUBAGENT_END 前必须 flush：" + sink2.lines);
+        int sepAt2 = indexOfSeparator(sink2.lines);
+        assertTrue(sepAt2 >= 0, "SUBAGENT_END 前必须 flush：" + sink2.lines);
+        assertTrue(sepAt2 < indexOfContaining(sink2.lines, "子任务结论"),
+                "表格必须排在子 agent 结论行之前：" + sink2.lines);
     }
 
     @Test
@@ -245,6 +272,42 @@ class CodeTuiViewTableFlushTest {
         assertTrue(sepAt < userAt, "表格必须排在 USER 行之前：" + sink.lines);
     }
 
+    @Test
+    @DisplayName("模态期间：输入还没排空就不许 flush（钉「输入已排空」那一半闸门）")
+    void modalWithHalfFedTableDoesNotFlushWhileInputRemains(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        Recording sink = new Recording();
+        s.onTurnStarted(1L);
+        CodeTuiView v = view(s, root, sink);
+
+        // ① 先把表头 + 分隔行喂进渲染器（一批走完，块进 IN_BLOCK 态）
+        s.onAssistantToken(1L, TABLE.get(0) + "\n" + TABLE.get(1) + "\n");
+        v.processUpdatesForTest(UiDirty.ALL);
+        assertTrue(v.printerForTest().hasBufferedTable(), "前置：表头 + 分隔行已在缓冲里");
+
+        // ② 剩下两条数据行留在 streaming 里（已成整行、但本批取不到），并弹一个模态让 hasModal() 为真
+        s.onAssistantToken(1L, TABLE.get(2) + "\n" + TABLE.get(3) + "\n");
+        s.onPermissionRequested(1L, new PermissionRequest(1L, null, "Write", "a.txt",
+                "{}", "写文件需要确认", null, outcome -> { }));
+        // ③ 再塞一条 INFO（豁免、不 flush）占住队列：本批取流式行的闸门是「队列已排空」，
+        //    于是这一批只打 INFO，剩下两条数据行留到下一批 —— 批尾「缓冲非空 + 输入未排空」成立
+        s.pushInfo("⚙ 使用模型 X");
+
+        UiUpdateCoordinator.UpdateResult r = v.processUpdatesForTest(UiDirty.ALL);
+
+        assertTrue(s.hasModal(), "前置：模态已弹出（闸门前件成立）");
+        assertTrue(v.printerForTest().hasBufferedTable(), "前置：缓冲仍非空");
+        assertTrue(r.outputRemaining(), "两条数据行还没成为输出——输入未排空，此刻不许 flush");
+        assertFalse(hasTableSeparator(sink.lines),
+                "少了「输入已排空」这一半，这里就会排出「只看过两行算出列宽的半张表」，"
+                        + "剩下两行随后按原样落下：" + sink.lines);
+
+        // 后续批把输入排空 → 整张表一次落地，且只有一条分隔线
+        drainBatches(v);
+        assertEquals(1, sink.lines.stream().filter(CodeTuiViewTableFlushTest::isTableSeparator).count(),
+                "输入排空后整张表一次排出：" + tail(sink.lines, 10));
+    }
+
     // ── 第 5 条：整篇 ASSISTANT 文档灌完 ───────────────────────────────────
 
     @Test
@@ -264,6 +327,38 @@ class CodeTuiViewTableFlushTest {
         assertFalse(v.printerForTest().hasBufferedTable(),
                 "printPlan 绕过 enqueueOutputLine，收尾不 flush 的话用户要在看不见表的情况下批准计划");
         assertTrue(hasTableSeparator(sink.lines), "表格应已落地：" + sink.lines);
+    }
+
+    @Test
+    @DisplayName("长计划 + 秒批：正文跨批还没打完时模态就没了，只剩第 5 条能救这张表")
+    void longPlanAnsweredMidBodyStillFlushesTable(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        Recording sink = new Recording();
+        s.onTurnStarted(1L);
+        CodeTuiView v = view(s, root, sink);
+
+        // 正文 > 单批 300 行预算：第一批打不完，批尾「输入已排空」不成立 → 第 4 条不介入
+        StringBuilder body = new StringBuilder("计划正文：\n\n");
+        for (int i = 0; i < 400; i++) {
+            body.append("步骤 ").append(i).append("\n");
+        }
+        body.append(String.join("\n", TABLE));
+        PlanRequest plan = new PlanRequest(1L, body.toString(), (outcome, feedback) -> { });
+        s.onPlanSubmitted(1L, plan);
+
+        UiUpdateCoordinator.UpdateResult first = v.processUpdatesForTest(UiDirty.ALL);
+        assertTrue(first.outputRemaining(), "前置：第一批没打完，剩余行留在队列里");
+
+        // 用户在正文打完前就批准 → 模态消失，而回合仍在跑（非 IDLE）：
+        // 此后每一批的第 4 条前件 (isIdle() || hasModal()) 恒为假，兜底再也不会介入
+        s.removeModal(plan);
+        assertFalse(s.hasModal() || s.isIdle(), "前置：模态没了、回合还在跑——第 4 条已出局");
+
+        drainBatches(v);
+
+        assertFalse(v.printerForTest().hasBufferedTable(),
+                "第 5 条是这条时序上唯一的 flush 点：去掉它，表格就永远压在缓冲里等下一个偶然的触发点");
+        assertTrue(hasTableSeparator(sink.lines), "表格应已落地：" + tail(sink.lines, 8));
     }
 
     // ── 第 6 条：/clear ───────────────────────────────────────────────────
