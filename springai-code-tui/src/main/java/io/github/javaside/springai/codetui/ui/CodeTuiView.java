@@ -514,6 +514,13 @@ public final class CodeTuiView extends InlineApp {
      * 只做一次）。drain 输出段的 kind 分派与旧实现逐字对应。
      */
     private void enqueueOutputLine(OutputLine ol) {
+        // 转角处插入 flush cursor（规范 §3.4 第 2 条：USER/TOOL_START/TOOL_OK/TOOL_FAIL/ERROR 前 flush；INFO 豁免）
+        switch (ol.kind()) {
+            case USER, TOOL_START, TOOL_OK, TOOL_FAIL, ERROR ->
+                outputQueue.enqueue(v -> printer.tableFlushCursor());
+            default -> { /* INFO 等豁免不 flush */ }
+        }
+
         switch (ol.kind()) {
             case USER       -> outputQueue.enqueue(v -> printer.userBlockCursor(ol.text()));   // 灰底白字块
             case ASSISTANT  -> outputQueue.enqueue(v -> printer.assistantCursor(ol.text()));   // markdown + 缩进
