@@ -75,7 +75,7 @@ class ProviderModelsEnvTest {
 
     @Test
     void openai_noEnv_builtInDefault() {
-        assertEquals("gpt-5.6-sol", new OpenAiProvider("key", null, null).defaultModel());
+        assertEquals("gpt-6-astra", new OpenAiProvider("key", null, null).defaultModel());
     }
 
     @Test

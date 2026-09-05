@@ -36,11 +36,11 @@ class CodingAgentThinkingTest {
                 return Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("done")))));
             }
             @Override public ChatOptions getOptions() {
-                return OpenAiChatOptions.builder().model("gpt-5.6-sol").build();
+                return OpenAiChatOptions.builder().model("gpt-6-astra").build();
             }
         };
         ThinkingConfigStore store = ThinkingConfigStore.inMemory();
-        store.put("openai", "gpt-5.6-sol", ThinkingConfig.enabledEffort("high"));
+        store.put("openai", "gpt-6-astra", ThinkingConfig.enabledEffort("high"));
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")), store);
         ChatClient client = ChatClient.builder(model).build();
         CodingAgent agent = new CodingAgent(registry, Map.of("openai", client), new StubListener(),

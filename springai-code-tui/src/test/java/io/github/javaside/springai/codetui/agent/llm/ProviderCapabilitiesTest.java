@@ -11,6 +11,7 @@ class ProviderCapabilitiesTest {
     void openAiVisionModelsReportImageSupport() {
         LlmProvider p = new OpenAiProvider("sk-fake");
         assertTrue(p.capabilities("gpt-5.6-sol").supportsImageInput(), "gpt-5.6-sol 应支持视觉");
+        assertTrue(p.capabilities("gpt-6-astra").supportsImageInput(), "gpt-6-astra 应支持视觉（2026-09-03 发布）");
     }
 
     @Test

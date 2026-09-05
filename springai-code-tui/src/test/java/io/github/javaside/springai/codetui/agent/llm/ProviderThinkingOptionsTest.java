@@ -36,6 +36,23 @@ class ProviderThinkingOptionsTest {
                 ThinkingConfig.disabled())).getReasoningEffort());
     }
 
+    /** gpt-6-astra（2026-09-03 发布）：effort 5 档 low..max（官方档位无 none），不可关闭。 */
+    @Test
+    void openAiGpt6AstraFiveEffortLevelsAndCannotDisable() {
+        OpenAiProvider provider = new OpenAiProvider("k");
+        assertFalse(provider.thinkingCapabilities("gpt-6-astra").supportsDisable());
+        assertEquals(List.of("low", "medium", "high", "xhigh", "max"),
+                provider.thinkingCapabilities("gpt-6-astra").effortValues());
+        assertEquals("max", ((OpenAiChatOptions) provider.options("gpt-6-astra",
+                ThinkingConfig.enabledEffort("max"))).getReasoningEffort());
+        assertThrows(IllegalArgumentException.class, () -> provider
+                .options("gpt-6-astra", ThinkingConfig.disabled()));
+        // gpt-5.6 保持三档可关闭——新模型接入不得漂移既有行为
+        assertTrue(provider.thinkingCapabilities("gpt-5.6-sol").supportsDisable());
+        assertEquals(List.of("low", "medium", "high"),
+                provider.thinkingCapabilities("gpt-5.6-sol").effortValues());
+    }
+
     @Test
     void qwenMapsToggleAndBudgetIntoExtraBody() {
         OpenAiChatOptions enabled = (OpenAiChatOptions) new QwenProvider("k")

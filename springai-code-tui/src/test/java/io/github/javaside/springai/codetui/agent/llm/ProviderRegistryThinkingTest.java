@@ -20,11 +20,11 @@ class ProviderRegistryThinkingTest {
     @Test
     void activeSelectionSnapshotsProviderModelConfigAndOptions() {
         ThinkingConfigStore store = ThinkingConfigStore.inMemory();
-        store.put("openai", "gpt-5.6-sol", ThinkingConfig.enabledEffort("high"));
+        store.put("openai", "gpt-6-astra", ThinkingConfig.enabledEffort("high"));
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")), store);
         ProviderRegistry.RequestSelection selection = registry.activeRequestSelection();
         assertEquals("openai", selection.provider().id());
-        assertEquals("gpt-5.6-sol", selection.modelId());
+        assertEquals("gpt-6-astra", selection.modelId());
         assertEquals("high", selection.config().effort());
         assertEquals("high", ((OpenAiChatOptions) selection.options()).getReasoningEffort());
     }
@@ -32,9 +32,9 @@ class ProviderRegistryThinkingTest {
     @Test
     void settingsForInactiveModelDoNotSwitchSelection() {
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")));
-        assertEquals("gpt-5.6-sol", registry.activeModelId());
-        assertEquals("gpt-5.6-terra", registry.thinkingSettings("openai", "gpt-5.6-terra").modelId());
-        assertEquals("gpt-5.6-sol", registry.activeModelId());
+        assertEquals("gpt-6-astra", registry.activeModelId());
+        assertEquals("gpt-5.6-sol", registry.thinkingSettings("openai", "gpt-5.6-sol").modelId());
+        assertEquals("gpt-6-astra", registry.activeModelId());
     }
 
     @Test
@@ -68,7 +68,7 @@ class ProviderRegistryThinkingTest {
         store.put("openai", "gpt-5.6-terra", ThinkingConfig.enabledEffort("low"));
         ProviderRegistry registry = new ProviderRegistry(List.of(new OpenAiProvider("k")), store);
         assertEquals("low", registry.requestSelection("gpt-5.6-terra").config().effort());
-        assertEquals("gpt-5.6-sol", registry.activeModelId());
+        assertEquals("gpt-6-astra", registry.activeModelId());
     }
 
     /** 同名模型的思考设置必须按 provider 隔离：配 A 家不该动 B 家。 */

@@ -10,9 +10,22 @@ class VisionModelsTest {
     @Test
     void knownVisionModelsAreSupported() {
         assertTrue(VisionModels.supportsImage("gpt-5.6-sol"), "gpt-5.6-sol");
+        assertTrue(VisionModels.supportsImage("gpt-6-astra"), "gpt-6-astra（2026-09-03 发布，文本+图像输入）");
         assertTrue(VisionModels.supportsImage("claude-opus-5"), "claude-opus-5");
         assertTrue(VisionModels.supportsImage("qwen-vl-max"), "qwen-vl-max");
         assertTrue(VisionModels.supportsImage("glm-4v-plus"), "glm-4v-plus");
+    }
+
+    /** 边界：gpt-6-astra 支持视觉不代表 gpt-6 家族未发布成员也支持；astra 系快照/fast id 是同一模型，前缀放行。 */
+    @Test
+    void gpt6FamilyBoundary() {
+        // 家族其他成员未经核实 → 不支持
+        assertFalse(VisionModels.supportsImage("gpt-6"), "裸 gpt-6");
+        assertFalse(VisionModels.supportsImage("gpt-6-mini"), "gpt-6-mini（未发布未核实）");
+        assertFalse(VisionModels.supportsImage("gpt-6-turbo"), "gpt-6-turbo（未发布未核实）");
+        // OpenAI 有 dated snapshot 惯例（gpt-4o-2024-05-13）：astra 快照/fast id 同为 Astra 模型，应放行
+        assertTrue(VisionModels.supportsImage("gpt-6-astra-2026-09-03"), "astra dated 快照 id");
+        assertTrue(VisionModels.supportsImage("gpt-6-astra-fast"), "astra fast 模式 id（若存在）");
     }
 
     @Test

@@ -12,6 +12,8 @@ public final class ModelContextWindows {
     static final long DEFAULT_UNKNOWN_WINDOW = 128_000L;
 
     private static final Map<String, Long> BUILT_INS = Map.ofEntries(
+            // gpt-6-astra（2026-09-03 发布，OpenAI 官方模型页核实）：1,050,000 / 输出上限 128,000。
+            Map.entry("openai:gpt-6-astra", 1_050_000L),
             Map.entry("openai:gpt-5.6-sol", 1_050_000L),
             Map.entry("openai:gpt-5.6-terra", 1_050_000L),
             Map.entry("openai:gpt-5.6-luna", 1_050_000L),
