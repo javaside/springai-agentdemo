@@ -18,4 +18,24 @@ public final class MarkdownTable {
         }
         return line.trim().startsWith("|");
     }
+
+    static boolean isSeparator(String line) {
+        if (line == null || line.isEmpty()) {
+            return false;
+        }
+        String stripped = line.strip();
+        if (!stripped.startsWith("|")) {
+            return false;
+        }
+        // 分隔行只能包含: | - : 和空格
+        boolean hasDash = false;
+        for (char c : stripped.toCharArray()) {
+            if (c == '-') {
+                hasDash = true;
+            } else if (c != '|' && c != ':' && c != ' ') {
+                return false;
+            }
+        }
+        return hasDash;
+    }
 }
