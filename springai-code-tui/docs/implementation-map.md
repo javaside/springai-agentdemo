@@ -215,6 +215,29 @@ ChatModelStreamAdvisor          LOWEST
 UI 批 `processUpdates` 调 `takeCompleteStreamingLines()`（按真实 `\n` 切，残行只做预览）→
 `ScrollbackPrinter.streamingLine`。Spring AI 类型不出 `CodingAgent`（三个 handler 全私有）。
 
+### markdown 表格：攒整块才能排版
+
+表格行不能边流边打。scrollback **只能追加、印出去改不了**，而列宽要按整块的真实内容算
+（模型按字符数补齐、终端按显示宽度排版，CJK 占 2 列，所以照抄必错位）。于是
+`MarkdownRenderer` 有一个四态机（`IDLE / CANDIDATE / IN_BLOCK / DEGRADED`）：`|` 开头的行先
+**缓冲**，块结束才交给 `MarkdownTable.render` 一次排出（表头加粗 + 一条 `─` + 空格对齐，不画竖线）。
+
+这是 `OutputCursor` staging 契约的**第二条例外**（第一条是 diff 工厂的一次性成本）：排版发生在
+**批中途某个 `next()` 内部**，缓冲还跨游标、跨批次、跨 `OutputLine` 存活。双向封顶：
+输入侧 200 行 / 64 K 原文字符（越限转降级态、剩余 `|` 行逐行原样输出），产出侧 600 物理行
+（越限整块退回原样）。
+
+`feed` 返回空列表 **≠ 游标耗尽**——`PhysicalOutputQueue.drain` 只认 `next()` 返回 `null` 作为耗尽
+信号，所以 `MdLineCursor.next()` 必须内部循环喂到真有输出为止；写成「空列表就返回 null」，
+一批里首条是 `|` 就会丢掉整个游标里其后最多 299 条逻辑行。
+
+因为块可能跨批次，什么时候「这一块不会再有行进来」由**五条 flush 触发点 + 一条豁免**决定
+（见 `docs/superpowers/specs/2026-09-04-code-tui-markdown-table-design.md` §3.4）：
+状态机内部遇非表格行、`enqueueOutputLine` 的模型流水线行入队前（`INFO` 豁免、`ERROR` **不**豁免）、
+批尾 `(isIdle() || hasModal()) && 输入已排空`、`printPlan` 收尾、`/clear` 丢缓冲。
+漏一条的后果不是崩溃而是**静默丢内容或顺序错乱**，所以每条都有用例
+（`CodeTuiViewTableFlushTest`）。
+
 ### 回合结束与取消
 
 `handleComplete`：`persistInterjection()` **必须先于** `onTurnComplete`——UI 出队钩子靠 `!busy()`
