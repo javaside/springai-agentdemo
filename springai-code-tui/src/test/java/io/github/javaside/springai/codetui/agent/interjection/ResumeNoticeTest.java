@@ -15,6 +15,7 @@ import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -96,20 +97,45 @@ class ResumeNoticeTest {
     }
 
     @Test
-    @DisplayName("refillForResume 将已合并 delivered 整体放回新 pending 之前")
+    @DisplayName("refillForResume 将整个 delivered 作为单元素放回 pending 头部")
     void refillForResumePreservesMergedTextAndChronology() {
+        Interjections interjections = new Interjections();
+        interjections.offer("A");
+        interjections.drainForInjection("call-1");
+        interjections.offer("B");
+
+        interjections.refillForResume();
+
+        assertEquals(List.of("A", "B"), interjections.pendingSnapshot(),
+                "退避前已送达插话必须排在退避期新插话之前");
+        assertTrue(interjections.takeForHistory().isEmpty(), "回填后 delivered 不得再落历史");
+    }
+
+    @Test
+    @DisplayName("takeAllForResumeUser 原子取走 delivered 与全部 pending 并保持时序，空调用不发布")
+    void takeAllForResumeUserConsumesAllResumeTextAtomically() {
         Interjections interjections = new Interjections();
         interjections.offer("A1");
         interjections.offer("A2");
         interjections.drainForInjection("call-1");
         interjections.offer("B");
+        interjections.offer("C");
+        interjections.setResumeNotice(NOTICE);
 
-        List<String> refilled = interjections.refillForResume();
+        AtomicInteger publishes = new AtomicInteger();
+        interjections.setUiChangeListener(bits -> publishes.incrementAndGet());
 
-        assertEquals(List.of("A1\nA2"), refilled, "delivered 是一个已合并元素，不得按换行拆分");
-        assertEquals(List.of("A1\nA2", "B"), interjections.pendingSnapshot(),
-                "退避前已送达插话必须排在退避期新插话之前");
-        assertTrue(interjections.takeForHistory().isEmpty(), "回填后 delivered 不得再落历史");
+        assertEquals(List.of("A1\nA2", "B", "C"), interjections.takeAllForResumeUser(),
+                "delivered 是一个含换行的完整元素，其后才是 pending 原文");
+        assertEquals(1, publishes.get(), "真实移除必须恰好发布一次 UI 变化");
+        assertTrue(interjections.pendingSnapshot().isEmpty(), "返回后 pending 必须为空，避免 Interjecting 再注入");
+        assertTrue(interjections.takeForHistory().isEmpty(), "取走后 delivered 不得再落历史");
+        assertEquals(NOTICE, interjections.peekResumeNoticeForTest(), "resume API 不得消费独立 notice 通道");
+
+        long version = interjections.uiVersion();
+        assertTrue(interjections.takeAllForResumeUser().isEmpty(), "再次调用应为空 no-op");
+        assertEquals(version, interjections.uiVersion(), "空调用不得推进 UI 版本");
+        assertEquals(1, publishes.get(), "空调用不得有任何 publish 副作用");
     }
 
     @Test

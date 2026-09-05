@@ -229,26 +229,50 @@ public final class Interjections implements UiChangeSource {
     }
 
     /**
-     * 流式重试前把已送达插话整体放回 pending 头部，确保早于退避期新输入。
+     * 文本形状续跑时原子取走全部插话，供恢复 user 统一组装。
      *
-     * @return 本次回填的元素列表，供恢复 prompt 组装；无 delivered 时为空
+     * <p>必须在同一个监视器临界区内完成 delivered + pending 的时序快照与清空，不能先回填再调用
+     * {@link #takePendingOnly()}：两次加锁之间的 {@link #offer} 会制造竞态窗口，导致重复或漏发。
+     * resumeNotice 是独立一次性通道，本方法不触碰。
      */
-    public List<String> refillForResume() {
+    public List<String> takeAllForResumeUser() {
         List<String> out;
         long version = 0L;
         synchronized (this) {
-            if (delivered == null) {
-                return List.of();
+            out = new ArrayList<>();
+            if (delivered != null) {
+                out.add(delivered);
             }
-            String refilled = delivered;
-            pending.addFirst(refilled);
-            delivered = null;
-            anchorToolCallId = null;
-            out = List.of(refilled);
-            version = changed();
+            out.addAll(pending);
+            if (!out.isEmpty()) {
+                pending.clear();
+                delivered = null;
+                anchorToolCallId = null;
+                version = changed();
+            }
         }
         publish(version);
         return out;
+    }
+
+    /**
+     * 工具形状续跑前把已送达插话整体放回 pending 头部，确保早于退避期新输入。
+     *
+     * <p>整个 delivered String 作为一个元素回填，不按换行拆分；原 pending 保留，由
+     * {@link InterjectingChatModel} 在下一次模型调用时统一注入。resumeNotice 是独立一次性通道，
+     * 本方法不触碰。
+     */
+    public void refillForResume() {
+        long version = 0L;
+        synchronized (this) {
+            if (delivered != null) {
+                pending.addFirst(delivered);
+                delivered = null;
+                anchorToolCallId = null;
+                version = changed();
+            }
+        }
+        publish(version);
     }
 
     /**
