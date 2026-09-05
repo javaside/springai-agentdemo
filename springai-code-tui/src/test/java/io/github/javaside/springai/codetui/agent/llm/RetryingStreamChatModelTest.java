@@ -202,7 +202,8 @@ class RetryingStreamChatModelTest {
         AtomicInteger calls = new AtomicInteger();
         ChatModel m = RetryingStreamChatModel.wrap(delegate(n ->
                 Flux.error(wcre429("Too Many Requests #" + n)), calls), null);
-        StepVerifier.create(m.stream(PROMPT))
+        StepVerifier.withVirtualTime(() -> m.stream(PROMPT))
+                .thenAwait(Duration.ofSeconds(8))   // 完整退避 0.5+1+2+4=7.5s，无墙钟等待
                 .expectErrorSatisfies(ex -> {
                     WebClientResponseException wcre = assertInstanceOf(WebClientResponseException.class, ex);
                     assertTrue(wcre.getMessage().contains("#5"), "应解包放行最后一次失败，实际=" + wcre.getMessage());

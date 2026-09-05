@@ -9,8 +9,8 @@ package io.github.javaside.springai.codetui.agent.llm;
  * <p>{@link #getMessage()} 恒为 null（构造置空）——UI 的 {@code formatError} 沿 cause 链取
  * 首个非空 message，置空让用户直接看到根因网络异常文案，而非本包装类的无信息样板。
  *
- * <p>瞬态判据上属于 {@link RetryPolicy#shouldRetry} 命中范围（cause 为原始瞬态失败）；
- * L1 自身<b>绝不</b>重试它（filter 恒等式：{@code emitted==0} 才接受重试）。
+ * <p>属 {@link RetryPolicy} 红线类型；L1 双保险拒绝（红线短路 + {@code emitted==0} 恒等式），
+ * 原样穿透命中 L2 白名单。
  *
  * <p><b>类型穿透要求</b>（spec §3.2）：本异常必须原样穿透 ToolCallingAdvisor 流式聚合、
  * SessionMemoryAdvisor 的 {@code publishOn + ChatClientMessageAggregator}、Vision/Interjecting

@@ -93,11 +93,14 @@ public final class RetryingStreamChatModel implements ChatModel {
                         .jitter(0d)                                        // R4：显式关闭，序列 0.5/1/2/4
                         .maxBackoff(Duration.ofMillis(CAP_BACKOFF_MS))
                         .doBeforeRetry(sig -> {
+                            // attempt = 即将进行的第几次尝试（首重试=2），与 RetryReporter 口径一致
+                            int attempt = (int) sig.totalRetries() + 2;
+                            long backoffMs = RetryPolicy.backoffMsAfter((int) sig.totalRetries() + 1);
+                            String reason = reasonOf(sig.failure());
+                            log.warn("主 agent 流式请求失败（第 {}/{} 次），{}ms 后重试：{}",
+                                    attempt, L1_RETRIES + 1, backoffMs, reason);
                             if (reporter != null) {
-                                // attempt = 即将进行的第几次尝试（首重试=2），与 RetryReporter 口径一致
-                                int attempt = (int) sig.totalRetries() + 2;
-                                long backoffMs = RetryPolicy.backoffMsAfter((int) sig.totalRetries() + 1);
-                                reporter.report(attempt, backoffMs, reasonOf(sig.failure()));
+                                reporter.report(attempt, backoffMs, reason);
                             }
                         })
                         .filter(ex -> emitted.get() == 0 && RetryPolicy.shouldRetry(ex)))
