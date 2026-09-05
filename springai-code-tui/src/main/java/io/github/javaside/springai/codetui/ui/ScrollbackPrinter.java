@@ -182,7 +182,17 @@ public final class ScrollbackPrinter {
 
     /** AI 正文：markdown/语法高亮 + 缩进 + 按终端宽折行，下沉 scrollback。严格分批版见 {@link #assistantCursor(String)}。 */
     void assistant(String text) {
-        printWrapped(md.renderFinalized(text));
+        // 走 feed 路径（支持表格块缓冲）
+        List<List<Span>> lines = md.feed(text, innerWidth());
+        for (List<Span> line : lines) {
+            printWrapped(line);
+        }
+
+        // 收尾 flush（第 1 条 flush 触发点）
+        List<List<Span>> flushed = md.flush(innerWidth());
+        for (List<Span> line : flushed) {
+            printWrapped(line);
+        }
     }
 
     /** 流式完整行：同 assistant。严格分批版见 {@link #streamingLinesCursor(List)}。 */
@@ -270,6 +280,83 @@ public final class ScrollbackPrinter {
     /** 流式完整行 cursor：一批逻辑行逐条走 assistant 语义（同一条 md 围栏/高亮状态链）。 */
     OutputCursor streamingLinesCursor(List<String> rows) {
         return new MdLineCursor(rows.toArray(new String[0]));
+    }
+
+    /**
+     * 表格 flush 游标：强制输出 MarkdownRenderer 缓冲的表格块。
+     * 在转角处插入（工具开始前、错误前、回合结束时）。
+     */
+    OutputCursor tableFlushCursor() {
+        return new OutputCursor() {
+            private List<List<Span>> flushed = null;
+            private Text rawBlock = null;
+            private int index = 0;
+            private SegmentedWrap.Styled segs = null;
+
+            @Override
+            public boolean hasNext() {
+                return flushed == null || (segs != null && segs.hasNextSegment()) || index < flushed.size();
+            }
+
+            @Override
+            public PhysicalLine next() {
+                if (flushed == null) {
+                    flushed = md.flush(innerWidth());
+                    if (flushed.isEmpty()) {
+                        return null; // 幂等：空缓冲
+                    }
+
+                    // 构造 raw（所有行共享）
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < flushed.size(); i++) {
+                        if (i > 0) sb.append("\n");
+                        for (Span span : flushed.get(i)) {
+                            sb.append(span.content());
+                        }
+                    }
+                    rawBlock = Text.raw(sb.toString());
+                }
+
+                // 先吐完当前行的折行段
+                if (segs != null && segs.hasNextSegment()) {
+                    List<Span> piece = segs.nextSegment();
+                    if (piece != null) {
+                        List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
+                        indentedSeg.add(Span.raw(INDENT));
+                        indentedSeg.addAll(piece);
+                        return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), rawBlock);
+                    }
+                }
+
+                // 取下一行
+                if (index >= flushed.size()) {
+                    return null;
+                }
+
+                List<Span> line = flushed.get(index++);
+                segs = SegmentedWrap.styled(line, innerWidth());
+
+                // 输出首段
+                if (segs.hasNextSegment()) {
+                    List<Span> piece = segs.nextSegment();
+                    if (piece != null) {
+                        List<Span> indentedSeg = new ArrayList<>(piece.size() + 1);
+                        indentedSeg.add(Span.raw(INDENT));
+                        indentedSeg.addAll(piece);
+                        return PhysicalLine.of(null, Text.from(Line.from(indentedSeg)), rawBlock);
+                    }
+                }
+
+                return null;
+            }
+        };
+    }
+
+    /**
+     * 缓冲里是否压着表格（候选态也算）。
+     */
+    public boolean hasBufferedTable() {
+        return md.hasBuffered();
     }
 
     /**
