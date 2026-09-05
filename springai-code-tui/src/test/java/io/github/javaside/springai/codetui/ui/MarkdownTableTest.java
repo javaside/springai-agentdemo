@@ -6,6 +6,7 @@ import java.util.List;
 import io.github.javaside.springai.codetui.ui.MarkdownTable.Alignment;
 import dev.tamboui.text.Span;
 import dev.tamboui.style.Style;
+import dev.tamboui.style.Modifier;
 
 public class MarkdownTableTest {
 
@@ -293,7 +294,8 @@ public class MarkdownTableTest {
         assertEquals(4, result.size());
 
         // 验证表头加粗（第一行应包含 BOLD 样式）
-        assertTrue(result.get(0).stream().anyMatch(s -> s.style().toString().contains("bold")));
+        assertTrue(result.get(0).stream().anyMatch(s ->
+            s.style().effectiveModifiers().contains(Modifier.BOLD)));
     }
 
     @Test

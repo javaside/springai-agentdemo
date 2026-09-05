@@ -1,8 +1,10 @@
 package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.text.Span;
+import dev.tamboui.style.Style;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public final class MarkdownTable {
 
@@ -364,18 +366,224 @@ public final class MarkdownTable {
      * @return 渲染后的行（每行是 Span 列表），退回原样时走 renderInline
      */
     static List<List<Span>> render(List<String> block, int inner) {
-        // 守卫：null 或空块
-        if (block == null || block.isEmpty()) {
-            return List.of();
-        }
-
-        // 守卫：终端过窄（< 6 列）
-        if (inner < 6) {
+        if (inner < 6 || block == null || block.size() < 2) {
             return fallbackToRaw(block);
         }
 
-        // 暂时退回原样（Task 8-9 实现完整排版逻辑）
-        return fallbackToRaw(block);
+        // 解析表头和分隔行
+        String headerLine = block.get(0);
+        if (!looksLikeRow(headerLine)) {
+            return fallbackToRaw(block);
+        }
+
+        String separatorLine = block.get(1);
+        if (!isSeparator(separatorLine)) {
+            return fallbackToRaw(block);
+        }
+
+        List<String> headerCells = parseCells(headerLine);
+        List<Alignment> aligns = alignments(separatorLine);
+
+        // 对齐信息数量必须 ≥ 表头列数
+        if (aligns.size() < headerCells.size()) {
+            return fallbackToRaw(block);
+        }
+
+        // 截取对齐信息到表头列数
+        aligns = aligns.subList(0, headerCells.size());
+        int columnCount = headerCells.size();
+
+        // 解析数据行
+        List<List<String>> dataRows = new ArrayList<>();
+        for (int i = 2; i < block.size(); i++) {
+            String line = block.get(i);
+            if (!looksLikeRow(line)) {
+                continue; // 跳过非表格行
+            }
+            List<String> cells = parseCells(line);
+            cells = adjustCellCount(cells, columnCount);
+            dataRows.add(cells);
+        }
+
+        // 收集所有行（用于计算列宽）
+        List<List<String>> allRows = new ArrayList<>();
+        allRows.add(headerCells);
+        allRows.addAll(dataRows);
+
+        // 计算列宽
+        int[] columnWidths = calculateColumnWidths(allRows);
+
+        // 计算总宽度
+        int separatorWidth = Math.max(0, 2 * (columnCount - 1));
+        int totalWidth = separatorWidth;
+        for (int w : columnWidths) {
+            totalWidth += w;
+        }
+
+        // 超宽时削列
+        if (totalWidth > inner) {
+            int[] reduced = reduceColumnWidths(columnWidths, inner);
+            if (reduced == null) {
+                // 削列超限，退回原样
+                return fallbackToRaw(block);
+            }
+            columnWidths = reduced;
+
+            // 重新计算总宽度
+            totalWidth = separatorWidth;
+            for (int w : columnWidths) {
+                totalWidth += w;
+            }
+        }
+
+        // 连最小宽度都装不下
+        int minTotalWidth = 4 * columnCount + separatorWidth;
+        if (minTotalWidth > inner) {
+            return fallbackToRaw(block);
+        }
+
+        // 开始排版输出
+        List<List<Span>> output = new ArrayList<>();
+        final int MAX_OUTPUT_LINES = 600;
+
+        // 排版表头
+        List<List<List<Span>>> wrappedHeader = wrapRow(headerCells, columnWidths, aligns, true);
+        for (List<List<Span>> physicalLine : wrappedHeader) {
+            if (output.size() >= MAX_OUTPUT_LINES) {
+                return fallbackToRaw(block);
+            }
+            output.add(flattenPhysicalLine(physicalLine));
+        }
+
+        // 输出分隔线
+        if (output.size() >= MAX_OUTPUT_LINES) {
+            return fallbackToRaw(block);
+        }
+        output.add(List.of(Span.styled(repeat('─', totalWidth), Style.create().dim())));
+
+        // 排版数据行
+        for (List<String> row : dataRows) {
+            List<List<List<Span>>> wrappedRow = wrapRow(row, columnWidths, aligns, false);
+            for (List<List<Span>> physicalLine : wrappedRow) {
+                if (output.size() >= MAX_OUTPUT_LINES) {
+                    return fallbackToRaw(block);
+                }
+                output.add(flattenPhysicalLine(physicalLine));
+            }
+        }
+
+        return output;
+    }
+
+    /**
+     * 将一行数据按列宽折行，返回物理行列表。
+     * 每个物理行是 List<List<Span>>，外层按列、内层是该列该段的 spans。
+     */
+    private static List<List<List<Span>>> wrapRow(List<String> cells, int[] columnWidths,
+                                                    List<Alignment> aligns, boolean bold) {
+        int columnCount = cells.size();
+
+        // 对每个格子格内折行
+        List<List<String>> wrappedCells = new ArrayList<>();
+        int maxLines = 1;
+
+        for (int col = 0; col < columnCount; col++) {
+            List<String> lines = wrapCellContent(cells.get(col), columnWidths[col]);
+            wrappedCells.add(lines);
+            maxLines = Math.max(maxLines, lines.size());
+        }
+
+        // 按物理行组装
+        List<List<List<Span>>> result = new ArrayList<>();
+        for (int lineIdx = 0; lineIdx < maxLines; lineIdx++) {
+            List<List<Span>> physicalLine = new ArrayList<>();
+
+            for (int col = 0; col < columnCount; col++) {
+                List<String> cellLines = wrappedCells.get(col);
+                String content = lineIdx < cellLines.size() ? cellLines.get(lineIdx) : "";
+
+                // 对齐处理
+                String aligned = alignContent(content, columnWidths[col], aligns.get(col), col == columnCount - 1);
+
+                // 渲染内联样式
+                List<Span> spans = MarkdownRenderer.renderInline(aligned);
+
+                // 表头加粗
+                if (bold) {
+                    List<Span> boldSpans = new ArrayList<>();
+                    for (Span s : spans) {
+                        Style newStyle = s.style().bold();
+                        boldSpans.add(Span.styled(s.content(), newStyle));
+                    }
+                    spans = boldSpans;
+                }
+
+                physicalLine.add(spans);
+            }
+
+            result.add(physicalLine);
+        }
+
+        return result;
+    }
+
+    /**
+     * 将物理行（多列 spans）拼接成单行 spans，列间加 2 空格。
+     */
+    private static List<Span> flattenPhysicalLine(List<List<Span>> columns) {
+        List<Span> result = new ArrayList<>();
+
+        for (int i = 0; i < columns.size(); i++) {
+            result.addAll(columns.get(i));
+
+            // 列间 2 空格（最后一列不加）
+            if (i < columns.size() - 1) {
+                result.add(Span.raw("  "));
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 对齐内容：左/中/右对齐，最后一列去尾部补白。
+     */
+    private static String alignContent(String content, int columnWidth, Alignment align, boolean isLastColumn) {
+        int contentWidth = displayWidth(content);
+        int padding = columnWidth - contentWidth;
+
+        if (padding <= 0) {
+            return content;
+        }
+
+        String padStr = repeat(' ', padding);
+
+        switch (align) {
+            case LEFT:
+                return isLastColumn ? content : content + padStr;
+            case RIGHT:
+                return padStr + content;
+            case CENTER:
+                int leftPad = padding / 2;
+                int rightPad = padding - leftPad;
+                if (isLastColumn) {
+                    rightPad = 0; // 最后一列去尾部补白
+                }
+                return repeat(' ', leftPad) + content + repeat(' ', rightPad);
+            default:
+                return content;
+        }
+    }
+
+    /**
+     * 重复字符 n 次。
+     */
+    private static String repeat(char c, int n) {
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) {
+            sb.append(c);
+        }
+        return sb.toString();
     }
 
     /**
