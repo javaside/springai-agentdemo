@@ -155,4 +155,49 @@ public class MarkdownTableTest {
         int[] widths = MarkdownTable.calculateColumnWidths(rows);
         assertArrayEquals(new int[]{1, 4, 1}, widths); // 空列最小宽度 4
     }
+
+    @Test
+    void reduceColumnWidths_reducesWidestColumn() {
+        int[] widths = {10, 20, 15};
+        int targetTotalWidth = 40; // 当前总宽 = 10+20+15+2×2 = 49
+
+        int[] reduced = MarkdownTable.reduceColumnWidths(widths, targetTotalWidth);
+
+        // 需削减 9 列，每次削最宽列：20→11 (9次)
+        assertArrayEquals(new int[]{10, 11, 15}, reduced);
+    }
+
+    @Test
+    void reduceColumnWidths_respectsMinWidth4() {
+        int[] widths = {5, 5, 5};
+        int targetTotalWidth = 10; // 当前总宽 = 5+5+5+2×2 = 19
+
+        int[] reduced = MarkdownTable.reduceColumnWidths(widths, targetTotalWidth);
+
+        // 最多削到每列 4：4+4+4+2×2 = 16，无法达到 10
+        assertArrayEquals(new int[]{4, 4, 4}, reduced);
+    }
+
+    @Test
+    void reduceColumnWidths_prefersLowerIndexWhenTied() {
+        int[] widths = {10, 10, 5};
+        int targetTotalWidth = 20; // 需削减 1 列
+
+        int[] reduced = MarkdownTable.reduceColumnWidths(widths, targetTotalWidth);
+
+        // 并列最宽时削索引小的：索引 0 的列被削
+        assertArrayEquals(new int[]{9, 10, 5}, reduced);
+    }
+
+    @Test
+    void reduceColumnWidths_stopsAtIterationLimit() {
+        // 模拟极端输入：单列超宽
+        int[] widths = {65000}; // 需削减约 64996 次才到最小宽 4
+        int targetTotalWidth = 4;
+
+        int[] reduced = MarkdownTable.reduceColumnWidths(widths, targetTotalWidth);
+
+        // 超过 10000 次迭代，返回 null（触发 fallback）
+        assertNull(reduced);
+    }
 }
