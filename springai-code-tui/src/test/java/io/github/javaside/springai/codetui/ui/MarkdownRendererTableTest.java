@@ -31,4 +31,50 @@ class MarkdownRendererTableTest {
         assertEquals(1, result.size());
         assertFalse(md.hasBuffered());
     }
+
+    @Test
+    void feed_enteresBlockStateOnSeparator() {
+        md.feed("| A | B |", 80);
+        List<List<Span>> result = md.feed("|---|---|", 80);
+
+        // 进块内态，仍不输出
+        assertEquals(0, result.size());
+        assertTrue(md.hasBuffered());
+    }
+
+    @Test
+    void feed_collectsRowsInBlock() {
+        md.feed("| A | B |", 80);
+        md.feed("|---|---|", 80);
+        List<List<Span>> result = md.feed("| 1 | 2 |", 80);
+
+        // 块内继续收集
+        assertEquals(0, result.size());
+        assertTrue(md.hasBuffered());
+    }
+
+    @Test
+    void feed_flushesBlockOnNonTableRow() {
+        md.feed("| A | B |", 80);
+        md.feed("|---|---|", 80);
+        md.feed("| 1 | 2 |", 80);
+
+        // 非表格行触发整块输出
+        List<List<Span>> result = md.feed("normal text", 80);
+
+        // 表格块（头行 + 分隔线 + 数据行 = 3 行）+ 当前行 = 4 行
+        assertTrue(result.size() >= 4, "Expected >= 4 lines, got " + result.size());
+        assertFalse(md.hasBuffered());
+    }
+
+    @Test
+    void feed_flushesCandidate_whenNotFollowedBySeparator() {
+        md.feed("| A | B |", 80);
+
+        // 下一行不是分隔符，吐候选行 + 当前行
+        List<List<Span>> result = md.feed("normal text", 80);
+
+        assertEquals(2, result.size());
+        assertFalse(md.hasBuffered());
+    }
 }
