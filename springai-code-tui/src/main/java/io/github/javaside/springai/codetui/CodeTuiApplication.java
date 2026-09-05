@@ -12,6 +12,7 @@ import io.github.javaside.springai.codetui.agent.llm.OpenAiProvider;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.llm.QwenProvider;
 import io.github.javaside.springai.codetui.agent.llm.StreamIdleTimeoutProvider;
+import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
 import io.github.javaside.springai.codetui.agent.llm.UsageRecordingProvider;
 import io.github.javaside.springai.codetui.agent.llm.ZhipuProvider;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
@@ -115,13 +116,19 @@ public class CodeTuiApplication {
         try {
             AgentTools.AgentRuntime runtime =
                     AgentTools.build(registry, root, state, mcpRegistry, permissionEngine);
+            // 与 AgentTools.build 内部的默认一致：同一进程读一次 CODETUI_STREAM_RETRY（fromEnv），
+            // 同时喂给装配层（L1 三元）与 CodingAgent（L2 白名单），保证两层开关永不漂移。
             CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
                     runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
                     runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer(),
                     mcpRegistry, runtime.permissionEngine(), runtime.visionModels(),
                     runtime.backgroundRegistry(), runtime.backgroundResults(), runtime.interjections(),
-                    usageAccumulator, runtime.systemPromptTokens());
+                    usageAccumulator, runtime.systemPromptTokens(), StreamRetryConfig.fromEnv());
+            // L1 两段式桥接线：装配期 build 已把 runtime.bridge() 包进主链 RetryingStreamChatModel，
+            // 这里在 CodingAgent 构造完成后 bind（agent::onL1Retry 是包私有方法，跨包方法引用编译失败，
+            // 故必须经 AgentTools.wireL1 在 agent 包内接线——见 wireL1 javadoc）。
+            AgentTools.wireL1(runtime, agent);
 
             // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
             // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。

@@ -4,7 +4,10 @@ import io.github.javaside.springai.codetui.agent.background.BackgroundTaskListTo
 import io.github.javaside.springai.codetui.agent.llm.DynamicAuxChatModel;
 import io.github.javaside.springai.codetui.agent.llm.LlmProvider;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.RetryReporter;
+import io.github.javaside.springai.codetui.agent.llm.RetryingStreamChatModel;
 import io.github.javaside.springai.codetui.agent.llm.SessionIdStreamGuardAdvisor;
+import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskTool;
 import io.github.javaside.springai.codetui.agent.background.TaskResultStore;
@@ -348,6 +351,23 @@ public final class AgentTools {
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
                                       McpRegistry mcpRegistry, PermissionEngine permissionEngine) {
+        return build(registry, root, listener, mcpRegistry, permissionEngine, StreamRetryConfig.fromEnv());
+    }
+
+    /**
+     * 同 {@link #build(ProviderRegistry, Path, AgentListener, McpRegistry, PermissionEngine)}，
+     * 仅 {@link StreamRetryConfig}（L1/L2 总闸）由调用方显式传入。
+     *
+     * <p><b>为什么必须注入、而不是在 build 内读环境变量</b>：测试无法安全修改 {@code System.getenv}，
+     * 而开发者本机真设了 {@code CODETUI_STREAM_RETRY} 会让链序断言随机红。注入重载让守卫测试逐档
+     * 断言开关语义（off/l2 → 不包装直通，l1/all → 包 RetryingStreamChatModel）；默认重载走
+     * {@link StreamRetryConfig#fromEnv()}（生产入口 {@code CodeTuiApplication} 调 5-arg 重载即此路径）。
+     *
+     * @param retryConfig L1/L2 计费总闸（CODETUI_STREAM_RETRY：all/l1/l2/off），见 {@link StreamRetryConfig}
+     */
+    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
+                                      McpRegistry mcpRegistry, PermissionEngine permissionEngine,
+                                      StreamRetryConfig retryConfig) {
         java.util.Objects.requireNonNull(permissionEngine, "permissionEngine 不可为 null：漏传等于全线无权限层");
         // 不设 allowedDirectory：沙箱是库的 opt-in 特性，空列表即放行任何路径
         // （见 FileSystemTools.validateAllowedAccess：allowedDirectories.isEmpty() → 直接返回放行）。
@@ -620,14 +640,33 @@ public final class AgentTools {
         // 每个 provider 的视觉装饰器实例单独留一份引用：/context 要按<b>激活</b> provider 读
         // lastSnapshot()，而快照是每个装饰器自己的状态（预算也按实例计），拿错一个就报错数字。
         java.util.Map<String, VisionMaterializingChatModel> visionModels = new java.util.LinkedHashMap<>();
+        // L1 重试事件的两段式桥（spec §3.2）：装配期包进每个 provider 的 RetryingStreamChatModel（reporter），
+        // CodingAgent 构造完成后经 {@link #wireL1} 一次性 bind 到 codingAgent::onL1Retry。
+        // 全 provider 共用一个实例——report 只透传、与模型家无关（与 interjections 全 provider 共用的同一理由）；
+        // 若每 provider 一个桥，wireL1 只 bind 得到其中一份，其余家的 L1 重试对 UI 永久不可见。
+        L1ReporterBridge bridge = new L1ReporterBridge();
         for (LlmProvider provider : registry.allProviders()) {
             if (!provider.available()) {
                 continue;
             }
             // 视觉兑现的唯一接线点：包在 provider 的 ChatModel 外，位于整条 advisor 链<b>下游</b>，
             // 故兑现结果绝不会回流进会话存储（见 VisionMaterializingChatModel 类注释）。
+            // ⚠ 主链 L1 零下发重试插在 provider.chatModel() 与 Vision 之间（spec §3.7 链序，勿挪）：
+            //   最终链 Interjecting(Vision(RetryStream(Usage(IdleTimeout(raw)))))——Usage/IdleTimeout 在
+            //   CodeTuiApplication 的 provider 包装层（{@code wrap()}），RetryStream 在其外。
+            //   位置论证（spec §3.7）：RetryStream 在 IdleTimeout 外（空闲/首字节超时可重试）、在 Vision 内
+            //   （L1 重订阅复用同一已物化 Prompt）、在 Usage 外（provider.chatModel() 是主/子/aux 三路共用
+            //   的共享链——放共享链内会给子 agent 双重重试、给 aux 违反守卫；aux/子 agent 不被误包由守卫
+            //   测试钉着：AuxClientNotRetryWrappedTest / 本装配段注释）。
+            //   总闸：retryConfig.l1Enabled()=false（off/l2）时三元直通不包装（无 passthrough API，见
+            //   RetryingStreamChatModel.wrap），守卫测试据此断言链中无 RetryingStreamChatModel。
+            // ⚠ dispose 守卫（spec §5「dispose 后 boundedElastic 不再 replaceEvents」）不在此装配行——
+            //   实际落位 CodingAgentTurnResumeTest 用例 7（repository 桩计数，Task 6 已实现），本任务不重复。
+            ChatModel base = retryConfig.l1Enabled()
+                    ? RetryingStreamChatModel.wrap(provider.chatModel(), bridge)
+                    : provider.chatModel();
             VisionMaterializingChatModel visionModel = VisionMaterializingChatModel.wrap(
-                    provider.chatModel(), root,
+                    base, root,
                     modelId -> provider.capabilities(modelId).supportsImageInput());
             visionModels.put(provider.id(), visionModel);
             // 插话注入包在<b>最外层</b>：位置必须在整条 advisor 链下游，才拿得到已配平的完整消息表
@@ -672,7 +711,7 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
-                backgroundRegistry, backgroundResults, interjections, systemPromptTokens);
+                backgroundRegistry, backgroundResults, interjections, systemPromptTokens, bridge);
     }
 
     /**
@@ -906,6 +945,9 @@ public final class AgentTools {
      * @param backgroundRegistry  后台任务注册表（进程内、不落盘）；{@code TaskOutput} / {@code ListTasks} / {@code /tasks} 面板共用
      * @param backgroundResults   后台结果限幅存储；超长正文落 artifacts 并在返回文本里给出路径
      * @param systemPromptTokens  装配期一次性估算的系统提示词 token 数，供 {@code /context} 与状态栏用同一分母
+     * @param bridge              L1 重试事件的两段式桥——与每个 provider 主链里 {@link RetryingStreamChatModel}
+     *                            wrap 进去的是<b>同一个实例</b>；CodingAgent 构造后经 {@link #wireL1} bind 到
+     *                            {@code agent::onL1Retry}（装配期未 bind，volatile null 守卫 no-op）
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -923,10 +965,42 @@ public final class AgentTools {
                                BackgroundTaskRegistry backgroundRegistry,
                                TaskResultStore backgroundResults,
                                Interjections interjections,
-                               long systemPromptTokens) {
+                               long systemPromptTokens,
+                               L1ReporterBridge bridge) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
+    }
+
+    /**
+     * 把 {@link AgentRuntime#bridge()} bind 到 {@code CodingAgent} 的 {@code onL1Retry}（spec §3.2 两段式时序）：
+     * 装配期 {@code build} 建桥并把桥包进 {@link RetryingStreamChatModel}，CodingAgent 构造<b>完成后</b>经本方法接线。
+     *
+     * <p><b>为什么必须放在 AgentTools 而不是 {@code CodeTuiApplication}</b>：bind 的是方法引用
+     * {@code agent::onL1Retry}，而 {@code onL1Retry} 是 <b>包私有</b> 方法——方法引用在引用方编译期
+     * 解析可访问性，{@code CodeTuiApplication}（codetui 包）写 {@code codingAgent::onL1Retry} 直接编译失败；
+     * 本方法在 agent 包内编译，天然可访问。调用方（跨包）只调这一个 public 静态方法。
+     */
+    public static void wireL1(AgentRuntime rt, CodingAgent agent) {
+        rt.bridge().bind(agent::onL1Retry);
+    }
+
+    /**
+     * L1 重试事件的两段式桥（完整形状，spec §3.2）：装配期实例建好即包进 {@link RetryingStreamChatModel}，
+     * 而真正消费方（CodingAgent 的 {@code onL1Retry} → UI ↻ 行）要等 CodingAgent 构造完才存在——
+     * 故桥先持 volatile sink（装配期 null），{@link #bind} 后转发。
+     *
+     * <p><b>volatile 快照读 + null 守卫</b>：{@code report} 与 {@code bind} 可能在不同线程（模型线程 vs
+     * 装配/构造线程）；快照读保证单次 report 内不因 bind 交错读到两次不同值，null 守卫让装配期偶发
+     * 上报（理论窗口极小：L1 重试发生在首个回合前）不 NPE。
+     */
+    static final class L1ReporterBridge implements RetryReporter {
+        private volatile RetryReporter sink;          // 装配期 null；wireL1 后有值
+        void bind(RetryReporter r) { this.sink = r; }
+        @Override public void report(int attempt, long backoffMs, String reason) {
+            RetryReporter s = sink;                   // 快照
+            if (s != null) s.report(attempt, backoffMs, reason);
+        }
     }
 
     /**
@@ -936,9 +1010,13 @@ public final class AgentTools {
      * <b>含引用块</b>——一旦包上，每次压缩都会把历史图兑现成真字节发给摘要模型，<b>一次纯文本摘要
      * 静默变成视觉请求</b>。而压缩是<b>自动触发</b>的、全程无提示，你不会注意到，直到看账单。
      *
+     * <p><b>同样绝不能被 {@link RetryingStreamChatModel} 包上</b>：aux 链（辅助 ChatClient）经
+     * {@link DynamicAuxChatModel} <b>每次调用实时直取 {@code provider.chatModel()}</b>——主链的 L1
+     * 重试只应在 AgentTools 主链 wrap（spec §3.7 收敛一行），放这里会给摘要/抽取请求也套上重试层。
+     * 两件事都有守卫测试盯住（{@code AuxClientNotVisionWrappedTest} / {@code AuxClientNotRetryWrappedTest}）。
+     *
      * <p>之所以把它抽成一个独立方法而不是埋在 {@link #build} 一长串构造里：让「auxClient 用哪个
-     * ChatModel」变成<b>一处显式决策</b>，可以被守卫测试直接盯住
-     * （见 {@code AuxClientNotVisionWrappedTest}）——否则「顺手包上」这件事没有任何东西挡得住。
+     * ChatModel」变成<b>一处显式决策</b>，可以被守卫测试直接盯住——否则「顺手包上」这件事没有任何东西挡得住。
      */
     static ChatModel auxChatModel(ProviderRegistry registry) {
         return new DynamicAuxChatModel(registry);
