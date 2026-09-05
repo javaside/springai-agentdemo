@@ -70,4 +70,23 @@ public class MarkdownTableTest {
         cells = MarkdownTable.parseCells("| a\\ |");
         assertEquals(List.of("a\\"), cells);
     }
+
+    @Test
+    void adjustCellCount_handlesFewerCells() {
+        List<String> header = List.of("A", "B", "C");
+        List<String> row = List.of("1", "2");
+
+        List<String> adjusted = MarkdownTable.adjustCellCount(row, header.size());
+        assertEquals(List.of("1", "2", ""), adjusted);
+    }
+
+    @Test
+    void adjustCellCount_handlesMoreCells() {
+        List<String> header = List.of("A", "B");
+        List<String> row = List.of("1", "2", "3", "4");
+
+        // 多出来的并入最后一列（用 " | " 拼接）
+        List<String> adjusted = MarkdownTable.adjustCellCount(row, header.size());
+        assertEquals(List.of("1", "2 | 3 | 4"), adjusted);
+    }
 }
