@@ -48,9 +48,19 @@ public final class MarkdownRenderer {
     private boolean inBlockComment = false;
 
     // ---- 表格状态机 ----
-    private enum TableState { IDLE, CANDIDATE, CONFIRMED }
+    /**
+     * 缓冲上限（规范 §3.5）：行数 > 200 或<b>原文</b>字符数 > 64 K 即转降级。
+     * 判定在每次入缓冲之后做。目的有两个：内存有界，以及「憋」的时长有界
+     * （几千行的表格不该让界面停半秒以上）。
+     */
+    private static final int MAX_BUFFERED_ROWS = 200;
+    private static final int MAX_BUFFERED_CHARS = 64 * 1024;
+
+    /** 降级是正式状态、不是补丁：越上限后该块剩余的 {@code |} 行原样输出直到块结束。 */
+    private enum TableState { IDLE, CANDIDATE, IN_BLOCK, DEGRADED }
     private TableState tableState = TableState.IDLE;
-    private List<String> tableBuffer = new ArrayList<>();
+    private final List<String> tableBuffer = new ArrayList<>();
+    private int bufferedCharCount = 0;
 
     /** 新回合开始时复位所有状态。 */
     public void reset() {
@@ -58,109 +68,169 @@ public final class MarkdownRenderer {
         codeLang = "";
         inBlockComment = false;
         tableState = TableState.IDLE;
-        tableBuffer.clear();
+        clearBuffer();
     }
 
-    /** 检查是否有缓冲的表格行。 */
+    /**
+     * 缓冲里是否压着表格（<b>候选态也算</b>，否则那一行会永久消失）。
+     * 降级态为 false——缓冲已空，此时第 4 条触发点不该再碰它。
+     */
     public boolean hasBuffered() {
         return !tableBuffer.isEmpty();
     }
 
     /**
-     * 喂入一行，返回零到多行排好的 spans。
-     * 表格块会被缓冲，feed 返回空列表 ≠ 无输出。
+     * 喂入一条<b>定稿</b>逻辑行，返回零到多行排好的 spans。
+     *
+     * <p><b>返回空列表 ≠ 无输出</b>：表格块要攒够整块才能算列宽（scrollback 只能追加），
+     * 所以缓冲期间返回空。调用方（{@code MdLineCursor}）必须内部循环，不能把空列表当游标耗尽。
      */
     public List<List<Span>> feed(String line, int inner) {
         if (line == null) {
             return List.of();
         }
 
-        switch (tableState) {
-            case IDLE:
-                if (MarkdownTable.looksLikeRow(line)) {
-                    // 进候选态
-                    tableState = TableState.CANDIDATE;
-                    tableBuffer.add(line);
-                    return List.of();
-                } else {
-                    // 非表格行直接输出
-                    return List.of(renderFinalized(line));
+        List<List<Span>> out = new ArrayList<>();
+        String current = line;
+
+        // 「当前行重新投喂」写成<b>循环</b>而不是真递归：被重投喂的行只会落到空闲态的两条分支
+        // （要么渲染、要么成为新候选），深度恒为 1，写成循环免得以后被改出无界递归。
+        while (current != null) {
+            String reFeed = null;
+
+            switch (tableState) {
+                case IDLE -> {
+                    // 围栏内的 `|` 不能当表格——状态机放在本类而不是外面，就是因为围栏开合只有它有
+                    if (!inCodeBlock && MarkdownTable.looksLikeRow(current)) {
+                        tableState = TableState.CANDIDATE;
+                        buffer(current);
+                        out.addAll(degradeIfOverLimit());
+                    } else {
+                        out.add(renderFinalized(current));
+                    }
                 }
-
-            case CANDIDATE:
-                if (MarkdownTable.isSeparator(line)) {
-                    // 进块内态
-                    tableState = TableState.CONFIRMED;
-                    tableBuffer.add(line);
-                    return List.of();
-                } else {
-                    // 非分隔行：吐候选行，回空闲，重新投喂当前行
-                    tableState = TableState.IDLE;
-                    String candidateLine = tableBuffer.get(0);
-                    tableBuffer.clear();
-
-                    List<List<Span>> output = new ArrayList<>();
-                    output.add(renderFinalized(candidateLine));
-
-                    // 重新投喂当前行
-                    output.addAll(feed(line, inner));
-                    return output;
+                case CANDIDATE -> {
+                    if (MarkdownTable.isSeparator(current)) {
+                        tableState = TableState.IN_BLOCK;
+                        buffer(current);
+                        out.addAll(degradeIfOverLimit());
+                    } else {
+                        // 吐候选行 → 回空闲 → 把当前行重新投喂一遍（少了这步，`|` 开头的正文
+                        // 会把紧跟其后的真表格吃掉，整张表拆成原样输出）
+                        String candidate = tableBuffer.get(0);
+                        clearBuffer();
+                        tableState = TableState.IDLE;
+                        out.add(renderFinalized(candidate));
+                        reFeed = current;
+                    }
                 }
-
-            case CONFIRMED:
-                if (MarkdownTable.looksLikeRow(line)) {
-                    // 块内继续收集
-                    tableBuffer.add(line);
-                    return List.of();
-                } else {
-                    // 非表格行：整块输出，回空闲，重新投喂当前行
-                    List<List<Span>> tableOutput = MarkdownTable.render(tableBuffer, inner);
-                    tableState = TableState.IDLE;
-                    tableBuffer.clear();
-
-                    List<List<Span>> output = new ArrayList<>(tableOutput);
-                    output.addAll(feed(line, inner));
-                    return output;
+                case IN_BLOCK -> {
+                    if (MarkdownTable.looksLikeRow(current)) {
+                        buffer(current);
+                        out.addAll(degradeIfOverLimit());
+                    } else {
+                        out.addAll(renderBufferedBlock(inner));   // 非表格行（含空行）= 块结束
+                        tableState = TableState.IDLE;
+                        reFeed = current;
+                    }
                 }
+                case DEGRADED -> {
+                    if (MarkdownTable.looksLikeRow(current)) {
+                        out.add(renderFinalized(current));
+                    } else {
+                        tableState = TableState.IDLE;
+                        reFeed = current;
+                    }
+                }
+            }
 
-            default:
-                return List.of(renderFinalized(line));
+            current = reFeed;
         }
+
+        return out;
     }
 
     /**
-     * 强制输出缓冲区内容并清空。
-     * 候选态按普通行输出，块内态对齐输出。
+     * 把缓冲排出来；空缓冲返回空列表（幂等）。
+     *
+     * <p>按状态分：候选 → 该行按普通行输出（一句「{@code |} 表示管道」不能被印成加粗表头 +
+     * 通栏 {@code ─}）；块内 → 对齐排出；降级 → 回空闲、返回空。
      */
     public List<List<Span>> flush(int inner) {
-        if (tableBuffer.isEmpty()) {
+        switch (tableState) {
+            case CANDIDATE -> {
+                List<List<Span>> out = new ArrayList<>(tableBuffer.size());
+                for (String line : tableBuffer) {
+                    out.add(renderFinalized(line));
+                }
+                clearBuffer();
+                tableState = TableState.IDLE;
+                return out;
+            }
+            case IN_BLOCK -> {
+                List<List<Span>> out = renderBufferedBlock(inner);
+                tableState = TableState.IDLE;
+                return out;
+            }
+            case DEGRADED -> {
+                // 缓冲已空，但状态必须复位：降级态活过回合边界会让下一回合的第一张表
+                // 在遇到第一个非 `|` 行之前全部原样输出
+                tableState = TableState.IDLE;
+                return List.of();
+            }
+            default -> {
+                return List.of();
+            }
+        }
+    }
+
+    /** 入缓冲：行数与<b>原文</b>字符数一起记账（不含样式，{@code length()} 近似即可）。 */
+    private void buffer(String line) {
+        tableBuffer.add(line);
+        bufferedCharCount += line.length();
+    }
+
+    private void clearBuffer() {
+        tableBuffer.clear();
+        bufferedCharCount = 0;
+    }
+
+    /**
+     * 每次入缓冲之后判上限：越限则把已攒行<b>原样</b>吐出、转降级态。
+     *
+     * <p>「原样」= 走 {@link #renderFinalized}，只是不重排列——降级行照旧要有
+     * {@code **粗**} / {@code `代码`} 的内联样式，否则就是把今天已有的行为改坏了。
+     */
+    private List<List<Span>> degradeIfOverLimit() {
+        if (tableBuffer.size() <= MAX_BUFFERED_ROWS && bufferedCharCount <= MAX_BUFFERED_CHARS) {
             return List.of();
         }
-
-        List<List<Span>> output = new ArrayList<>();
-
-        switch (tableState) {
-            case CANDIDATE:
-                // 候选行按普通行输出
-                for (String line : tableBuffer) {
-                    output.add(renderFinalized(line));
-                }
-                tableBuffer.clear();
-                tableState = TableState.IDLE;
-                break;
-
-            case CONFIRMED:
-                // 对齐排出整块
-                output.addAll(MarkdownTable.render(tableBuffer, inner));
-                tableBuffer.clear();
-                tableState = TableState.IDLE;
-                break;
-
-            default:
-                break;
+        List<List<Span>> out = new ArrayList<>(tableBuffer.size());
+        for (String buffered : tableBuffer) {
+            out.add(renderFinalized(buffered));
         }
+        clearBuffer();
+        tableState = TableState.DEGRADED;
+        return out;
+    }
 
-        return output;
+    /**
+     * 对齐排出整块并清缓冲。{@code render} 万一抛了就把该块原样输出——自兜一层的理由见
+     * 规范 §3.2：调用方 {@code MdLineCursor.next()} 的 catch 返回 null，而 null 在队列语义里
+     * 是「游标耗尽」，一次异常会丢掉整块 + 同游标里剩余的逻辑行。
+     */
+    private List<List<Span>> renderBufferedBlock(int inner) {
+        List<String> block = List.copyOf(tableBuffer);
+        clearBuffer();
+        try {
+            return MarkdownTable.render(block, inner);
+        } catch (RuntimeException e) {
+            List<List<Span>> out = new ArrayList<>(block.size());
+            for (String raw : block) {
+                out.add(renderFinalized(raw));
+            }
+            return out;
+        }
     }
 
     /** 处理一条「定稿」行：更新内部状态并返回带样式 span。 */
