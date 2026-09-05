@@ -50,9 +50,9 @@ public class MarkdownTableTest {
         cells = MarkdownTable.parseCells("| a | b |");
         assertEquals(List.of("a", "b"), cells);
 
-        // 空表格行
+        // 全空行：外侧两个空串丢掉后剩中间那一个空格子（`||` = 一个空列）
         cells = MarkdownTable.parseCells("||");
-        assertEquals(List.of(), cells);
+        assertEquals(List.of(""), cells);
     }
 
     @Test
@@ -107,6 +107,51 @@ public class MarkdownTableTest {
         // 空串
         assertEquals(0, MarkdownTable.displayWidth(""));
         assertEquals(0, MarkdownTable.displayWidth(null));
+    }
+
+    @Test
+    void displayWidth_agreesWithCharWidthOracle() {
+        // 排出来的行随后要过 SegmentedWrap（用 CharWidth 测量）。两套口径不一致时，
+        // 本类算 ≤ inner 的行会被 SegmentedWrap 判超宽撕成两段——§3.1 硬不变量的失效形态。
+        for (String s : List.of(
+                "控制是否使用同步输出。",   // 全角句号 U+3002，CJK Symbols and Punctuation
+                "、《》「」【】",           // 同区间的其它标点
+                "한국어",                   // Hangul Syllables
+                "ｱｲｳ",                     // 半角片假名（CharWidth 算 1，别算成 2）
+                "ㄅㄆㄇ",                   // 注音符号
+                "é",                 // 组合字符（CharWidth 算 0 宽）
+                "hello",
+                "你好abc")) {
+            assertEquals(dev.tamboui.text.CharWidth.of(s), MarkdownTable.displayWidth(s),
+                    "displayWidth 必须与 CharWidth 逐字一致，否则行宽算错：" + s);
+        }
+    }
+
+    @Test
+    void wrapCellContent_matchesSegmentedWrapWhenNoSpaces() {
+        // §5.1 交叉单测：无空格可断时，格内折行必须与 SegmentedWrap 逐字相等
+        // （仓里第三套折行语义，分家就是「打出去的行 ≠ 留底重放的行」）。
+        for (String content : List.of("你好世界再见天地", "abcdefghijklmnop", "a你b好c世d界", "混排abc中文def",
+                                     "一句话。又一句话。", "한국어테스트")) {
+            for (int width : new int[]{3, 4, 5, 8}) {
+                List<String> mine = MarkdownTable.wrapCellContent(content, width);
+                List<String> theirs = new java.util.ArrayList<>();
+                SegmentedWrap.Plain p = SegmentedWrap.plain(content, width);
+                while (p.hasNextSegment()) {
+                    theirs.add(p.nextSegment());
+                }
+                assertEquals(theirs, mine,
+                        "无空格内容在宽度 " + width + " 下必须与 SegmentedWrap 一致：" + content);
+            }
+        }
+    }
+
+    @Test
+    void parseCells_keepsInteriorEmptyCells() {
+        // 只丢首尾的空单元格；中间的空格子是真实列，丢了会让后面的内容整体左移一列
+        assertEquals(List.of("a", "", "c"), MarkdownTable.parseCells("| a |  | c |"));
+        assertEquals(List.of("", "b"), MarkdownTable.parseCells("|  | b |"));
+        assertEquals(List.of("a", ""), MarkdownTable.parseCells("| a |  |"));
     }
 
     @Test
@@ -347,6 +392,133 @@ public class MarkdownTableTest {
 
         // 格内折行后应该多于 3 行
         assertTrue(result.size() > 3);
+    }
+
+    @Test
+    void render_everyRowFitsInner_withCjkPunctuation() {
+        // §3.1 硬不变量：排出来的每一行（未加缩进）显示宽度 ≤ inner。
+        // 全角标点是最容易破这条的输入——列宽算窄 1 列，行就会被 SegmentedWrap 撕开。
+        List<String> block = List.of(
+                "| 参数 | 说明 |",
+                "|------|------|",
+                "| a | " + "中".repeat(20) + "。".repeat(8) + " |",
+                "| bb | 取值 never/auto，默认 auto。|");
+
+        int inner = 78;
+        List<List<Span>> result = MarkdownTable.render(block, inner);
+
+        for (List<Span> row : result) {
+            StringBuilder sb = new StringBuilder();
+            row.forEach(s -> sb.append(s.content()));
+            assertTrue(dev.tamboui.text.CharWidth.of(sb.toString()) <= inner,
+                    "行宽 %d 超过 inner %d：%s".formatted(
+                            dev.tamboui.text.CharWidth.of(sb.toString()), inner, sb));
+        }
+    }
+
+    @Test
+    void render_separatorLineSpansExactTableWidth() {
+        // 分隔线长度 = 表格总宽（Σ列宽 + 2×(列数−1)），不是 inner、也不是表头行的实际宽度
+        List<String> block = List.of(
+                "| 参数 | 类型 |",
+                "|------|------|",
+                "| abc | String |");
+
+        List<List<Span>> result = MarkdownTable.render(block, 78);
+
+        // 列宽：col0 = max("参数"=4, "abc"=3) = 4；col1 = max("类型"=4, "String"=6) = 6
+        // 总宽 = 4 + 6 + 2 = 12
+        String sep = result.get(1).stream().map(Span::content).reduce("", String::concat);
+        assertEquals("─".repeat(12), sep, "分隔线必须与表格总宽等长");
+    }
+
+    @Test
+    void render_inlineMarkupNotCountedInWidth() {
+        // 列宽按 spans 内容拼接后测量：`**粗**` 的星号不算宽度
+        List<String> block = List.of(
+                "| A | B |",
+                "|---|---|",
+                "| **bold** | x |");
+
+        List<List<Span>> result = MarkdownTable.render(block, 78);
+
+        String row = result.get(2).stream().map(Span::content).reduce("", String::concat);
+        assertFalse(row.contains("**"), "内联标记应被渲染掉，不应出现在输出里：" + row);
+        // col0 宽 = max("A"=1, "bold"=4) = 4；col1 宽 = 1 → 数据行 = "bold" + 2 空格 + "x"
+        assertEquals("bold  x", row);
+    }
+
+    @Test
+    void render_appliesAlignment() {
+        List<String> block = List.of(
+                "| L | C | R |",
+                "| :--- | :--: | ---: |",
+                "| a | b | c |");
+
+        List<List<Span>> result = MarkdownTable.render(block, 78);
+        String row = result.get(2).stream().map(Span::content).reduce("", String::concat);
+
+        // 每列宽 1（表头与数据都是 1 列宽），无补白空间 → 三列各 1 字符、列间 2 空格
+        assertEquals("a  b  c", row);
+
+        // 换一个有补白空间的：右对齐靠前置补白
+        block = List.of(
+                "| head | tail |",
+                "| ---: | ---: |",
+                "| a | b |");
+        result = MarkdownTable.render(block, 78);
+        row = result.get(2).stream().map(Span::content).reduce("", String::concat);
+        assertEquals("   a     b", row, "右对齐前置补白；最后一列尾部不补白");
+    }
+
+    @Test
+    void render_singleColumnTable() {
+        List<String> block = List.of("| 参数 |", "|------|", "| abc |");
+
+        List<List<Span>> result = MarkdownTable.render(block, 78);
+
+        assertEquals(3, result.size());
+        String sep = result.get(1).stream().map(Span::content).reduce("", String::concat);
+        // 单列：列间宽退化为 0，总宽 = 列宽 = max("参数"=4, "abc"=3) = 4
+        assertEquals("─".repeat(4), sep);
+    }
+
+    @Test
+    void render_fallsBackWhenSeparatorHasFewerColumnsThanHeader() {
+        // GFM 识别规则：分隔行列数 < 表头列数 → 不是表格
+        List<String> block = List.of(
+                "| A | B | C |",
+                "|---|---|",
+                "| 1 | 2 | 3 |");
+
+        List<List<Span>> result = MarkdownTable.render(block, 78);
+
+        assertEquals(3, result.size());
+        String head = result.get(0).stream().map(Span::content).reduce("", String::concat);
+        assertEquals("| A | B | C |", head, "退回原样必须保留原文（只是不重排列）");
+    }
+
+    @Test
+    void render_preservesContentWhenRowHasExtraCells() {
+        // 多于表头的单元格并入最后一列，一个字不丢（典型触发：格子里有带管道的行内代码）
+        List<String> block = List.of(
+                "| cmd | desc |",
+                "|-----|------|",
+                "| ps | ps aux | grep java |");
+
+        List<List<Span>> result = MarkdownTable.render(block, 78);
+        String row = result.get(2).stream().map(Span::content).reduce("", String::concat);
+
+        assertTrue(row.contains("ps aux | grep java"), "多出的单元格应拼回最后一列：" + row);
+    }
+
+    @Test
+    void render_doesNotThrowOnMalformedInput() {
+        assertDoesNotThrow(() -> MarkdownTable.render(List.of("|---|"), 78));            // 只有分隔行
+        assertDoesNotThrow(() -> MarkdownTable.render(List.of("|", "|", "|"), 78));      // 全是 |
+        assertDoesNotThrow(() -> MarkdownTable.render(List.of("| a |", "|---|"), -5));   // 负宽度
+        assertDoesNotThrow(() -> MarkdownTable.render(java.util.Arrays.asList("| a |", null), 78));
+        assertDoesNotThrow(() -> MarkdownTable.render(List.of("| a |", "|---|", ""), 78));
     }
 
     @Test

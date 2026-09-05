@@ -254,8 +254,16 @@ public final class MarkdownRenderer {
         return renderInline(line);
     }
 
-    /** 解析一段文本中的内联样式：**bold**、`code`、*italic*，其余为默认。 */
+    /**
+     * 解析一段文本中的内联样式：**bold**、`code`、*italic*，其余为默认。
+     *
+     * <p>{@code null} 视为空行——{@link MarkdownTable} 的「对任意输入不抛」契约要靠这里兜住
+     * （退回原样时块里可能有 null 行，抛出去会让游标丢掉整块 + 剩余逻辑行）。
+     */
     static List<Span> renderInline(String text) {
+        if (text == null) {
+            return List.of(Span.raw(""));
+        }
         List<Span> spans = new ArrayList<>();
         StringBuilder plain = new StringBuilder();
         int i = 0;

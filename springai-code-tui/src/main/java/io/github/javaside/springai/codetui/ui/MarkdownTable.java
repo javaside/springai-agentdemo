@@ -1,23 +1,29 @@
 package io.github.javaside.springai.codetui.ui;
 
+import dev.tamboui.text.CharWidth;
 import dev.tamboui.text.Span;
 import dev.tamboui.style.Style;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
+/**
+ * Markdown 表格块的解析 + 排版：<b>纯函数、无状态</b>（只有 static 方法，不持有协作者、不碰 IO），
+ * 因此可独立单测。轻量表输出规格见设计 §3.1：表头加粗 + 一条 {@code ─} 分隔线 + 空格对齐，
+ * 不画竖线、行尾不补白。
+ *
+ * <p>宽度一律走 {@link #displayWidth}（委托 {@link CharWidth}），与后续 {@code SegmentedWrap}
+ * 的折行口径必须同源，否则排好的行会被二次折行撕开。
+ *
+ * <p><b>对任意输入不抛异常</b>（含 {@code null}）：调用方 {@code MdLineCursor.next()} 的 catch
+ * 返回 null，而 null 在队列语义里是「游标耗尽」，一次异常会丢掉整块 + 同游标里剩余的逻辑行。
+ */
 public final class MarkdownTable {
 
     enum Alignment {
         LEFT, CENTER, RIGHT
     }
 
-    private final MarkdownRenderer markdownRenderer;
-    private final ScrollbackPrinter scrollbackPrinter;
-
-    public MarkdownTable(MarkdownRenderer markdownRenderer, ScrollbackPrinter scrollbackPrinter) {
-        this.markdownRenderer = markdownRenderer;
-        this.scrollbackPrinter = scrollbackPrinter;
+    private MarkdownTable() {
     }
 
     static boolean looksLikeRow(String line) {
@@ -113,19 +119,22 @@ public final class MarkdownTable {
         }
         result.add(current.toString());
 
-        // 去除首尾空单元格
-        List<String> trimmed = new ArrayList<>();
-        for (int i = 0; i < result.size(); i++) {
-            String cell = result.get(i).trim();
-            if (cell.isEmpty() && (i == 0 || i == result.size() - 1)) {
-                continue;
-            }
-            if (!cell.isEmpty()) {
-                trimmed.add(cell);
-            }
+        // 只丢<b>首尾</b>的空单元格（GFM 标准写法 `| a | b |` 产生的外侧空串，不是真的空列）。
+        // 中间的空格子是真实列，丢了会让它后面的内容整体左移一列（adjustCellCount 在末尾补空）。
+        List<String> cells = new ArrayList<>(result.size());
+        for (String cell : result) {
+            cells.add(cell.trim());
+        }
+        int from = 0;
+        int to = cells.size();
+        if (from < to && cells.get(from).isEmpty()) {
+            from++;
+        }
+        if (to > from && cells.get(to - 1).isEmpty()) {
+            to--;
         }
 
-        return trimmed;
+        return new ArrayList<>(cells.subList(from, to));
     }
 
     /**
@@ -159,39 +168,18 @@ public final class MarkdownTable {
     }
 
     /**
-     * 计算字符串的显示宽度（CJK 字符算 2 列）。
+     * 显示宽度：<b>必须</b>与 {@link CharWidth} 同口径。
+     *
+     * <p>排出来的每一行随后都要过 {@code SegmentedWrap.styled(line, innerWidth())}
+     * （用 {@code CharWidth} 测量）。这里若自成一套 CJK 区间表，本类算出「总宽 ≤ inner」的行
+     * 会被 SegmentedWrap 判超宽撕成两段、续段再加一层缩进——「大部分行齐、个别行裂开」
+     * 是最难看的形态（设计 §3.1 硬不变量）。所以直接委托，不要重新实现。
      */
     static int displayWidth(String s) {
         if (s == null || s.isEmpty()) {
             return 0;
         }
-
-        int width = 0;
-        for (int i = 0; i < s.length(); i++) {
-            int codePoint = s.codePointAt(i);
-            if (Character.isSupplementaryCodePoint(codePoint)) {
-                i++; // 跳过低代理项
-            }
-
-            // CJK 统一表意文字、全角字符等占 2 列
-            if ((codePoint >= 0x4E00 && codePoint <= 0x9FFF) ||   // CJK 统一表意文字
-                (codePoint >= 0x3400 && codePoint <= 0x4DBF) ||   // CJK 扩展 A
-                (codePoint >= 0x20000 && codePoint <= 0x2A6DF) || // CJK 扩展 B
-                (codePoint >= 0x2A700 && codePoint <= 0x2B73F) || // CJK 扩展 C
-                (codePoint >= 0x2B740 && codePoint <= 0x2B81F) || // CJK 扩展 D
-                (codePoint >= 0x2B820 && codePoint <= 0x2CEAF) || // CJK 扩展 E
-                (codePoint >= 0xF900 && codePoint <= 0xFAFF) ||   // CJK 兼容表意文字
-                (codePoint >= 0x2F800 && codePoint <= 0x2FA1F) || // CJK 兼容表意文字补充
-                (codePoint >= 0x3040 && codePoint <= 0x309F) ||   // 平假名
-                (codePoint >= 0x30A0 && codePoint <= 0x30FF) ||   // 片假名
-                (codePoint >= 0xFF00 && codePoint <= 0xFFEF)) {   // 全角字符
-                width += 2;
-            } else {
-                width += 1;
-            }
-        }
-
-        return width;
+        return CharWidth.of(s);
     }
 
     /**
@@ -289,69 +277,41 @@ public final class MarkdownTable {
 
     /**
      * 格内折行：优先在空格处断，无空格则硬切（不切半个宽字符）。
+     *
+     * <p>硬切走 {@link CharWidth#substringByWidth}——与 {@code SegmentedWrap} /
+     * {@code TextWrap} 同一原语。这是本仓第三套折行语义，唯一的区别只能是「空格感知」，
+     * 无空格可断时必须与 {@code SegmentedWrap.plain} 逐字相等（有交叉单测钉住）。
      */
     static List<String> wrapCellContent(String content, int columnWidth) {
         if (content == null || content.isEmpty()) {
             return List.of("");
         }
 
+        int width = Math.max(1, columnWidth);
         List<String> result = new ArrayList<>();
         String remaining = content;
 
         while (!remaining.isEmpty()) {
-            // 整行适配，直接返回
-            if (displayWidth(remaining) <= columnWidth) {
+            // 整段适配，直接收尾
+            if (displayWidth(remaining) <= width) {
                 result.add(remaining);
                 break;
             }
 
-            // 尝试在空格处断
-            int lastSpaceIdx = -1;
-            int widthUpToSpace = 0;
-
-            for (int i = 0; i < remaining.length(); i++) {
-                char c = remaining.charAt(i);
-                int charWidth = displayWidth(String.valueOf(c));
-
-                if (widthUpToSpace + charWidth > columnWidth) {
-                    break;
-                }
-
-                widthUpToSpace += charWidth;
-
-                if (c == ' ') {
-                    lastSpaceIdx = i;
-                }
+            // 本段能容纳的最长前缀（宽字符不切半）
+            String window = CharWidth.substringByWidth(remaining, width);
+            if (window.isEmpty()) {
+                window = remaining.substring(0, 1);   // 窄到放不下 1 个宽字符：硬吃 1 个防死循环
             }
 
-            if (lastSpaceIdx > 0) {
-                // 在空格处断，空格丢弃
-                result.add(remaining.substring(0, lastSpaceIdx));
-                remaining = remaining.substring(lastSpaceIdx + 1).trim();
+            int lastSpace = window.lastIndexOf(' ');
+            if (lastSpace > 0) {
+                // 在空格处断，空格本身丢弃、下一段去掉开头空白
+                result.add(remaining.substring(0, lastSpace));
+                remaining = remaining.substring(lastSpace + 1).stripLeading();
             } else {
-                // 硬切（不切半个宽字符）
-                int cutIdx = 0;
-                int accumulatedWidth = 0;
-
-                for (int i = 0; i < remaining.length(); i++) {
-                    String charStr = String.valueOf(remaining.charAt(i));
-                    int charWidth = displayWidth(charStr);
-
-                    if (accumulatedWidth + charWidth > columnWidth) {
-                        break;
-                    }
-
-                    accumulatedWidth += charWidth;
-                    cutIdx = i + 1;
-                }
-
-                if (cutIdx == 0) {
-                    // 单个字符就超宽，强制取 1 个字符
-                    cutIdx = 1;
-                }
-
-                result.add(remaining.substring(0, cutIdx));
-                remaining = remaining.substring(cutIdx);
+                result.add(window);
+                remaining = remaining.substring(window.length());
             }
         }
 
