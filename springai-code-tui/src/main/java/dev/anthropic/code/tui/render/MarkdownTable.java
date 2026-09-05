@@ -84,22 +84,46 @@ public final class MarkdownTable {
             return List.of();
         }
 
-        String[] rawCells = line.split("\\|", -1);
         List<String> result = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean escaped = false;
 
-        for (int i = 0; i < rawCells.length; i++) {
-            String trimmed = rawCells[i].trim();
-
-            // 首尾空单元格丢弃
-            if (trimmed.isEmpty() && (i == 0 || i == rawCells.length - 1)) {
-                continue;
-            }
-
-            if (!trimmed.isEmpty()) {
-                result.add(trimmed);
+        for (char c : line.toCharArray()) {
+            if (escaped) {
+                if (c == '|' || c == '\\') {
+                    current.append(c);
+                } else {
+                    current.append('\\').append(c);
+                }
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '|') {
+                result.add(current.toString());
+                current.setLength(0);
+            } else {
+                current.append(c);
             }
         }
 
-        return result;
+        // 行末单 \ 保留
+        if (escaped) {
+            current.append('\\');
+        }
+        result.add(current.toString());
+
+        // 去除首尾空单元格
+        List<String> trimmed = new ArrayList<>();
+        for (int i = 0; i < result.size(); i++) {
+            String cell = result.get(i).trim();
+            if (cell.isEmpty() && (i == 0 || i == result.size() - 1)) {
+                continue;
+            }
+            if (!cell.isEmpty()) {
+                trimmed.add(cell);
+            }
+        }
+
+        return trimmed;
     }
 }
