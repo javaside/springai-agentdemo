@@ -210,4 +210,32 @@ public final class MarkdownTable {
 
         return displayWidth(joined.toString());
     }
+
+    /**
+     * 计算每列的最大宽度（头行+体行取最大值）。
+     */
+    static int[] calculateColumnWidths(List<List<String>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return new int[0];
+        }
+
+        int columnCount = rows.stream().mapToInt(List::size).max().orElse(0);
+        int[] widths = new int[columnCount];
+
+        for (List<String> row : rows) {
+            for (int i = 0; i < row.size(); i++) {
+                int cellWidth = displayWidth(row.get(i));
+                widths[i] = Math.max(widths[i], cellWidth);
+            }
+        }
+
+        // 空列最小宽度 4
+        for (int i = 0; i < widths.length; i++) {
+            if (widths[i] == 0) {
+                widths[i] = 4;
+            }
+        }
+
+        return widths;
+    }
 }
