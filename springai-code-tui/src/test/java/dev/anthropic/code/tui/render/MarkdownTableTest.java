@@ -201,4 +201,38 @@ public class MarkdownTableTest {
         // 超过 10000 次迭代，返回 null（触发 fallback）
         assertNull(reduced);
     }
+
+    @Test
+    void wrapCellContent_breaksAtSpaces() {
+        List<String> lines = MarkdownTable.wrapCellContent("hello world foo", 8);
+
+        // 优先在空格处断："hello" (5) + " world" (6，超8) → 断在 "hello" 后
+        assertEquals(List.of("hello", "world", "foo"), lines);
+    }
+
+    @Test
+    void wrapCellContent_hardBreaksLongWords() {
+        // 单词超列宽，按显示宽度硬切
+        List<String> lines = MarkdownTable.wrapCellContent("verylongword", 5);
+
+        assertEquals(List.of("veryl", "ongwo", "rd"), lines);
+    }
+
+    @Test
+    void wrapCellContent_handlesCJKWithoutSpaces() {
+        // CJK 无空格，硬切（不切半个宽字符）
+        List<String> lines = MarkdownTable.wrapCellContent("你好世界", 4); // 每行最多 4 列 = 2 个 CJK 字符
+
+        assertEquals(List.of("你好", "世界"), lines);
+    }
+
+    @Test
+    void wrapCellContent_doesNotSplitWideChar() {
+        // 硬切时不切半个宽字符
+        List<String> lines = MarkdownTable.wrapCellContent("a你b", 2); // 2 列容不下 "你" (2列)
+
+        // "a" (1列) + "你" (2列，超) → "a" 单独一行
+        // "你" (2列) + "b" (1列) → "你" 单独一行，"b" 下一行
+        assertEquals(List.of("a", "你", "b"), lines);
+    }
 }
