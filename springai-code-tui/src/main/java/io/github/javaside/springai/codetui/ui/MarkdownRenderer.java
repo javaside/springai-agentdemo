@@ -47,11 +47,23 @@ public final class MarkdownRenderer {
     private String codeLang = "";
     private boolean inBlockComment = false;
 
+    // ---- 表格状态机 ----
+    private enum TableState { IDLE, CANDIDATE, CONFIRMED }
+    private TableState tableState = TableState.IDLE;
+    private List<String> tableBuffer = new ArrayList<>();
+
     /** 新回合开始时复位所有状态。 */
     public void reset() {
         inCodeBlock = false;
         codeLang = "";
         inBlockComment = false;
+        tableState = TableState.IDLE;
+        tableBuffer.clear();
+    }
+
+    /** 检查是否有缓冲的表格行。 */
+    public boolean hasBuffered() {
+        return !tableBuffer.isEmpty();
     }
 
     /** 处理一条「定稿」行：更新内部状态并返回带样式 span。 */
