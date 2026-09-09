@@ -94,19 +94,22 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      * @param status      当前状态
      * @param currentTool 正在跑的工具名；无则为 null
      */
-    public record SubtaskView(String agentName, String description, SubtaskStatus status, String currentTool) {}
+    public record SubtaskView(String agentName, String description, SubtaskStatus status, String currentTool,
+                              String model) {}
 
     /** 内部可变持有者：status/currentTool 就地更新。仅本类访问。 */
     private static final class Subtask {
         final String taskId;
         final String agentName;
         final String description;
+        final String model;
         SubtaskStatus status = SubtaskStatus.RUNNING;
         String currentTool = "";
-        Subtask(String taskId, String agentName, String description) {
+        Subtask(String taskId, String agentName, String description, String model) {
             this.taskId = taskId;
             this.agentName = agentName;
             this.description = description;
+            this.model = model;
         }
     }
 
@@ -721,14 +724,22 @@ public final class ConversationState implements AgentListener, UiChangeSource {
 
     @Override
     public void onSubagentStarted(long turnId, String taskId, String agentName, String description) {
+        onSubagentStarted(turnId, taskId, agentName, description, "");
+    }
+
+    @Override
+    public void onSubagentStarted(long turnId, String taskId, String agentName, String description,
+                                  String modelLabel) {
         Change change = null;
         synchronized (this) {
             if (turnId != acceptingTurnId) return;    // 迟到过滤，与其它事件一致
             flushStreaming();                          // 把在建助手残行定稿，子 agent 块另起
             String d = summarize(description);         // 折叠空白/换行，守住「一 OutputLine=一物理行」不变量
-            pending.add(new OutputLine("▸ Task(" + agentName + ")" + (d.isEmpty() ? "" : " " + d),
+            String m = summarize(modelLabel);           // 同上：modelLabel 亦可能含嵌入换行，须同一纪律折叠
+            String tag = m.isEmpty() ? "" : "  · " + m;
+            pending.add(new OutputLine("▸ Task(" + agentName + ")" + (d.isEmpty() ? "" : " " + d) + tag,
                     OutputLine.Kind.SUBAGENT_START));
-            subtasks.add(new Subtask(taskId, agentName, d));   // 任务面板追加一条运行中子 agent（d 已 summarize=一物理行）
+            subtasks.add(new Subtask(taskId, agentName, d, m));   // 任务面板追加一条运行中子 agent（d 已 summarize=一物理行）
             change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
         }
         publish(change);
@@ -923,7 +934,9 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     /** 任务面板快照：本回合派出的子 agent 状态。返回不可变值副本，与内部可变状态解耦。 */
     public synchronized List<SubtaskView> subtaskSnapshot() {
         List<SubtaskView> out = new ArrayList<>(subtasks.size());
-        for (Subtask s : subtasks) out.add(new SubtaskView(s.agentName, s.description, s.status, s.currentTool));
+        for (Subtask s : subtasks) {
+            out.add(new SubtaskView(s.agentName, s.description, s.status, s.currentTool, s.model));
+        }
         return List.copyOf(out);
     }
 

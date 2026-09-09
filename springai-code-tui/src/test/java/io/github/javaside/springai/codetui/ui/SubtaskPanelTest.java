@@ -14,7 +14,7 @@ import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 class SubtaskPanelTest {
 
     private static SubtaskView v(String agent, String desc, SubtaskStatus st, String tool) {
-        return new SubtaskView(agent, desc, st, tool);
+        return new SubtaskView(agent, desc, st, tool, "");
     }
 
     @Test
@@ -85,5 +85,21 @@ class SubtaskPanelTest {
         CodeTuiView v = new CodeTuiView(s, (io.github.javaside.springai.codetui.agent.seam.SubmitHandler) t -> null,
                 java.nio.file.Path.of("."));
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(v::renderForTest);
+    }
+
+    @Test
+    void row_appendsModelWhenPresent() {
+        String r = CodeTuiView.subtaskRowText(
+                new SubtaskView("explore", "d", SubtaskStatus.RUNNING, "", "deepseek:deepseek-v4-pro"));
+        assertTrue(r.contains("· deepseek:deepseek-v4-pro"), "附带模型标签，实际=" + r);
+    }
+
+    @Test
+    void row_modelBeforeCurrentTool_whenBothPresent() {
+        String r = CodeTuiView.subtaskRowText(
+                new SubtaskView("explore", "d", SubtaskStatus.RUNNING, "Grep", "openai:gpt-5.6-sol"));
+        int modelIdx = r.indexOf("openai:gpt-5.6-sol");
+        int toolIdx = r.indexOf("Grep");
+        assertTrue(modelIdx >= 0 && toolIdx > modelIdx, "模型标签在前、当前工具在后，实际=" + r);
     }
 }
