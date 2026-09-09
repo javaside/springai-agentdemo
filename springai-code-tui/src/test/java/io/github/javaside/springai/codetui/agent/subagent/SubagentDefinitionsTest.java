@@ -61,4 +61,13 @@ class SubagentDefinitionsTest {
         assertTrue(gp.denyTools().contains("AskUserQuestionTool"),
                 "general-purpose 应 deny AskUserQuestionTool");
     }
+
+    /** TodoWrite 的完整内容对子 agent 注定被丢弃（见 ConversationState.onTodoUpdated 的 taskId!=null 分支），
+     *  默认放行只是让子 agent 白白多花一次工具往返。 */
+    @Test
+    void generalPurposeDeniesTodoWrite() {
+        SubagentSpec gp = SubagentLoader.loadBuiltins().get("general-purpose");
+        assertTrue(gp.denyTools().contains("TodoWrite"),
+                "general-purpose 应 deny TodoWrite（内容会被丢弃，见 ConversationState.onTodoUpdated）");
+    }
 }
