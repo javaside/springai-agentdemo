@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent.subagent;
 
+import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -170,5 +171,31 @@ class SubagentToolTest {
         List<String> expected = new ArrayList<>(List.of("openai:gpt-5.6-sol", "deepseek:deepseek-v4-pro"));
         expected.add(null);
         assertEquals(expected, capturedModels, "同一批里每条子任务各自独立的 model 覆盖，互不影响");
+    }
+
+    @Test
+    void schemaExposesModelParam() {
+        ToolCallback tc = SubagentTool.create(Map.of(), (spec, prompt, desc, turn) -> "unused");
+        String schema = tc.getToolDefinition().inputSchema();
+        assertTrue(schema.contains("\"model\""), schema);
+    }
+
+    @Test
+    void descriptionListsAvailableModels() {
+        List<ProviderModel> models = List.of(
+                new ProviderModel("openai", "gpt-5.6-sol", "Sol", "d"),
+                new ProviderModel("deepseek", "deepseek-v4-pro", "Pro", "d"));
+        ToolCallback tc = SubagentTool.create(Map.of(), models, (spec, prompt, desc, turn) -> "unused", null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("openai:gpt-5.6-sol"), desc);
+        assertTrue(desc.contains("deepseek:deepseek-v4-pro"), desc);
+    }
+
+    @Test
+    void parallelDescriptionListsAvailableModels() {
+        List<ProviderModel> models = List.of(new ProviderModel("openai", "gpt-5.6-sol", "Sol", "d"));
+        ToolCallback tc = SubagentTool.createParallel(Map.of(), models, (dispatches, turn) -> List.of(), null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("openai:gpt-5.6-sol"), desc);
     }
 }

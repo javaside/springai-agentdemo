@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent.subagent;
 
+import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.function.FunctionToolCallback;
@@ -33,6 +34,15 @@ public final class SubagentTool {
             - Tell the subagent whether you want it to just research/read or to actually make changes.
             - Choose subagent_type from the list above.
 
+            Model override:
+            - By default the subagent runs on its own configured model, or the currently active model
+              if it has none configured.
+            - Optionally set `model` to "provider:modelId" to run this specific dispatch on a
+              different model. Available models:
+            %s
+            - To compare how different models handle the same task, dispatch it via ParallelTasks with
+              one subtask per model (same prompt, different `model`), then compare the results.
+
             Foreground vs background:
             - DEFAULT to foreground (omit run_in_background or set false). Most coding workflows are
               sequential: explore → plan → implement → test. Each step needs the previous result.
@@ -53,11 +63,19 @@ public final class SubagentTool {
             (e.g. investigating unrelated failures, exploring separate subsystems). If subtasks depend
             on each other or need shared context, use the single Task tool instead.
 
-            Each subtask has the same shape as Task: description, prompt, subagent_type. All subtasks
-            run in parallel; results are returned together, one block per subtask (in input order),
-            each marked success/failure independently — one failing subtask does not abort the others.
+            Each subtask has the same shape as Task: description, prompt, subagent_type, and an
+            optional `model` override ("provider:modelId") to run that particular subtask on a
+            different model than the others. All subtasks run in parallel; results are returned
+            together, one block per subtask (in input order), each marked success/failure
+            independently — one failing subtask does not abort the others.
+
+            To compare how different models handle the same task, give every subtask the same prompt
+            and subagent_type but a different `model`.
 
             Available subagent types:
+            %s
+
+            Available models (optional per-subtask `model` override, format "provider:modelId"):
             %s
             """;
 
@@ -141,14 +159,20 @@ public final class SubagentTool {
         return create(specs, dispatcher, null);
     }
 
-    /** 构建名为 "Task" 的 ToolCallback。turnId 从 ThreadLocal 取（同主流工具，装配时落实）。 */
+    /** 沿用旧 3 参签名：模型 roster 传空（回显桩 / 测试桩，不关心可选模型清单）。 */
     public static ToolCallback create(Map<String, SubagentSpec> specs, Dispatcher dispatcher,
                                       BackgroundDispatcher background) {
+        return create(specs, List.of(), dispatcher, background);
+    }
+
+    /** 生产装配用：带模型 roster，写进 Task 描述供主 agent 选择按次覆盖的 model。 */
+    public static ToolCallback create(Map<String, SubagentSpec> specs, List<ProviderModel> models,
+                                      Dispatcher dispatcher, BackgroundDispatcher background) {
         String roster = specs.values().stream()
                 .map(s -> "- " + s.name() + ": " + s.description())
                 .collect(Collectors.joining("\n"));
         return FunctionToolCallback.builder("Task", function(specs, dispatcher, background))
-                .description(DESCRIPTION_TEMPLATE.formatted(roster))
+                .description(DESCRIPTION_TEMPLATE.formatted(roster, modelRoster(models)))
                 .inputType(SubagentCall.class)
                 .build();
     }
@@ -158,16 +182,32 @@ public final class SubagentTool {
         return createParallel(specs, dispatcher, null);
     }
 
-    /** 构建名为 "ParallelTasks" 的批量 ToolCallback。parentTurnId 由 BatchDispatcher 实现内部经 ThreadLocal 取，这里占位 -1L。 */
+    /** 沿用旧 3 参签名：模型 roster 传空（回显桩 / 测试桩，不关心可选模型清单）。 */
     public static ToolCallback createParallel(Map<String, SubagentSpec> specs, BatchDispatcher dispatcher,
                                               BackgroundDispatcher background) {
+        return createParallel(specs, List.of(), dispatcher, background);
+    }
+
+    /** 生产装配用：带模型 roster，写进 ParallelTasks 描述供主 agent 为每个子任务各自挑选 model。 */
+    public static ToolCallback createParallel(Map<String, SubagentSpec> specs, List<ProviderModel> models,
+                                              BatchDispatcher dispatcher, BackgroundDispatcher background) {
         String roster = specs.values().stream()
                 .map(s -> "- " + s.name() + ": " + s.description())
                 .collect(Collectors.joining("\n"));
         return FunctionToolCallback.builder("ParallelTasks", batchFunction(specs, dispatcher, background))
-                .description(PARALLEL_DESCRIPTION_TEMPLATE.formatted(roster))
+                .description(PARALLEL_DESCRIPTION_TEMPLATE.formatted(roster, modelRoster(models)))
                 .inputType(ParallelCall.class)
                 .build();
+    }
+
+    /** 模型 roster 的展示文本：一行一个 "provider:modelId — label"；空清单给一句占位说明。 */
+    private static String modelRoster(List<ProviderModel> models) {
+        if (models.isEmpty()) {
+            return "(no models configured)";
+        }
+        return models.stream()
+                .map(m -> "- " + m.providerId() + ":" + m.modelId() + " — " + m.label())
+                .collect(Collectors.joining("\n"));
     }
 
     static final String NO_BACKGROUND =
