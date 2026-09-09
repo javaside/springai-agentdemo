@@ -1,13 +1,16 @@
 package io.github.javaside.springai.codetui.ui;
 
+import io.github.javaside.springai.codetui.agent.AgentTools;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectionText;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;
 import dev.tamboui.text.CharWidth;
+import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,6 +27,8 @@ import java.util.List;
 final class HistoryReplay {
 
     private HistoryReplay() {}
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** 历史消息 → 回放行（不含头尾提示，由调用方补）。null/空返回空列表。 */
     static List<OutputLine> toReplayLines(List<Message> messages) {
@@ -73,6 +78,33 @@ final class HistoryReplay {
             }
         }
         return out;
+    }
+
+    /** 恢复会话时重建 todo 面板：找历史里最后一次 TodoWrite 调用，取其参数还原成显示行（格式与
+     *  {@link AgentTools#toLines} 完全一致——直接复用，不新写一份格式化逻辑）。找不到、或参数反序列化
+     *  失败（容忍老版本残留数据）都返回空列表，不让恢复流程崩掉。 */
+    static List<String> lastTodoSnapshot(List<Message> messages) {
+        if (messages == null) {
+            return List.of();
+        }
+        String lastArgs = null;
+        for (Message m : messages) {
+            if (m instanceof AssistantMessage am && am.hasToolCalls()) {
+                for (AssistantMessage.ToolCall tc : am.getToolCalls()) {
+                    if ("TodoWrite".equals(tc.name())) {
+                        lastArgs = tc.arguments();
+                    }
+                }
+            }
+        }
+        if (lastArgs == null) {
+            return List.of();
+        }
+        try {
+            return AgentTools.toLines(MAPPER.readValue(lastArgs, Todos.class));
+        } catch (Exception ignore) {
+            return List.of();
+        }
     }
 
     /**

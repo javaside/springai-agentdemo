@@ -1084,8 +1084,10 @@ public final class AgentTools {
         return names;
     }
 
-    /** 把 {@link Todos} 转成可显示的行：状态标记 + 内容。 */
-    static List<String> toLines(Todos todos) {
+    /** 把 {@link Todos} 转成可显示的行：状态标记 + 内容。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public static List<String> toLines(Todos todos) {
         if (todos == null || todos.todos() == null) {
             return List.of();
         }

@@ -2,6 +2,9 @@ package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -430,5 +433,28 @@ class ConversationStateTest {
                 .filter(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_START)
                 .findFirst().orElseThrow();
         assertTrue(!startLine.text().contains("\n"), "模型标签里的换行必须被折叠，否则撕裂 scrollback 物理行，实际=" + startLine.text());
+    }
+
+    // ── -c 恢复时重建 todo 面板 ──
+
+    @Test
+    void replayHistorySeedsTodoPanelFromLastTodoWriteCall() {
+        ConversationState state = new ConversationState();
+        List<Message> history = List.of(
+                new UserMessage("开始任务"),
+                AssistantMessage.builder()
+                        .toolCalls(List.of(new AssistantMessage.ToolCall("c1", "function", "TodoWrite",
+                                "{\"todos\":[{\"content\":\"步骤一\",\"activeForm\":\"正在步骤一\",\"status\":\"completed\"},"
+                                + "{\"content\":\"步骤二\",\"activeForm\":\"正在步骤二\",\"status\":\"in_progress\"}]}")))
+                        .build());
+        state.replayHistory(history);
+        assertEquals(List.of("✓ 步骤一", "▶ 步骤二"), state.todoSnapshot(), "恢复应从历史重建 todo 面板");
+    }
+
+    @Test
+    void replayHistoryLeavesTodoPanelEmptyWhenHistoryHasNoTodoWrite() {
+        ConversationState state = new ConversationState();
+        state.replayHistory(List.of(new UserMessage("问题"), new AssistantMessage("回答")));
+        assertTrue(state.todoSnapshot().isEmpty(), "历史无 TodoWrite 时面板应保持空");
     }
 }

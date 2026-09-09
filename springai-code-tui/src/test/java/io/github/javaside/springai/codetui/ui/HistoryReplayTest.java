@@ -273,4 +273,39 @@ class HistoryReplayTest {
                 out.stream().map(OutputLine::kind).toList());
         assertEquals(2, HistoryReplay.userTurns(history), "用户轮数");
     }
+
+    // ── -c 恢复时重建 todo 面板 ──
+
+    @Test
+    void lastTodoSnapshotReturnsLatestOfMultipleCalls() {
+        AssistantMessage first = AssistantMessage.builder()
+                .toolCalls(List.of(new AssistantMessage.ToolCall("c1", "function", "TodoWrite",
+                        "{\"todos\":[{\"content\":\"步骤一\",\"activeForm\":\"正在步骤一\",\"status\":\"in_progress\"}]}")))
+                .build();
+        AssistantMessage second = AssistantMessage.builder()
+                .toolCalls(List.of(new AssistantMessage.ToolCall("c2", "function", "TodoWrite",
+                        "{\"todos\":[{\"content\":\"步骤一\",\"activeForm\":\"正在步骤一\",\"status\":\"completed\"},"
+                        + "{\"content\":\"步骤二\",\"activeForm\":\"正在步骤二\",\"status\":\"in_progress\"}]}")))
+                .build();
+        List<String> lines = HistoryReplay.lastTodoSnapshot(List.of(first, second));
+        assertEquals(List.of("✓ 步骤一", "▶ 步骤二"), lines, "应取最后一次调用，而非第一次");
+    }
+
+    @Test
+    void lastTodoSnapshotEmptyWhenNoTodoWriteCall() {
+        AssistantMessage am = AssistantMessage.builder()
+                .toolCalls(List.of(new AssistantMessage.ToolCall("c1", "function", "Grep", "{\"pattern\":\"foo\"}")))
+                .build();
+        assertTrue(HistoryReplay.lastTodoSnapshot(List.of(am)).isEmpty());
+        assertTrue(HistoryReplay.lastTodoSnapshot(null).isEmpty());
+        assertTrue(HistoryReplay.lastTodoSnapshot(List.of()).isEmpty());
+    }
+
+    @Test
+    void lastTodoSnapshotToleratesMalformedArguments() {
+        AssistantMessage am = AssistantMessage.builder()
+                .toolCalls(List.of(new AssistantMessage.ToolCall("c1", "function", "TodoWrite", "not valid json")))
+                .build();
+        assertTrue(HistoryReplay.lastTodoSnapshot(List.of(am)).isEmpty(), "格式异常应静默返回空，不抛异常");
+    }
 }
