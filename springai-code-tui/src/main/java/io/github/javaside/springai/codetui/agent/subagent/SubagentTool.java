@@ -36,12 +36,22 @@ public final class SubagentTool {
 
             Model override:
             - By default the subagent runs on its own configured model, or the currently active model
-              if it has none configured.
+              if it has none configured — i.e. the same model the main conversation is using, unless
+              the subagent type itself has a different default configured.
             - Optionally set `model` to "provider:modelId" to run this specific dispatch on a
               different model. Available models:
             %s
             - To compare how different models handle the same task, dispatch it via ParallelTasks with
               one subtask per model (same prompt, different `model`), then compare the results.
+            - ONLY set `model` when the user has explicitly asked for a specific model, or explicitly
+              asked to compare models, in this request. Do not decide on your own to use a different
+              model — that choice belongs to the user.
+            - In particular: a dispatch failing from a transient error (network timeout, stream
+              interruption, gateway 5xx, rate limit) is NOT a reason to switch models. Retry the exact
+              same dispatch (same model, same task) instead. The failure is almost always
+              infrastructure-side, not model-side — switching models to "route around" it silently
+              changes who did the work without the user asking for that, and does not fix the actual
+              problem.
 
             Foreground vs background:
             - DEFAULT to foreground (omit run_in_background or set false). Most coding workflows are
@@ -70,7 +80,11 @@ public final class SubagentTool {
             independently — one failing subtask does not abort the others.
 
             To compare how different models handle the same task, give every subtask the same prompt
-            and subagent_type but a different `model`.
+            and subagent_type but a different `model` — but only do this when the user has explicitly
+            asked for a specific model or a cross-model comparison. Do not pick different models on
+            your own judgment, and never as a workaround for a transient dispatch failure (a network
+            timeout, stream interruption, gateway 5xx, or rate limit is infrastructure trouble, not a
+            reason to switch models — retry the same model/task instead).
 
             Available subagent types:
             %s
@@ -96,7 +110,10 @@ public final class SubagentTool {
             @ToolParam(required = false, description =
                     "Optional model override for this dispatch, as 'provider:modelId' (see the model "
                     + "roster in this tool's description). Omit to use this subagent type's own default "
-                    + "model, or the currently active model if it has none.") String model,
+                    + "model, or the currently active model if it has none. ONLY set this when the user "
+                    + "explicitly asked for a specific model or a cross-model comparison — never on your "
+                    + "own judgment, and never to retry past a transient failure (network/stream/gateway "
+                    + "error): retry the same dispatch instead.") String model,
             @ToolParam(required = false, description =
                     "Background mode (default false/omitted = foreground). "
                     + "Set true ONLY when: the task is independent (you do not need its result to "

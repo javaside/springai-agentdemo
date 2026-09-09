@@ -198,4 +198,25 @@ class SubagentToolTest {
         String desc = tc.getToolDefinition().description();
         assertTrue(desc.contains("openai:gpt-5.6-sol"), desc);
     }
+
+    /**
+     * 2026-09-09：真实会话实证——主 agent 连续两次因网络瞬时故障（HTTP/2 流中断）派发子 agent 失败后，
+     * 自行决定"换个更稳定的模型重试"，用户全程没有要求切模型。工具描述必须明确劝阻这种自作主张，
+     * 否则 model 覆盖会被模型当成故障排除手段，产生用户没要求过的跨模型切换。
+     */
+    @Test
+    void descriptionWarnsAgainstAutonomousModelSwitching() {
+        ToolCallback tc = SubagentTool.create(Map.of(), List.of(), (spec, prompt, desc, turn) -> "unused", null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("ONLY set `model`"), desc);
+        assertTrue(desc.contains("transient"), desc);
+    }
+
+    @Test
+    void parallelDescriptionWarnsAgainstAutonomousModelSwitching() {
+        ToolCallback tc = SubagentTool.createParallel(Map.of(), List.of(), (dispatches, turn) -> List.of(), null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("asked for a specific model"), desc);
+        assertTrue(desc.contains("transient"), desc);
+    }
 }
