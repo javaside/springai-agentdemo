@@ -91,15 +91,22 @@ public final class ProviderRegistry {
         return selection(active, activeModelId);
     }
 
-    /** Explicit subagent model remains scoped to the active provider in v1. */
+    /** 跨 provider 找 modelId 的第一个持有者（宽松语义，兼容裸 modelId 的旧配置）；找不到即抛错。 */
     public synchronized RequestSelection requestSelection(String modelId) {
-        LlmProvider provider = active;
-        boolean belongsToActive = provider.models().stream().anyMatch(model -> model.id().equals(modelId));
-        if (!belongsToActive) {
-            // Keep the established v1 behavior: use the active provider even for a custom override.
-            return selection(provider, modelId);
+        ModelOwner owner = ownerOf(modelId);
+        if (owner == null) {
+            throw new IllegalArgumentException("未知或不可用模型: " + modelId);
         }
-        return selection(provider, modelId);
+        return selection(owner.provider(), owner.model().id());
+    }
+
+    /** 精确 provider+model 路由：都匹配才命中，未命中即抛错。子 agent 按次覆盖模型的主入口。 */
+    public synchronized RequestSelection requestSelection(String providerId, String modelId) {
+        ModelOwner owner = ownerOf(providerId, modelId);
+        if (owner == null) {
+            throw new IllegalArgumentException("未知或不可用模型: " + providerId + ":" + modelId);
+        }
+        return selection(owner.provider(), owner.model().id());
     }
 
     public synchronized ModelThinkingSettings thinkingSettings(String providerId, String modelId) {
