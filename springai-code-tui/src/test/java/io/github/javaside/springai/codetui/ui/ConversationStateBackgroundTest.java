@@ -28,6 +28,29 @@ class ConversationStateBackgroundTest {
     }
 
     @Test
+    void backgroundStartWithModelLabelShowsInScrollbackAndPanel() {
+        ConversationState s = started(1L);
+        s.onBackgroundTaskStarted("task_ab12", "explore", "调查登录失败", "openai:gpt-5.6-sol");
+
+        assertTrue(s.drainPending().stream().anyMatch(l -> l.text().contains("openai:gpt-5.6-sol")),
+                "⏱ 启动行要带上实际请求的模型，否则用户不知道后台派的是哪个模型");
+        assertEquals("openai:gpt-5.6-sol", s.backgroundTasks().get(0).model());
+    }
+
+    @Test
+    void backgroundStartWithModelLabelEmbeddedNewline_foldedToSingleLine() {
+        ConversationState s = started(1L);
+        s.onBackgroundTaskStarted("t1", "explore", "d", "openai:gpt-5.6-sol\nEVIL");
+        List<ConversationState.OutputLine> out = s.drainPending();
+        ConversationState.OutputLine startLine = out.stream()
+                .filter(o -> o.kind() == ConversationState.OutputLine.Kind.INFO
+                        && o.text().contains("后台任务已启动"))
+                .findFirst().orElseThrow();
+        assertTrue(!startLine.text().contains("\n"),
+                "模型标签里的换行必须被折叠，否则撕裂 scrollback 物理行，实际=" + startLine.text());
+    }
+
+    @Test
     void backgroundTaskSurvivesNewTurn() {
         ConversationState s = started(1L);
         s.onBackgroundTaskStarted("task_ab12", "explore", "调查");

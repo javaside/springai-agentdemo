@@ -408,4 +408,27 @@ class ConversationStateTest {
         assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_TOOL));
         assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_END));
     }
+
+    @Test
+    void taskPanel_startedWithModel_showsModelInScrollbackAndPanel() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "审查文档", "deepseek:deepseek-v4-pro");
+        List<ConversationState.OutputLine> out = s.drainPending();
+        assertTrue(out.stream().anyMatch(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_START
+                && o.text().contains("deepseek:deepseek-v4-pro")));
+        assertEquals("deepseek:deepseek-v4-pro", s.subtaskSnapshot().get(0).model());
+    }
+
+    @Test
+    void taskPanel_modelLabelWithEmbeddedNewline_foldedToSingleLine() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onSubagentStarted(1L, "t1", "explore", "d", "openai:gpt-5.6-sol\nEVIL");
+        List<ConversationState.OutputLine> out = s.drainPending();
+        ConversationState.OutputLine startLine = out.stream()
+                .filter(o -> o.kind() == ConversationState.OutputLine.Kind.SUBAGENT_START)
+                .findFirst().orElseThrow();
+        assertTrue(!startLine.text().contains("\n"), "模型标签里的换行必须被折叠，否则撕裂 scrollback 物理行，实际=" + startLine.text());
+    }
 }

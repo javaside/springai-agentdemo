@@ -1,10 +1,13 @@
 package io.github.javaside.springai.codetui.agent.subagent;
 
+import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -14,7 +17,7 @@ class SubagentToolTest {
 
     private static SubagentTool.SubagentCall call(String type) {
         // run_in_background 传 null：既有用例覆盖的都是前台语义，null 正是模型省略该字段时的取值
-        return new SubagentTool.SubagentCall("do things", "the prompt", type, null);
+        return new SubagentTool.SubagentCall("do things", "the prompt", type, null, null);
     }
 
     @Test
@@ -67,8 +70,8 @@ class SubagentToolTest {
                 dispatches.stream().map(d -> "ran " + d.spec().name()).toList();
         var fn = SubagentTool.batchFunction(specs, batch);
         SubagentTool.ParallelCall pc = new SubagentTool.ParallelCall(List.of(
-                new SubagentTool.SubagentCall("do a", "pa", "explore", null),
-                new SubagentTool.SubagentCall("do b", "pb", "no-such", null)), null);
+                new SubagentTool.SubagentCall("do a", "pa", "explore", null, null),
+                new SubagentTool.SubagentCall("do b", "pb", "no-such", null, null)), null);
         String out = fn.apply(pc);
         assertTrue(out.contains("[1] explore"), out);
         assertTrue(out.contains("ran explore"), out);
@@ -85,9 +88,9 @@ class SubagentToolTest {
                 dispatches.stream().map(d -> "RESULT:" + d.prompt()).toList();
         var fn = SubagentTool.batchFunction(specs, batch);
         SubagentTool.ParallelCall pc = new SubagentTool.ParallelCall(List.of(
-                new SubagentTool.SubagentCall("a", "pa", "explore", null),
-                new SubagentTool.SubagentCall("b", "pb", "no-such", null),
-                new SubagentTool.SubagentCall("c", "pc", "explore", null)), null);
+                new SubagentTool.SubagentCall("a", "pa", "explore", null, null),
+                new SubagentTool.SubagentCall("b", "pb", "no-such", null, null),
+                new SubagentTool.SubagentCall("c", "pc", "explore", null, null)), null);
         String out = fn.apply(pc);
         // 三段按输入顺序：[1] explore ✓ RESULT:pa / [2] no-such ✗ 未知 / [3] explore ✓ RESULT:pc
         int i1 = out.indexOf("[1] explore ✓");
@@ -97,5 +100,102 @@ class SubagentToolTest {
         assertTrue(out.contains("RESULT:pa"), out);   // 第 1 个已知的结果落回 [1]
         assertTrue(out.contains("RESULT:pc"), out);   // 第 2 个已知的结果落回 [3]（不是 [2]）
         assertTrue(out.contains("未知 subagent 类型"), out);
+    }
+
+    @Test
+    void modelOverrideAppliedToDispatchedSpec() {
+        Map<String, SubagentSpec> specs = Map.of(
+                "explore", new SubagentSpec("explore", "d", "sys", List.of(), List.of(), null, List.of()));
+        AtomicReference<String> capturedModel = new AtomicReference<>();
+        SubagentTool.Dispatcher dispatch = (spec, prompt, desc, turn) -> {
+            capturedModel.set(spec.model());
+            return "ran";
+        };
+        var fn = SubagentTool.function(specs, dispatch);
+
+        fn.apply(new SubagentTool.SubagentCall("do a", "pa", "explore", "openai:gpt-5.6-sol", null));
+
+        assertEquals("openai:gpt-5.6-sol", capturedModel.get());
+    }
+
+    @Test
+    void noModelOverrideLeavesSpecModelUnchanged() {
+        Map<String, SubagentSpec> specs = Map.of(
+                "explore", new SubagentSpec("explore", "d", "sys", List.of(), List.of(), "static-model", List.of()));
+        AtomicReference<String> capturedModel = new AtomicReference<>();
+        SubagentTool.Dispatcher dispatch = (spec, prompt, desc, turn) -> {
+            capturedModel.set(spec.model());
+            return "ran";
+        };
+        var fn = SubagentTool.function(specs, dispatch);
+
+        fn.apply(new SubagentTool.SubagentCall("do a", "pa", "explore", null, null));
+
+        assertEquals("static-model", capturedModel.get(), "未传 model 时沿用 spec 静态配置");
+    }
+
+    @Test
+    void modelOverrideAppliedInBackgroundDispatch() {
+        Map<String, SubagentSpec> specs = Map.of(
+                "explore", new SubagentSpec("explore", "d", "sys", List.of(), List.of(), null, List.of()));
+        AtomicReference<String> capturedModel = new AtomicReference<>();
+        SubagentTool.Dispatcher dispatch = (spec, prompt, desc, turn) -> "fg";
+        SubagentTool.BackgroundDispatcher bg = (spec, prompt, desc) -> {
+            capturedModel.set(spec.model());
+            return "bg";
+        };
+        var fn = SubagentTool.function(specs, dispatch, bg);
+
+        fn.apply(new SubagentTool.SubagentCall("do a", "pa", "explore", "deepseek:deepseek-v4-pro", true));
+
+        assertEquals("deepseek:deepseek-v4-pro", capturedModel.get());
+    }
+
+    @Test
+    void parallelTasksApplyIndependentModelOverridesPerSubtask() {
+        Map<String, SubagentSpec> specs = Map.of(
+                "explore", new SubagentSpec("explore", "d", "sys", List.of(), List.of(), null, List.of()));
+        List<String> capturedModels = new ArrayList<>();
+        SubagentTool.BatchDispatcher batch = (dispatches, turn) -> {
+            for (var d : dispatches) capturedModels.add(d.spec().model());
+            return dispatches.stream().map(d -> "ran " + d.spec().model()).toList();
+        };
+        var fn = SubagentTool.batchFunction(specs, batch);
+        SubagentTool.ParallelCall pc = new SubagentTool.ParallelCall(List.of(
+                new SubagentTool.SubagentCall("a", "p", "explore", "openai:gpt-5.6-sol", null),
+                new SubagentTool.SubagentCall("b", "p", "explore", "deepseek:deepseek-v4-pro", null),
+                new SubagentTool.SubagentCall("c", "p", "explore", null, null)), null);
+
+        fn.apply(pc);
+
+        List<String> expected = new ArrayList<>(List.of("openai:gpt-5.6-sol", "deepseek:deepseek-v4-pro"));
+        expected.add(null);
+        assertEquals(expected, capturedModels, "同一批里每条子任务各自独立的 model 覆盖，互不影响");
+    }
+
+    @Test
+    void schemaExposesModelParam() {
+        ToolCallback tc = SubagentTool.create(Map.of(), (spec, prompt, desc, turn) -> "unused");
+        String schema = tc.getToolDefinition().inputSchema();
+        assertTrue(schema.contains("\"model\""), schema);
+    }
+
+    @Test
+    void descriptionListsAvailableModels() {
+        List<ProviderModel> models = List.of(
+                new ProviderModel("openai", "gpt-5.6-sol", "Sol", "d"),
+                new ProviderModel("deepseek", "deepseek-v4-pro", "Pro", "d"));
+        ToolCallback tc = SubagentTool.create(Map.of(), models, (spec, prompt, desc, turn) -> "unused", null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("openai:gpt-5.6-sol"), desc);
+        assertTrue(desc.contains("deepseek:deepseek-v4-pro"), desc);
+    }
+
+    @Test
+    void parallelDescriptionListsAvailableModels() {
+        List<ProviderModel> models = List.of(new ProviderModel("openai", "gpt-5.6-sol", "Sol", "d"));
+        ToolCallback tc = SubagentTool.createParallel(Map.of(), models, (dispatches, turn) -> List.of(), null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("openai:gpt-5.6-sol"), desc);
     }
 }

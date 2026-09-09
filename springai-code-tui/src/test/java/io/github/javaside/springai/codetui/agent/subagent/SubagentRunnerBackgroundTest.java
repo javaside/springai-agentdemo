@@ -221,6 +221,25 @@ class SubagentRunnerBackgroundTest {
     }
 
     @Test
+    void backgroundDispatchReportsResolvedModelLabelToListener() throws Exception {
+        AtomicReference<String> label = new AtomicReference<>();
+        BackgroundTaskRegistry reg = new BackgroundTaskRegistry(64);
+        AgentListener lis = new StubListener() {
+            @Override
+            public void onBackgroundTaskStarted(String taskId, String agentName, String description,
+                                                 String modelLabel) {
+                label.set(modelLabel);
+            }
+        };
+        SubagentRunner r = runner(chatModel("结论", null), reg, lis);
+
+        r.runInBackground(spec().withModel("openai:gpt-5.6-sol"), "hi", "调查");
+        awaitDone(reg, reg.all().get(0).taskId());
+
+        assertEquals("openai:gpt-5.6-sol", label.get(), "后台派发也要把解析出的模型标签报给 listener");
+    }
+
+    @Test
     void queueFullIsRejectedWithClearTextAndTaskIsNotDeliverable() throws Exception {
         CountDownLatch gate = new CountDownLatch(1);
         BackgroundTaskRegistry reg = new BackgroundTaskRegistry(64);

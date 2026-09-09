@@ -29,4 +29,9 @@ public record SubagentSpec(String name,
                            List<String> denyTools,
                            String model,
                            List<String> skills) {
+
+    /** 派生一份指定 model 覆盖值的副本，其余字段不变；供 {@code SubagentTool} 按次覆盖用。 */
+    public SubagentSpec withModel(String model) {
+        return new SubagentSpec(name, description, systemPrompt, allowTools, denyTools, model, skills);
+    }
 }
