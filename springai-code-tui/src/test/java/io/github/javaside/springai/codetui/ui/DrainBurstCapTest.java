@@ -243,6 +243,67 @@ class DrainBurstCapTest {
         }
     }
 
+    @Test
+    @DisplayName("大 diff + 未闭合大表格同现一次回复：内容不丢，且没有单批耗时异常（集成兜底）")
+    void expensiveDiffAndUnclosedTable_contentIntactAndNoSingleBatchBlowsUp(@TempDir Path root)
+            throws Exception {
+        // segment ① 的真实成本来源：LCS_MAX(=800) 量级、内容互不相同的 Edit diff。
+        Path file = root.resolve("Big.java");
+        int n = 800;
+        StringBuilder oldFile = new StringBuilder();
+        StringBuilder oldString = new StringBuilder();
+        StringBuilder newString = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            String oldLine = "old_line_" + i + "_unique_content_padding_xyz";
+            if (i > 0) { oldFile.append('\n'); oldString.append('\n'); newString.append('\n'); }
+            oldFile.append(oldLine);
+            oldString.append(oldLine);
+            newString.append("new_line_").append(i).append("_totally_different_qrs");
+        }
+        Files.writeString(file, oldFile.toString());
+        String editJson = "{\"filePath\":" + quote(file.toString())
+                + ",\"old_string\":" + quote(oldString.toString())
+                + ",\"new_string\":" + quote(newString.toString()) + "}";
+
+        ConversationState state = new ConversationState();
+        RecordingSink sink = new RecordingSink();
+        CodeTuiView v = view(state, root, sink);
+
+        state.onTurnStarted(1L);
+        state.onToolStarted(1L, "Edit", editJson);
+
+        // segment ③（强制表格 flush）的触发条件：回复以未闭合表格结尾（无收尾空行），回合结束。
+        StringBuilder table = new StringBuilder();
+        table.append("| 方案名称 | 说明 | 优点 | 缺点 | 指数 | 备注 |\n");
+        table.append("|---|---|---|---|---|---|\n");
+        for (int i = 0; i < 198; i++) {
+            table.append("| 方案").append(i).append(" | 说明文字说明文字 | 优点简述 | 缺点简述 | ")
+                    .append(i % 5).append(" | 备注信息备注信息 |");
+            if (i < 197) table.append('\n');
+        }
+        state.onAssistantToken(1L, table.toString());
+        state.onTurnComplete(1L);
+
+        long maxSingleBatchMs = 0;
+        for (int batch = 0; batch < 30; batch++) {
+            int before = sink.lines.size();
+            long start = System.nanoTime();
+            v.tickForTest();
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            maxSingleBatchMs = Math.max(maxSingleBatchMs, elapsedMs);
+            if (sink.lines.size() == before) break;   // 一批没写任何新行 ⇒ 存量已清空
+        }
+
+        // 粗粒度兜底：不追求精确复现 Task 1 已经钉住的 bug，只防「多个例外无限叠加」这类
+        // 严重回归——那种情况耗时量级是几百毫秒起，不是这里测的十几毫秒。
+        assertTrue(maxSingleBatchMs < 200,
+                "单批耗时 " + maxSingleBatchMs + "ms 过长，像是多个预算例外在同一批里无限叠加");
+        assertTrue(sink.lines.stream().anyMatch(l -> l.contains("Update(Big.java)")),
+                "diff 头应该最终出现在输出里，内容不能丢");
+        assertTrue(sink.lines.stream().anyMatch(l -> l.contains("方案197")),
+                "表格最后一行数据应该最终出现在输出里，内容不能丢");
+    }
+
     /** JSON 字符串字面量（最简转义：路径与换行）。 */
     private static String quote(String s) {
         StringBuilder b = new StringBuilder("\"");
