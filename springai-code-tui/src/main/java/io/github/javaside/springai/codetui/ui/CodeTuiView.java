@@ -3836,7 +3836,7 @@ public final class CodeTuiView extends InlineApp {
         return tasks.subList(from, tasks.size());
     }
 
-    /** 一条后台任务的行文本："  <图标> <id> <agent>  <描述>  <耗时>[  <当前工具/已终止>]"。 */
+    /** 一条后台任务的行文本："  <图标> <id> <agent>  <描述>  <模型>  <耗时>[  <当前工具/已终止>]"。 */
     static String backgroundRowText(ConversationState.BackgroundView t, long now) {
         String icon = switch (t.status()) {
             case DONE -> "✓";
@@ -3849,8 +3849,9 @@ public final class CodeTuiView extends InlineApp {
         // 「已终止」要写成字，不能只靠 ⊘ 图标：这是用户自己按 k 干的，得能一眼确认那一下生效了。
         String tail = t.status() == ConversationState.BackgroundStatus.KILLED ? "  已终止"
                 : (t.currentTool() != null && !t.currentTool().isEmpty()) ? "  " + t.currentTool() : "";
+        String modelTag = (t.model() != null && !t.model().isEmpty()) ? "  " + t.model() : "";
         return "  " + icon + " " + t.taskId() + " " + t.agentName() + "  " + t.description()
-                + "  " + elapsedText(end - t.startedAt()) + tail;
+                + modelTag + "  " + elapsedText(end - t.startedAt()) + tail;
     }
 
     /**

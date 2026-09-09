@@ -204,6 +204,16 @@ public interface AgentListener {
     default void onBackgroundTaskStarted(String taskId, String agentName, String description) { }
 
     /**
+     * 后台任务已启动（带本次委派实际请求的模型标签，供 UI 展示）。默认委托 3 参版本，
+     * 只有需要展示模型的实现（{@code ConversationState} 面板）覆写本方法。
+     *
+     * @param modelLabel 本次请求的模型（如 {@code "openai:gpt-5.6-sol"}）；spec 未指定则为当前激活模型
+     */
+    default void onBackgroundTaskStarted(String taskId, String agentName, String description, String modelLabel) {
+        onBackgroundTaskStarted(taskId, agentName, description);
+    }
+
+    /**
      * 后台任务结束。ok=false 表示执行抛错（finalText 是摊平后的原因）。
      *
      * <p><b>刻意没有配套的「进度」事件</b>：后台任务「当前在跑哪个工具」不走这条通道，

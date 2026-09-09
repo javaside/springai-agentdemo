@@ -434,7 +434,7 @@ public final class SubagentRunner implements UiChangeSource {
                     + "请改用 run_in_background=false 的前台 Task。";
         }
         String taskId = backgroundRegistry.register(spec.name(), description);
-        listener.onBackgroundTaskStarted(taskId, spec.name(), description);
+        listener.onBackgroundTaskStarted(taskId, spec.name(), description, requestedModelLabel(spec));
         // 与前台 run() 同一条纪律：increment 是 try 前的最后一条语句、publishBackground 是 try 内的首语句。
         // 同步窗口（increment → execute 成功）内的任何异常——包括 listener 抛的 Error（publishBackground
         // 只隔 RuntimeException）——都由下面的 finally 收尾递减，backgroundInFlight 才不会永久挂 1；
@@ -474,8 +474,8 @@ public final class SubagentRunner implements UiChangeSource {
                 publishBackground(changed());
             }
         }
-        return "已在后台启动：" + taskId + "（" + spec.name() + " · " + description + "）。"
-                + "用 TaskOutput 取结果，或等待完成通知。";
+        return "已在后台启动：" + taskId + "（" + spec.name() + " · " + description + " · "
+                + requestedModelLabel(spec) + "）。用 TaskOutput 取结果，或等待完成通知。";
     }
 
     /** 后台任务体：跑完把结果写回注册表并发事件。<b>任何异常都不得逃出本方法</b>（池线程死掉没人知道）。 */

@@ -143,25 +143,28 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      * @param startedAt   开始时刻（epoch millis）
      * @param finishedAt  结束时刻（epoch millis）；未结束为 0，耗时据此定格
      * @param result      子 agent 的完整结果；未结束为空串
+     * @param model       本次委派实际请求的模型标签（如 {@code "openai:gpt-5.6-sol"}）
      */
     public record BackgroundView(String taskId, String agentName, String description,
                                  BackgroundStatus status, String currentTool,
-                                 long startedAt, long finishedAt, String result) {}
+                                 long startedAt, long finishedAt, String result, String model) {}
 
     /** 内部可变持有者。仅本类访问。 */
     private static final class BackgroundEntry {
         final String taskId;
         final String agentName;
         final String description;
+        final String model;
         final long startedAt = System.currentTimeMillis();
         long finishedAt;                  // 0 = 仍在跑
         BackgroundStatus status = BackgroundStatus.RUNNING;
         String currentTool = "";
         String result = "";               // 完整结果正文（/tasks 面板展开用）
-        BackgroundEntry(String taskId, String agentName, String description) {
+        BackgroundEntry(String taskId, String agentName, String description, String model) {
             this.taskId = taskId;
             this.agentName = agentName;
             this.description = description;
+            this.model = model;
         }
     }
 
@@ -771,12 +774,18 @@ public final class ConversationState implements AgentListener, UiChangeSource {
 
     @Override
     public void onBackgroundTaskStarted(String taskId, String agentName, String description) {
+        onBackgroundTaskStarted(taskId, agentName, description, "");
+    }
+
+    @Override
+    public void onBackgroundTaskStarted(String taskId, String agentName, String description, String modelLabel) {
         Change change;
         synchronized (this) {
             String d = summarize(description);      // 折叠换行：守住「一 OutputLine = 一物理行」
-            backgroundTasks.add(new BackgroundEntry(taskId, agentName, d));
+            String m = summarize(modelLabel);        // 同上：modelLabel 亦可能含嵌入换行，须同一纪律折叠
+            backgroundTasks.add(new BackgroundEntry(taskId, agentName, d, m));
             pending.add(new OutputLine("⏱ 后台任务已启动  " + taskId + " · " + agentName
-                    + (d.isEmpty() ? "" : " · " + d), OutputLine.Kind.INFO));
+                    + (d.isEmpty() ? "" : " · " + d) + (m.isEmpty() ? "" : " · " + m), OutputLine.Kind.INFO));
             change = changed(UiDirty.ALL);
         }
         publish(change);
@@ -837,7 +846,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         List<BackgroundView> out = new ArrayList<>(backgroundTasks.size());
         for (BackgroundEntry e : backgroundTasks) {
             out.add(new BackgroundView(e.taskId, e.agentName, e.description, e.status, e.currentTool,
-                    e.startedAt, e.finishedAt, e.result));
+                    e.startedAt, e.finishedAt, e.result, e.model));
         }
         return out;
     }
