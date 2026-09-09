@@ -9,7 +9,7 @@ import java.util.function.Function;
 
 /**
  * 严格分批的<b>物理行输出队列</b>（设计 §9.1/§9.2）：把逻辑输出（{@code OutputLine} / 流式完整行）
- * 变成 {@link OutputCursor} 消费流，{@link #drain(int, long, PhysicalSink)} 在两个预算——物理行数与
+ * 变成 {@link OutputCursor} 消费流，{@link #drain(int, long, int, PhysicalSink)} 在两个预算——物理行数与
  * UI 线程执行时间——任一耗尽时<b>立即</b>返回事件循环，尚未提交的物理行留在游标里，
  * 顺序不变、内容不丢。
  *
@@ -33,9 +33,12 @@ import java.util.function.Function;
  * <p><b>⚠ markdown 表格块的攒块也游离于两个预算之外（如实声明，第二条例外）</b>：
  * 表格行在渲染器里<b>缓冲</b>到块结束才一次排版（scrollback 只能追加、列宽必须按整块真实内容算），
  * 排版发生在<b>批中途某个 {@code next()} 内部</b>，缓冲还跨游标、跨批次、跨 OutputLine 存活。
- * 缓冲期间<b>不写行</b>，而时间检查从第 2 行起才生效——所以一批可以喂完 600 条 pending +
- * 300 条流式行、完全不受 12ms 约束。量级由渲染器输入上限（200 行 / 64 K 原文字符，越限降级成逐行
- * 原样输出）与排版产出上限（600 物理行，越限整块退回原样）双向封顶，可接受。
+ * 缓冲期间<b>不写行</b>，而时间检查从<b>整批</b>第 2 行起才生效（{@code alreadyWrittenThisBatch}，
+ * 此前按每次 {@code drain()} 调用各自的局部计数判断，同一批里多次调用会各自重新豁免一次——
+ * 现在改为调用方传入的整批累计值，豁免只在批的第一次真正开始消费内容时生效一次）。单个表格块
+ * 本身仍可能在这一次豁免内把 200 行 / 64K 字符排版完、不受 12ms 约束，量级由渲染器输入上限
+ * （200 行 / 64 K 原文字符，越限降级成逐行原样输出）与排版产出上限（600 物理行，越限整块退回
+ * 原样）双向封顶，可接受。
  * 与上面的 diff 工厂成本<b>不是同一个模式</b>（那笔在首段之前、每条输出只付一次）。
  * 另注：{@code drain} 从不调用 {@link OutputCursor#hasNext()}，只认 {@code next()} 返回
  * {@code null} 作为耗尽信号——所以表格游标「本次没有可吐的行但逻辑行还没读完」时<b>不能</b>返回
@@ -122,10 +125,18 @@ public final class PhysicalOutputQueue {
      * @param maxPhysicalRows 本批物理行硬上限（&gt;0）
      * @param deadlineNanos   <b>绝对</b>截止时刻（nanoTime 域）；≤0 视为不限时。
      *                        同一 UI 批的多个 drain 段应传同一个值（批内共享预算）。
+     * @param alreadyWrittenThisBatch 调用方在<b>同一 UI 批</b>内、在本次调用之前，已经通过
+     *                                其它 {@code drain()} 调用写出的物理行总数。
+     *                                「前 2 行免时间检查」的豁免按 {@code alreadyWrittenThisBatch
+     *                                + 本次写出行数} 判断，不是按本次调用的局部计数——
+     *                                否则一批里连续多次调用 {@code drain()}（主段/计划段/强制表格 flush 段）
+     *                                会各自重新豁免一次，diff LCS 展开与表格排版这两处已知的预算例外
+     *                                （见类注释）就能跨段叠加。传 0 等价于「批的第一段」。
      * @param sink            物理行出口（两条分支对应 {@link PhysicalLine} 的两种形态）
      * @return 批次结果
      */
-    public BatchResult drain(int maxPhysicalRows, long deadlineNanos, PhysicalSink sink) {
+    public BatchResult drain(int maxPhysicalRows, long deadlineNanos,
+            int alreadyWrittenThisBatch, PhysicalSink sink) {
         int written = 0;
         boolean timeExhausted = false;
         while (written < maxPhysicalRows) {
@@ -139,9 +150,12 @@ public final class PhysicalOutputQueue {
             if (line.styled() != null) sink.printlnStyled(line.styled(), line.raw());
             else sink.printlnPlain(line.plain() == null ? "" : line.plain(), line.raw());
             written++;
-            // 时间检查从第二行起：首行前的工厂成本（如 diff 的读文件+LCS，O(一个工具入参) 的一次性
-            // 工作，见类注释的如实声明）不挤占行吞吐预算——否则慢机器上首行后立即停，一批只出 1 行。
-            if (written >= 2 && deadlineNanos > 0 && System.nanoTime() >= deadlineNanos) {
+            // 时间检查从整批第 2 行起：首行前的工厂成本（如 diff 的读文件+LCS，O(一个工具入参)
+            // 的一次性工作，见类注释的如实声明）不挤占行吞吐预算——否则慢机器上首行后立即停，
+            // 一批只出 1 行。「整批」= alreadyWrittenThisBatch + written；此前只看本次调用的
+            // 局部 written，同一批里多次调用会各自重新豁免一次。
+            if (alreadyWrittenThisBatch + written >= 2
+                    && deadlineNanos > 0 && System.nanoTime() >= deadlineNanos) {
                 timeExhausted = true;                        // 行间时间检查（设计 §9.1）
                 break;
             }

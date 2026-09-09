@@ -516,7 +516,7 @@ public final class CodeTuiView extends InlineApp {
     private int drainQueuedOutput(int budget) {
         if (budget <= 0 || outputQueue.isEmpty()) return 0;
         drainDeadlinesObserved.add(batchDeadlineNanos);   // 测试观测点：所有段必须是同一个绝对时刻
-        return outputQueue.drain(budget, batchDeadlineNanos, queueSink).rowsWritten();
+        return outputQueue.drain(budget, batchDeadlineNanos, batchRowsUsed, queueSink).rowsWritten();
     }
 
     /**
