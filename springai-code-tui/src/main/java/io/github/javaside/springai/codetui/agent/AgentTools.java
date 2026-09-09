@@ -493,7 +493,7 @@ public final class AgentTools {
         TaskResultStore backgroundResults = new TaskResultStore(root);
         subagentRunner.enableBackground(backgroundRegistry, resolveBackgroundConcurrency());
 
-        ToolCallback taskTool = SubagentTool.create(subagentSpecs,
+        ToolCallback taskTool = SubagentTool.create(subagentSpecs, registry.allModels(),
                 (spec, prompt, desc, turnIgnored) ->
                         // 真实 parentTurnId 从 ThreadLocal 取（Task 工具被 ToolEventCallback 装饰，call 时已压入）
                         subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()),
@@ -506,7 +506,7 @@ public final class AgentTools {
 
         // 批量 ParallelTasks 工具：并发执行多个独立子 agent。parentTurnId 在工具线程（fan-out 前）从 ThreadLocal 取，
         // 再由 runAll 显式传入每个子任务闭包（子线程不读 ThreadLocal）。
-        ToolCallback parallelTool = SubagentTool.createParallel(subagentSpecs,
+        ToolCallback parallelTool = SubagentTool.createParallel(subagentSpecs, registry.allModels(),
                 (dispatches, turnIgnored) ->
                         subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()),
                 subagentRunner::runInBackground);
