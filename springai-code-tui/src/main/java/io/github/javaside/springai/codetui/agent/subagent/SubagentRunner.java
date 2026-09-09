@@ -222,7 +222,7 @@ public final class SubagentRunner implements UiChangeSource {
     /** 执行一次委派，返回子 agent 最终文本。parentTurnId=发起 Task 的回合。 */
     public String run(SubagentSpec spec, String prompt, String description, long parentTurnId) {
         String taskId = taskIdSupplier.get();
-        listener.onSubagentStarted(parentTurnId, taskId, spec.name(), description);
+        listener.onSubagentStarted(parentTurnId, taskId, spec.name(), description, requestedModelLabel(spec));
         // increment 必须是 try 前的最后一条语句、publish 必须是 try 内的首语句——否则 onSubagentStarted 抛出
         // 会漏掉 finally 的递减，计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。publish 只隔 RuntimeException，
         // 放 try 外的话 listener 抛 Error（SOE/OOM/NoClassDefFoundError）同样会漏减（错误在这里不是「不该发生」，
@@ -622,16 +622,23 @@ public final class SubagentRunner implements UiChangeSource {
         return tools.stream().map(t -> t.getToolDefinition().name()).toList();
     }
 
-    /** model 空→激活 selection；否则在当前 v1 provider 路由下解析显式模型 selection。 */
+    /** model 空→激活 selection；否则解析显式 model（支持 provider:model 跨家路由，裸 modelId 兼容旧配置）。 */
     private ProviderRegistry.RequestSelection resolveSelection(SubagentSpec spec) {
         if (spec.model() == null || spec.model().isBlank()) {
             return registry.activeRequestSelection();
         }
-        // provider:model 的跨家路由留待 v2（spec §12）；v1 先在激活 provider 上按模型名覆盖。
-        String modelId = spec.model().contains(":")
-                ? spec.model().substring(spec.model().indexOf(':') + 1)
+        String m = spec.model();
+        int colon = m.indexOf(':');
+        return colon < 0
+                ? registry.requestSelection(m)
+                : registry.requestSelection(m.substring(0, colon), m.substring(colon + 1));
+    }
+
+    /** 派发前（可能解析失败）就能确定的展示标签：不解析、不抛异常，仅用于 UI 即时反馈。 */
+    private String requestedModelLabel(SubagentSpec spec) {
+        return (spec.model() == null || spec.model().isBlank())
+                ? registry.active().id() + ":" + registry.activeModelId()
                 : spec.model();
-        return registry.requestSelection(modelId);
     }
 
     /** 子 agent 有效工具 = 内置装饰工具 + MCP 实时工具（registry 快照），再按 spec allow/deny 过滤（注册名精确匹配）。
