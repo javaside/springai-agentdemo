@@ -21,7 +21,7 @@ class SubagentToolBackgroundTest {
     }
 
     private static SubagentTool.SubagentCall call(String type, boolean bg) {
-        return new SubagentTool.SubagentCall("do things", "the prompt", type, bg);
+        return new SubagentTool.SubagentCall("do things", "the prompt", type, null, bg);
     }
 
     @Test
@@ -53,7 +53,7 @@ class SubagentToolBackgroundTest {
         var fn = SubagentTool.function(specs(),
                 (spec, prompt, desc, turn) -> "fg", (spec, prompt, desc) -> "bg");
         // 模型可能整个省略该字段 → Jackson 给 null。默认必须是前台（向后兼容）
-        assertEquals("fg", fn.apply(new SubagentTool.SubagentCall("d", "p", "explore", null)));
+        assertEquals("fg", fn.apply(new SubagentTool.SubagentCall("d", "p", "explore", null, null)));
     }
 
     @Test

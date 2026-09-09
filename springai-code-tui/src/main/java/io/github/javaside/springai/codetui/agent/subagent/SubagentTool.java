@@ -76,6 +76,10 @@ public final class SubagentTool {
             @ToolParam(description = "Detailed, self-contained task prompt for the subagent") String prompt,
             @ToolParam(description = "Which subagent type to use") String subagent_type,
             @ToolParam(required = false, description =
+                    "Optional model override for this dispatch, as 'provider:modelId' (see the model "
+                    + "roster in this tool's description). Omit to use this subagent type's own default "
+                    + "model, or the currently active model if it has none.") String model,
+            @ToolParam(required = false, description =
                     "Background mode (default false/omitted = foreground). "
                     + "Set true ONLY when: the task is independent (you do not need its result to "
                     + "decide your next action), AND the task is read-only or uses only pre-approved "
@@ -87,6 +91,11 @@ public final class SubagentTool {
         /** null-safe：模型省略该字段时 Jackson 给 null，默认前台。 */
         public boolean background() {
             return Boolean.TRUE.equals(run_in_background);
+        }
+
+        /** null-safe：空白视为「不覆盖」，与 {@link #background()} 同一纪律。 */
+        public String modelOverride() {
+            return (model == null || model.isBlank()) ? null : model.trim();
         }
     }
 
@@ -178,12 +187,14 @@ public final class SubagentTool {
                 throw new RuntimeException("No subagent found with type: " + callArgs.subagent_type()
                         + ". Available: " + String.join(", ", specs.keySet()));
             }
+            String override = callArgs.modelOverride();
+            SubagentSpec effectiveSpec = override == null ? spec : spec.withModel(override);
             if (callArgs.background()) {
                 return background == null
                         ? NO_BACKGROUND
-                        : background.dispatch(spec, callArgs.prompt(), callArgs.description());
+                        : background.dispatch(effectiveSpec, callArgs.prompt(), callArgs.description());
             }
-            return dispatcher.dispatch(spec, callArgs.prompt(), callArgs.description(), -1L);
+            return dispatcher.dispatch(effectiveSpec, callArgs.prompt(), callArgs.description(), -1L);
         };
     }
 
@@ -215,7 +226,8 @@ public final class SubagentTool {
                     } else if (background == null) {
                         body = NO_BACKGROUND;
                     } else {
-                        body = background.dispatch(spec, t.prompt(), t.description());
+                        SubagentSpec effectiveSpec = t.modelOverride() == null ? spec : spec.withModel(t.modelOverride());
+                        body = background.dispatch(effectiveSpec, t.prompt(), t.description());
                     }
                     if (i > 0) sb.append("\n\n");
                     sb.append("[").append(i + 1).append("] ").append(t.subagent_type()).append("\n").append(body);
@@ -234,7 +246,8 @@ public final class SubagentTool {
                     failure[i] = "未知 subagent 类型: " + t.subagent_type()
                             + "（可用: " + String.join(", ", specs.keySet()) + "）";
                 } else {
-                    dispatchable.add(new SubagentRunner.Dispatch(spec, t.prompt(), t.description()));
+                    SubagentSpec effectiveSpec = t.modelOverride() == null ? spec : spec.withModel(t.modelOverride());
+                    dispatchable.add(new SubagentRunner.Dispatch(effectiveSpec, t.prompt(), t.description()));
                     dispatchIndex.add(i);
                 }
             }
