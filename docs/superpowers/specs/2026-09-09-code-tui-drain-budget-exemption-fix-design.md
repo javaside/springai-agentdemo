@@ -254,8 +254,14 @@ private int drainQueuedOutput(int budget) {
    `batchRowsUsed`。
 2. 新增 `PhysicalOutputQueueTest.java`：证明「第二次 `drain()` 调用在批内已写行数
    已达门槛时不再重新豁免」，且证明「批的第一次调用仍保留豁免（forward progress）」。
-3. `DrainBurstCapTest.java` 新增端到端用例：主段耗掉预算 + 同批触发强制表格 flush 段，
-   断言 flush 段没有独立于主段的完整 12ms/300 行豁免。
+3. `DrainBurstCapTest.java` 新增端到端用例：真实大 diff + 同批触发的强制表格 flush 段
+   同现一次回复，断言内容不丢 + 单批耗时无异常膨胀（<200ms 粗粒度兜底）。**如实说明**
+   （最终审查用变异测试实证）：这条用例走的确实是被修复的那条机制（同批①③两段），
+   但由于这个 bug 本身的真实成本增量只有约 1 行写入（微秒级，而不是「几百毫秒」），
+   粗粒度阈值结构上看不出这个差值——把 Task 1 的修复临时还原、只留这条用例单独跑，
+   它照样是绿的。真正能钉住这个 bug 回归的，唯一是第 2 条的 `PhysicalOutputQueueTest`
+   （确定性、不依赖真实墙钟）；这条端到端用例的价值是内容完整性 + 灾难性叠加的兜底，
+   不是这个 bug 本身的回归哨兵——这是设计已知的取舍（§5.2），不是实现遗漏。
 4. `mvn test -pl springai-code-tui` 改动前后均全绿。
 5. 不涉及 `springai-tamboui-inline-patch` 模块（AsyncPtyWriter 路径不在本次改动范围内），
    不需要重跑该模块测试，但本次排查已确认其现状健康（33/33）。
