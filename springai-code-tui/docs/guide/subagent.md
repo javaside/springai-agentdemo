@@ -16,7 +16,7 @@
 | --- | --- |
 | **上下文独立** | 不挂会话记忆 advisor，看不到主对话历史。所以派发 prompt 必须自包含（工具描述反复强调 "self-contained"） |
 | **结果只回最终文本** | 子 agent 内部几十轮工具调用都不进主会话，回给主 agent 的只有最后一条消息——这就是委派能省主 agent 上下文的机制 |
-| **工具/模型继承自主 agent** | 拿到的是主 agent 那套**已装饰**工具（权限审批、工具事件、媒体外置全套生效），可按定义裁剪；模型默认跟随当前所选 |
+| **工具/模型继承自主 agent** | 拿到的是主 agent 那套**已装饰**工具（权限审批、工具事件、媒体外置全套生效），可按定义裁剪；模型默认跟随当前所选，可按次覆盖（见 §3.1） |
 
 ## 2. 参与的类（一张图）
 
@@ -33,6 +33,10 @@
 后台层    BackgroundTaskRegistry（状态真相源）· TaskResultStore（限幅落盘）
          BackgroundNotifier（自动送达判定+刹车）· BackgroundDigest（给模型的统一措辞）
 ```
+
+工具层还接一路不进这张图的输入：`SubagentCall.model`（按次覆盖，见 §3.1）在路由到 `spec`
+**之后**、执行**之前**用 `spec.withModel(override)` 合并——只影响这一次委派，`SubagentSpec`
+本身（含 classpath 里的定义文件）不变。
 
 装配点在 `AgentTools.build`：`SubagentRunner` 复用主 agent 的已装饰工具列表；
 `TaskOutput` / `ListTasks` / 记忆工具 / `ExitPlanMode` **刻意不进**这份列表——
@@ -52,7 +56,7 @@ You are a codebase exploration specialist...                ← systemPrompt 正
 ```
 
 - `tools` 为空 = 继承全部工具；`disallowedTools` 在 allow 结果上再剔除。
-- `model` 可空；非空时**只在当前 provider 上**按模型名覆盖（跨家路由未实现）。
+- `model` 可空——这是定义层的**静态**默认值，可被下面 §3.1 的**按次覆盖**盖过。
 - 内置四件：`general-purpose`（几乎全工具）、`explore`/`plan`（只读三件套）、
   `bash`（Bash 系列）。
 - 不支持用户自定义子 agent（没有扫描 `.codetui/agents/` 的代码）。
@@ -60,6 +64,40 @@ You are a codebase exploration specialist...                ← systemPrompt 正
 子 agent 的系统提示**每次派发现拼**：spec 正文 + AGENTS.md 项目指令 +
 权限模式段（实时读当前模式，Shift+Tab 切档下一次委派即生效）+ 产物路径提示
 （提醒它把生成的图片路径写进最终报告，否则主 agent 不知道那些图存在）。
+
+### 3.1 按次模型覆盖（2026-09-09）
+
+`Task`/`ParallelTasks` 的入参除 `subagent_type`/`prompt` 外还有一个可选 `model`
+字段（`"provider:modelId"`，如 `"deepseek:deepseek-chat"`；裸 `modelId` 也接受，按
+「第一个拥有该 id 的 provider」宽松匹配）——主 agent 可以让**同一次委派**跑在跟
+它自己不同的模型上，典型用法是把同一份材料派给不同模型的子 agent 分别评估，
+再综合对比。数据流：
+
+```
+SubagentTool.SubagentCall.model ──→ modelOverride()（空白视为 null）
+        │
+        ▼
+effectiveSpec = override == null ? spec : spec.withModel(override)   ← 只在这次委派生效，不改任何持久状态
+        │
+        ▼
+SubagentRunner.resolveSelection(effectiveSpec)
+        │
+        ├─ spec.model() 为空 → registry.activeRequestSelection()（跟随当前激活，行为不变）
+        └─ spec.model() = "provider:modelId" → registry.requestSelection(providerId, modelId)（精确路由，跨家生效）
+           spec.model() = "modelId"（无冒号）  → registry.requestSelection(modelId)（宽松匹配首个持有者）
+```
+
+- **未知/不可用模型清楚报错**，不会静默退回到当前激活模型——`ProviderRegistry.requestSelection`
+  两个重载找不到 owner 都抛 `IllegalArgumentException`（这本身是 2026-09-09 修的一个 bug：
+  旧代码两个分支殊途同归，跨 provider 的 modelId 曾经被悄悄按当前激活模型跑掉）。
+- **UI 可见性**：scrollback 与任务面板显示每次委派**实际请求的模型标签**
+  （`SubagentRunner.requestedModelLabel`——不解析、不抛异常，纯展示用，spec.model()
+  为空时展示当前激活的 `"provider:modelId"`）；前台（`ConversationState.SubtaskView.model`）
+  与后台（`BackgroundView.model`）两条路径都有，互相独立实现（历史上后台这条一度漏掉，
+  见 commit `b64d10ba`）。
+- **只应在用户明确要求时使用**——工具描述里对模型明确写了「网络/流式瞬态故障不是换模型的
+  理由，原地重试同一 dispatch」，防止主 agent 把它当故障排除手段自作主张切模型
+  （真实误用案例与修复见 commit `f693608e`）。
 
 ## 4. 三种执行模式
 

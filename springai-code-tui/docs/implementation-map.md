@@ -812,8 +812,25 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 `PermissionModePrompt.forSubagent(modeSupplier.get())`（仅 PLAN 非空）+ 恒定 `ARTIFACT_GUIDANCE`。
 `modeSupplier` 是 `permissionEngine::mode`，**刻意用 Supplier 而非值**，Shift+Tab 切档下一次委派生效。
 
-**模型路由** `resolveSelection`：`spec.model()` 空则用当前激活；非空则**只在当前 provider 上**
-按模型名覆盖（跨家路由是未做项）。
+**模型路由** `resolveSelection`：`spec.model()` 空则 `registry.activeRequestSelection()`（跟随当前
+激活）；非空按是否含 `:` 分派——`"provider:modelId"` 走 `registry.requestSelection(providerId, modelId)`
+精确跨家路由，裸 `"modelId"` 走 `registry.requestSelection(modelId)` 宽松匹配首个持有者；两个重载
+找不到 owner 都抛 `IllegalArgumentException`（2026-09-09 前是 bug：两分支殊途同归，跨 provider
+modelId 被静默按当前激活模型跑掉，见 `bf1371a5`/`e0ef2d35`）。
+
+**按次覆盖入口** `SubagentTool.SubagentCall.model`（`Task`/`ParallelTasks` 可选入参，
+`ParallelCall` 每个子任务独立设置）：`modelOverride()` 空白视为 null；非 null 时
+`function()`/`batchFunction()` 用 `spec.withModel(override)` 算出 `effectiveSpec`（新
+`SubagentSpec` 实例，只这次委派用，不改任何持久状态）再喂给 `resolveSelection`。
+工具描述里带模型 roster（`AgentTools` 装配时传 `registry.allModels()`）供主 agent 选择，
+且明确写了「只在用户明确要求时用；网络/流式瞬态故障不是换模型的理由」（真实误用案例
+见 `f693608e`）。
+
+**展示标签** `SubagentRunner.requestedModelLabel(spec)`：派发前（可能还没真正解析）就能
+确定的展示用标签，不解析不抛异常——`spec.model()` 空则拼 `active().id()+":"+activeModelId()`，
+非空原样返回。前台经 `onSubagentStarted` 落进 `ConversationState.SubtaskView.model`，
+后台经 `onBackgroundTaskStarted` 落进 `BackgroundView.model`——两条路径各自独立实现，
+历史上后台这条曾经漏掉（`a13f06fd` 只接了前台，`b64d10ba` 补后台）。
 
 **两个不同的「桥」别混**：
 
