@@ -76,8 +76,9 @@ public interface AgentListener {
     void onTodoUpdated(long turnId, List<String> todoLines);   // Todos 转成可显示的行
 
     /**
-     * 带 taskId 的 Todo 事件：taskId==null 是控制器（主 agent）的计划 todo（开发计划进度，进任务面板）；
-     * taskId!=null 是子 agent 内部 todo（当前子 agent 的进度，进 todo 面板）。
+     * 带 taskId 的 Todo 事件：taskId==null 是控制器（主 agent）的计划 todo，进 todo 面板；
+     * taskId!=null 是子 agent 内部 todo，被丢弃（不进任何面板，仅工具活动本身在 scrollback 留痕）——
+     * 内容注定看不见，一般不该让子 agent 拿到 TodoWrite（见 general-purpose 的 disallowedTools）。
      * 默认委托无 taskId 版本，只有需按层分流的实现（ConversationState）覆写本方法。
      *
      * @param turnId    所属回合

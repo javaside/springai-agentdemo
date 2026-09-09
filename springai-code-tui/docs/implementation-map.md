@@ -53,7 +53,7 @@
 6. `McpRegistry.init(root, state, engine)` —— **立即返回**，连接在后台跑（实测一个远程 HTTP
    server 要 5~8 秒）。「已发现 N 个工具」那行由 `onMcpReady` 回调补上。
 7. `AgentTools.build(...)` → `AgentRuntime`（16 字段 record）→ `new CodingAgent(...)`。
-8. `resumed` 时 `state.replayHistory(...)` 回放历史进 scrollback。
+8. `resumed` 时 `state.replayHistory(...)` 回放历史进 scrollback，并从历史最后一次 TodoWrite 调用重建 todo 面板。
 9. `new CodeTuiView(state, agent, root).run()`，全程 try/finally 关 MCP。
 10. `System.exit(exitCode)` —— 必须强制退，OkHttp Dispatcher 线程 keep-alive 60s。
 
@@ -475,6 +475,11 @@ Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改
 显示的是原文。ASSISTANT 按 `\n` **逐行**拆（`printer.assistant` 只处理单行）；
 tool_call 渲 `⏺ name 摘要` 且 `raw=null`（**不重绘 diff**，历史里的原文件可能早已改变）。
 
+同一份历史另喂给 `HistoryReplay.lastTodoSnapshot`：找最后一次 `TodoWrite` 调用、反序列化其参数，
+复用 `AgentTools.toLines` 格式化后重建 todo 面板——不用担心历史里混入子 agent 的 TodoWrite：
+子 agent 的每次委派都是无会话记忆的一次性 `ChatClient` 调用（见 `SubagentRunner.execute`），
+其内部工具调用从不写入主会话的持久化消息流，故这里扫到的一定是主 agent 自己的调用。
+
 `/clear` → `CodingAgent.clearContext()` 只换 volatile `sessionId`（下一回合自动建空会话），
 **旧文件原样保留可 `-c` 恢复**；顺带 `usageAccumulator.reset()`、`clearSessionRules()`、
 `interjections.drainForRefill()`。
@@ -802,7 +807,7 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 （`name` / `description` / `tools`→allow / `disallowedTools`→deny / `model` / `skills`）+ 正文→systemPrompt。
 **不支持用户自定义子 agent**（无代码扫描 `.codetui/agents/`；`parse(uri)` 支持 `file:` 但无调用方）。
 
-内置四个的工具约束：`general-purpose` 只 deny `AskUserQuestionTool`；
+内置四个的工具约束：`general-purpose` deny `AskUserQuestionTool, TodoWrite`（前者无问询，后者内容被 UI 丢弃）；
 `explore` / `plan` allow `Read, Grep, Glob`；`bash` allow `Bash, BashOutput, KillShell`。
 
 **工具集隔离**：`effectiveTools(spec)` = `decoratedList` + `mcpRegistry.activeTools()`（每次委派现取，
