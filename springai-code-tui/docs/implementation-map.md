@@ -802,7 +802,7 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 （`name` / `description` / `tools`→allow / `disallowedTools`→deny / `model` / `skills`）+ 正文→systemPrompt。
 **不支持用户自定义子 agent**（无代码扫描 `.codetui/agents/`；`parse(uri)` 支持 `file:` 但无调用方）。
 
-内置四个的工具约束：`general-purpose` 只 deny `AskUserQuestionTool`；
+内置四个的工具约束：`general-purpose` deny `AskUserQuestionTool, TodoWrite`（前者无问询，后者内容被 UI 丢弃）；
 `explore` / `plan` allow `Read, Grep, Glob`；`bash` allow `Bash, BashOutput, KillShell`。
 
 **工具集隔离**：`effectiveTools(spec)` = `decoratedList` + `mcpRegistry.activeTools()`（每次委派现取，
