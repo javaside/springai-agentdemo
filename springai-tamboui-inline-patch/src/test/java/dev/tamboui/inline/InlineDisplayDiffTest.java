@@ -451,6 +451,50 @@ class InlineDisplayDiffTest {
         return count;
     }
 
+    /**
+     * 三段式 live 区收缩：稳定顶部（模拟 todo 面板，6 行，本轮没变）+ 可变中段（模拟
+     * picker，8 行，整段消失）+ 稳定底部（模拟输入框/状态行，4 行，本轮没变）。
+     * 顶部行数（6）大于底部行数（4），{@code shiftAlignsBetter} 因此判「顶部对齐」更优，
+     * 走的正是曾经算错删除起点的非平移分支。
+     *
+     * <p>回归的是 {@code /model} 选择器反复开关的真实故障：{@code down(newHeight)} 曾经把
+     * newHeight（顶部稳定行数 + 底部稳定行数之和 = 10）当成删除起点，落进变化区域中间——
+     * 该删的整段 8 行漏删了前 4 行，它们从此没人再删，卡在屏幕上（PTY 实机复现见
+     * {@code springai-code-tui/src/test/resources/scripts/model_picker_smoke.py}；
+     * 纯字节子串测不出「最终画面对不对」，那边靠 pyte 重放判终端语义，这里只钉住
+     * 「DL 发在正确的行」这个更底层、更快的契约）。
+     */
+    @Test
+    void shrinkingWithStableTopAndBottomDeletesExactlyTheChangedMiddleSection() {
+        InlineDisplay display = display(30);
+
+        String[] top = {"TODO-0", "TODO-1", "TODO-2", "TODO-3", "TODO-4", "TODO-5"};
+        String[] big = {"PICK-0", "PICK-1", "PICK-2", "PICK-3", "PICK-4", "PICK-5", "PICK-6", "PICK-7"};
+        String[] bottom = {"BOX-TOP", "BOX-MID", "BOX-BOT", "STATUS"};
+
+        renderSections(display, top, big, bottom, 0, 0);     // 帧 1：picker 打开，18 行
+        backend.resetCounts();
+
+        renderSections(display, top, null, bottom, 0, 0);    // 帧 2：Esc 关闭，10 行（delta=-8）
+
+        String raw = backend.outputUtf8();
+        assertTrue(raw.contains("\u001b[6B\r\u001b[8M"),
+                "DL 必须紧跟在顶部稳定的 6 行之后发出、一次删掉整段 8 行变化区域：" + raw);
+        assertFalse(raw.contains("\u001b[10B"),
+                "不能再用「顶部 + 底部稳定行数之和」（10）当删除起点：" + raw);
+    }
+
+    private static void renderSections(InlineDisplay display, String[] top, String[] middle, String[] bottom, int cx, int cy) {
+        int midLen = middle == null ? 0 : middle.length;
+        int total = top.length + midLen + bottom.length;
+        display.render((area, buffer) -> {
+            int row = 0;
+            for (String s : top) buffer.setString(0, row++, s, Style.EMPTY);
+            if (middle != null) for (String s : middle) buffer.setString(0, row++, s, Style.EMPTY);
+            for (String s : bottom) buffer.setString(0, row++, s, Style.EMPTY);
+        }, total, cx, cy);
+    }
+
     private InlineDisplay display(int height) {
         return new InlineDisplay(height, 40, backend, backend.writer(),
                 SynchronizedOutput.from(java.util.Map.of(), "never"));

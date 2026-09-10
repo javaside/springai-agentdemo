@@ -410,6 +410,10 @@ public final class InlineDisplay implements AutoCloseable {
         boolean shiftRows = oldHeight > 0 && newHeight > 0 && previousFrameValid && nextFrame != null
                 && shiftAlignsBetter(previousBuffer, nextFrame, delta);
         appendHome(batch);
+        // shiftRows==false 且收缩时，DL 不能想当然地发在 newHeight 处（见下方分支注释）——
+        // 提前算好「顶部有多少行本轮真的没变」，两处（发 DL 的位置 / 之后重新对齐内部快照）都要用同一个数，
+        // 算错或算漏一处，内部快照和终端实际内容就会对不上，下一帧的差分要么白画、要么漏画。
+        int shrinkPrefixLen = 0;
         if (delta > 0) {
             if (oldHeight > 0) down(batch, oldHeight - 1);
             for (int i = 0; i < delta; i++) batch.append("\r\n");
@@ -422,17 +426,57 @@ public final class InlineDisplay implements AutoCloseable {
         } else if (shiftRows) {
             batch.append("\u001b[").append(-delta).append('M');   // 光标已在 live 区顶部，直接删顶部若干行
         } else {
-            down(batch, newHeight);
+            // ⚠ 不能用 down(newHeight)：newHeight 是「顶部稳定内容 + 底部稳定内容」两段之和
+            // （例如 todo 面板 + 输入框/状态行），不是「顶部稳定内容」自己的行数。当顶部还有一块
+            // 本轮没变的内容（todo/子 agent 面板挂在会缩放的 picker/slash-menu 上方）时，
+            // down(newHeight) 会把光标落在变化区域中间，DL 从那里往下删，删掉的是「变化区域剩余
+            // 部分 + 底部稳定内容」，唯独漏掉变化区域最前面几行——它们从此再没人删，永远停在屏幕上
+            // （用户实报：反复开关 /model 选择器，斜杠菜单/选择器的头几行像鬼影一样越堆越多）。
+            // 正确的删除起点是「顶部这次真的没变的行数」，用内容对比现算，不用高度差硬算。
+            shrinkPrefixLen = previousFrameValid && nextFrame != null
+                    ? commonPrefixLength(previousBuffer, nextFrame, Math.min(oldHeight, newHeight), delta)
+                    : 0;
+            down(batch, shrinkPrefixLen);
             batch.append('\r').append("\u001b[").append(-delta).append('M');
-            up(batch, newHeight);
+            up(batch, shrinkPrefixLen);
             batch.append('\r');
         }
         previousBuffer = previousFrameValid
-                ? InlinePatch.realign(previousBuffer, width, newHeight, shiftRows ? delta : 0)
+                ? (delta < 0 && !shiftRows
+                        ? InlinePatch.realignWithStablePrefix(previousBuffer, width, newHeight, shrinkPrefixLen, delta)
+                        : InlinePatch.realign(previousBuffer, width, newHeight, shiftRows ? delta : 0))
                 : Buffer.empty(Rect.of(width, newHeight));
         currentHeight = newHeight;
         lastCursorX = 0;
         lastCursorY = 0;
+    }
+
+    /**
+     * 顶部 {@code [0, limit)} 内，{@code previous} 与 {@code next} 逐行相同的最长前缀长度——
+     * 但只信任「贪心前缀之后，剩下的尾部整体按同一个 {@code delta} 平移能完全对上」的那段，
+     * 更短的贪心结果一律回退。
+     *
+     * <p><b>为什么不能直接用贪心结果</b>：贪心只看「这一行文字碰巧一样」，分不清「这是没变的稳定面板」
+     * 还是「变化区域头一行恰好长得和上一帧对应位置一样」。斜杠命令补全菜单就会撞上后者——过滤词从
+     * 「/」收紧到「/m」再到「/model」，最靠前的匹配项全程都是 {@code /model}，那一行在收紧前后<b>逐字节相同</b>，
+     * 贪心因此会把它算进「顶部稳定内容」（todo 面板）里，多吃进变化区域的第一行；删除操作从这一行
+     * <b>之后</b>才开始，真正该删的那一行反而漏删、永远留在屏幕上。尾部校验能拦住这个巧合：只有当
+     * 「候选边界之后的每一行都能用同一个 delta 解释」成立时，才说明候选边界真的落在了两段的分界线上，
+     * 不是撞了运气。
+     */
+    private int commonPrefixLength(Buffer previous, Buffer next, int limit, int delta) {
+        int n = 0;
+        while (n < limit && rowsEqual(previous, n, next, n)) n++;
+        while (n > 0 && !tailMatchesShift(previous, next, n, delta)) n--;
+        return n;
+    }
+
+    /** {@code next} 从 {@code from} 行到末尾，是否整段都等于 {@code previous} 按 {@code delta} 平移后的对应行。 */
+    private boolean tailMatchesShift(Buffer previous, Buffer next, int from, int delta) {
+        for (int row = from; row < next.height(); row++) {
+            if (!rowsEqual(previous, row - delta, next, row)) return false;
+        }
+        return true;
     }
 
     /**

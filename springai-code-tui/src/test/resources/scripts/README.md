@@ -30,6 +30,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 | `interjection_smoke.py` | 忙时插话 UI、模型消息顺序及 Esc 回填。 | 本地 SSE 桩 |
 | `memory_smoke.py` | 长时记忆工具装配与存储目录。 | 本地 |
 | `model_memory_smoke.py` | `/model` 选择持久化及重启恢复。 | 本地 |
+| `model_picker_smoke.py` | todo 面板挂着时反复开关 `/model` 选择器：斜杠菜单/选择器残影不得堆积。 | 本地 SSE 桩 |
 | `permission_smoke.py` | 权限模式、面板、ASK 阻塞握手与取消历史。 | 本地 SSE 桩；配置中禁用 MCP，不调用 `npx` |
 | `render_diff_smoke.py` | 局部差分、按需 IME 补帧、完全静止 2s 零终端字节。 | 本地 |
 | `resize_smoke.py` | 真 `SIGWINCH`、generation settle 的 `ESC[3J` 重放与最终画面/光标。 | 本地；pyte 不支持 reflow，视觉 reflow 仍需实机 |
@@ -57,6 +58,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/edit_shortcut_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/memory_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/model_memory_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/model_picker_smoke.py
 ```
 
 ## `npx` 脚本命令

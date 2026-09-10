@@ -100,4 +100,28 @@ final class InlinePatch {
         }
         return moved;
     }
+
+    /**
+     * 两段式版本的 {@link #realign}：{@code [0, prefixLen)} 顶部对齐（不平移，对应 DL/IL 落在
+     * {@code prefixLen} 行之后、完全没碰到的那段），{@code [prefixLen, newHeight)} 按 {@code rowShift}
+     * 平移（对应终端上真被 DL/IL 挪动过的那段）。{@code prefixLen==0} 时退化为
+     * {@code realign(previous, newWidth, newHeight, rowShift)}。
+     *
+     * <p>存在的理由：{@link InlineDisplay#resizeDisplay} 顶部有一段本轮没变的稳定内容（如 todo 面板）时，
+     * DL/IL 会发在 {@code prefixLen} 行之后而不是第 0 行——快照的对齐方式必须跟终端上<b>实际发生的
+     * 操作</b>一致（分段平移），用单一 {@code rowShift} 整体平移会错误地把稳定前缀那段也移位，
+     * 导致内部快照与终端真实内容对不上，下一帧的差分因此瞎画（该改的没改、不该动的又被判成变了）。
+     */
+    static Buffer realignWithStablePrefix(Buffer previous, int newWidth, int newHeight, int prefixLen, int rowShift) {
+        Buffer moved = Buffer.empty(Rect.of(newWidth, newHeight));
+        int width = Math.min(previous.width(), newWidth);
+        for (int row = 0; row < newHeight; row++) {
+            int source = row < prefixLen ? row : row - rowShift;
+            if (source < 0 || source >= previous.height()) continue;
+            for (int col = 0; col < width; col++) {
+                moved.set(col, row, previous.get(col, source));
+            }
+        }
+        return moved;
+    }
 }

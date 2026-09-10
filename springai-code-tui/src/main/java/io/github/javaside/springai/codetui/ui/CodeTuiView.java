@@ -145,6 +145,10 @@ public final class CodeTuiView extends InlineApp {
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     private static final int SKILL_PICKER_CAP = 10; // 技能选择器可见行上限；避免大量技能撑高 InlineDisplay、触发终端反复重排
+    private static final int MODEL_PICKER_CAP = 10; // /model 选择器可见行上限，理由同 SKILL_PICKER_CAP：
+    // 模型目录已有 17+ 个且只会增多，不封顶时 live 区（todo 面板 + 选择器 + 输入框/状态行）很容易
+    // 超过终端实际高度——这一档 InlineDisplay 的光标相对移动会被终端边界夹断，超出部分的位置计算
+    // 全部错位，表现为 Esc 关闭后输入框整段消失、要等下一次不相关的事件才会被带回来的另一帧重画。
     // ⏱ 面板（后台任务）最多显示几条。这份列表<b>跨回合累积、只有 /clear 清</b>，已完成的永不移除：
     // 不封顶的话，一个会话派 20 个后台任务就常驻 21 行，把输入框一路顶下去。全量看 /tasks 面板。
     static final int BACKGROUND_CAP = 6;
@@ -2503,21 +2507,32 @@ public final class CodeTuiView extends InlineApp {
     /** 选择器面板：标题 + 每个模型一行（❯ 高亮当前、✓ 标记在用、右侧暗色说明）。 */
     private Element[] modelPickerChildren() {
         List<ProviderModel> models = onSubmit.models();
+        if (models.isEmpty()) return new Element[0];
         String cur = onSubmit.currentModel();
         String curProvider = onSubmit.currentProviderId();
         Set<String> dupes = duplicateModelIds(models);
+        // 窗口化：同 skillPickerChildren，以当前选中项为中心截一段可见窗口，而不是把整份目录
+        // 都摊开——目录已有 17+ 项，摊开的话 live 区（todo 面板 + 本面板 + 输入框/状态行）
+        // 很容易超过终端实际高度，见 MODEL_PICKER_CAP 处注释。
+        int sel = clampIndex(pickIndex, models.size());
+        int visible = Math.min(MODEL_PICKER_CAP, models.size());
+        int from = Math.max(0, Math.min(sel - visible / 2, models.size() - visible));
+        int to = from + visible;
         List<Element> els = new ArrayList<>();
         els.add(text("  选择模型（↑↓ 选择 · Enter 切换 · → 思考设置 · Esc 取消）").style(PICK_TITLE));
-        for (int i = 0; i < models.size(); i++) {
+        for (int i = from; i < to; i++) {
             ProviderModel m = models.get(i);
-            boolean sel = i == pickIndex;
+            boolean isSel = i == sel;
             boolean active = m.id().equals(cur) && m.providerId().equals(curProvider);
-            String marker = (sel ? "❯ " : "  ") + (active ? "✓ " : "  ");
+            String marker = (isSel ? "❯ " : "  ") + (active ? "✓ " : "  ");
             String summary = thinkingSummary(m.providerId(), m.id());
             String label = dupes.contains(m.id()) ? m.label() + " · " + m.providerId() : m.label();
             els.add(text("  " + marker + (i + 1) + ". " + label + "   " + m.desc()
                     + "   " + summary)
-                    .style(sel ? PICK_SEL : (active ? PICK_ITEM : PICK_DESC)));
+                    .style(isSel ? PICK_SEL : (active ? PICK_ITEM : PICK_DESC)));
+        }
+        if (models.size() > visible) {
+            els.add(text("  显示 " + (from + 1) + "-" + to + " / 共 " + models.size() + " 个模型").style(DIM));
         }
         return els.toArray(new Element[0]);
     }
