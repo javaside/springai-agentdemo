@@ -67,6 +67,10 @@ You are a codebase exploration specialist...                ← systemPrompt 正
 
 ### 3.1 按次模型覆盖（2026-09-09）
 
+**怎么触发**：没有专门的斜杠命令——用户在请求里明确要求换模型或做跨模型对比时（例如
+「分别用 DeepSeek 和 OpenAI 的模型评审一下这份设计」），主 agent 会自行决定在这次委派上
+带上 `model` 参数；不这么要求的话，子 agent 照旧跟随主 agent 当前模型，行为不变。
+
 `Task`/`ParallelTasks` 的入参除 `subagent_type`/`prompt` 外还有一个可选 `model`
 字段（`"provider:modelId"`，如 `"deepseek:deepseek-chat"`；裸 `modelId` 也接受，按
 「第一个拥有该 id 的 provider」宽松匹配）——主 agent 可以让**同一次委派**跑在跟

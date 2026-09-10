@@ -107,6 +107,12 @@ DeepSeek 现役内置模型为 `deepseek-v4-flash`（非思考）、`deepseek-v4
 `deepseek-v4-flash-vision-exp`（视觉 · 实验，图最多 384 token/张）；旧模型名 `deepseek-chat` /
 `deepseek-reasoner` 已停用。
 
+子 agent 默认跟着主 agent 当前的模型；想让某一次委派换一个模型（比如同一份材料分别找不同模型
+评审、对比结论），用自然语言提出即可，例如「分别用 DeepSeek 和 OpenAI 的模型评审这份设计」——
+主 agent 会据此只给这一次 `Task`/`ParallelTasks` 调用带上对应的模型，不影响其他委派或它自己的
+模型。没有专门的斜杠命令；可选模型与 `/model` 选择器里看到的一致，机制细节见
+[subagent.md §3.1](docs/guide/subagent.md#31-按次模型覆盖2026-09-09)。
+
 ## 常用操作
 
 - `/model`：切换模型；在列表按 `→` 进入当前高亮模型的思考设置（模式开关 + provider 原生强度/token 预算），按模型独立记忆。
@@ -200,7 +206,7 @@ mvn -pl springai-code-tui -am clean package -Pdist
 | [security.md](docs/guide/security.md) | 安全边界、权限层已知限制和使用建议 |
 | [permissions.md](docs/guide/permissions.md) | 审批面板、规则 DSL、权限模式和内置底线 |
 | [background-agent.md](docs/guide/background-agent.md) | 后台子 agent、结果回收、面板和权限矩阵 |
-| [subagent.md](docs/guide/subagent.md) | 子 agent 实现原理：三种执行模式、结果回收与取消语义 |
+| [subagent.md](docs/guide/subagent.md) | 子 agent 实现原理：三种执行模式、按次模型覆盖、结果回收与取消语义 |
 | [vision.md](docs/guide/vision.md) | 视觉输入、模型支持、限制和图片处理 |
 | [mcp.md](docs/guide/mcp.md) | MCP 的 stdio / Streamable HTTP 配置和运行期管理 |
 | [skills.md](docs/guide/skills.md) | 技能目录、`SKILL.md` 格式和热加载 |
