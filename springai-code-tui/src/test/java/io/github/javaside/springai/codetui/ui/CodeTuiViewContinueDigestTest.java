@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import reactor.core.Disposable;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -106,5 +107,27 @@ class CodeTuiViewContinueDigestTest {
     void defaultDigestIsEmpty() {
         SubmitHandler stub = text -> null;
         assertEquals("", stub.backgroundDigestForContinue());
+    }
+
+    /**
+     * /continue 续的是同一份计划：新回合真正开始时（{@link ConversationState#onTurnStarted}）
+     * 不该把刚恢复/中断前还在显示的 todo 面板清空——这是 /continue 与普通新消息唯一的面板行为差异，
+     * 靠 {@link ConversationState#preserveTodoOnNextTurn()} 实现，本测试钉住 /continue 确实调用了它。
+     */
+    @Test
+    @DisplayName("/continue 派发后新回合开始：todo 面板不被清空")
+    void continuePreservesTodoPanelAcrossNextTurnStart(@TempDir Path root) {
+        ConversationState state = new ConversationState();
+        state.onTurnStarted(1L);
+        state.onTodoUpdated(1L, null, List.of("✓ 步骤一", "▶ 步骤二"));
+        state.onTurnComplete(1L);
+        Handler h = new Handler();
+        CodeTuiView v = new CodeTuiView(state, h, root);
+
+        runContinue(v);
+        state.onTurnStarted(2L);      // 模拟 CodingAgent 真正起新回合（生产代码里由 submit() 同步触发）
+
+        assertEquals(List.of("✓ 步骤一", "▶ 步骤二"), state.todoSnapshot(),
+                "/continue 触发的新回合不应清空上一份计划");
     }
 }

@@ -480,6 +480,12 @@ tool_call 渲 `⏺ name 摘要` 且 `raw=null`（**不重绘 diff**，历史里�
 子 agent 的每次委派都是无会话记忆的一次性 `ChatClient` 调用（见 `SubagentRunner.execute`），
 其内部工具调用从不写入主会话的持久化消息流，故这里扫到的一定是主 agent 自己的调用。
 
+`onTurnStarted`（`ConversationState`）默认无条件清 todo 面板（新回合=新计划，用完即走，见上表步骤 d）；
+`/continue`（`CodeTuiView`）派发前调 `state.preserveTodoOnNextTurn()`，让紧接着那次 `onTurnStarted`
+跳过清空（一次性标记，消费后自动复位）——否则恢复/中断前还显示着的计划会在 `/continue` 一按下去就被清空，
+直到模型自己因任务状态变化再调一次 TodoWrite 才重新出现，观感上像"主 agent 不再用 TodoWrite 了"。
+只护 `todo`，不护 `subtasks`（任务面板）：谁在跑天然回合级，不管是不是 `/continue` 都该清。
+
 `/clear` → `CodingAgent.clearContext()` 只换 volatile `sessionId`（下一回合自动建空会话），
 **旧文件原样保留可 `-c` 恢复**；顺带 `usageAccumulator.reset()`、`clearSessionRules()`、
 `interjections.drainForRefill()`。

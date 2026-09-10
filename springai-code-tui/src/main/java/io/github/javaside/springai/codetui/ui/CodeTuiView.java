@@ -2299,6 +2299,7 @@ public final class CodeTuiView extends InlineApp {
             if (!digest.isEmpty()) {
                 prompt = prompt + "\n\n" + digest;
             }
+            state.preserveTodoOnNextTurn();             // 续的是同一份计划：新回合别把刚恢复/中断前的面板清空
             if (busy()) state.enqueue(prompt, null);   // 忙/压缩中/有在飞子 agent：排队，清空后自动出队（同普通消息）
             else dispatch(prompt, null);
             return;

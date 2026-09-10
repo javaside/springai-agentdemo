@@ -191,6 +191,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     private final StringBuilder streaming = new StringBuilder();
     private final List<String> todo = new ArrayList<>();          // 主 agent（控制器）的 todo/计划（todo 面板，不进 scrollback）
     private final List<Subtask> subtasks = new ArrayList<>();     // 本回合派出的子 agent 状态（任务面板，不进 scrollback）
+    private boolean preserveTodoOnNextTurn = false;                // /continue 用的一次性标记，见 preserveTodoOnNextTurn()
 
     /**
      * 后台子 agent（run_in_background）状态——⏱ 面板，<b>不进 scrollback 的中间态</b>。
@@ -633,6 +634,20 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         publish(change);
     }
 
+    /**
+     * {@code /continue} 用：让下一次 {@link #onTurnStarted} 跳过清 todo 面板一次（一次性，消费后自动复位）。
+     *
+     * <p><b>为什么需要</b>：{@code /continue} 续的是<b>同一份</b>计划，不是新计划——但 {@code onTurnStarted}
+     * 对"新回合"一视同仁地清空 todo 面板，抢在模型来得及重新调用 TodoWrite 之前就先清空，会让刚恢复出来的
+     * （或者 Esc 中断前本就在显示的）计划闪一下消失，直到模型自己因任务状态变化而再调一次 TodoWrite 才重新出现。
+     *
+     * <p><b>只管 todo，不管 {@link #subtasks}</b>：任务面板显示的是"谁正在跑"，天然回合级——不管是不是
+     * {@code /continue}，上一回合派出的子 agent 状态到新回合都该清空，这里不需要、也不应该保留。
+     */
+    public synchronized void preserveTodoOnNextTurn() {
+        preserveTodoOnNextTurn = true;
+    }
+
     // ── AgentListener 落地端 ────────────────────────────────────────────
     @Override
     public void onTurnStarted(long turnId) {
@@ -644,7 +659,12 @@ public final class ConversationState implements AgentListener, UiChangeSource {
             streaming.setLength(0);
             // 新回合清空上一份计划：面板内容变空（用完即走）。这只是清内容、不改 live 高度，
             // 不触发 InlineDisplay 收缩(deleteLines)的漂移，因此不会复现「面板消失」。
-            todo.clear();
+            // /continue 续的是同一份计划：preserveTodoOnNextTurn() 标记过的这一次跳过清空，一次性消费。
+            if (preserveTodoOnNextTurn) {
+                preserveTodoOnNextTurn = false;
+            } else {
+                todo.clear();
+            }
             subtasks.clear();                 // 新回合清空任务面板（子 agent 状态），与 todo 同生命周期
             change = changed(UiDirty.ALL);
         }

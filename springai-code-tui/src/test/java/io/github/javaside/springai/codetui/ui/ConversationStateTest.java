@@ -457,4 +457,44 @@ class ConversationStateTest {
         state.replayHistory(List.of(new UserMessage("问题"), new AssistantMessage("回答")));
         assertTrue(state.todoSnapshot().isEmpty(), "历史无 TodoWrite 时面板应保持空");
     }
+
+    // ── /continue 续跑时保留 todo 面板 ──
+
+    @Test
+    void preserveTodoOnNextTurn_keepsTodoAcrossTurnStart() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onTodoUpdated(1L, null, List.of("✓ 步骤一", "▶ 步骤二"));
+
+        s.preserveTodoOnNextTurn();
+        s.onTurnStarted(2L);
+
+        assertEquals(List.of("✓ 步骤一", "▶ 步骤二"), s.todoSnapshot(), "/continue 续跑不应清空上一份计划");
+    }
+
+    @Test
+    void preserveTodoOnNextTurn_isOneShot() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onTodoUpdated(1L, null, List.of("▶ 计划1"));
+
+        s.preserveTodoOnNextTurn();
+        s.onTurnStarted(2L);          // 消费掉这次保留标记
+        s.onTurnStarted(3L);          // 未再声明保留：应恢复默认清空
+
+        assertTrue(s.todoSnapshot().isEmpty(), "保留标记只管一次，之后的新回合仍要清空");
+    }
+
+    @Test
+    void preserveTodoOnNextTurn_stillClearsSubtaskPanel() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1L);
+        s.onTodoUpdated(1L, null, List.of("▶ 计划1"));
+        s.onSubagentStarted(1L, "t1", "implementer", "d");
+
+        s.preserveTodoOnNextTurn();
+        s.onTurnStarted(2L);
+
+        assertTrue(s.subtaskSnapshot().isEmpty(), "子 agent 任务面板仍按回合清空，不受 todo 保留影响");
+    }
 }
