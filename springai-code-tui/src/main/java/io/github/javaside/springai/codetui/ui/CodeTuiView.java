@@ -4079,7 +4079,8 @@ public final class CodeTuiView extends InlineApp {
                     qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出" + projectSuffix, THINK, animTick, mode));
             case RETRYING -> {
                 String label = state.retryLabel() == null ? "↻ 重试中" : state.retryLabel();
-                String backoff = state.retryBackoffText();
+                // 限额等待时每帧从 deadline 现算倒计时（动画帧持续重绘，无 ticker）；普通重试回落静态文本。
+                String backoff = quotaBackoffText(state, System.currentTimeMillis());
                 String backoffTail = terminalWidth() >= 100 && backoff != null ? " · 退避 " + backoff : "";
                 String suffix = qs + ijs + ns + backoffTail + " · Esc 取消" + projectSuffix;
                 yield richText(statusBar.shimmer(label, suffix, THINK, animTick, mode));
@@ -4093,6 +4094,16 @@ public final class CodeTuiView extends InlineApp {
                         suffix + projectSuffix, RUNNING, animTick, mode));
             }
         };
+    }
+
+    /**
+     * RETRYING 态的退避显示文本（spec §3.5）：限额等待时每帧从 deadline 现算剩余
+     * （RETRYING 态动画协调器持续重绘 ~66ms，与 compactElapsedNanos 同款现算模式——不新增 ticker）；
+     * 非限额等待回落静态 retryBackoffText（普通重试路径行为不变）。
+     */
+    static String quotaBackoffText(ConversationState state, long nowMillis) {
+        Long d = state.quotaWaitDeadline();
+        return d != null ? ConversationState.formatQuotaRemaining(d - nowMillis) : state.retryBackoffText();
     }
 
     /**
