@@ -7,13 +7,21 @@ import com.openai.errors.UnauthorizedException;
 import com.openai.errors.UnexpectedStatusCodeException;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
+import reactor.util.retry.Retry;
 
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -220,6 +228,123 @@ class RetryPolicyTest {
         for (int attempt = 1; attempt <= 6; attempt++) {
             assertEquals(RetryingChatModel.backoffMsAfter(attempt), RetryPolicy.backoffMsAfter(attempt),
                     "backoffMsAfter(" + attempt + ") 两入口应一致");
+        }
+    }
+
+    // ---- 限额分支（spec §3.2）：filter 门控 / 预算扣减 / 独立上限 / 订阅级计数 ----
+
+    @Test
+    void quotaWaitMsFuturePastAndNull() {
+        Instant now = Instant.parse("2026-09-22T10:00:00Z");
+        assertEquals(90_000, RetryPolicy.quotaWaitMs(new QuotaLimit("1316",
+                now.plusSeconds(90)), now));
+        // 过去/临近：MIN 下限兜底，杜绝 0ms 轰炸
+        assertEquals(RetryPolicy.MIN_QUOTA_WAIT_MS, RetryPolicy.quotaWaitMs(new QuotaLimit("1316",
+                now.minusSeconds(60)), now));
+        assertEquals(RetryPolicy.MIN_QUOTA_WAIT_MS, RetryPolicy.quotaWaitMs(new QuotaLimit("1316",
+                now.plusSeconds(5)), now));
+        assertEquals(-1, RetryPolicy.quotaWaitMs(QuotaLimit.withoutResetAt("1316"), now));
+    }
+
+    @Test
+    void quotaWaitRetriesWithoutConsumingBudget() {
+        RetryPolicy.setDelayScaleForTest(ms -> Math.min(ms, 1));
+        try {
+            // 注意：message 经 HH:mm:ss 格式化截断到秒——期望值也要按秒截断对齐
+            Instant reset = Instant.now().plusSeconds(90).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+            AtomicLong waitSeen = new AtomicLong(-1);
+            AtomicLong resetSeen = new AtomicLong(-1);
+            AtomicInteger normalRetries = new AtomicInteger();
+            // 序列：限额 429 ×2 → 普通 IOException ×2 → 成功。maxRetries=2（普通预算）。
+            AtomicInteger emissions = new AtomicInteger();
+            Flux<Object> src = Flux.defer(() -> {
+                int n = emissions.incrementAndGet();
+                if (n <= 2) return Flux.error(Quota429s.quota429("1316",
+                        "429: 上限，将在 `" + reset.atZone(ZoneId.of("Asia/Shanghai"))
+                                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) + "` 重置。"));
+                if (n <= 4) return Flux.error(new java.io.IOException("eof"));
+                return Flux.just("ok");
+            });
+            StepVerifier.create(src.retryWhen(RetryPolicy.backoffRetry(2, e -> true,
+                    (r, ms, f) -> normalRetries.incrementAndGet(),
+                    (ms, resetAt, reason) -> { waitSeen.set(ms); resetSeen.set(resetAt); })))
+                    .expectNext("ok")
+                    .verifyComplete();
+            // 2 次限额等待均未消耗普通预算：2 次普通失败仍各获重试（普通重试回调恰好 2 次）
+            assertEquals(2, normalRetries.get());
+            assertTrue(waitSeen.get() >= 89_000 && waitSeen.get() <= 91_000);
+            assertEquals(reset.toEpochMilli(), resetSeen.get());   // 秒截断口径对齐
+            assertEquals(5, emissions.get());                      // 2 限额 + 2 普通重试 + 1 成功
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
+        }
+    }
+
+    @Test
+    void quotaBranchRespectsFilter() {
+        // filter 否决（L1 mid-stream 语义：emitted>0）→ 限额分支不拦截，直接终态（防重放，spec §3.2 必修）
+        RetryPolicy.setDelayScaleForTest(ms -> Math.min(ms, 1));
+        try {
+            Flux<Object> src = Flux.error(Quota429s.quota429("1316",
+                    "429: 上限，将在 `2099-01-01 00:00:00` 重置。"));
+            StepVerifier.create(src.retryWhen(RetryPolicy.backoffRetry(3, e -> false, null, null)))
+                    .verifyErrorSatisfies(e -> assertTrue(e instanceof com.openai.errors.RateLimitException));
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
+        }
+    }
+
+    @Test
+    void consecutiveQuotaWaitsCapped() {
+        RetryPolicy.setDelayScaleForTest(ms -> Math.min(ms, 1));
+        try {
+            AtomicInteger n = new AtomicInteger();   // 必须计数钉住 MAX_QUOTA_WAITS（只 verifyError 钉不住）
+            Flux<Object> src = Flux.defer(() -> {
+                n.incrementAndGet();
+                return Flux.error(Quota429s.quota429("1316", "429: 上限，将在 `2099-01-01 00:00:00` 重置。"));
+            });
+            StepVerifier.create(src.retryWhen(RetryPolicy.backoffRetry(9, e -> true, null, null)))
+                    .verifyErrorSatisfies(e -> assertTrue(e instanceof com.openai.errors.RateLimitException));
+            assertEquals(6, n.get());   // 5 次限额等待（重订阅）+ 第 6 次失败终态
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
+        }
+    }
+
+    @Test
+    void quotaWithNullResetAtFallsToNormalBranch() {
+        // 解析失败安全网：落普通分支，计入预算（maxRetries=1 → 1 次重试后耗尽）
+        RetryPolicy.setDelayScaleForTest(ms -> Math.min(ms, 1));
+        try {
+            AtomicInteger n = new AtomicInteger();
+            Flux<Object> src = Flux.defer(() -> {
+                n.incrementAndGet();
+                return Flux.error(Quota429s.quota429("1310", "429: 已达到每周使用上限。"));
+            });
+            StepVerifier.create(src.retryWhen(RetryPolicy.backoffRetry(1, e -> true, null, null)))
+                    .verifyError();
+            assertEquals(2, n.get());   // 首次 + 1 次普通重试
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
+        }
+    }
+
+    @Test
+    void quotaWaitsArePerSubscription() {
+        // 同一 Retry 装配给第二个 Flux：计数器独立（订阅级红线，spec §3.2）
+        RetryPolicy.setDelayScaleForTest(ms -> Math.min(ms, 1));
+        try {
+            Retry retry = RetryPolicy.backoffRetry(1, e -> true, null, null);
+            java.util.function.Supplier<Flux<Object>> once = () -> {
+                AtomicInteger n = new AtomicInteger();
+                return Flux.defer(() -> n.incrementAndGet() == 1
+                        ? Flux.error(Quota429s.quota429("1316", "429: 上限，将在 `2099-01-01 00:00:00` 重置。"))
+                        : Flux.just("ok"));
+            };
+            StepVerifier.create(once.get().retryWhen(retry)).expectNext("ok").verifyComplete();
+            StepVerifier.create(once.get().retryWhen(retry)).expectNext("ok").verifyComplete();
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
         }
     }
 }

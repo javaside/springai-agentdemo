@@ -8,11 +8,14 @@ import reactor.util.retry.Retry;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 
 /**
@@ -36,6 +39,10 @@ public final class RetryPolicy {
      * 与 {@link #CAP_BACKOFF_MS} 分开——指数退避封 30s，服务端明示的等待可到 60s（它更懂何时恢复）。
      */
     static final long RETRY_AFTER_CAP_MS = 60_000;
+    /** 限额等待下限（30s）：解析出的重置时刻已在过去/临近（服务端时钟偏差、刚重置未生效）时的兜底退避——杜绝 0ms 循环轰炸。 */
+    static final long MIN_QUOTA_WAIT_MS = 30_000L;
+    /** 单层连续限额等待上限（5）：防「到点重试→又限额→又等」异常死循环；正常场景等 1 次即成功。L1/L2/子 agent 各自独立计数。 */
+    static final int MAX_QUOTA_WAITS = 5;
 
     /**
      * 测试钩子：仅作用于 {@link #backoffRetry} 里 {@code Mono.delay} 的<b>实际</b>睡眠毫秒（默认恒等）。
@@ -124,6 +131,20 @@ public final class RetryPolicy {
         return -1;
     }
 
+    /** 限额等待毫秒（唯一真相源）：{@code max(resetAt − now, MIN_QUOTA_WAIT_MS)}；quota null 或 resetAt null 返回 -1（调用方退化普通分支）。 */
+    public static long quotaWaitMs(QuotaLimit quota) {
+        return quotaWaitMs(quota, Instant.now());
+    }
+
+    /** 测试可见的可控 now 变体（纯函数）。 */
+    static long quotaWaitMs(QuotaLimit quota, java.time.Instant now) {
+        if (quota == null || quota.resetAt() == null) {
+            return -1;
+        }
+        long ms = Duration.between(now, quota.resetAt()).toMillis();
+        return Math.max(ms, MIN_QUOTA_WAIT_MS);
+    }
+
     /** 解析单个 Retry-After 头值为毫秒：delta-seconds 优先，其次 HTTP-date（相对 now）；空/畸形/负返回 {@code -1}。 */
     private static long parseRetryAfter(String raw) {
         if (raw == null || raw.isBlank()) {
@@ -145,29 +166,65 @@ public final class RetryPolicy {
         }
     }
 
-    /**
-     * 构造 L1/L2 共用的 reactive {@link Retry} 策略（唯一真相源，替代分散的 {@code Retry.backoff}）：延迟按
-     * {@link #nextDelayMs} 现算（含 Retry-After），jitter 显式关闭（单用户 TUI 无并发，关闭换退避可预测 + 单测好写）。
-     *
-     * @param maxRetries 最大重试次数（不含首次尝试）
-     * @param filter     该次失败是否参与重试（各层白名单：L1 = {@code emitted==0 && shouldRetry}；L2 = SII）
-     * @param onRetry    退避 delay 前同步回调（UI ↻ 行；入参 attempt 为即将进行的尝试序号 2..、backoffMs、failure）
-     */
+    /** 三参重载语义不变：不限额上报、限额分支照常生效（spec §3.2）。 */
     public static Retry backoffRetry(long maxRetries, Predicate<Throwable> filter, RetryHook onRetry) {
-        return Retry.from(companion -> companion.concatMap(sig -> {
-            Throwable failure = sig.failure();
-            if (sig.totalRetries() >= maxRetries || !filter.test(failure)) {
-                return Mono.error(failure);              // 耗尽/不匹配：终态（与 Retry.backoff 语义一致）
-            }
-            long totalRetries = sig.totalRetries();      // 0 基已完成重试数（本次是第 totalRetries+1 次重试）
-            long backoffMs = nextDelayMs((int) totalRetries + 1, failure);
-            if (onRetry != null) {
-                onRetry.accept(totalRetries, backoffMs, failure);   // 上报真实退避（UI ↻ 行）
-            }
-            // 实际睡眠经测试钩子（生产恒等）：耗尽用例可压缩真实等待，而上报值仍是 nextDelayMs 真值。
-            long sleepMs = delayMsForTest.applyAsLong(backoffMs);
-            return Mono.delay(Duration.ofMillis(sleepMs)).thenReturn(totalRetries);
-        }));
+        return backoffRetry(maxRetries, filter, onRetry, null);
+    }
+
+    /**
+     * 构造 L1/L2 共用的 reactive {@link Retry} 策略（唯一真相源）。延迟按 {@link #nextDelayMs}
+     * 现算（含 Retry-After），jitter 显式关闭（单用户 TUI 无并发，换退避可预测 + 单测好写）。
+     *
+     * <p><b>限额分支（spec §3.2）</b>：识别智谱限额错误（{@link QuotaLimitDetector}）且解析出
+     * 未来重置时刻时，睡到重置点（{@link #quotaWaitMs}，不受 60s 封顶约束）。两条红线：
+     * <ol>
+     *   <li><b>不豁免 filter</b>——L1 的 emitted==0 闸门 / L2 的 SII 白名单照常生效，否则
+     *       mid-stream 限额被 L1 重订阅重放已下发内容；豁免的只有普通耗尽判定；</li>
+     *   <li><b>预算扣减</b>——reactor 的 totalRetries 由框架自增（限额等待也推高它，无法重置），
+     *       普通分支耗尽判定用 {@code totalRetries − quotaWaits}（quotaWaits 恰计限额次数，
+     *       扣减精确；quotaWaits==0 时与旧判定逐字节一致）。</li>
+     * </ol>
+     *
+     * <p><b>quotaWaits 声明位置红线</b>：必须在本方法 lambda 体内（订阅级——FluxRetryWhen 每次
+     * 订阅重调 generateCompanion，随（重）订阅重建）。挪到方法体级=装配级（侥幸无害语义错）；
+     * 提为静态/实例字段=跨回合累积（真事故）。
+     *
+     * @param maxRetries  最大普通重试次数（不含首次尝试；限额等待不计入）
+     * @param filter      该次失败是否参与重试（各层白名单；限额分支同样受它门控）
+     * @param onRetry     普通重试的退避前回调（totalRetries 入参为<b>扣减后</b>的普通重试数）
+     * @param onQuotaWait 限额等待的退避前回调；null = 不上报
+     */
+    public static Retry backoffRetry(long maxRetries, Predicate<Throwable> filter, RetryHook onRetry,
+                                     QuotaWaitHook onQuotaWait) {
+        return Retry.from(companion -> {
+            AtomicInteger quotaWaits = new AtomicInteger();   // 订阅级：严禁挪出本 lambda
+            return companion.concatMap(sig -> {
+                Throwable failure = sig.failure();
+                Optional<QuotaLimit> quota = QuotaLimitDetector.detect(failure);
+                if (quota.isPresent() && quota.get().resetAt() != null && filter.test(failure)) {
+                    if (quotaWaits.incrementAndGet() > MAX_QUOTA_WAITS) {
+                        return Mono.error(failure);              // 限额兜底终态（5 次仍限额）
+                    }
+                    long waitMs = quotaWaitMs(quota.get());
+                    if (onQuotaWait != null) {
+                        onQuotaWait.onQuotaWait(waitMs, quota.get().resetAt().toEpochMilli(),
+                                firstNonBlankMessage(failure, failure.getClass().getSimpleName()));
+                    }
+                    return Mono.delay(Duration.ofMillis(delayMsForTest.applyAsLong(waitMs)))
+                            .thenReturn(sig.totalRetries());
+                }
+                long effective = sig.totalRetries() - quotaWaits.get();   // 普通重试数（扣限额）
+                if (effective >= maxRetries || !filter.test(failure)) {
+                    return Mono.error(failure);                  // 耗尽/不匹配：终态
+                }
+                long backoffMs = nextDelayMs((int) effective + 1, failure);
+                if (onRetry != null) {
+                    onRetry.accept(effective, backoffMs, failure);
+                }
+                long sleepMs = delayMsForTest.applyAsLong(backoffMs);
+                return Mono.delay(Duration.ofMillis(sleepMs)).thenReturn(sig.totalRetries());
+            });
+        });
     }
 
     /**
@@ -179,6 +236,20 @@ public final class RetryPolicy {
     @FunctionalInterface
     public interface RetryHook {
         void accept(long totalRetries, long backoffMs, Throwable failure);
+    }
+
+    /**
+     * 限额等待已排定的回调（退避 delay 前同步执行，时序纪律同 {@link RetryHook}）。
+     * 与普通重试互斥——限额等待场景不触发 onRetry（UI 的 ↻ 行与 ⏳ 行互斥，spec §3.3）。
+     */
+    @FunctionalInterface
+    public interface QuotaWaitHook {
+        /**
+         * @param waitMs        即将等待的毫秒数（含 MIN 下限兜底；与真实 delay 同公式现算）
+         * @param resetAtEpochMs 解析出的重置时刻（显示用绝对时间）
+         * @param reason        根因摘要（{@link #firstNonBlankMessage}，未截断——截断由 UI 层做）
+         */
+        void onQuotaWait(long waitMs, long resetAtEpochMs, String reason);
     }
 
     /**
