@@ -41,7 +41,7 @@ public final class RetryPolicy {
     static final long RETRY_AFTER_CAP_MS = 60_000;
     /** 限额等待下限（30s）：解析出的重置时刻已在过去/临近（服务端时钟偏差、刚重置未生效）时的兜底退避——杜绝 0ms 循环轰炸。 */
     static final long MIN_QUOTA_WAIT_MS = 30_000L;
-    /** 单层连续限额等待上限（5）：防「到点重试→又限额→又等」异常死循环；正常场景等 1 次即成功。L1/L2/子 agent 各自独立计数。 */
+    /** 单层限额等待累计上限（5，同一订阅/call 内<b>累计</b>计数、不因成功重试复位）：防「到点重试→又限额→又等」异常死循环；正常场景等 1 次即成功。L1/L2/子 agent 各自独立计数。 */
     static final int MAX_QUOTA_WAITS = 5;
 
     /**

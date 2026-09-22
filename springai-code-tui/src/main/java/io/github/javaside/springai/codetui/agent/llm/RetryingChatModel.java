@@ -116,7 +116,7 @@ public final class RetryingChatModel implements ChatModel {
     @Override
     public ChatResponse call(Prompt prompt) {
         int attempt = 1;                 // 即将进行的尝试（1 基）
-        int quotaWaits = 0;              // 本 call 内的连续限额等待（每次调用重建，天然回合级）
+        int quotaWaits = 0;              // 本 call 内的累计限额等待（call 级累计、不因成功重试复位；每次调用重建，天然回合级）
         while (true) {
             boolean emptyStream;
             RuntimeException failure;

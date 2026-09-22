@@ -61,8 +61,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>后台 {@link #backgroundInFlight} 计数变化只发 {@code VIEW}——<b>绝不</b>含 CONTROL
  *       （后台任务不进 busy 闸门，这正是两个计数分开的全部理由，混了等于后台化失效）；</li>
  *   <li>通知在<b>原子计数变化之后</b>、任何业务锁<b>外</b>调用（本类没有业务监视器，listener 也不得
- *       反向持有计数语义），且必须是 increment 后紧邻的 <b>try 块首语句</b>——listener 抛出的
- *       {@link RuntimeException} 被隔离成日志；即便抛 {@link Error}，计数递减也在同一 try 的
+ *       反向持有计数语义），且落在 increment 后紧邻的 <b>try 内首段</b>——run() 里串行线程登记
+ *       先于 publish，两者都在 try 内（后台路径的 publishBackground 仍是 try 首语句）；listener
+ *       抛出的 {@link RuntimeException} 被隔离成日志；即便抛 {@link Error}，计数递减也在同一 try 的
  *       finally 里，不会泄漏打断 busy 闸门的生命线；</li>
  *   <li>计数本身不经过 listener 路径变更：listener 只是「计数变了」的回声。</li>
  * </ul>
@@ -104,10 +105,14 @@ public final class SubagentRunner implements UiChangeSource {
      */
     private final Map<Long, Set<ExecutorService>> poolsByTurn = new ConcurrentHashMap<>();
     /**
-     * 回合 → 该回合串行（前台 Task 工具内同步执行）子 agent 的执行线程。串行路径无池
+     * 回合 → 该回合子 agent 的执行线程：前台 Task 工具内同步执行的<b>串行</b> run，以及
+     * runAll 的<b>并行 worker</b>——后者复用 run()，同样在此登记。串行路径无池
      * （javadoc 原注「无法强制打断」）——限额等待把不可打断窗口拉到小时/天级且 busy 闸门
      * 排队后续输入造成假死，故登记线程由 {@link #cancelTurn} interrupt（spec §3.4.3 必修）。
-     * 与 {@link #poolsByTurn} 同构；同 turn 串行 run 同时至多一个（主 agent 工具循环串行）。
+     * 与 {@link #poolsByTurn} 同构；同 turn 串行 run 至多一个（主 agent 工具循环串行），
+     * 但并行 worker 可多个同时在飞——集合会被多线程并发增删（ConcurrentHashMap + newKeySet
+     * 承载）。取消双保险：cancelTurn 对并行池 {@code shutdownNow} 之外，还对本集合登记的
+     * 线程逐个 interrupt，对并行 worker 同样生效（幂等，best-effort）。
      */
     private final Map<Long, Set<Thread>> serialThreadsByTurn = new ConcurrentHashMap<>();
 
