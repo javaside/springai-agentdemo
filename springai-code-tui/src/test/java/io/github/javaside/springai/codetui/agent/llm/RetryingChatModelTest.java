@@ -284,4 +284,97 @@ class RetryingChatModelTest {
         assertEquals(1, calls.get(), "休眠即中断：只有首次尝试发生");
         assertTrue(Thread.interrupted(), "中断标志必须保留");
     }
+
+    // ---- 限额等待（spec §3.4）：等待不占预算 / 5 次上限 / Retry-After 对齐 ----
+
+    private static String quotaMessage(long deltaSeconds) {
+        String at = java.time.Instant.now().plusSeconds(deltaSeconds)
+                .atZone(java.time.ZoneId.of("Asia/Shanghai"))
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        return "429: 已达到 5 小时使用上限。您的限额将在 `" + at + "` 重置。";
+    }
+
+    /** 混合序列桩：script 收 1 基调用序号，返回该次订阅的 Flux（Flux.error / Flux.just(ChatResponse)）。 */
+    private static ChatModel scripted(java.util.function.IntFunction<Flux<ChatResponse>> script,
+                                      AtomicInteger calls) {
+        return new ChatModel() {
+            @Override public ChatResponse call(Prompt prompt) { throw new UnsupportedOperationException(); }
+            @Override public Flux<ChatResponse> stream(Prompt prompt) {
+                return Flux.defer(() -> script.apply(calls.incrementAndGet()));
+            }
+            @Override public ChatOptions getDefaultOptions() { return ChatOptions.builder().build(); }
+        };
+    }
+
+    private static ChatResponse textResponse(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    @Test
+    void quotaWaitSleepsUntilResetWithoutConsumingAttempts() {
+        List<Long> sleeps = new java.util.ArrayList<>();
+        List<String> quotaReasons = new java.util.ArrayList<>();
+        // 序列：1316 ×2 → IOException ×1 → 成功
+        AtomicInteger calls = new AtomicInteger();
+        ChatModel delegate = scripted(n -> {
+            if (n <= 2) return Flux.error(new java.util.concurrent.CompletionException(
+                    Quota429s.quota429("1316", quotaMessage(120))));
+            if (n == 3) return Flux.error(new java.io.IOException("eof"));
+            return Flux.just(textResponse("ok"));
+        }, calls);
+        RetryingChatModel model = new RetryingChatModel(delegate,
+                sleeps::add,
+                (waitMs, resetAt, reason) -> quotaReasons.add(reason));
+        assertEquals("ok", model.call(new Prompt("x")).getResult().getOutput().getText());
+        // 2 次限额等待（≈120s，±5s 容差）+ 1 次普通退避（1s），无双睡
+        assertEquals(3, sleeps.size());
+        assertTrue(sleeps.get(0) >= 115_000 && sleeps.get(0) <= 125_000);
+        assertTrue(sleeps.get(1) >= 115_000 && sleeps.get(1) <= 125_000);
+        assertEquals(1000L, sleeps.get(2));
+        assertEquals(2, quotaReasons.size());
+    }
+
+    @Test
+    void quotaWaitsCappedAtFive() {
+        List<Long> sleeps = new java.util.ArrayList<>();
+        AtomicInteger calls = new AtomicInteger();
+        ChatModel delegate = scripted(n -> Flux.error(new java.util.concurrent.CompletionException(
+                Quota429s.quota429("1316", quotaMessage(3600)))), calls);
+        RetryingChatModel model = new RetryingChatModel(delegate, sleeps::add, null);
+        RuntimeException thrown = assertThrows(RuntimeException.class, () -> model.call(new Prompt("x")));
+        // 5 次等待 = 6 次调用后抛出原始 429
+        assertTrue(java.util.stream.Stream.of(thrown).anyMatch(t ->
+                t instanceof com.openai.errors.RateLimitException
+                        || (t.getCause() instanceof com.openai.errors.RateLimitException)));
+        assertEquals(6, calls.get());
+        assertEquals(5, sleeps.size());
+    }
+
+    @Test
+    void quotaWithoutResetAtFallsBackToNormalBudget() {
+        List<Long> sleeps = new java.util.ArrayList<>();
+        AtomicInteger calls = new AtomicInteger();
+        ChatModel delegate = scripted(n -> Flux.error(new java.util.concurrent.CompletionException(
+                Quota429s.quota429("1310", "429: 已达到每周使用上限。"))), calls);   // 无时间 → 普通分支
+        RetryingChatModel model = new RetryingChatModel(delegate, sleeps::add, null);
+        assertThrows(RuntimeException.class, () -> model.call(new Prompt("x")));
+        assertEquals(7, calls.get());   // 全预算 MAX_ATTEMPTS=7
+        assertEquals(6, sleeps.size());
+    }
+
+    @Test
+    void backoffNowHonorsRetryAfterHeader() {
+        // 既有偏差修复（spec §3.4.1）：429 WCRE 带 Retry-After: 3 → 退避 3s（旧实现恒 1s）。
+        // create 的第 3 参就是 HttpHeaders，retryAfterMs 经 wcre.getHeaders().getFirst 读到。
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.set("Retry-After", "3");
+        List<Long> sleeps = new java.util.ArrayList<>();
+        AtomicInteger calls = new AtomicInteger();
+        ChatModel delegate = scripted(n -> Flux.error(
+                org.springframework.web.reactive.function.client.WebClientResponseException
+                        .create(429, "Too Many Requests", headers, null, null)), calls);
+        RetryingChatModel model = new RetryingChatModel(delegate, sleeps::add, null);
+        assertThrows(RuntimeException.class, () -> model.call(new Prompt("x")));
+        assertEquals(3000L, sleeps.get(0));
+    }
 }

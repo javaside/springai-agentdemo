@@ -10,6 +10,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongConsumer;
 
@@ -32,10 +33,14 @@ import java.util.function.LongConsumer;
  *
  * <p><b>不</b>重试取消/中断（回合 Esc 要立即退出，且中断标志位必须保留）；stream() 原样透传（子 agent 不用）。
  *
- * <p><b>退避</b>：指数 1s×2^n 封顶 30s（序列 1s·2s·4s·8s·16s·30s），总尝试 7 次。瞬态判据与退避的唯一真相源是
+ * <p><b>退避</b>：指数 1s×2^n 封顶 30s（序列 1s·2s·4s·8s·16s·30s），实际取 {@link RetryPolicy#nextDelayMs}
+ * （对齐 Retry-After 头），总尝试 7 次。瞬态判据与退避的唯一真相源是
  * {@link RetryPolicy}（与后续 RetryingStreamChatModel 共用），本类仅保留同名静态方法委托
  * （2026-08-17 生产日志实测扩容）。休眠可注入
  * （{@link RetryingChatModel#RetryingChatModel(ChatModel, LongConsumer)}），测试不必真实等待。
+ * 限额等待（智谱 Coding Plan 429 限额码）经 {@link RetryPolicy#quotaWaitMs} 分流：睡到重置点、
+ * 不占普通退避预算（quotaWaits ≤ {@link RetryPolicy#MAX_QUOTA_WAITS}）——见 spec
+ * {@code 2026-09-22-zhipu-quota-wait-retry-design.md}。
  *
  * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
  */
@@ -49,9 +54,38 @@ public final class RetryingChatModel implements ChatModel {
     private final ChatModel delegate;
     /** 休眠器：生产 Thread::sleep；测试注入收集间隔的桩，避免真实等待。 */
     private final LongConsumer sleeper;
+    /** 可选限额等待钩子（UI ⏳ 行）；null = no-op。 */
+    private final RetryPolicy.QuotaWaitHook quotaHook;
 
-    private RetryingChatModel(ChatModel delegate) {
-        this(delegate, ms -> {
+    /** 生产装配（既有语义；quota 上报 no-op）。 */
+    public static ChatModel wrap(ChatModel delegate) {
+        return wrap(delegate, null);
+    }
+
+    /** 全参装配（spec §3.4.4）：quotaHook 为限额等待 UI 上报；null = no-op。 */
+    public static ChatModel wrap(ChatModel delegate, RetryPolicy.QuotaWaitHook quotaHook) {
+        return new RetryingChatModel(delegate, quotaHook);
+    }
+
+    private RetryingChatModel(ChatModel delegate, RetryPolicy.QuotaWaitHook quotaHook) {
+        this(delegate, defaultSleeper(), quotaHook);
+    }
+
+    /** 既有两参构造（既有测试在用，保留委托——H3：删了会编译失败）。 */
+    RetryingChatModel(ChatModel delegate, LongConsumer sleeper) {
+        this(delegate, sleeper, null);
+    }
+
+    /** 测试可见：注入休眠器与限额钩子。 */
+    RetryingChatModel(ChatModel delegate, LongConsumer sleeper, RetryPolicy.QuotaWaitHook quotaHook) {
+        this.delegate = delegate;
+        this.sleeper = sleeper;
+        this.quotaHook = quotaHook;
+    }
+
+    /** 生产 sleeper（原构造内匿名体提取为方法，两处构造共用；换算纪律不变——调用点传 raw 值）。 */
+    private static LongConsumer defaultSleeper() {
+        return ms -> {
             try {
                 // 实际睡眠经 RetryPolicy 的测试钩子换算（生产恒等）——与 L1/L2 的 reactive 退避共用
                 // 同一压缩函数：耗尽用例一处 setDelayScaleForTest 即可让子 agent 阻塞退避也秒过。
@@ -60,22 +94,7 @@ public final class RetryingChatModel implements ChatModel {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException(ie);
             }
-        });
-    }
-
-    /** 测试可见：注入自定义休眠器（收集中断请求等）。 */
-    RetryingChatModel(ChatModel delegate, LongConsumer sleeper) {
-        this.delegate = delegate;
-        this.sleeper = sleeper;
-    }
-
-    /**
-     * 包裹一个 ChatModel 为重试装饰器（生产装配入口）。
-     *
-     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
-     */
-    public static ChatModel wrap(ChatModel delegate) {
-        return new RetryingChatModel(delegate);
+        };
     }
 
     /**
@@ -86,33 +105,64 @@ public final class RetryingChatModel implements ChatModel {
         return RetryPolicy.backoffMsAfter(attempt);
     }
 
+    /**
+     * 阻塞调用 + 瞬态重试（while 形态，spec §3.4 实现红线：单次迭代恰一次睡眠；
+     * 限额判定先于 attempt 预算 bail——否则第 7 次尝试上的限额直接抛）。
+     * 限额等待不递增 attempt（预算豁免），由 quotaWaits ≤ {@link RetryPolicy#MAX_QUOTA_WAITS} 兜底。
+     *
+     * <p><b>空流豁免 shouldRetry（语义钉）</b>：原 for 实现对空流是合成异常后<b>无条件</b>重试
+     * （不问 shouldRetry——合成异常无瞬态特征，问就是必抛）。while 版用 emptyStream 标志保留该语义。
+     */
     @Override
     public ChatResponse call(Prompt prompt) {
-        RuntimeException last = null;
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            if (attempt > 1) {
-                sleeper.accept(backoffMsAfter(attempt - 1));
-            }
+        int attempt = 1;                 // 即将进行的尝试（1 基）
+        int quotaWaits = 0;              // 本 call 内的连续限额等待（每次调用重建，天然回合级）
+        while (true) {
+            boolean emptyStream;
+            RuntimeException failure;
             try {
                 ChatResponse aggregated = streamAndAggregate(prompt);
                 if (!isEffectivelyEmpty(aggregated)) {
                     return aggregated;
                 }
-                // 空流守卫：正常完成但零内容零工具调用——网关坏窗口的另一副面孔，按瞬态失败重试
-                last = new RuntimeException("LLM 流式响应为空（无文本、无工具调用）——疑似网关空响应，已尝试 "
+                emptyStream = true;      // 空流：不设 shouldRetry 门（原 for 语义）
+                failure = new RuntimeException("LLM 流式响应为空（无文本、无工具调用）——疑似网关空响应，已尝试 "
                         + attempt + "/" + MAX_ATTEMPTS + " 次");
-                log.warn("LLM 返回空流（疑似网关坏响应），第 {}/{} 次尝试{}",
-                        attempt, MAX_ATTEMPTS, attempt < MAX_ATTEMPTS ? "，将重试" : "，放弃");
+                log.warn("LLM 返回空流（疑似网关坏响应），第 {}/{} 次尝试{}", attempt, MAX_ATTEMPTS,
+                        attempt < MAX_ATTEMPTS ? "，将重试" : "，放弃");
             } catch (RuntimeException ex) {
-                if (!shouldRetry(ex) || attempt == MAX_ATTEMPTS) {
-                    throw ex;
-                }
-                last = ex;
-                log.warn("LLM 流式请求失败（疑似网关坏响应），第 {}/{} 次尝试后重试：{}",
-                        attempt, MAX_ATTEMPTS, ex.getMessage());
+                emptyStream = false;
+                failure = ex;
             }
+            // 限额分支：先于普通预算 bail；取消/中断类失败（shouldRetry 否决）与空流绝不等待
+            Optional<QuotaLimit> quota = (!emptyStream && RetryPolicy.shouldRetry(failure))
+                    ? QuotaLimitDetector.detect(failure) : Optional.empty();
+            if (quota.isPresent() && quota.get().resetAt() != null) {
+                if (quotaWaits++ >= RetryPolicy.MAX_QUOTA_WAITS) {
+                    throw failure;                                 // 限额兜底终态
+                }
+                long waitMs = RetryPolicy.quotaWaitMs(quota.get());
+                log.warn("智谱限额已到（code={}，resetAt={}），等待 {}ms 后重试（quotaWait {}/{}）：{}",
+                        quota.get().code(), quota.get().resetAt(), waitMs, quotaWaits,
+                        RetryPolicy.MAX_QUOTA_WAITS,
+                        RetryPolicy.firstNonBlankMessage(failure, failure.getClass().getSimpleName()));
+                if (quotaHook != null) {
+                    quotaHook.onQuotaWait(waitMs, quota.get().resetAt().toEpochMilli(),
+                            RetryPolicy.firstNonBlankMessage(failure, failure.getClass().getSimpleName()));
+                }
+                sleeper.accept(waitMs);
+                continue;                                          // attempt 不递增：不占普通预算
+            }
+            if ((!emptyStream && !shouldRetry(failure)) || attempt >= MAX_ATTEMPTS) {
+                throw failure;
+            }
+            if (!emptyStream) {   // 空流只打上面那条日志，别双打
+                log.warn("LLM 流式请求失败（疑似网关坏响应），第 {}/{} 次尝试后重试：{}",
+                        attempt, MAX_ATTEMPTS, failure.getMessage());
+            }
+            sleeper.accept(RetryPolicy.nextDelayMs(attempt, failure));   // raw 值：生产 sleeper 体内做换算
+            attempt++;
         }
-        throw last;
     }
 
     /** 一次流式请求 + 聚合为单响应。被中断时 blockLast 抛 RuntimeException(InterruptedException)——不重试、快速退出。 */
