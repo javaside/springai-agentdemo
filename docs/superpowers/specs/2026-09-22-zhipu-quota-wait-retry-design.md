@@ -132,6 +132,10 @@ public final class QuotaLimitDetector {
 - 沿 cause 链逐层找 `OpenAIServiceException`（Spring AI 可能包一层 RuntimeException，
   与 `shouldRetry`/`retryAfterMs` 同法）。**SII 包装穿透**：`StreamInterruptedException`
   构造时 message 置空但 **cause 保留原始异常**——L2 路径的限额检测沿 cause 链可命中。
+- **观测钩子（首次真实命中校准）**：429 且 detect 命中/解析失败均打 WARN 日志（业务码、
+  message 原文、解析出的 resetAt 或 null）——限额错误的真实 message 格式无真机样本
+  （无法主动构造），解析器按文档文案 + 宽容正则实现；首个真实命中后凭日志校准解析
+  规则（解析失败也有退化安全网兜底，§4，不会因猜错出事故）。
 
 ### 3.2 `RetryPolicy` 限额分支（唯一真相源扩展）
 
