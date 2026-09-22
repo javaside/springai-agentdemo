@@ -251,6 +251,9 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     private volatile String compactReason = "";
     private volatile String retryLabel;
     private volatile String retryBackoffText;
+    /** 限额等待的重置时刻（epoch ms）；null = 非限额等待。渲染层每帧现算剩余（RETRYING 态动画帧持续重绘，无 ticker）。 */
+    private volatile Long quotaWaitDeadline;
+    private volatile String quotaWaitReason;
 
     // ── 模态请求队列（问询 + 审批共用；渲染线程读、工具线程写；迟到过滤后置入） ──
     // 为何是队列而非单字段：ParallelTasks 下多个子 agent 线程可能同时判出 ASK，
@@ -429,6 +432,8 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     public long acceptingTurnId() { return acceptingTurnId; }
     public String retryLabel() { return retryLabel; }
     public String retryBackoffText() { return retryBackoffText; }
+    public Long quotaWaitDeadline() { return quotaWaitDeadline; }
+    public String quotaWaitReason() { return quotaWaitReason; }
 
     /** 队首模态请求（无则 null）；渲染线程读，<b>不出队</b>。 */
     public synchronized ModalRequest peekModal() { return modals.peek(); }
@@ -1085,6 +1090,35 @@ public final class ConversationState implements AgentListener, UiChangeSource {
             status = Status.RETRYING;
             retryLabel = "↻ 重试中 " + tag;
             retryBackoffText = formatBackoff(backoffMs);
+            quotaWaitDeadline = null;      // spec §3.5：新一轮普通重试也是「离开限额等待」事件
+            quotaWaitReason = null;
+            change = changed(UiDirty.ALL);
+        }
+        publish(change);
+    }
+
+    @Override
+    public void onQuotaWaitScheduled(long turnId, long resetAtEpochMs, String reason) {
+        Change change = null;
+        synchronized (this) {
+            // -1（后台子 agent）显式丢弃：空闲态 acceptingTurnId==-1 会穿透比较（onToolStarted 踩过同坑）
+            if (turnId < 0 || turnId != acceptingTurnId) return;
+            int bits = flushStreaming();
+            if ((bits & UiDirty.OUTPUT) != 0) {
+                pending.add(new OutputLine("", OutputLine.Kind.INFO));
+            }
+            String at = java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
+                    .withZone(java.time.ZoneId.systemDefault())
+                    .format(java.time.Instant.ofEpochMilli(resetAtEpochMs));
+            String prefix = "⏳ 限额等待：将于 " + at + " 自动重试（Esc 取消）：";
+            pending.add(new OutputLine(prefix
+                    + summarizeRetryReason(reason, 80 - CharWidth.of(prefix)), OutputLine.Kind.INFO));
+            status = Status.RETRYING;
+            retryLabel = "⏳ 限额等待";
+            retryBackoffText = formatQuotaRemaining(
+                    Math.max(0, resetAtEpochMs - System.currentTimeMillis()));
+            quotaWaitDeadline = resetAtEpochMs;
+            quotaWaitReason = reason;
             change = changed(UiDirty.ALL);
         }
         publish(change);
@@ -1284,12 +1318,14 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     }
 
     /**
-     * 清空重试瞬态字段。<b>仅在持有本类监视器时调用</b>；嵌套 helper 不自行 publish。
+     * 清空重试/限额等待瞬态字段。<b>仅在持有本类监视器时调用</b>；嵌套 helper 不自行 publish。
      * {@code retryLabel == null} 是公开的「当前非重试」契约，所有离开或初始化重试状态的路径必须调用。
      */
     private void clearRetryState() {
         retryLabel = null;
         retryBackoffText = null;
+        quotaWaitDeadline = null;
+        quotaWaitReason = null;
     }
 
     /**
@@ -1302,6 +1338,18 @@ public final class ConversationState implements AgentListener, UiChangeSource {
 
     private static String formatBackoff(long backoffMs) {
         return String.format(java.util.Locale.ROOT, "%.1fs", backoffMs / 1000.0);
+    }
+
+    /** 限额等待剩余时间（渲染帧现算用）：45s / 2m30s / 3h5m / 6d23h；过期显示「即将重试」。 */
+    public static String formatQuotaRemaining(long remainMs) {
+        if (remainMs <= 0) return "即将重试";
+        long s = remainMs / 1000;
+        if (s < 60) return s + "s";
+        long m = s / 60;
+        if (m < 60) return m + "m" + (s % 60) + "s";
+        long h = m / 60;
+        if (h < 24) return h + "h" + (m % 60) + "m";
+        return (h / 24) + "d" + (h % 24) + "h";
     }
 
     private static String summarizeRetryReason(String reason, int budget) {

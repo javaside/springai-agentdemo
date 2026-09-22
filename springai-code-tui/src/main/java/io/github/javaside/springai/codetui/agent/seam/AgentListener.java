@@ -95,6 +95,13 @@ public interface AgentListener {
     default void onRetryScheduled(long turnId, int attempt, int maxAttempts, long backoffMs, String reason) { }
 
     /**
+     * 限额等待已排定（spec §3.5）：回合挂起睡到重置时刻。与 {@link #onRetryScheduled} 互斥
+     * （同一次失败只会走其一）。turnId 迟到过滤纪律同 onRetryScheduled；后台子 agent 的 -1
+     * 由 ConversationState 侧丢弃。
+     */
+    default void onQuotaWaitScheduled(long turnId, long resetAtEpochMs, String reason) { }
+
+    /**
      * 模型经 AskUserQuestionTool 发问：UI 应弹出作答面板并最终经 {@code request.responder()} 应答。
      * 与其它方法一样带 turnId 供迟到过滤。落地端会阻塞工具线程直到 UI 应答（见 UserQuestionBridge）。
      *
