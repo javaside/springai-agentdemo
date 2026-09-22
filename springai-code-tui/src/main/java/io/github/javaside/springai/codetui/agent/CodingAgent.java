@@ -132,6 +132,9 @@ public final class CodingAgent implements SubmitHandler {
      */
     private volatile RetryReporter activeTurnL1Sink;
 
+    /** L1 限额等待事件的本回合 sink（spec §3.6，镜像 {@link #activeTurnL1Sink}）。 */
+    private volatile RetryPolicy.QuotaWaitHook activeTurnQuotaSink;
+
     /** 无技能清单的构造（回显桩/测试桩用）：等价于技能为空。
      *
      * @param chatClient          单个 ChatClient（桩路径，无多 provider 路由）
@@ -457,12 +460,22 @@ public final class CodingAgent implements SubmitHandler {
         AtomicBoolean disposed = new AtomicBoolean();
         AtomicInteger l1Retries = new AtomicInteger();
         boolean l2Enabled = retryConfig.l2Enabled();   // filter 闭包捕获该局部快照
+        // 限额续跑文案二选的标记（spec §3.5）：L2 quota 回调置位、resumeNotice 消费——回合局部，
+        // ⚠ 不得为实例字段（跨回合残留会让下一回合健康首轮误选限额文案，纪律同 resubscriptions）。
+        AtomicBoolean resumeFromQuota = new AtomicBoolean();
         // L1 桥计数载体：submit 开头整体替换。turnId 比对（long 基本类型）在 sink 闭包内——
         // RetryReporter 签名无 turnId，onL1Retry 层没有可比对的值；旧闭包失配即丢弃，终态不清空无害。
         activeTurnL1Sink = (attempt, backoffMs, reason) -> {
             if (activeTurnId.get() == turnId) {
                 l1Retries.incrementAndGet();
                 listener.onRetryScheduled(turnId, attempt, (int) (RetryingStreamChatModel.L1_RETRIES + 1), backoffMs, reason);
+            }
+        };
+        // L1 限额等待 sink：与上方 L1 计数 sink 同一镜像形状（整体替换 + 闭包内 turnId 过滤，
+        // 迟到事件失配即丢弃）。事件直达 listener.onQuotaWaitScheduled（Task 5 的 UI ⏳ 行）。
+        activeTurnQuotaSink = (waitMs, resetAtEpochMs, reason) -> {
+            if (activeTurnId.get() == turnId) {
+                listener.onQuotaWaitScheduled(turnId, resetAtEpochMs, reason);
             }
         };
         // 出站净化（层①）：发请求前先把会话裁到合法前缀。上一回合若被取消、且有迟到的子 agent 写入漏进会话
@@ -518,12 +531,13 @@ public final class CodingAgent implements SubmitHandler {
             if (resub == 1) {
                 outboundUser = effectiveOutbound;
             } else {
-                ResumeShape shape = prepareResume(sessionId, disposed);
+                ResumeShape shape = prepareResume(sessionId, disposed, resumeFromQuota);
                 if (shape == ResumeShape.FROM_TEXT) {
                     // 原子取走 delivered+pending 全部原文（单锁）；返回后 pending 必空 → Interjecting 该轮早退，
                     // 不会在 compose 出的 user 之后再注入第二条 user（连续双 user 400）。
                     outboundUser = composeResumeUser(effectiveOutbound,
-                            interjections == null ? List.of() : interjections.takeAllForResumeUser());
+                            interjections == null ? List.of() : interjections.takeAllForResumeUser(),
+                            resumeFromQuota);
                 } else {
                     // FROM_TOOLS：不调 .user()（V1 断言 2 口径：空 user 落库、出站不含），notice/插话走 Interjecting。
                     outboundUser = null;
@@ -563,7 +577,13 @@ public final class CodingAgent implements SubmitHandler {
                                 (int) totalRetries + 1,
                                 (int) L2_RESUMES,
                                 backoffMs,
-                                "流中断")))
+                                "流中断"),
+                        // 限额等待分支（智谱 429 限额码）：标记续跑文案二选 + 直连 UI ⏳ 行（spec §3.5/§3.6）。
+                        // resumeFromQuota 是 submit 局部（M4 红线），回调在等待前置位、prepareResume 消费复位。
+                        (waitMs, resetAtEpochMs, reason) -> {
+                            resumeFromQuota.set(true);               // prepareResume 消费（spec §3.5 文案二选）
+                            listener.onQuotaWaitScheduled(turnId, resetAtEpochMs, reason);
+                        }))
                 .doOnNext(resp -> handleChunk(resp, turnId))
                 // 终态错误一次（解包 L2 包装 + 拼重试前缀文案；l2 计数 = resubscriptions-1）。
                 .doOnError(err -> handleErrorWithRetryPrefix(unwrapL2(err), turnId,
@@ -598,6 +618,16 @@ public final class CodingAgent implements SubmitHandler {
             + "网络中断，你的上一段输出未被保留。请从中断处继续完成回答，不要重复已输出的内容。\n"
             + "</system-notice>";
 
+    /** 限额等待后的续跑通知（spec §3.5：按失败类型二选，防「网络中断」文案失真）。 */
+    private static final String RESUME_NOTICE_QUOTA = "<system-notice>\n"
+            + "额度限额等待结束，你的上一段输出未被保留。请从中断处继续完成回答，不要重复已输出的内容。\n"
+            + "</system-notice>";
+
+    /** 本次续跑的通知文本（消费 submit 局部 resumeFromQuota 并复位；仅 resub>1 路径调用——增参传入，不用实例字段）。 */
+    private static String resumeNotice(java.util.concurrent.atomic.AtomicBoolean resumeFromQuota) {
+        return resumeFromQuota.getAndSet(false) ? RESUME_NOTICE_QUOTA : RESUME_NOTICE;
+    }
+
     /**
      * 续跑轮出站前的会话重整（仅 resub&gt;1 执行）。执行序（spec §3.3 步骤 1-6）：
      * trim → 分流判定（trim 后尾部是 UserMessage → 形状①；否则②——先判会把悬空 tool_calls 误判成②的兄弟场景判错）
@@ -605,7 +635,8 @@ public final class CodingAgent implements SubmitHandler {
      * 形状② setResumeNotice（会话内最后一条 UserMessage 已含 {@code <system-notice>} 则跳过——防 ①→② 混变双份）。
      * 形状①的 takeAllForResumeUser 由调用方（defer）在 prepareResume 返回后调用，本方法不触碰队列取走类操作。
      */
-    private ResumeShape prepareResume(String sid, AtomicBoolean disposed) {
+    private ResumeShape prepareResume(String sid, AtomicBoolean disposed,
+                                      java.util.concurrent.atomic.AtomicBoolean resumeFromQuota) {
         trimDanglingToolCalls();
         List<SessionEvent> events = sessionService.getEvents(sid);
         boolean tailIsUser = !events.isEmpty() && events.get(events.size() - 1).getMessage() instanceof UserMessage;
@@ -622,7 +653,7 @@ public final class CodingAgent implements SubmitHandler {
                 return ResumeShape.FROM_TOOLS;
             }
             if (!lastUserHasResumeNotice(sid)) {
-                interjections.setResumeNotice(RESUME_NOTICE);
+                interjections.setResumeNotice(resumeNotice(resumeFromQuota));
             }
         }
         return shape;
@@ -632,12 +663,13 @@ public final class CodingAgent implements SubmitHandler {
      * 形状①的恢复 user：{@code effectiveText + "\n\n" + 合并插话 + "\n\n" + NOTICE}，纯函数、每轮从 submit
      * 闭包原始值重建（多轮续跑不叠加 notice：strip 先删上一轮含 notice 的那条再重放）。空插话退化为两段。
      */
-    private String composeResumeUser(String effectiveText, List<String> resumeTexts) {
+    private String composeResumeUser(String effectiveText, List<String> resumeTexts,
+                                     java.util.concurrent.atomic.AtomicBoolean resumeFromQuota) {
         // resumeTexts 恒非 null：调用方以 List.of() 归一（interjections == null 时），takeAllForResumeUser 亦保证非 null。
         if (resumeTexts.isEmpty()) {
-            return effectiveText + "\n\n" + RESUME_NOTICE;
+            return effectiveText + "\n\n" + resumeNotice(resumeFromQuota);
         }
-        return effectiveText + "\n\n" + String.join("\n", resumeTexts) + "\n\n" + RESUME_NOTICE;
+        return effectiveText + "\n\n" + String.join("\n", resumeTexts) + "\n\n" + resumeNotice(resumeFromQuota);
     }
 
     /** 形状①：删掉会话尾部本回合 user（重走 advisor 链时 before() 必然再 append，删+重追加 = 恰好一条）。 */
@@ -697,6 +729,14 @@ public final class CodingAgent implements SubmitHandler {
         RetryReporter sink = activeTurnL1Sink;
         if (sink != null) {
             sink.report(attempt, backoffMs, reason);
+        }
+    }
+
+    /** L1 限额等待事件入口（AgentTools.wireL1 bind；spec §3.6）。 */
+    void onL1QuotaWait(long waitMs, long resetAtEpochMs, String reason) {
+        RetryPolicy.QuotaWaitHook sink = activeTurnQuotaSink;
+        if (sink != null) {
+            sink.onQuotaWait(waitMs, resetAtEpochMs, reason);
         }
     }
 

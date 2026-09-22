@@ -4,6 +4,7 @@ import io.github.javaside.springai.codetui.agent.background.BackgroundTaskListTo
 import io.github.javaside.springai.codetui.agent.llm.DynamicAuxChatModel;
 import io.github.javaside.springai.codetui.agent.llm.LlmProvider;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
 import io.github.javaside.springai.codetui.agent.llm.RetryReporter;
 import io.github.javaside.springai.codetui.agent.llm.RetryingStreamChatModel;
 import io.github.javaside.springai.codetui.agent.llm.SessionIdStreamGuardAdvisor;
@@ -650,6 +651,9 @@ public final class AgentTools {
         // 全 provider 共用一个实例——report 只透传、与模型家无关（与 interjections 全 provider 共用的同一理由）；
         // 若每 provider 一个桥，wireL1 只 bind 得到其中一份，其余家的 L1 重试对 UI 永久不可见。
         L1ReporterBridge bridge = new L1ReporterBridge();
+        // L1 限额等待事件的两段式桥（spec §3.6）：完整镜像 bridge——全 provider 共用一个实例，
+        // wrap 进每个 provider 主链的三参 hook；CodingAgent 构造后经 wireL1 bind 到 agent::onL1QuotaWait。
+        L1QuotaBridge quotaBridge = new L1QuotaBridge();
         for (LlmProvider provider : registry.allProviders()) {
             if (!provider.available()) {
                 continue;
@@ -668,7 +672,7 @@ public final class AgentTools {
             // ⚠ dispose 守卫（spec §5「dispose 后 boundedElastic 不再 replaceEvents」）不在此装配行——
             //   实际落位 CodingAgentTurnResumeTest 用例 7（repository 桩计数，Task 6 已实现），本任务不重复。
             ChatModel base = retryConfig.l1Enabled()
-                    ? RetryingStreamChatModel.wrap(provider.chatModel(), bridge)
+                    ? RetryingStreamChatModel.wrap(provider.chatModel(), bridge, quotaBridge)
                     : provider.chatModel();
             // 与工具侧（MediaExternalizingCallback）共用同一个 visionBudget 实例：出站兑现开回合、
             // 工具读图查同一桶，两侧额度口径才一致。
@@ -718,7 +722,7 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
-                backgroundRegistry, backgroundResults, interjections, systemPromptTokens, bridge);
+                backgroundRegistry, backgroundResults, interjections, systemPromptTokens, bridge, quotaBridge);
     }
 
     /**
@@ -955,6 +959,9 @@ public final class AgentTools {
      * @param bridge              L1 重试事件的两段式桥——与每个 provider 主链里 {@link RetryingStreamChatModel}
      *                            wrap 进去的是<b>同一个实例</b>；CodingAgent 构造后经 {@link #wireL1} bind 到
      *                            {@code agent::onL1Retry}（装配期未 bind，volatile null 守卫 no-op）
+     * @param quotaBridge         L1 限额等待事件的两段式桥（spec §3.6）——镜像 {@code bridge}：与三参 wrap 进
+     *                            provider 主链的是<b>同一个实例</b>；经 {@link #wireL1} bind 到
+     *                            {@code agent::onL1QuotaWait}（装配期未 bind，volatile null 守卫 no-op）
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -973,14 +980,16 @@ public final class AgentTools {
                                TaskResultStore backgroundResults,
                                Interjections interjections,
                                long systemPromptTokens,
-                               L1ReporterBridge bridge) {
+                               L1ReporterBridge bridge,
+                               L1QuotaBridge quotaBridge) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
     }
 
     /**
-     * 把 {@link AgentRuntime#bridge()} bind 到 {@code CodingAgent} 的 {@code onL1Retry}（spec §3.2 两段式时序）：
+     * 把 {@link AgentRuntime#bridge()} bind 到 {@code CodingAgent} 的 {@code onL1Retry}（spec §3.2 两段式时序），
+     * 并同步把 {@link AgentRuntime#quotaBridge()} bind 到 {@code onL1QuotaWait}（spec §3.6 镜像桥）：
      * 装配期 {@code build} 建桥并把桥包进 {@link RetryingStreamChatModel}，CodingAgent 构造<b>完成后</b>经本方法接线。
      *
      * <p><b>为什么必须放在 AgentTools 而不是 {@code CodeTuiApplication}</b>：bind 的是方法引用
@@ -990,6 +999,7 @@ public final class AgentTools {
      */
     public static void wireL1(AgentRuntime rt, CodingAgent agent) {
         rt.bridge().bind(agent::onL1Retry);
+        rt.quotaBridge().bind(agent::onL1QuotaWait);
     }
 
     /**
@@ -1007,6 +1017,16 @@ public final class AgentTools {
         @Override public void report(int attempt, long backoffMs, String reason) {
             RetryReporter s = sink;                   // 快照
             if (s != null) s.report(attempt, backoffMs, reason);
+        }
+    }
+
+    /** L1 限额等待事件的两段式桥（spec §3.6，完整镜像 {@link L1ReporterBridge}：装配期 null 守卫 + bind 后转发）。 */
+    static final class L1QuotaBridge implements RetryPolicy.QuotaWaitHook {
+        private volatile RetryPolicy.QuotaWaitHook sink;          // 装配期 null；wireL1 后有值
+        void bind(RetryPolicy.QuotaWaitHook h) { this.sink = h; }
+        @Override public void onQuotaWait(long waitMs, long resetAtEpochMs, String reason) {
+            RetryPolicy.QuotaWaitHook s = sink;                   // 快照
+            if (s != null) s.onQuotaWait(waitMs, resetAtEpochMs, reason);
         }
     }
 
