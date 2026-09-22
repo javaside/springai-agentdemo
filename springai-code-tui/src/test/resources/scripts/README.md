@@ -32,6 +32,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 | `model_memory_smoke.py` | `/model` 选择持久化及重启恢复。 | 本地 |
 | `model_picker_smoke.py` | todo 面板挂着时反复开关 `/model` 选择器：斜杠菜单/选择器残影不得堆积。 | 本地 SSE 桩 |
 | `permission_smoke.py` | 权限模式、面板、ASK 阻塞握手与取消历史。 | 本地 SSE 桩；配置中禁用 MCP，不调用 `npx` |
+| `quota_wait_smoke.py` | 智谱 Coding Plan 限额等待：429(1308) → 睡到重置时刻自动续跑、⏳/↻ 两态互斥、Esc 取消语义；ZHIPU_BASE_URL 显式指向本地桩（不覆盖会打真网）。 | 本地 SSE 桩 |
 | `render_diff_smoke.py` | 局部差分、按需 IME 补帧、完全静止 2s 零终端字节。 | 本地 |
 | `resize_smoke.py` | 真 `SIGWINCH`、generation settle 的 `ESC[3J` 重放与最终画面/光标。 | 本地；pyte 不支持 reflow，视觉 reflow 仍需实机 |
 | `stalled_terminal_smoke.py` | 输出高峰期间读端停摆 3s（pty-writer 卡 write(2)）：完整回显落盘晚于末行输出（顺序判据）、恢复后 2000 行零丢失、排空后零字节。证红：`CODETUI_STALLED_MUTATE_SYNC_WRITE=1` 翻转顺序断言。 | 本地 SSE 桩 |
@@ -50,6 +51,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/resize_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/stalled_terminal_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/permission_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/quota_wait_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/interjection_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/attachment_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/clear_smoke.py

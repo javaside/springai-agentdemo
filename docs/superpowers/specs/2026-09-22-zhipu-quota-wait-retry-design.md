@@ -1,9 +1,10 @@
 # 智谱 Coding Plan 限额感知重试（等到重置时刻自动续跑）设计
 
 日期：2026-09-22
-状态：**终稿 v2**（v1 经双 subagent 审核——代码事实核查 + reactor 语义/设计逻辑评审——
+状态：**已交付**（实现计划 docs/superpowers/plans/2026-09-22-zhipu-quota-wait-retry.md；
+v1 经双 subagent 审核——代码事实核查 + reactor 语义/设计逻辑评审——
 修订 3 项必修：限额分支加 filter 门控、预算豁免改扣减偏移、串行子 agent 可 interrupt；
-另采纳 5 项勘误与若干实现红线，见文末「v2 修订记录」；待 writing-plans）
+另采纳 5 项勘误与若干实现红线，见文末「v2 修订记录」）
 参考：智谱 BigModel 错误码文档 `https://docs.bigmodel.cn/cn/api/api-code`
 关联：`docs/superpowers/specs/2026-09-03-main-agent-stream-retry-design.md`（L1/L2 重试架构，
 本设计在其上扩展）；`docs/superpowers/specs/2026-08-18-subagent-retry-transient-expansion-design.md`
@@ -136,6 +137,13 @@ public final class QuotaLimitDetector {
   message 原文、解析出的 resetAt 或 null）——限额错误的真实 message 格式无真机样本
   （无法主动构造），解析器按文档文案 + 宽容正则实现；首个真实命中后凭日志校准解析
   规则（解析失败也有退化安全网兜底，§4，不会因猜错出事故）。
+
+**真机实证（2026-09-22，探针实测）**：Coding Plan 端点 `/api/coding/paas/v4` 撞 5 小时
+限额返回 `{"error":{"code":"1308","message":"已达到 5 小时的使用上限。您的限额将在
+2026-09-22 13:45:14 重置。"}}`；同账号按量付费端点 `/api/paas/v4` 返回 1113（余额不足，
+正确排除）。真机 message **无反引号**、时间格式为 `yyyy-MM-dd HH:mm:ss`（带秒位）；
+本机与服务端同时区 Asia/Shanghai（无偏移时间按此解释成立）。观测钩子（WARN）已在
+真机确认可读到业务码与重置时刻。
 
 ### 3.2 `RetryPolicy` 限额分支（唯一真相源扩展）
 
@@ -350,6 +358,16 @@ default void onQuotaWaitScheduled(long turnId, long resetAtEpochMs, String reaso
 6. **桥接/装配**：L1 两段式桥 turnId 过滤（迟到丢弃）；L2 闭包直连；SubagentRunner
    注入链通 + 后台 -1 丢弃；**cancelTurn interrupt 串行子 agent 执行线程**（登记/
    清理/中断杀循环）；RESUME_NOTICE 限额文案二选。
+7. **PTY 端到端冒烟（接线守卫，唯一的一道网）**：`quota_wait_smoke.py`——本地 SSE 桩
+   回真机形态 429（code=1308、message 内嵌「首个 429 时刻 + 35s」的北京时间重置时刻，
+   >30s 下限），`ZHIPU_BASE_URL` 显式指向桩（<b>必须覆盖本机真实端点，绝不能打真网</b>）。
+   真凭据优先：桩收到 1+2+1 次调用（1 初始 + 2 次 openai-java SDK 内部 429 重试 +
+   1 次等待后续跑，SDK maxRetries=2 源码核实——SDK 内部重试占掉了「第 1→2 次调用」的
+   字面间隔，故间隔断言取「最后一个 429 → 成功 ≈35s（±10s）」这一真实等待窗口）；成功调用
+   落在 body 声明的重置时刻 ±10s 内（睡到重置点而非 1s 起指数退避的硬证据）；等待期状态行
+   `⏳ 限额等待` 且无 `↻ 重试中`（两态互斥）；应用日志含 `QuotaLimitDetector` 的 WARN
+   观测钩子（code=1308 + resetAt + message 原文）；Esc 场景取消后桩不再收到新调用
+   （Mono.delay 被 dispose、无到点复活）。
 
 ## 6. 非目标
 

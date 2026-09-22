@@ -46,12 +46,18 @@ class QuotaLimitDetectorTest {
      * 真机样本（2026-09-22 探针实测）：Coding Plan 专用端点
      * https://open.bigmodel.cn/api/coding/paas/v4 撞 5 小时限额的 429 body
      * {"error":{"code":"1308","message":"已达到 5 小时的使用上限。您的限额将在 2026-09-22 13:45:14 重置。"}}；
-     * SDK 侧 getMessage() 即传入串（"429: " 前缀由 SDK 拼 statusCode 而来）。
+     * <b>构造须传原始 body message（不带前缀）</b>——SDK 的 RateLimitException 构造器自拼
+     * "429: " 前缀（源码：{@code "429: ${error.message}"}），手工再拼一次就是双前缀，与真机不符。
+     * 保真断言：{@code svc.getMessage()} 必须恰等于真机原文。
      */
     @Test
     void realWorldSample1308CodingPlan5hLimit() {
-        Optional<QuotaLimit> q = QuotaLimitDetector.detect(Quota429s.quota429("1308",
-                "429: 已达到 5 小时的使用上限。您的限额将在 2026-09-22 13:45:14 重置。"));
+        RateLimitException svc = Quota429s.quota429("1308",
+                "已达到 5 小时的使用上限。您的限额将在 2026-09-22 13:45:14 重置。");
+        // 真机原文：SDK 自拼的前缀恰出现一次，无双前缀
+        assertEquals("429: 已达到 5 小时的使用上限。您的限额将在 2026-09-22 13:45:14 重置。",
+                svc.getMessage());
+        Optional<QuotaLimit> q = QuotaLimitDetector.detect(svc);
         assertTrue(q.isPresent());
         assertEquals("1308", q.get().code());
         // 北京时间 13:45:14 == UTC 05:45:14（解析按 Asia/Shanghai）
