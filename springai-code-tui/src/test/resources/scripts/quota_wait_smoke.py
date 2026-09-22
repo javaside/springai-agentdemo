@@ -17,20 +17,22 @@
 显示回合卡在「● 思考中…」（等待真的在发生），但屏幕上<b>从头到尾没有 ⏳ 行</b>——桥断了，
 `onQuotaWaitScheduled` 没人调，用户什么都看不到。`AgentTools.wireL1` 的
 `rt.quotaBridge().bind(agent::onL1QuotaWait)` 那一行被删是同形的失败（sink 恒 null、no-op），
-本脚本同样红在 `wait_quota_row`。所以：<b>别拿「等待行为」当接线证据</b>——睡 35s 靠的是
+本脚本同样红在 `wait_quota_row`。所以：<b>别拿「等待行为」当接线证据</b>——睡到重置点靠的是
 RetryPolicy，接线断掉它照样睡；这个功能唯一的一道网是本脚本的 ⏳ 行断言。
 
 <b>没有真实 key 怎么跑</b>：照 interjection_smoke.py 的办法——脚本内起一个说 OpenAI SSE 方言的桩模型，
 把 `ZHIPU_BASE_URL` 指过去（⚠ 本机环境变量里的 `ZHIPU_BASE_URL` 是真实 Coding Plan 端点，脚本
 <b>必须显式覆盖</b>为桩地址，绝不能打真网）。桩对带标记的消息先回 3 次 HTTP 429（body 为真机原文，
-重置时刻 = 首个 429 时刻 + 35 秒北京时间），之后回正常 SSE 文本。<b>不需要真实 key、不需要网络。</b>
+重置时刻 = 首个 429 时刻 + 75 秒北京时间），之后回正常 SSE 文本。<b>不需要真实 key、不需要网络。</b>
 
 <b>本脚本最有价值的一组断言</b>（scenario_one 里的 stub 时序断言）：屏幕上看到 ⏳ 行<b>证明不了</b>
 「真的睡到了重置时刻」——那行是 UI 画自己的状态，就算 `RetryPolicy` 限额分支没接上（走老的 1s 起
 指数退避），屏幕上也会有别的重试行。真凭据是桩<b>实际收到的请求时序</b>：
-成功的那次调用必须落在 429 body 里<b>声明的那一个重置时刻</b> ±10s 内——应用只能靠解析 message
-拿到 T，它能踩准 T 只可能是「睡到重置点」。这与 interjection_smoke 的
-「别拿面板当证据，真凭据是桩收到的请求体」是同一条纪律。
+成功的那次调用必须落在 429 body 里<b>声明的那一个重置时刻</b> ±8s 内——应用只能靠解析 message
+拿到 T，它能踩准 T 只可能是「睡到重置点」。T 特意取 now+75s：与实现里 MIN_QUOTA_WAIT_MS=30s
+下限相差 45s >> 容差 8s，「睡到 T」与「退化为恒睡 30s 下限」由此可被明确区分（若走下限，
+gap≈30s、对 T 偏差≈45s，两路时序断言<b>必红</b>——评审 Important-2 的修法）。这与
+interjection_smoke 的「别拿面板当证据，真凭据是桩收到的请求体」是同一条纪律。
 
 <b>真机事实（脚本头部必须钉死，断言都长在它们上面）</b>：
 
@@ -39,7 +41,7 @@ RetryPolicy，接线断掉它照样睡；这个功能唯一的一道网是本脚
     抛给应用层。因此桩看到的 429 阶段是 <b>3 次调用</b>（1 初始 + 2 SDK 内部重试），随后才进入
     应用层限额等待，等待结束再来 1 次成功调用——<b>共 4 次</b>。任务书里「第 1→2 次调用间隔
     ≈35s」的字面写法被 SDK 内部重试占掉了前两次间隔，本脚本改为等价的真凭据：
-    <b>最后一个 429 → 成功的间隔 ≈35s</b>，且<b>成功时刻 ≈ body 声明的重置时刻</b>；
+    <b>最后一个 429 → 成功的间隔 ≈75s（±8s）</b>，且<b>成功时刻 ≈ body 声明的重置时刻（±8s）</b>；
   * `RateLimitException.getMessage() == "429: " + error.message`（SDK 构造器自拼前缀）；
   * 重置时刻是北京时间（`yyyy-MM-dd HH:mm:ss`，无反引号），应用按 Asia/Shanghai 解析；
     本脚本生成 T 用固定 UTC+8（中国无夏令时），与机器时区无关；
@@ -57,8 +59,8 @@ RetryPolicy，接线断掉它照样睡；这个功能唯一的一道网是本脚
 
   | 场景     | 操作                                       | 期望（真凭据优先）                              |
   |----------|--------------------------------------------|-------------------------------------------------|
-  | 限额续跑 | 发带 QUOTANOW 标记的消息                   | 桩收 4 次调用（3×429 + 1×200）；200 落在重置时刻 ±10s；等待期屏上 ⏳ 限额等待 且无 ↻ 重试中；日志有 QuotaLimitDetector WARN；回合正常完成 |
-  | Esc 取消 | 再发带 QUOTANOW2 标记的消息，⏳ 出现后按 Esc | 进程回 IDLE（已取消当前回合）；桩不再收到新调用（取消语义） |
+  | 限额续跑 | 发带 QUOTANOW 标记的消息                   | 桩收 4 次调用（3×429 + 1×200）；200 落在重置时刻 ±8s；等待期屏上 ⏳ 限额等待 且无 ↻ 重试中；日志有 QuotaLimitDetector WARN；回合正常完成 |
+  | Esc 取消 | 再发带 QUOTANOW2 标记的消息，⏳ 出现后按 Esc | 进程回 IDLE（已取消当前回合）；静置跨过该回合重置时刻 T+5s 后，桩不再收到新调用（取消语义，观察窗盖住「到点复活」点） |
 
 运行前<b>必须重新 package</b>，否则跑的是旧 jar，会得到一个看起来很像回归的假失败：
 
@@ -97,9 +99,14 @@ CST = timezone(timedelta(hours=8))
 
 MODEL_ID = "glm-5.3"                       # zhipu 默认模型（桩应答里回显用，不做断言）
 
-# 重置时刻 = 首个 429 时刻 + QUOTA_DELAY_S 秒。⚠ 必须 > 实现里的 MIN_QUOTA_WAIT_MS=30s 下限，
-# 这样测的是「真睡到重置时刻」而非下限兜底（若 T 过近，waitMs 会顶到 30s 下限，间隔断言失真）。
-QUOTA_DELAY_S = 35
+# 重置时刻 = 首个 429 时刻 + QUOTA_DELAY_S 秒。⚠ 必须与实现里的 MIN_QUOTA_WAIT_MS=30s 下限拉开
+# 足够大的差距（75 − 30 = 45s >> 容差 QUOTA_TOL_S=8s）：这样测的才是「真睡到重置时刻」而非下限
+# 兜底——若实现退化为恒睡 30s 下限，gap≈30s、对 T 偏差≈45s，两路时序断言必红（评审 Important-2）。
+QUOTA_DELAY_S = 75
+# 时序断言容差（gap 与重置偏差共用）：秒截断（桩与 detector 同为秒精度）+ 调度开销实测 <1s，
+# 8s 已远大于抖动、又远小于 45s 的「T vs 30s 下限」差距——容差若取宽（旧值 ±10s 且 T 仅 +35s）
+# 会把该差距整个吞掉，「睡到 T」与「睡下限」不可区分（评审 Important-2）。
+QUOTA_TOL_S = 8
 # openai-java 4.49.0 RetryingHttpClient 默认 maxRetries（源码核实）：429 在应用层看到之前，
 # SDK 内部先重试 2 次。断言「共 4 次调用」长在这个数上；SDK 改版会让冒烟红得响。
 SDK_MAX_RETRIES = 2
@@ -315,8 +322,9 @@ def scenario_one(session, home_dir):
             % (reset_text, line), session.screen.display)
     print("日志 OK: QuotaLimitDetector WARN 出现（%r）." % line.strip())
 
-    # 等到回合完成：等待结束后的续跑应拿到正常 SSE 应答并落地。
-    session.wait_for(SUCCESS_REPLY, timeout=60)
+    # 等到回合完成：等待结束后的续跑应拿到正常 SSE 应答并落地。T=首个 429+QUOTA_DELAY_S(75s)，
+    # 此处距首个 429 已过数秒，剩余等待 ~70s+，超时给足余量。
+    session.wait_for(SUCCESS_REPLY, timeout=120)
     wait_until(session, lambda: "Enter 发送" in status_row(session), 10,
                "回合完成后状态行回到 IDLE")
     print("回合完成 OK: %r 落地，状态行回到 IDLE." % SUCCESS_REPLY)
@@ -339,24 +347,26 @@ def scenario_one(session, home_dir):
         die("3 个 429 未簇在 %.0fs 内（实际 %.1fs）——间隔大头不是应用层限额等待"
             % (SDK_RETRY_WINDOW_S, last429_t - first_t), session.screen.display)
 
-    # 硬证据（核心行为）：最后一个 429 → 成功 的间隔 ≈ 35s（±10s）。
-    # 老实现的 1s 起指数退避封顶 30s，两次相邻应用级调用最多 ~30s，且 UI 会走 ↻ 行——
-    # 这一条与上面的 ↻ 互斥断言合起来，把「睡到重置点」与「指数退避」彻底分开。
+    # 硬证据（核心行为）：最后一个 429 → 成功 的间隔 ≈ QUOTA_DELAY_S（±QUOTA_TOL_S）。
+    # 两个对照假设都被推出窗：老实现的 1s 起指数退避封顶 30s 且 UI 走 ↻ 行（与上面的 ↻ 互斥
+    # 断言互相印证）；退化为恒睡 MIN_QUOTA_WAIT_MS=30s 下限则 gap≈30s，距 75s 差 45s——必红。
     gap = success_t - last429_t
-    if not (QUOTA_DELAY_S - 10 <= gap <= QUOTA_DELAY_S + 10):
-        die("最后一个 429 → 成功 的间隔 %.1fs，期望 ≈%ds（±10s）——不是睡到重置时刻"
-            % (gap, QUOTA_DELAY_S), session.screen.display)
-    print("时序 OK: 最后一个 429 → 成功 间隔 %.1fs（≈%ds）——睡到了重置时刻，"
-          "不是 1s 起的指数退避." % (gap, QUOTA_DELAY_S))
+    if not (QUOTA_DELAY_S - QUOTA_TOL_S <= gap <= QUOTA_DELAY_S + QUOTA_TOL_S):
+        die("最后一个 429 → 成功 的间隔 %.1fs，期望 ≈%ds（±%ds；若走 MIN_QUOTA_WAIT_MS=30s 下限"
+            "则 gap≈30s，此断言必红）——不是睡到重置时刻" % (gap, QUOTA_DELAY_S, QUOTA_TOL_S),
+            session.screen.display)
+    print("时序 OK: 最后一个 429 → 成功 间隔 %.1fs（≈%ds，±%ds）——睡到了重置时刻，"
+          "既不是 1s 起的指数退避、也不是 30s 下限兜底." % (gap, QUOTA_DELAY_S, QUOTA_TOL_S))
 
-    # 最强证据：成功调用落在 429 body 里<b>声明的重置时刻</b> ±10s 内。
+    # 最强证据：成功调用落在 429 body 里<b>声明的重置时刻</b> ±QUOTA_TOL_S 内。
     # 应用只能靠解析 message 拿到 T；踩得准 T 只可能是「睡到 T 再重试」。
+    # 若走 MIN_QUOTA_WAIT_MS=30s 下限，此处偏差≈45s，必红。
     reset_epoch = datetime.strptime(reset_text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CST).timestamp()
-    if abs(success_t - reset_epoch) > 10:
-        die("成功调用（%.1f）偏离 body 声明的重置时刻 %s（%.1f）超 ±10s——等待时长与解析出的 T 对不上"
-            % (success_t, reset_text, reset_epoch), session.screen.display)
-    print("重置时刻 OK: 成功调用落在 body 声明的重置时刻 %s 的 ±10s 内（偏差 %.1fs）."
-          % (reset_text, success_t - reset_epoch))
+    if abs(success_t - reset_epoch) > QUOTA_TOL_S:
+        die("成功调用（%.1f）偏离 body 声明的重置时刻 %s（%.1f）超 ±%ds——等待时长与解析出的 T 对不上"
+            % (success_t, reset_text, reset_epoch, QUOTA_TOL_S), session.screen.display)
+    print("重置时刻 OK: 成功调用落在 body 声明的重置时刻 %s 的 ±%ds 内（偏差 %.1fs）."
+          % (reset_text, QUOTA_TOL_S, success_t - reset_epoch))
 
 
 # ── 场景二（Esc 取消语义）：等待期间按 Esc → 回 IDLE，桩不再被叫 ─────────────
@@ -382,16 +392,25 @@ def scenario_two(session):
     print("回 IDLE OK: 状态行恢复常态（%r）." % status_row(session).strip())
 
     # 取消语义硬证据：Esc 之后桩<b>不再收到新调用</b>（等待的 Mono.delay 被 dispose 掐断，
-    # 没有到点复活）。先让它静置几秒再比对计数。
-    esc_before = len(snapshot_marker("esc"))
-    session.pump(12.0)
+    # 没有到点复活）。观察窗必须<b>跨过该回合的重置时刻 T</b>（T = 首个 esc-429 + QUOTA_DELAY_S，
+    # 记录在 429 body 里）：静置到 T+5s 之后再比对计数——若 dispose 语义回归，「到点复活」
+    # 恰好发生在 T，观察窗盖不住 T 就是假绿（评审 Important-1）。这是冒烟不是单测，拉长耗时可接受。
+    esc_calls = snapshot_marker("esc")
+    esc_before = len(esc_calls)
+    esc_reset_epoch = datetime.strptime(
+        esc_calls[0][3], "%Y-%m-%d %H:%M:%S").replace(tzinfo=CST).timestamp()
+    idle_deadline = esc_reset_epoch + 5.0
+    while time.time() < idle_deadline:
+        session.pump(0.5)
     esc_after = len(snapshot_marker("esc"))
     if esc_after != esc_before:
-        die("Esc 后桩又收到 %d 次新调用（%d → %d）——取消没有终止等待，到点复活了"
-            % (esc_after - esc_before, esc_before, esc_after), session.screen.display)
+        die("Esc 后静置到重置时刻 T+5s（T=%s），桩又收到 %d 次新调用（%d → %d）——取消没有终止等待，"
+            "到点复活了" % (esc_calls[0][3], esc_after - esc_before, esc_before, esc_after),
+            session.screen.display)
     if any(c[2] == 200 for c in snapshot_marker("esc")):
         die("Esc 场景的回合不该拿到成功应答", session.screen.display)
-    print("取消语义 OK: Esc 后静置 12s，桩调用数保持 %d（等待被真正取消，无到点复活）." % esc_before)
+    print("取消语义 OK: Esc 后静置跨过重置时刻 T+5s（T=%s），桩调用数保持 %d"
+          "（等待被真正取消，无到点复活）." % (esc_calls[0][3], esc_before))
 
 
 # ── main ─────────────────────────────────────────────────────────────────

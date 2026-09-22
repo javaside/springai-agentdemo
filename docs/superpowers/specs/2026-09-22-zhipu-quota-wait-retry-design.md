@@ -359,15 +359,17 @@ default void onQuotaWaitScheduled(long turnId, long resetAtEpochMs, String reaso
    注入链通 + 后台 -1 丢弃；**cancelTurn interrupt 串行子 agent 执行线程**（登记/
    清理/中断杀循环）；RESUME_NOTICE 限额文案二选。
 7. **PTY 端到端冒烟（接线守卫，唯一的一道网）**：`quota_wait_smoke.py`——本地 SSE 桩
-   回真机形态 429（code=1308、message 内嵌「首个 429 时刻 + 35s」的北京时间重置时刻，
-   >30s 下限），`ZHIPU_BASE_URL` 显式指向桩（<b>必须覆盖本机真实端点，绝不能打真网</b>）。
+   回真机形态 429（code=1308、message 内嵌「首个 429 时刻 + 75s」的北京时间重置时刻，
+   与 MIN_QUOTA_WAIT_MS=30s 下限拉开 45s，容差吞不掉），`ZHIPU_BASE_URL` 显式指向桩（<b>必须覆盖本机真实端点，绝不能打真网</b>）。
    真凭据优先：桩收到 1+2+1 次调用（1 初始 + 2 次 openai-java SDK 内部 429 重试 +
    1 次等待后续跑，SDK maxRetries=2 源码核实——SDK 内部重试占掉了「第 1→2 次调用」的
-   字面间隔，故间隔断言取「最后一个 429 → 成功 ≈35s（±10s）」这一真实等待窗口）；成功调用
-   落在 body 声明的重置时刻 ±10s 内（睡到重置点而非 1s 起指数退避的硬证据）；等待期状态行
+   字面间隔，故间隔断言取「最后一个 429 → 成功 ≈75s（±8s）」这一真实等待窗口；若退化为
+   恒睡 30s 下限则 gap≈30s，必红）；成功调用
+   落在 body 声明的重置时刻 ±8s 内（睡到重置点而非 1s 起指数退避的硬证据）；等待期状态行
    `⏳ 限额等待` 且无 `↻ 重试中`（两态互斥）；应用日志含 `QuotaLimitDetector` 的 WARN
-   观测钩子（code=1308 + resetAt + message 原文）；Esc 场景取消后桩不再收到新调用
-   （Mono.delay 被 dispose、无到点复活）。
+   观测钩子（code=1308 + resetAt + message 原文）；Esc 场景取消后静置跨过该回合重置时刻
+   T+5s 再比对，桩不再收到新调用（Mono.delay 被 dispose、无到点复活——观察窗盖住「到点
+   复活」发生的时刻，防假绿）。
 
 ## 6. 非目标
 
