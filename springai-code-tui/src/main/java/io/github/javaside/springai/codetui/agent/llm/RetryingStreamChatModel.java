@@ -42,7 +42,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * jitter(0) <b>显式关闭</b>
  * （默认 0.5 会随机化退避，打翻序列测试、UI 文案「1s 后重发」与预算算术；单用户 TUI
  * 无并发不需要抖动，且与子 agent {@code Thread.sleep} 版严格同参）。判据与退避的唯一真相源是
- * {@link RetryPolicy}。
+ * {@link RetryPolicy}。限额等待（智谱 Coding Plan 429 限额码）经 {@link RetryPolicy#backoffRetry}
+ * 限额分支分流：睡到重置点、不占普通预算、⏳ 钩子上报——见 spec
+ * {@code 2026-09-22-zhipu-quota-wait-retry-design.md}。
  *
  * <p><b>前提（单回合串行约束）</b>：{@code emitted} 为实例字段、doOnSubscribe 重置——主链同一
  * 时刻仅一个活跃订阅。{@link #stream} 每次调用返回的冷流按订阅序各自重置，行为与局部变量等价。
@@ -62,6 +64,8 @@ public final class RetryingStreamChatModel implements ChatModel {
     private final ChatModel delegate;
     /** 可选重试事件钩子（UI ↻ 行）；null = no-op。 */
     private final RetryReporter reporter;
+    /** 可选限额等待钩子（UI ⏳ 行）；null = no-op。判据/等待/预算在 {@link RetryPolicy} 限额分支内分流。 */
+    private final RetryPolicy.QuotaWaitHook quotaHook;
 
     /**
      * 已向下游下发的「有内容」chunk 计数（text 非空含纯空白，或 hasToolCalls）。
@@ -70,14 +74,23 @@ public final class RetryingStreamChatModel implements ChatModel {
      */
     private final AtomicInteger emitted = new AtomicInteger();
 
-    private RetryingStreamChatModel(ChatModel delegate, RetryReporter reporter) {
+    private RetryingStreamChatModel(ChatModel delegate, RetryReporter reporter, RetryPolicy.QuotaWaitHook quotaHook) {
         this.delegate = delegate;
         this.reporter = reporter;
+        this.quotaHook = quotaHook;
     }
 
     /** 包裹一个 ChatModel 为 L1 零下发重试装饰器（生产装配入口；reporter 可 null）。 */
     public static ChatModel wrap(ChatModel delegate, RetryReporter reporter) {
-        return new RetryingStreamChatModel(delegate, reporter);
+        return wrap(delegate, reporter, null);
+    }
+
+    /**
+     * 全参装配（spec §3.3）：quotaHook 为限额等待的 UI 上报通道（⏳ 行）；null = no-op。
+     * 限额分支判据/退避在 {@link RetryPolicy#backoffRetry} 四参重载内分流——本类只透传钩子。
+     */
+    public static ChatModel wrap(ChatModel delegate, RetryReporter reporter, RetryPolicy.QuotaWaitHook quotaHook) {
+        return new RetryingStreamChatModel(delegate, reporter, quotaHook);
     }
 
     @Override
@@ -100,7 +113,8 @@ public final class RetryingStreamChatModel implements ChatModel {
                             if (reporter != null) {
                                 reporter.report(attempt, backoffMs, reason);
                             }
-                        }))
+                        },
+                        quotaHook))
                 .transformDeferred(this::classify);
     }
 

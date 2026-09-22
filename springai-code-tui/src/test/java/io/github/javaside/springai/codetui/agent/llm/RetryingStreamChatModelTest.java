@@ -352,4 +352,78 @@ class RetryingStreamChatModelTest {
         // 短 message 原样返回
         assertEquals("short", RetryingStreamChatModel.reasonOf(new RuntimeException("short")));
     }
+
+    // ---- 限额等待（spec §3.3）：握手期等待 / mid-stream 不重放 / dispose 取消 ----
+
+    /** 造 message 内嵌 now+deltaSeconds 重置时刻的 1316。 */
+    private static String quotaMessage(long deltaSeconds) {
+        String at = java.time.Instant.now().plusSeconds(deltaSeconds)
+                .atZone(java.time.ZoneId.of("Asia/Shanghai"))
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        return "429: 已达到 5 小时使用上限。您的限额将在 `" + at + "` 重置。";
+    }
+
+    @Test
+    void handshakeQuotaWaitFiresQuotaHookNotRetryReporter() {
+        RetryPolicy.setDelayScaleForTest(ms -> Math.min(ms, 1));
+        try {
+            AtomicInteger subs = new AtomicInteger();
+            ChatModel delegate = delegate(n -> n == 1
+                    ? Flux.error(Quota429s.quota429("1316", quotaMessage(90)))
+                    : Flux.just(chunk("hi")), subs);
+            List<String> quotaReasons = new java.util.ArrayList<>();
+            List<Integer> retryReports = new java.util.ArrayList<>();
+            ChatModel wrapped = RetryingStreamChatModel.wrap(delegate,
+                    (attempt, backoffMs, reason) -> retryReports.add(attempt),
+                    (waitMs, resetAt, reason) -> quotaReasons.add(reason));
+            StepVerifier.create(wrapped.stream(new Prompt("x")))
+                    .expectNextCount(1)
+                    .verifyComplete();
+            assertEquals(1, quotaReasons.size());
+            assertTrue(retryReports.isEmpty());      // ↻ 行与 ⏳ 行互斥
+            assertEquals(2, subs.get());
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
+        }
+    }
+
+    @Test
+    void midStreamQuotaNotReplayed_wrapsAsSii() {
+        RetryPolicy.setDelayScaleForTest(ms -> Math.min(ms, 1));
+        try {
+            AtomicInteger subs = new AtomicInteger();
+            ChatModel delegate = delegate(n -> Flux.concat(
+                    Flux.just(chunk("seen")),               // 已下发 → emitted>0
+                    Flux.error(Quota429s.quota429("1316", quotaMessage(90)))), subs);
+            List<Long> quotaFired = new java.util.ArrayList<>();
+            ChatModel wrapped = RetryingStreamChatModel.wrap(delegate, null,
+                    (waitMs, resetAt, reason) -> quotaFired.add(waitMs));
+            StepVerifier.create(wrapped.stream(new Prompt("x")))
+                    .expectNextCount(1)                        // chunk 原样下发一次
+                    .verifyErrorSatisfies(e ->
+                            assertTrue(e instanceof StreamInterruptedException));   // 交 L2，不在 L1 重放
+            assertEquals(1, subs.get());                       // 无重订阅
+            assertTrue(quotaFired.isEmpty());                  // L1 不等待（filter 门控）
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
+        }
+    }
+
+    @Test
+    void disposeDuringQuotaWaitCancels() throws InterruptedException {
+        RetryPolicy.setDelayScaleForTest(ms -> 50L);   // 等待压到 50ms：若 dispose 未取消定时器，300ms 内必重订阅
+        try {
+            AtomicInteger subs = new AtomicInteger();
+            ChatModel delegate = delegate(n -> {
+                throw Quota429s.quota429("1316", quotaMessage(90));   // script 体内抛 → defer 转 onError
+            }, subs);
+            ChatModel wrapped = RetryingStreamChatModel.wrap(delegate, null, null);
+            wrapped.stream(new Prompt("x")).subscribe().dispose();
+            assertEquals(1, subs.get());
+            Thread.sleep(300);                          // 跨过至少一个等待窗口
+            assertEquals(1, subs.get());                // 定时器已随 dispose 取消：无重订阅（硬断言，防假阳性）
+        } finally {
+            RetryPolicy.resetDelayScaleForTest();
+        }
+    }
 }
