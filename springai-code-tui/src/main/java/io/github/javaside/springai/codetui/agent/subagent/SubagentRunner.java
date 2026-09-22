@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.agent.subagent;
 
 import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
+import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
 import io.github.javaside.springai.codetui.agent.llm.RetryingChatModel;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
@@ -102,6 +103,13 @@ public final class SubagentRunner implements UiChangeSource {
      * 取消（{@link #cancelTurn}）据此 {@code shutdownNow} 拆掉该回合所有在飞并行子 agent（best-effort，见 runAll 中断语义）。
      */
     private final Map<Long, Set<ExecutorService>> poolsByTurn = new ConcurrentHashMap<>();
+    /**
+     * 回合 → 该回合串行（前台 Task 工具内同步执行）子 agent 的执行线程。串行路径无池
+     * （javadoc 原注「无法强制打断」）——限额等待把不可打断窗口拉到小时/天级且 busy 闸门
+     * 排队后续输入造成假死，故登记线程由 {@link #cancelTurn} interrupt（spec §3.4.3 必修）。
+     * 与 {@link #poolsByTurn} 同构；同 turn 串行 run 同时至多一个（主 agent 工具循环串行）。
+     */
+    private final Map<Long, Set<Thread>> serialThreadsByTurn = new ConcurrentHashMap<>();
 
     /**
      * 后台任务注册表；null 表示未启用后台模式（老测试与回显桩不受影响）。
@@ -228,13 +236,19 @@ public final class SubagentRunner implements UiChangeSource {
     public String run(SubagentSpec spec, String prompt, String description, long parentTurnId) {
         String taskId = taskIdSupplier.get();
         listener.onSubagentStarted(parentTurnId, taskId, spec.name(), description, requestedModelLabel(spec));
-        // increment 必须是 try 前的最后一条语句、publish 必须是 try 内的首语句——否则 onSubagentStarted 抛出
+        // increment 必须是 try 前的最后一条语句、登记 + publish 必须是 try 内的首段——否则 onSubagentStarted 抛出
         // 会漏掉 finally 的递减，计数永久泄漏、busy 闸门永久卡死、UI 再也无法提交。publish 只隔 RuntimeException，
         // 放 try 外的话 listener 抛 Error（SOE/OOM/NoClassDefFoundError）同样会漏减（错误在这里不是「不该发生」，
-        // 而是发生后 finally 必须仍然跑——这正是 try 存在的意义）。故 increment 紧贴 onSubagentStarted 之后、
-        // 通知挪进 try 作为首语句（通知仍在计数变化之后，语义不变）。
+        // 而是发生后 finally 必须仍然跑——这正是 try 存在的意义）。串行线程登记同样留在 try 内作首段：
+        // 若插在 increment 与 try 之间，computeIfAbsent/add 抛 Error 时 inFlight 已增而 finally 未挂上——
+        // 正是该纪律要封的泄漏窗口。故 increment 紧贴 onSubagentStarted 之后、登记 + 通知挪进 try 作为首段
+        // （通知仍在计数变化之后，语义不变）。
         inFlight.incrementAndGet();   // 进入在飞（finally 递减）——喂给 UI busy 闸门，取消后仍未清的旧子 agent 会挡住 /continue
         try {
+            // 登记串行执行线程：cancelTurn 据此 interrupt（限额等待的 Thread.sleep 立即抛）。
+            Set<Thread> threads = serialThreadsByTurn
+                    .computeIfAbsent(parentTurnId, k -> ConcurrentHashMap.newKeySet());
+            threads.add(Thread.currentThread());
             publish(changed());       // 计数变化之后、锁外；异常隔离（不打断下面的执行与 finally 收尾）
             // 子 agent 内部工具事件带上 parentTurnId + taskId（供 TUI 缩进）
             String finalText = execute(spec, prompt,
@@ -252,6 +266,11 @@ public final class SubagentRunner implements UiChangeSource {
             listener.onSubagentFinished(parentTurnId, taskId, "子 agent 执行失败：" + detail, false);
             throw new SubagentFailedException(detail, ex);
         } finally {
+            // 原子摘除本线程；该 turn 再无串行 run 则连 key 一起清（消掉 remove/checkEmpty 两步竞态，与 runAll 池摘除同款）。
+            serialThreadsByTurn.computeIfPresent(parentTurnId, (k, set) -> {
+                set.remove(Thread.currentThread());
+                return set.isEmpty() ? null : set;   // remapping 返回 null 即删除 entry，防泄漏
+            });
             inFlight.decrementAndGet();   // 无论成功/失败/被中断（shutdownNow → interrupt → 网络调用抛出）都退出在飞
             publish(changed());           // 锁外发布：闸门解除必须让 UI 看到，否则 /continue 永久排队
         }
@@ -272,9 +291,24 @@ public final class SubagentRunner implements UiChangeSource {
      */
     private String execute(SubagentSpec spec, String prompt, Map<String, Object> toolContext) {
         ProviderRegistry.RequestSelection selection = resolveSelection(spec);
-        ChatClient client = ChatClient.builder(RetryingChatModel.wrap(selection.provider().chatModel()),
-                ObservationRegistry.NOOP, null, null,
-                ToolCallingAdvisor.builder().toolCallingManager(TurnToolLimitWiring.create()))
+        // quota 桥（spec §3.4.4）：前台（turnId ≥ 0）转 listener 进 UI ⏳ 行；后台（turnId=-1，见
+        // runBackgroundBody）的 -1 会穿透 ConversationState 空闲态过滤（acceptingTurnId==-1）打进空闲界面——
+        // 丢弃 UI 上报只留日志。
+        long turnId = toolContext.get(ToolEventCallback.TURN_ID_KEY) instanceof Long l ? l : -1L;
+        String taskId = String.valueOf(toolContext.get(ToolEventCallback.TASK_ID_KEY));
+        RetryPolicy.QuotaWaitHook quotaHook = (waitMs, resetAtEpochMs, reason) -> {
+            if (turnId < 0) {
+                // 后台子 agent：-1 会穿透 ConversationState 空闲态过滤（acceptingTurnId==-1），
+                // 打进空闲界面——丢弃 UI 上报只留日志（spec §3.4.4）。
+                log.info("后台子 agent 限额等待（taskId={}）：{}ms 后重试", taskId, waitMs);
+                return;
+            }
+            listener.onQuotaWaitScheduled(turnId, resetAtEpochMs, "子任务 " + reason);
+        };
+        ChatClient client = ChatClient.builder(
+                        RetryingChatModel.wrap(selection.provider().chatModel(), quotaHook),
+                        ObservationRegistry.NOOP, null, null,
+                        ToolCallingAdvisor.builder().toolCallingManager(TurnToolLimitWiring.create()))
                 .defaultTools(effectiveTools(spec).toArray())
                 .build();
         ChatOptions options = selection.options();
@@ -353,18 +387,26 @@ public final class SubagentRunner implements UiChangeSource {
     }
 
     /**
-     * 取消某回合的所有在飞并行子 agent：对该 turn 名下每个线程池 {@code shutdownNow}（中断工作线程）。
-     * <b>立即返回、不 awaitTermination</b>——保证调用方（Esc 回合取消）快速回 IDLE，与 runAll 的中断语义一致。
+     * 取消某回合的所有在飞子 agent。并行：对该 turn 名下每个线程池 {@code shutdownNow}（中断工作线程）；
+     * 串行：经 {@link #serialThreadsByTurn} 登记 + 对执行线程 interrupt。<b>立即返回、不 awaitTermination</b>——
+     * 保证调用方（Esc 回合取消）快速回 IDLE，与 runAll 的中断语义一致。
      * 被中断的子 agent 的迟到会话/UI 写入由 {@code CodingAgent} 的出站净化与 {@code ConversationState} 的 turnId
-     * 过滤兜底。未知 turn（无在飞并行任务）为静默无操作。串行 run() 无池、无法强制打断，靠出站净化 + busy 闸门兜底。
+     * 过滤兜底。未知 turn（无在飞任务）为静默无操作。
      */
     public void cancelTurn(long parentTurnId) {
         Set<ExecutorService> turnPools = poolsByTurn.get(parentTurnId);
-        if (turnPools == null) {
-            return;
+        if (turnPools != null) {
+            for (ExecutorService pool : turnPools) {
+                pool.shutdownNow();
+            }
         }
-        for (ExecutorService pool : turnPools) {
-            pool.shutdownNow();
+        // 串行子 agent（限额等待长睡的 Thread.sleep 响应 interrupt → sleeper 抛 RuntimeException 杀循环）。
+        // best-effort：若线程恰在网络 IO，interrupt 标志位置位、下次 sleep 立即抛——与并行池语义一致。
+        Set<Thread> serials = serialThreadsByTurn.get(parentTurnId);
+        if (serials != null) {
+            for (Thread t : serials) {
+                t.interrupt();
+            }
         }
     }
 
