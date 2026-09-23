@@ -346,6 +346,13 @@ public final class CodeTuiView extends InlineApp {
     private final Map<Integer, String> imagePlaceholders = new HashMap<>();
     /** 下一个占位符编号；随草稿清空复位——每条消息都从 [IMAGE1] 重新计。 */
     private int nextPlaceholderNo = 1;
+    // ── 长文本占位符（[TEXT1]，与 [IMAGEn] 同套路）──────────────────────
+    // 贴大段日志（>400 字符或 >12 行）时输入框只放 [TEXT1]——否则输入框随行数无限增高、
+    // 把整个界面顶飞（实报：贴日志后「整个输入框就显示是个问题」）。全文登记在这里，
+    // 提交时展开还原给模型（同 Claude Code 的 pasted text 折叠）。
+    private final Map<Integer, String> textPlaceholders = new HashMap<>();
+    /** 下一个长文本编号；随草稿清空复位——每条消息都从 [TEXT1] 重新计（与图片编号独立）。 */
+    private int nextTextNo = 1;
 
     /** 斜杠命令（自动补全 + 分发）。 */
     private record SlashCommand(String name, String desc) {}
@@ -1576,8 +1583,9 @@ public final class CodeTuiView extends InlineApp {
             // 终端拖图即粘贴，且不保证与已有文字之间有空白。整段粘贴全是可识别图片路径时
             // 占位符化：文本只插 [IMAGE1]（路径太长，贴几张就糊成一片），真实路径进映射，
             // 识别与提交时展开（见 attachments() / expandImagePlaceholders）。
-            // 多 token（Finder 多选拖多张）各占一个编号；普通文本/代码粘贴原样交给编辑器。
-            String pasted = event.text();
+            // 多 token（Finder 多选拖多张）各占一个编号；超长普通文本折叠成 [TEXT1]（见
+            // shouldCollapsePaste）；其余粘贴原样交给编辑器。
+            String pasted = normalizePasteText(event.text());
             List<String> tokens = ImageAttachmentDetector.tokenize(pasted);
             ImageAttachmentDetector.Result detected = imageDetector.detectWithOverflow(pasted, root);
             int imageCount = detected.images().size() + detected.overflow();
@@ -1589,15 +1597,28 @@ public final class CodeTuiView extends InlineApp {
                     imagePlaceholders.put(no, token);   // tokenize 产物已去转义，登记后可直接复用
                     ph.append("[IMAGE").append(no).append(']');
                 }
-                String line = inputState.getLine(inputState.cursorRow());
-                int col = inputState.cursorCol();
-                boolean left = col > 0 && !Character.isWhitespace(line.charAt(col - 1));
-                boolean right = col < line.length() && !Character.isWhitespace(line.charAt(col));
-                event = new PasteEvent((left ? " " : "") + ph + (right ? " " : ""));
+                event = spacedPasteEvent(ph.toString());
+            } else if (shouldCollapsePaste(pasted)) {
+                // 长文本折叠：全文登记、只插 [TEXTn]。输入框高度随行数自动增高，几千行日志
+                // 会把面板全顶出屏幕；折叠后框里恒为一小段可编辑标记（同 Claude Code）。
+                event = spacedPasteEvent(registerTextPlaceholder(pasted));
             }
             EventResult r = inputKeys.handlePasteEvent(event);      // 多行粘贴
             publishLocalViewChange();   // 粘贴改文本：附件行/菜单结构可能变（本地状态，无 Agent 事件）
             return r;
+        }
+
+        /**
+         * 生成在光标处插入单个 token（{@code [IMAGE1]} / {@code [TEXT1]}）的粘贴事件：
+         * 两侧按需补一个空格——占位符与已有文字粘连（{@code 看[TEXT1]图}）既难读，
+         * 也会让正则之外的消费方把路径/标记和正文粘成同一个词。
+         */
+        private PasteEvent spacedPasteEvent(String token) {
+            String line = inputState.getLine(inputState.cursorRow());
+            int col = inputState.cursorCol();
+            boolean left = col > 0 && !Character.isWhitespace(line.charAt(col - 1));
+            boolean right = col < line.length() && !Character.isWhitespace(line.charAt(col));
+            return new PasteEvent((left ? " " : "") + token + (right ? " " : ""));
         }
 
         @Override
@@ -1772,18 +1793,106 @@ public final class CodeTuiView extends InlineApp {
         return out.toString();
     }
 
+    // ── 长文本占位符（[TEXT1]）：判定 / 归一 / 展开 / 附件行提示 ──────────
+
+    /**
+     * 粘贴文本是否超长到应折叠成 {@code [TEXTn]}：阈值与回显折叠共用同一判定
+     * （{@link ConversationState#overEchoFoldThreshold}，&gt;400 字符或 &gt;12 行）——
+     * 同一条消息，输入框折叠了而回显不折（或反之）会显得精神分裂。纯函数。
+     */
+    static boolean shouldCollapsePaste(String text) {
+        return ConversationState.overEchoFoldThreshold(text);
+    }
+
+    /** 占位符词法：{@code [TEXT1]}，编号十进制。残缺标记不匹配 → 当普通文本（同 [IMAGEn]）。 */
+    private static final java.util.regex.Pattern TEXT_PLACEHOLDER =
+            java.util.regex.Pattern.compile("\\[TEXT(\\d++)]");
+
+    /**
+     * 粘贴文本归一：{@code CRLF} 与裸 {@code CR} 一律折成 {@code LF}。
+     *
+     * <p>为什么必须在这里做：{@code TextAreaState.insert} 只认 {@code \n} 作换行，
+     * {@code \r} 会以<b>不可见字面字符</b>落进输入框并原样发给模型（复制自 Windows
+     * 风格输出/部分 IDE 控制台的日志常带 CR）——既毁显示也污染正文。
+     */
+    static String normalizePasteText(String text) {
+        if (text == null || text.indexOf('\r') < 0) return text;
+        return text.replace("\r\n", "\n").replace('\r', '\n');
+    }
+
+    /**
+     * 把输入文本里的 {@code [TEXTn]} 展开成登记的全文，<b>不加任何包裹</b>。
+     *
+     * <p>与 {@link #expandImagePlaceholders} 的差异：图片展开物要过附件识别器（按空白
+     * 切词，路径须双引号包裹）；文本展开物直接进发给模型的正文，包引号反而是污染。
+     * 未登记的编号与残缺标记一律原样保留（用户手打的 [TEXT2] 是普通文本），最可预测。
+     */
+    static String expandTextPlaceholders(String text, Map<Integer, String> placeholders) {
+        if (text == null || text.isEmpty() || placeholders == null || placeholders.isEmpty()) {
+            return text;
+        }
+        java.util.regex.Matcher m = TEXT_PLACEHOLDER.matcher(text);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String full = placeholders.get(Integer.parseInt(m.group(1), 10));
+            String rep = full != null ? full : m.group(0);
+            m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(rep));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    /**
+     * 输入框下方那行的「长文本折叠」提示段；无折叠段时为空串。
+     *
+     * <p><b>必须说清段数与总量</b>：折叠静默发生的话，用户不知道将发出去的是几十 KB
+     * 日志（他看到的只是 [TEXT1]）。千字以上按 {@code 3.2K} 计——提示行是一行，数字
+     * 不能比信息本身长。{@code inputText} 里已删除的占位符不计（映射还在但没被引用）。
+     */
+    static String textFoldLine(String inputText, Map<Integer, String> placeholders) {
+        if (inputText == null || inputText.isEmpty()
+                || placeholders == null || placeholders.isEmpty()) {
+            return "";
+        }
+        java.util.regex.Matcher m = TEXT_PLACEHOLDER.matcher(inputText);
+        int segments = 0;
+        long chars = 0;
+        while (m.find()) {
+            String full = placeholders.get(Integer.parseInt(m.group(1), 10));
+            if (full != null) {
+                segments++;
+                chars += full.length();
+            }
+        }
+        if (segments == 0) return "";
+        StringBuilder b = new StringBuilder("  ⏎ 已折叠 ").append(segments).append(" 段长文本（共约 ");
+        if (chars >= 1000) {
+            b.append(String.format("%.1fK", chars / 1000.0));
+        } else {
+            b.append(chars);
+        }
+        return b.append(" 字）").toString();
+    }
+
     /** 该画在输入框下方的那一行；空串=不画（也不占高度）。 */
     private String attachmentLineText() {
         ImageAttachmentDetector.Result r = attachments();
+        String image;
         if (r.images().isEmpty()) {
             // 没图可取消时顺手复位取消态：用户把路径删掉再重新写一条，理应重新附上。
             // 不复位的话，一次 Ctrl+X 会连累同一段草稿里之后写的所有路径，而用户看不出原因。
             attachmentsCancelled = false;
-            return "";
+            image = "";
+        } else {
+            image = attachmentsCancelled
+                    ? attachmentLineCancelled()
+                    : attachmentLine(r.images().size(), r.overflow(), r.images().get(0).name());
         }
-        return attachmentsCancelled
-                ? attachmentLineCancelled()
-                : attachmentLine(r.images().size(), r.overflow(), r.images().get(0).name());
+        // 长文本折叠提示与图片附件行共用这一行（都是「输入框下方一行」的位置语义）；
+        // 两段都有时用 · 连接——再多信息也绝不撑到第二行（println 会把多行塌成一行截断）。
+        String fold = textFoldLine(inputState.text(), textPlaceholders);
+        if (image.isEmpty()) return fold;
+        return fold.isEmpty() ? image : image + " · " + fold.strip();
     }
 
     // ── 附件兑现：识别结果 → [file reference] 块 ───────────────────────────
@@ -1979,7 +2088,14 @@ public final class CodeTuiView extends InlineApp {
             state.cancelCurrent();
             state.clearQueued();                         // 取消时一并清空排队消息
             if (!refill.isEmpty()) {
-                inputState.setText(String.join("\n", refill));
+                // 回填的插话是<b>展开后</b>的全文（提交时 [TEXTn] 已还原）：超长条目必须
+                // 重新折叠登记，否则取消一次就把几千行日志灌回输入框、界面再次被顶飞。
+                StringBuilder b = new StringBuilder();
+                for (String s : refill) {
+                    if (b.length() > 0) b.append('\n');
+                    b.append(shouldCollapsePaste(s) ? registerTextPlaceholder(s) : s);
+                }
+                inputState.setText(b.toString());
                 inputState.moveCursorToEnd();            // 光标落在文末：用户多半要接着改一改重发
             }
             state.setNotice(running || dropped > 0
@@ -2203,6 +2319,16 @@ public final class CodeTuiView extends InlineApp {
         return EventResult.UNHANDLED;             // 字母/退格 → 交给编辑器改前缀，菜单随之过滤
     }
 
+    /**
+     * 登记一段超长文本并返回其占位符（{@code [TEXTn]}）。编号随登记自增；复位只发生在
+     * {@link #clearInput}（随草稿消亡）。Esc 回填路径也走这里（对取回的展开全文重新折叠）。
+     */
+    private String registerTextPlaceholder(String fullText) {
+        int no = nextTextNo++;
+        textPlaceholders.put(no, fullText);
+        return "[TEXT" + no + ']';
+    }
+
     /** 光标紧跟在一个反斜杠之后（行尾 {@code \} + Enter 用作换行的判定）。 */
     private boolean cursorAfterBackslash() {
         int cr = inputState.cursorRow(), cc = inputState.cursorCol();
@@ -2221,10 +2347,12 @@ public final class CodeTuiView extends InlineApp {
     private void clearInput() {
         inputState.clear();
         attachmentsCancelled = false;
-        // 占位符随草稿一起消亡：映射清空 + 编号复位——下一条消息又从 [IMAGE1] 重新计，
+        // 占位符随草稿一起消亡：映射清空 + 编号复位——下一条消息又从 [IMAGE1]/[TEXT1] 重新计，
         // 否则编号一路涨，[IMAGE5] 对不上一条消息里的任何东西。
         imagePlaceholders.clear();
         nextPlaceholderNo = 1;
+        textPlaceholders.clear();
+        nextTextNo = 1;
     }
 
     /**
@@ -2383,6 +2511,9 @@ public final class CodeTuiView extends InlineApp {
                 state.setNotice("用法：/queue <消息> — 排到下一回合再发");
                 return;
             }
+            // 排队也是提交：[TEXTn] 必须现在展开——出队发出去的是存进队列的文本，那时
+            // 输入框早已清空、映射已复位，占位符将永远等不到展开（模型只看到字面 [TEXT1]）。
+            body = expandTextPlaceholders(body, textPlaceholders);
             clearInput();
             releaseBrake();
             String queuedSkill = pendingSkill;       // 一次性：同普通提交，取走挂载
@@ -2413,7 +2544,11 @@ public final class CodeTuiView extends InlineApp {
                     + " 不支持图片输入，用 /model 换一个（输入已保留）");
             return;
         }
-        String effective = injectAttachments(text, attached, root);
+        // 长文本占位符在此展开（必须在 injectAttachments 之前、全部斜杠命令之后）：
+        // 模型要的是全文，而输入框/历史里保留 [TEXTn] 短形态。历史（addHistory 在方法开头、
+        // 记的是 text）因此存占位符形态——↑ 回溯不会把几千行日志重新灌回输入框。
+        String expanded = expandTextPlaceholders(text, textPlaceholders);
+        String effective = injectAttachments(expanded, attached, root);
 
         clearInput();
         String skill = pendingSkill;                 // 一次性：本条消息取走挂载

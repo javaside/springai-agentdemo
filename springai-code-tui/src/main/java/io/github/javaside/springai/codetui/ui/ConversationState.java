@@ -682,10 +682,57 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         synchronized (this) {
             if (turnId != acceptingTurnId) return;
             pending.add(new OutputLine("", OutputLine.Kind.ASSISTANT));   // 回合间留白，分隔更清晰
-            pending.add(new OutputLine("› " + text, OutputLine.Kind.USER));   // 保留 › 提示符，去掉「你」
+            // 回显折叠：发给模型的可能是展开后的全文（粘贴 [TEXTn] 在提交时还原），照登会
+            // 把几千行日志从输入框挪到 scrollback 继续刷屏。HistoryReplay 用户块同规则。
+            pending.add(new OutputLine("› " + foldUserEcho(text), OutputLine.Kind.USER));   // 保留 › 提示符，去掉「你」
             change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
         }
         publish(change);
+    }
+
+    // ── 用户消息回显折叠（与 CodeTuiView 粘贴折叠同一阈值口径）──────────
+
+    /** 回显折叠阈值（字符）：与粘贴折叠 {@code CodeTuiView.shouldCollapsePaste} 对齐。 */
+    static final int ECHO_FOLD_CHARS = 400;
+    /** 回显折叠阈值（行）：与粘贴折叠对齐——同一条消息，两边口径不同会显得精神分裂。 */
+    static final int ECHO_FOLD_LINES = 12;
+    /** 预览的字符上限：单行超长（没有换行可截）时「前两行」等于整行，必须再按字符截断。 */
+    private static final int ECHO_PREVIEW_CHAR_CAP = 160;
+
+    /**
+     * 用户消息回显的折叠形态：超长（&gt;{@link #ECHO_FOLD_CHARS} 字符或
+     * &gt;{@link #ECHO_FOLD_LINES} 行）→ 前 2 行（合计再按 {@link #ECHO_PREVIEW_CHAR_CAP}
+     * 截断）+ 末行折叠标记；否则原样返回。{@code null} 原样透传。
+     *
+     * <p>回显只影响显示，<b>永不改发给模型的文本</b>（那是 {@code CodeTuiView.submitInput}
+     * 的事）；标记必须带全文行数——用户得知道被折掉的是 30 行还是 3000 行。
+     */
+    static String foldUserEcho(String text) {
+        if (text == null || !overEchoFoldThreshold(text)) return text;
+        int totalLines = 1;
+        int secondNl = -1;
+        int seen = 0;
+        for (int i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) {
+            totalLines++;                    // 数完所有行：标记里的「全文 N 行」必须是真值
+            if (++seen == 2) secondNl = i;   // 不 break——记下第二行行尾后继续数总数
+        }
+        String preview = secondNl >= 0 ? text.substring(0, secondNl) : text;
+        // 单行超长没有第二个换行：preview=整行，须按字符截断（保留前缀 + 省略号）
+        if (preview.length() > ECHO_PREVIEW_CHAR_CAP) {
+            preview = preview.substring(0, ECHO_PREVIEW_CHAR_CAP) + "…";
+        }
+        return preview + "\n…（已折叠，全文 " + totalLines + " 行）";
+    }
+
+    /** 超过回显/粘贴折叠阈值（字符或行数）的判定；null/空返回 false。纯函数。 */
+    static boolean overEchoFoldThreshold(String text) {
+        if (text == null || text.isEmpty()) return false;
+        if (text.length() > ECHO_FOLD_CHARS) return true;
+        int lines = 1;
+        for (int i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) {
+            if (++lines > ECHO_FOLD_LINES) return true;
+        }
+        return false;
     }
 
     @Override

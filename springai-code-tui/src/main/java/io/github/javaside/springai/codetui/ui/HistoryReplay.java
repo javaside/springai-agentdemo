@@ -47,8 +47,10 @@ final class HistoryReplay {
                     // 插话的 [interjection] 包裹同理，且更要紧：里面那段是<b>给模型的行为指引</b>，
                     // 不剥就成了「用户说过这句话」（拆包裹与包裹同住 InterjectionText）。
                     // 单行 OutputLine 即可——userBlock 自身按 \n 拆行、软折（与实时同路径）。
-                    out.add(new OutputLine("› " + stripFileReferences(
-                            stripSkillInstruction(InterjectionText.unwrap(safe(m.getText())))), Kind.USER));
+                    // 超长用户块与实时 onUserMessage 同规则折叠（foldUserEcho）：重开会话回放
+                    // 照登全文的话，粘贴折叠只是把刷屏从当时挪到了重开之后。
+                    out.add(new OutputLine("› " + ConversationState.foldUserEcho(stripFileReferences(
+                            stripSkillInstruction(InterjectionText.unwrap(safe(m.getText()))))), Kind.USER));
                 }
                 case ASSISTANT -> {
                     String text = m.getText();

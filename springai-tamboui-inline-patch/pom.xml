@@ -12,7 +12,7 @@
 
     <artifactId>springai-tamboui-inline-patch</artifactId>
     <name>springai-tamboui-inline-patch</name>
-    <description>TamboUI 0.4.0 行内显示差分渲染兼容层</description>
+    <description>TamboUI 0.4.0 行内显示差分渲染兼容层；另 shadow EventParser（括号粘贴静默预算，防大粘贴拆分/自动发送）</description>
 
     <dependencies>
         <dependency>
@@ -29,6 +29,18 @@
         <dependency>
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-tui</artifactId>
+        </dependency>
+        <!--
+          EventParser 粘贴批量快路径编译依赖（org.jline.utils.NonBlockingReader.readBuffered）。
+          版本与 tamboui-jline3-backend 0.4.0 的传递依赖一致（org.jline:jline:3.25.1）；
+          scope=provided：运行期由部署方（code-tui）的 classpath 提供同一 jar，不重复打包。
+          升级 tamboui 时须同步核对此版本。
+        -->
+        <dependency>
+            <groupId>org.jline</groupId>
+            <artifactId>jline</artifactId>
+            <version>3.25.1</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
