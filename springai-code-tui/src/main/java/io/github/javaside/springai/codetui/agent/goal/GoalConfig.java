@@ -8,8 +8,9 @@ import org.slf4j.LoggerFactory;
 /**
  * /goal 循环的可调参数（CODETUI_* env 解析 + 钳制）。
  *
- * <p>解析纪律照 {@code LlmTimeouts}：null/空白→默认；{@code Integer.parseInt(raw.trim())}；
- * 双向钳制 {@code Math.max(MIN, Math.min(MAX, v))}；NumberFormatException→默认值 + warn。
+ * <p>解析纪律照 {@code LlmTimeouts}：null/空白→默认；{@code Long.parseLong(raw.trim())} 解析后
+ * 双向钳制 {@code Math.max(MIN, Math.min(MAX, v))}（超出上下界的巨值被钳到 MIN/MAX，而非报错）；
+ * NumberFormatException→默认值 + warn。
  * env 读取经 {@link #from(Function)} 注入以便测试，不碰真实进程环境。
  */
 public record GoalConfig(int maxTurns, int stalledLimit, long tokenBudget, int turnGapSeconds,
@@ -39,9 +40,14 @@ public record GoalConfig(int maxTurns, int stalledLimit, long tokenBudget, int t
 
     public GoalConfig {
         Objects.requireNonNull(evaluatorModel, "evaluatorModel");
-        if (maxTurns < 1 || stalledLimit < 1 || turnGapSeconds < 0 || errorRetry < 0
-                || evalFailLimit < 1 || protocolFailLimit < 1 || evalTimeoutSeconds < 5
-                || tokenBudget < 0) {
+        if (maxTurns < MIN_MAX_TURNS || maxTurns > MAX_MAX_TURNS
+                || stalledLimit < MIN_STALLED_LIMIT || stalledLimit > MAX_STALLED_LIMIT
+                || tokenBudget < 0
+                || turnGapSeconds < MIN_TURN_GAP || turnGapSeconds > MAX_TURN_GAP
+                || errorRetry < MIN_ERROR_RETRY || errorRetry > MAX_ERROR_RETRY
+                || evalFailLimit < MIN_EVAL_FAIL_LIMIT || evalFailLimit > MAX_EVAL_FAIL_LIMIT
+                || protocolFailLimit < MIN_PROTOCOL_FAIL_LIMIT || protocolFailLimit > MAX_PROTOCOL_FAIL_LIMIT
+                || evalTimeoutSeconds < MIN_EVAL_TIMEOUT || evalTimeoutSeconds > MAX_EVAL_TIMEOUT) {
             throw new IllegalArgumentException("goal config 越界");
         }
     }

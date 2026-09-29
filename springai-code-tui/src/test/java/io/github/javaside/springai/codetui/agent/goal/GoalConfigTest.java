@@ -63,4 +63,22 @@ class GoalConfigTest {
         GoalConfig c = GoalConfig.from(name -> "CODETUI_GOAL_MAX_TURNS".equals(name) ? "abc" : null);
         assertEquals(25, c.maxTurns());
     }
+
+    @Test
+    void rejectsValuesAboveUpperBound() {
+        // maxTurns 201 > MAX_MAX_TURNS(200)
+        assertThrows(IllegalArgumentException.class,
+                () -> new GoalConfig(201, 3, 0, 3, 2, 2, 3, 60, ""));
+        // evalTimeoutSeconds 301 > MAX_EVAL_TIMEOUT(300)，另一字段超界
+        assertThrows(IllegalArgumentException.class,
+                () -> new GoalConfig(25, 3, 0, 3, 2, 2, 3, 301, ""));
+    }
+
+    @Test
+    void acceptsValuesAtUpperBound() {
+        GoalConfig c = new GoalConfig(200, 10, 5_000_000L, 60, 10, 10, 10, 300, "");
+        assertEquals(200, c.maxTurns());
+        assertEquals(60, c.turnGapSeconds());
+        assertEquals(300, c.evalTimeoutSeconds());
+    }
 }
