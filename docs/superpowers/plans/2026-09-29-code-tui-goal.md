@@ -429,17 +429,20 @@ git commit -m "feat(code-tui): goal 协议解析器+合成标记——取末 VER
 **Interfaces:**
 - Consumes: Task 1-2 全部类型；`io.github.javaside.springai.codetui.ui.update.{UiChangeSource,UiChangeListener,UiDirty}`；`agent.session.TokenUsageAccumulator`。
 - Produces（后续 Task 4/5/8/9/10/11 依赖，签名钉死）:
-  - `GoalManager(GoalConfig config, TokenUsageAccumulator usage)`（构造注入；`usage` 可 null=预算永不清算）
-  - `void activate(String condition)`——空白拒绝（IllegalStateException 或静默+notice 由 View 预判，Manager 侧 `Objects.requireNonNull` + `isBlank` 抛 `IllegalArgumentException`）；替换旧 goal（epoch 失效在途评估）；RUNNING；`autoTurnPending=true`（首轮）。
+  - `GoalManager(GoalConfig config, TokenUsageAccumulator usage)`（构造注入；`usage` 可 null=预算永不清算）——委托包私有 `GoalManager(GoalConfig, TokenUsageAccumulator, java.time.Clock clock)`（测试拨表用，倒计时 deadline 的生成与判定统一走 clock；生产构造传 `Clock.systemDefaultZone()`）。
+  - `void activate(String condition)`——空白**或超 4000 字符**抛 `IllegalArgumentException`（View 预判转 notice，不静默截断用户意图）；替换旧 goal（epoch 失效在途评估）；RUNNING；`autoTurnPending=true`（首轮）。
   - `void clear(String via)`——CLEARED 终态；INACTIVE 时 no-op。
-  - `void pauseByEsc()`——RUNNING→PAUSED(ESC)；PAUSED→CANCELLED（两级 Esc）。
-  - `void pause(PauseReason reason)`、`void terminate(GoalPhase terminal)`（内部+包内）。
-  - `void onUserDispatch()`——PAUSED 任意原因→RUNNING + 对应计数重置；RUNNING 时重置 stalled streak（真实用户输入）。
+  - `void pauseByEsc()`——RUNNING→PAUSED(ESC)（**清 autoTurnPending/gapDeadline**，取消待发轮）；PAUSED(ESC)→CANCELLED（两级 Esc）。
+  - `void pause(PauseReason reason)`、`void terminate(GoalPhase terminal)`（内部+包内；pause 同样清 pending/gapDeadline）。
+  - `void onUserDispatch()`——PAUSED 任意原因→RUNNING + 对应计数重置；**并清 autoTurnPending/gapDeadline**（用户插话使挂起的自动轮与旧 verdict 作废——spec §5.2「挂起 verdict 单槽」）。**不置 pending**：用户轮结束后 goal 槽照常发起评估（评估输入含该轮插话原文），verdict 再决定下一自动轮。
   - `long currentEpoch()`（= goalId，activate 时递增）。
   - `boolean hasAutoTurnPending()`、`String takeAutoTurn()`（UI 线程空闲批调用：置 `turnsUsed+1`、预算复检、清 pending/deadline；熔断则进终态并返回 null）、`Long gapDeadlineEpochMs()`。
+  - `boolean evaluationInFlight()`（锁内读，goal 槽防重复发起）。
   - `GoalPhase phase()`、`GoalStateSnapshot snapshot()`。
+  - `void bindSession(SessionService sessionService, java.util.function.Supplier<String> sessionIdSupplier)`（Task 9 由 CodingAgent 两段式调用；均 null 时评估结论不落库）。
   - `implements UiChangeSource`：`setUiChangeListener` / `uiVersion()`。
   - 终态单调：一切 `onVerdict`/`onTurnError`/迟到事件在 `phase().isTerminal()` 时 no-op。
+  - `record GoalEvalTrace(int turn, String verdict, String reason)`——`GoalStateSnapshot` 的嵌套类型（面板轨迹行）。
 
 - [ ] **Step 1: 写状态机转移表失败测试**
 
@@ -473,9 +476,10 @@ class GoalManagerStateTest {
     }
 
     @Test
-    void blankConditionRejected() {
+    void blankAndOversizeConditionRejected() {
         GoalManager gm = new GoalManager(cfg(), null);
         assertThrows(IllegalArgumentException.class, () -> gm.activate("   "));
+        assertThrows(IllegalArgumentException.class, () -> gm.activate("x".repeat(4001)));
         assertEquals(GoalPhase.INACTIVE, gm.phase());   // 无状态变更
     }
 
@@ -491,13 +495,16 @@ class GoalManagerStateTest {
     }
 
     @Test
-    void pausedResumesOnUserDispatch() {
+    void pausedResumesOnUserDispatchWithoutPending() {
         GoalManager gm = new GoalManager(cfg(), null);
         gm.activate("g");
         gm.pause(PauseReason.STALLED);
         gm.onUserDispatch();
         assertEquals(GoalPhase.RUNNING, gm.phase());
-        assertTrue(gm.hasAutoTurnPending());           // 用户消息触发的轮结束后由 goal 槽接续
+        // 用户轮结束后先评估该轮（评估输入含插话），再由 verdict 决定下一轮——
+        // 所以这里不得有 pending 自动轮：
+        assertFalse(gm.hasAutoTurnPending());
+        assertNull(gm.gapDeadlineEpochMs());
     }
 
     @Test
@@ -579,9 +586,9 @@ public final class GoalManager implements UiChangeSource {
 
     public void activate(String condition) {
         if (condition == null || condition.isBlank()) throw new IllegalArgumentException("goal 条件为空");
+        if (condition.length() > 4000) throw new IllegalArgumentException("goal 条件超 4000 字符（当前 " + condition.length() + "）");
         long version;
         synchronized (this) {
-            if (condition.length() > 4000) condition = condition.substring(0, 4000);
             this.condition = condition;
             this.epoch = goalIds.incrementAndGet();
             this.phase = GoalPhase.RUNNING;
@@ -633,10 +640,11 @@ git commit -m "feat(code-tui): GoalManager 状态机——epoch 防陈旧/终态
 **Interfaces:**
 - Consumes: `TokenUsageAccumulator.snapshot()`（执行前先读 `CT/agent/session/TokenUsageAccumulator.java` L34-71 确认 `Snapshot` 访问器名，本计划按 `promptTokens()/completionTokens()` 书写）。
 - Produces（View/Runner 依赖）:
-  - `long beginEvaluation()`——CAS 置在飞：锁内 `phase==RUNNING && !evalInFlight` 时置位返回 epoch，否则 -1。
-  - `void endEvaluation(long epoch)`——finally 复位（epoch 不符也复位自己那代）。
-  - `void onVerdict(long epoch, GoalVerdict v)`——epoch 不符丢弃；SATISFIED/IMPOSSIBLE→终态；UNSATISFIED→记录+置 gapDeadline（turnGapSeconds>0）或 autoTurnPending；stalled streak 更新。
-  - `void onEvaluationFailure(long epoch, Throwable t)`——EVALUATOR 计数（超时同归此）。
+  - `long beginEvaluation()`——CAS 置在飞：锁内 `phase==RUNNING && !evalInFlight && !autoTurnPending` 时置位返回 epoch，否则 -1（有 pending 自动轮时先发轮、不评估）；置位同时**锁存当前 dispatchSerial**。
+  - **回调即终点契约**（替代 begin/end 配对）：`onVerdict(epoch, v)` / `onEvaluationFailure(epoch, t)` / `onProtocolFailure(epoch, raw)` 三回调在 `epoch == currentEpoch() && dispatchSerial 未变` 时**自清 evalInFlight 并正常处理**；epoch 不符（旧代迟到）或 **serial 不符（评估在飞期间用户插话——spec §5.2「挂起 verdict 单槽」：插话改变上下文，旧判断过期）**则丢弃判定但若 epoch 相符仍清自己的在飞标志（好让下一空闲批重评）；`activate()` 换代时重置 `evalInFlight=false`。无独立 `endEvaluation`。
+  - dispatchSerial：内部计数器，`onUserDispatch()` 与 `takeAutoTurn()` 各 +1（一次轮对话一次变化）；语义 =「评估输入所见的最后对话边界」。
+  - `void onVerdict(long epoch, GoalVerdict v)`——epoch 不符丢弃；SATISFIED/IMPOSSIBLE→终态；UNSATISFIED→更新 stalled streak（达 limit → PAUSED(STALLED)），**否则恒置 `autoTurnPending=true`**，gap>0 时同时置 `gapDeadlineEpochMs`（now+gap）、gap=0 置 null——pending 恒真 + deadline 只负责延迟，绝不允许「pending=false 等 deadline 叫醒」的断流形态。
+  - `void onEvaluationFailure(long epoch, Throwable t)`——EVALUATOR 计数（超时/调用异常同归此）。
   - `void onProtocolFailure(long epoch, String rawOutput)`——PROTOCOL 计数（先按 UNSATISFIED+stalled 记一轮）。
   - `void onTurnError(Throwable rootCause)`——`EmptyStreamException` 根因不计（交评估器判 stalled）；CancellationException 不计（Esc 取消）；其余 errorStreak+1，达 `errorRetry+1` 连续 → PAUSED(ERROR)。
   - `void onTurnCompleted()`——errorStreak 清零（成功重置）。
@@ -675,9 +683,13 @@ class GoalManagerFuseTest {
         // 同时预算超限+轮数耗尽：决策点先判预算 → BUDGET_EXCEEDED（spec §7 优先级 CANCEL/CLEAR > BUDGET > MAX_TURNS > …）
         // terminate(CANCELLED) 优先于一切迟到判定
     }
-    @Test void beginEndEvaluationCasPairing() {
-        // beginEvaluation 两次：第二次 -1（在飞）；endEvaluation 后可再 begin
-        // epoch 变更后 begin 返回新 epoch
+    @Test void beginEvaluationCasAndCallbacksSelfClear() {
+        // beginEvaluation 两次：第二次 -1（在飞）；onVerdict 回调后 evalInFlight 复原、可再 begin
+        // epoch 变更后 begin 返回新 epoch；旧代回调（onVerdict(oldEpoch,...)）不清新代的在飞标志
+    }
+    @Test void interjectionDuringEvalInvalidatesVerdictBySerial() {
+        // begin 评估（serial 锁存）→ onUserDispatch()（serial+1）→ onVerdict(epoch, UNSATISFIED)
+        // → 判定丢弃（无 pending）、evalInFlight 已清（可再 begin 重评）——epoch 未变，纯 serial 失效
     }
 }
 ```
@@ -692,7 +704,8 @@ mvn -pl springai-code-tui -am test -Dtest=GoalManagerFuseTest -Dsurefire.failIfN
 - [ ] **Step 3: 实现熔断逻辑**
 
 要点（全部在既有锁内改、锁外 publish 的方法体内展开）：
-- `onVerdict`：`synchronized` 内先 `if (epoch != this.epoch || phase.isTerminal()) return;`；SATISFIED/IMPOSSIBLE → `terminateLocked(...)` + `lastSummary = verdict.reason()`；UNSATISFIED → `stalledStreak = v.stalled() ? +1 : 0`、达 limit → `pauseLocked(STALLED)`；否则 `gapDeadlineEpochMs = turnGapSeconds>0 ? now+gap*1000 : null`、`autoTurnPending = turnGapSeconds==0`。
+- `onVerdict`：`synchronized` 内先 `if (epoch != this.epoch || phase.isTerminal()) return;`（旧代迟到不动当前代 evalInFlight）；随后**先清 evalInFlight**（回调即终点）；SATISFIED/IMPOSSIBLE → `terminateLocked(...)` + `lastSummary = verdict.reason()`；UNSATISFIED → `stalledStreak = v.stalled() ? streak+1 : 0`、达 limit → `pauseLocked(STALLED)`；**否则恒 `autoTurnPending = true`，`gapDeadlineEpochMs = turnGapSeconds>0 ? clock.millis()+gap*1000 : null`**（stateLedger 更新为 v.stateLedger() 非空者）。
+- `onEvaluationFailure`/`onProtocolFailure`：同构——epoch 校验 → 清 evalInFlight → 对应计数（达限 `pauseLocked(...)`）。
 - `onTurnError`：终态/`epoch 过期`不动作；`unwrapRoot(err) instanceof EmptyStreamException` 或 `CancellationException` → return；`errorStreak++ >= errorRetry+1` → PAUSED(ERROR)。
 - `budgetExceeded()`：`config.tokenBudget()==0 || usage==null` → false；`spent = (p-baseP)+(c-baseC) >= budget`。
 - `takeAutoTurn` 决策点顺序：`phase!=RUNNING → null`；`budgetExceeded() → terminate(BUDGET_EXCEEDED)`；`turnsUsed+1 > maxTurns → terminate(MAX_TURNS)`；其余放行（**软超限口径**：在飞轮放行到轮末，判定只在决策点）。
@@ -938,7 +951,10 @@ GoalConfig goalConfig = GoalConfig.fromEnv();
 GoalManager goalManager = new GoalManager(goalConfig, usageAccumulator);
 GoalEvaluationRunner goalRunner = new GoalEvaluationRunner(goalConfig);
 ```
-`build(..., goalManager)` 传入；`view` 构造后（见 Task 10 改造后的签名）接线；app 退出路径 `goalRunner.close()`。
+接线顺序（**View 构造零改动**——View 经 Task 9 的 SubmitHandler default 方法取用）：
+1. `build(..., goalManager)` 第 7 参传入 → `runtime.goalManager()`；
+2. `new CodingAgent(...)` 之后、与 `AgentTools.wireL1(runtime, agent)` 并排：`agent.bindGoal(goalManager, goalRunner, ChatClientGoalEvaluator.create(registry, goalConfig));`
+3. app 退出路径 `goalRunner.close()`（照既有 close 钩子位置）。
 
 - [ ] **Step 4: 跑 `GoalWiringTest` + 既有 `AgentRuntimeTest` 全绿**（record 加组件会迫使全参构造调用点更新——只有 build 一处，兼容重载不受影响）
 
@@ -956,8 +972,8 @@ GoalEvaluationRunner goalRunner = new GoalEvaluationRunner(goalConfig);
 **Interfaces:**
 - Consumes: `GoalManager`（Task 3-5）；`sessionService.getEvents(sid)`（oldest-first）；`InterjectionText.OPEN` 前缀过滤（HistoryReplay L118-126 先例）；`EmptyStreamException`（`CT/agent/llm/`，RetryingStreamChatModel 抛出）。
 - Produces:
-  - `CodingAgent.bindGoal(GoalManager goalManager, GoalEvaluationRunner runner, GoalEvaluator evaluator)`——包内两段式（照 `AgentTools.wireL1` L1000-1003 先例），内部 `goalManager.bindSession(sessionService, () -> this.sessionId)`（lambda 在 agent 包内可访问包私有 `sessionId()` L1217）。
-  - `SubmitHandler` 加 default：`default GoalTurnMaterial collectGoalMaterial() { return null; }` + `default GoalManager goal() { return null; }`（View 经 `onSubmit.goal()` 拿 manager——CodeTuiView 不新增构造参数，测试桩零改动）。
+  - `CodingAgent.bindGoal(GoalManager goalManager, GoalEvaluationRunner runner, GoalEvaluator evaluator)`——包内两段式（照 `AgentTools.wireL1` L1000-1003 先例），内部 `goalManager.bindSession(sessionService, () -> this.sessionId)`（lambda 在 agent 包内可访问包私有 `sessionId()` L1217）；三个依赖存可空字段。
+  - `SubmitHandler` 加四个 default（**View 唯一取用口，测试桩零改动**）：`default GoalManager goal() { return null; }`、`default GoalEvaluationRunner goalRunner() { return null; }`、`default GoalEvaluator goalEvaluator() { return null; }`、`default GoalTurnMaterial collectGoalMaterial() { return null; }`——CodingAgent 各自覆写返回绑定字段。
   - `handleError`（L1338-1343）加 `goalManager.onTurnError(rootCauseOf(err))`；`handleComplete`（L1345-1352）加 `goalManager.onTurnCompleted()`（均 null 守卫）。
   - `clearContext`（L1124-1138）加 `if (goalManager != null) goalManager.clear("clear-context");`。
 
@@ -1059,12 +1075,12 @@ class CodeTuiViewGoalCommandTest {
 - [ ] **Step 3: 实现**
 
 - `COMMANDS` 加 `new SlashCommand("/goal", "设定/查看目标循环（/goal stop 清除）")`。
-- `submitInput` 加分支（放 `/continue` 分支旁）：
+- `submitInput` 加分支（放 `/continue` 分支旁；参数切分照 `/queue` 先例 L2507-2508——`cmd` 是整行 strip 后文本）：
 
 ```java
-if (cmd.equals("/goal")) {
+if (cmd.equals("/goal") || cmd.startsWith("/goal ")) {
     clearInput();
-    handleGoalCommand(rawInputText().substring(cmd.length()).strip());   // 余文
+    handleGoalCommand(cmd.substring("/goal".length()).strip());   // 余文（照 /queue 的 body 切分）
     return;
 }
 ```
@@ -1081,11 +1097,17 @@ private void handleGoalCommand(String rest) {
         state.pushInfo("◎ goal 已清除：" + before.condition());
         return;
     }
-    if (state.permissionMode() == PermissionMode.DEFAULT) {
+    if (rest.length() > 4000) { state.setNotice("条件超 4000 字符（当前 " + rest.length() + "），请精简"); return; }
+    if (onSubmit.permissionMode() == PermissionMode.DEFAULT) {   // 访问器在 SubmitHandler 上（L3587 先例）
         state.pushInfo("（提示：当前权限档位为 DEFAULT，循环会停下等批准；建议 Shift+Tab 切到 ACCEPT_EDITS/BYPASS。）");
     }
-    gm.activate(rest);                     // 状态立即立起；首轮由空闲批 goal 槽发出（忙碌时同样成立）
-    state.pushInfo("◎ goal 已设定（" + gm.snapshot().turnsUsed() + "/" + gm.snapshot().maxTurns() + "）：" + rest);
+    try {
+        gm.activate(rest);                     // 状态立即立起；首轮由空闲批 goal 槽发出（忙碌时同样成立）
+    } catch (IllegalArgumentException e) {
+        state.setNotice(e.getMessage());       // 空/超长条件：Manager 抛、View 转 notice
+        return;
+    }
+    state.pushInfo("◎ goal 已设定（上限 " + gm.snapshot().maxTurns() + " 轮）：" + rest);
 }
 ```
 - `statusLine()`：在既有 modeTag 拼接点前取 `goalLeadingSpan()`（`snapshot()` 一次读齐），照 `withLeading(leading, ...)` 先例插入；倒计时态文本 `state.formatQuotaRemaining(deadline - now)`（State L1390-400 既有静态，复用）。
@@ -1104,8 +1126,8 @@ private void handleGoalCommand(String rest) {
 - Test: `CTT/ui/CodeTuiViewGoalSlotTest.java`
 
 **Interfaces:**
-- Consumes: `processUpdatesInsideBatch`（L901-1003，goal 槽插在 `state.pollQueued()` 出队之后、`deliverBackgroundResults()` 之前）；`busy()`（L2601）；输入框 Esc 分支（L2078-2106）与 `cancelTurnFor`（L3256-3262）；`animationDemandActive()`（L1120-1124）；`onSubmit.collectGoalMaterial()`（Task 9）；Runner/Evaluator（经 `onSubmit` 桩或测试直接注入 View 的包内字段）。
-- Produces: 私有 `boolean goalSlotTick()`（本批 dispatch 了自动轮则 true）；私有 `void goalOnEsc()`（统一两级 Esc 挂点，输入框 Esc 与 `cancelTurnFor` 都调它）。
+- Consumes: `processUpdatesInsideBatch`（L901-1003，goal 槽插在 `state.pollQueued()` 出队之后、`deliverBackgroundResults()` 之前）；`busy()`（L2601）；输入框 Esc 分支（L2078-2106）与 `cancelTurnFor`（L3256-3262）；`animationDemandActive()`（L1120-1124）；`onSubmit.collectGoalMaterial()` / `onSubmit.goalRunner()` / `onSubmit.goalEvaluator()`（Task 9 default 方法）。
+- Produces: 私有 `boolean goalSlotTick()`（本批 dispatch 了自动轮则 True）；私有 `void goalOnEsc()`（统一两级 Esc 挂点，输入框 Esc 与 `cancelTurnFor` 都调它）；私有 `void goalNoticeIfTransitioned()`（spec §3.4——对比上次快照 phase，变迁进终态/PAUSED 时 `state.pushInfo` 一行式总结「◎ goal 终态：SATISFIED — reason（N/M，token x/y）」/「◎ goal 已暂停（STALLED）：reason」，在 `processUpdatesInsideBatch` 顶部调用，与 dirty bits 无关靠快照差分）。
 
 - [ ] **Step 1: 写失败测试（用可放行 fake evaluator：CompletableFuture 手动 complete）**
 
@@ -1137,6 +1159,12 @@ class CodeTuiViewGoalSlotTest {
         // 自动轮在飞（state 置 THINKING）→ Esc 键 → gm PAUSED(ESC)、notice "已暂停，发送任意消息继续"
         // 再 Esc → CANCELLED 终态
         // cancelTurnFor 路径（审批"中断本回合"）→ 同样 PAUSED(ESC)
+        // EVALUATING/倒计时中 Esc（IDLE 态，现有取消逻辑空转）→ 同走 goalOnEsc → PAUSED(ESC)
+    }
+    @Test void terminalAndPauseTransitionsPrintOneLineSummary() {
+        // fake verdict SATISFIED → drain → pushInfo 断言 "◎ goal 终态：SATISFIED"（含 reason/N/M/token）
+        // stalled 刹车 → drain → "◎ goal 已暂停（STALLED）"
+        // 重复 drain 不重复打印（快照差分）
     }
     @Test void pausedResumesOnUserMessage() {
         // PAUSED(STALLED) → dispatch 用户消息 → gm RUNNING；该轮结束 → goal 槽接续评估
@@ -1165,23 +1193,21 @@ private boolean goalSlotTick() {
         Long deadline = gm.gapDeadlineEpochMs();
         if (deadline != null && System.currentTimeMillis() < deadline) return false;  // 倒计时中，动画帧再看
         String prompt = gm.takeAutoTurn();
-        if (prompt == null) return false;             // 决策点熔断（终态已进），notice 由 manager publish 驱动
+        if (prompt == null) return false;             // 决策点熔断（终态已进），总结由 goalNoticeIfTransitioned 驱动
         dispatch(prompt, null);                       // UI 线程空闲批 dispatch——红线
         return true;
     }
     if (gm.phase() == GoalPhase.RUNNING && !gm.evaluationInFlight()) {
-        long epoch = gm.beginEvaluation();
+        long epoch = gm.beginEvaluation();            // 锁内 CAS：RUNNING && !evalInFlight && !autoTurnPending
         if (epoch < 0) return false;
-        try {
-            GoalTurnMaterial m = onSubmit.collectGoalMaterial();
-            gm.recordTurnMaterial(m);
-            goalRunner.submit(epoch, goalEvaluator, gm.buildEvaluationInput(),
-                    v -> gm.onVerdict(epoch, v),                      // executor 线程→锁内改锁外 publish
-                    ex -> {
-                        if (ex instanceof GoalVerdict.GoalProtocolException pe) gm.onProtocolFailure(epoch, pe.getMessage());
-                        else gm.onEvaluationFailure(epoch, ex);
-                    });
-        } finally { /* begin/end 配对：submit 已异步化，endEvaluation 不在此处 */ }
+        GoalTurnMaterial m = onSubmit.collectGoalMaterial();
+        gm.recordTurnMaterial(m);
+        onSubmit.goalRunner().submit(epoch, onSubmit.goalEvaluator(), gm.buildEvaluationInput(),
+                v -> gm.onVerdict(epoch, v),                           // executor 线程→锁内改锁外 publish
+                ex -> {                                                // 回调即终点：三个入口自清 evalInFlight
+                    if (ex instanceof GoalVerdict.GoalProtocolException pe) gm.onProtocolFailure(epoch, pe.getMessage());
+                    else gm.onEvaluationFailure(epoch, ex);
+                });
         // 评估在飞不算"本批一个动作"（无 dispatch），可继续 deliverBackgroundResults
     }
     return false;
@@ -1200,7 +1226,7 @@ private void goalOnEsc() {
     else if (p == GoalPhase.PAUSED && gm.snapshot().pauseReason() == PauseReason.ESC) gm.pauseByEsc();  // 第二级
 }
 ```
-（PAUSED(STALLED/ERROR/…) 中 Esc 不升级取消——spec §3.3 第二级仅针对 ESC 暂停；其余暂停态 Esc 保持既有输入框行为。）
+（PAUSED(STALLED/ERROR/…) 中 Esc 不升级取消——spec §3.3 第二级仅针对 ESC 暂停；其余暂停态 Esc 保持既有输入框行为。`goalOnEsc` 第一级覆盖 RUNNING 的全部子态——自动轮在飞/EVALUATING/倒计时——因为 Manager 侧 phase 只有 RUNNING/PAUSED 两档活跃态；`pauseByEsc()` 自带清 pending/gapDeadline（Task 3 契约）。）
 
 - [ ] **Step 4: 跑测试确认通过 + 全模块回归**
 
@@ -1233,7 +1259,7 @@ mvn -pl springai-code-tui -am test
 
 - [ ] **Step 2: 跑测试确认失败（先装置后逐场景）**
 
-- [ ] **Step 3: 补齐实现缺口直到 6 场景全绿**（预期 Task 3-11 已覆盖逻辑，此处主要钉接线；发现缺口回补对应类并补单测）*
+- [ ] **Step 3: 补齐实现缺口直到 6 场景全绿**（预期 Task 3-11 已覆盖逻辑，此处主要钉接线；发现缺口回补对应类并补单测）
 
 - [ ] **Step 4: 全模块回归** `mvn -pl springai-code-tui -am test`
 
@@ -1277,7 +1303,7 @@ private void appendEvaluationEvent(String verdictLine, String reason) {
 ```
 （`SessionService` 若无 appendEvent 门面则经 `sessionRepository.appendEvent`——执行时看 `DefaultSessionService` 暴露面，二选一，测试钉住落库形状。）
 
-HistoryReplay：`userTurns` 过滤加 `!safe(m.getText()).startsWith(GoalText.CONTINUE_PREFIX_RAW)`（"[goal 继续"）；`toReplayLines` 的 USER 分支前加：`startsWith(GoalText.EVAL_OPEN)` → 渲一行 `Kind.INFO`（"◎ goal 评估：<内容>"）不重放正文；`replayHistory` 头部检测任一 goal 痕迹 → 追加一行 `pushInfo("上次会话有未完成 goal，已失效")`。
+HistoryReplay：`userTurns` 过滤加 `!GoalText.isContinueMessage(safe(m.getText()))`（自动轮不计对话轮数）；`toReplayLines` 的 USER 分支前加两支：`GoalText.isContinueMessage(t)` 与 `t.startsWith(GoalText.EVAL_OPEN)` → 各渲一行 `Kind.INFO`（"◎ goal 继续（N/M）"/"◎ goal 评估：<内容 unwrap>"）不重放正文；`replayHistory` 头部检测任一 goal 痕迹 → 追加一行 `pushInfo("上次会话有未完成 goal，已失效")`。
 
 - [ ] **Step 2: 跑 ⑦–⑭ + 全模块回归** `mvn -pl springai-code-tui -am test`
 
@@ -1301,5 +1327,14 @@ CODETUI_GOAL_EVALUATOR_MODEL=<智谱providerId>:<modelId> java -cp "$(cat target
 
 - **Spec 覆盖**：§3.1-3.4 命令面/状态栏/Esc/通知 → Task 10-13；§4 两份 prompt → Task 5/6；§5 架构与状态机 → Task 3-8；§6 评估器 → Task 6-7；§7 熔断矩阵+优先级 → Task 4（单测）+12/13（集成）；§8 权限 → Task 10（DEFAULT 档提示）；§9 配置 → Task 1；§10 涉及文件 → 全部映射（`CodingAgent` 门面简化为"GoalManager 直接持有 accumulator"，spec 原文"暴露 usage 完整 snapshot 门面"由构造注入达成——Snapshot 本就含 completionTokens）；§11 测试策略 → Task 1-13 逐层；§12 实现顺序 → Task 顺序一致。
 - **与 spec 的三处偏差（已论证）**：① 构造实为 23 参非 22（红线不变）；② 忙碌时首轮不 enqueue 而置 `autoTurnPending` 走 goal 槽（队列语义干净，行为等价）；③ 空回复（EmptyStreamException）现状走 onError，由 `onTurnError` 根因豁免实现"不算 onError"口径。
-- **类型一致性**：`GoalManager` 方法名在 Task 3/4/9/10/11 间已对齐（activate/clear/pauseByEsc/onUserDispatch/beginEvaluation/endEvaluation/onVerdict/onEvaluationFailure/onProtocolFailure/onTurnError/onTurnCompleted/collectGoalMaterial(SubmitHandler)/hasAutoTurnPending/takeAutoTurn/gapDeadlineEpochMs/currentEpoch/phase/snapshot/goal()）。
+- **类型一致性**：`GoalManager` 方法名在 Task 3/4/9/10/11 间已对齐（activate/clear/pauseByEsc/onUserDispatch/beginEvaluation/onVerdict/onEvaluationFailure/onProtocolFailure/onTurnError/onTurnCompleted/collectGoalMaterial(SubmitHandler)/goal()/goalRunner()/goalEvaluator()/hasAutoTurnPending/takeAutoTurn/gapDeadlineEpochMs/evaluationInFlight/currentEpoch/phase/snapshot/bindSession）。
+- **复审修正（2026-09-29 二次审核，8 处）**：
+  1. 【死锁】onVerdict 曾写 `autoTurnPending = turnGapSeconds==0`——gap>0 时 pending 永假、无人唤醒 → 改为恒真 + deadline 只延迟（Task 4）。
+  2. 【流程】onUserDispatch 曾置 pending=true——用户轮结束会被跳过评估直接发自动轮 → 改为清 pending，评估先行（Task 3）。
+  3. 【断链】View 取 runner/evaluator 无路径 → SubmitHandler 四 default（goal/goalRunner/goalEvaluator/collectGoalMaterial）+ CodeTuiApplication bindGoal 接线顺序钉死（Task 8/9）。
+  4. 【契约】begin/end 配对改为"回调即终点 + dispatchSerial 锁存校验"——同代插话靠 serial 作废旧 verdict（spec §5.2 单槽），epoch 只管换代（Task 4）。
+  5. 【漏接】spec §3.4 终态/暂停一行式总结无接线 → goalNoticeIfTransitioned 快照差分（Task 11）。
+  6. 【API】`rawInputText()` 为臆造 → `/queue` 式 `cmd.startsWith("/goal ")` 切分；`state.permissionMode()` → `onSubmit.permissionMode()`（Task 10）。
+  7. 【类型】GoalEvalTrace 补定义、CONTINUE_PREFIX_RAW 改用 isContinueMessage（Task 3/13）。
+  8. 【口径】4000 字符上限由静默截断改为拒绝 + notice（Task 3/10）；Clock 注入构造补齐（Task 3/11 拨表测试）。
 - **已知执行期核对点**（非占位符，执行时以代码为准）：TokenUsageAccumulator.Snapshot 访问器名（Task 4）；SessionService 是否暴露 appendEvent（Task 13）；Prompt.getToolCallbacks 断言形态随 Spring AI 版本（Task 6）。
