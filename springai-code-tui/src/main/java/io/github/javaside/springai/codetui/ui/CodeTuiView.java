@@ -11,9 +11,14 @@ import io.github.javaside.springai.codetui.agent.seam.PlanOutcome;
 import io.github.javaside.springai.codetui.agent.seam.PlanRequest;
 import io.github.javaside.springai.codetui.agent.seam.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
 import io.github.javaside.springai.codetui.agent.goal.GoalManager;
 import io.github.javaside.springai.codetui.agent.goal.GoalPhase;
 import io.github.javaside.springai.codetui.agent.goal.GoalStateSnapshot;
+import io.github.javaside.springai.codetui.agent.goal.GoalTurnMaterial;
+import io.github.javaside.springai.codetui.agent.goal.GoalVerdict;
+import io.github.javaside.springai.codetui.agent.goal.PauseReason;
 import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
@@ -470,6 +475,16 @@ public final class CodeTuiView extends InlineApp {
     private void bindChangeSources() {
         state.setUiChangeListener(coordinator);
         onSubmit.setUiChangeListener(coordinator);
+        // goal 状态机第三路（Task 11）：评估回调跑在 goal-evaluator executor 线程上、只调
+        // GoalManager（自身线程安全，红线）——它经 UiChangeSource 锁外 publish 回 UI 线程，
+        // 本条绑定就是那条回路的最后一跳。没它的话 verdict 后的待发轮/终态要等下一次
+        // 用户按键才有批来消费（空闲态没有别的唤醒源），自主循环会静默卡死。
+        // 生产装配里 bindGoal 早于 View 构造（CodeTuiApplication wireGoal → new CodeTuiView），
+        // 此处 goal() 非 null；桩未装配时降级为不绑。
+        GoalManager gm = onSubmit.goal();
+        if (gm != null) {
+            gm.setUiChangeListener(coordinator);
+        }
     }
 
     /** 队列出口 → 留底 sink + 终端（构造时固定；物理行已折好；留底记录折行前原文，见构造器注释）。 */
@@ -691,6 +706,8 @@ public final class CodeTuiView extends InlineApp {
         //    解绑不等于丢数据——业务数据仍在 state/队列里，只是没有 UI 在听了。
         state.setUiChangeListener(null);
         onSubmit.setUiChangeListener(null);
+        GoalManager gm = onSubmit.goal();          // goal 回路同批解绑（评估回调迟到发布不再进已停 coordinator）
+        if (gm != null) gm.setUiChangeListener(null);
         // 3) 关闭本 View 持有的执行设施（context-usage 单飞池 + 按需任务 scheduler）。
         contextUsageExecutor.shutdownNow();
         updateScheduler.shutdownNow();
@@ -904,6 +921,7 @@ public final class CodeTuiView extends InlineApp {
     private static final int MAX_BATCH_FAILURE_RETRIES = 2;
 
     private UiUpdateCoordinator.UpdateResult processUpdatesInsideBatch(int dirtyBits) {
+        goalNoticeIfTransitioned();   // goal 快照差分（spec §3.4）：终态/暂停一行式总结，与 dirty bits 无关
         lastDirtyBitsForFlag = dirtyBits;   // computeFollowUpFlags 的 context-usage 判据
         processedBatches.incrementAndGet();
         // 动画帧计数：每批自增一次。忙态下批由动画帧 timer 驱动（每 ~66ms 一批，Task 8），
@@ -993,16 +1011,22 @@ public final class CodeTuiView extends InlineApp {
             List<String> leftover = onSubmit.takePendingInterjections();
             if (!leftover.isEmpty()) {
                 releaseBrake();
+                goalUserDispatch();          // 插话兜底出队也是用户的对话边界（语义同 releaseBrake：双处对齐）
                 dispatch(String.join("\n", leftover), null);
                 return computeFollowUpFlags();   // 本批已提交：后台送达让到下一批（用户排的队优先）
             }
             ConversationState.Queued next = state.pollQueued();
             if (next != null) {
                 releaseBrake();              // 用户的真实输入：重置自动回合刹车
+                goalUserDispatch();          // 排队消息出队=到达模型：goal 恢复 RUNNING + 记对话边界
                 dispatch(next.text(), next.skill());
                 return computeFollowUpFlags();   // 本批已提交：后台送达让到下一批
             }
-            deliverBackgroundResults();
+            if (goalSlotTick()) {            // ← goal 槽（Task 11）：评估启动或自动轮 dispatch
+                return computeFollowUpFlags();   // 本批已 dispatch 自动轮：后台送达让到下一批（红线：每批一个自动动作）
+            }
+            goalNoticeIfTransitioned();      // 槽内决策点熔断（takeAutoTurn→MAX_TURNS/BUDGET_EXCEEDED）当批清算：
+            deliverBackgroundResults();      //   终态后动画帧停摆，顶部那一次可能等不到下一批
         }
         return computeFollowUpFlags();
     }
@@ -1115,17 +1139,34 @@ public final class CodeTuiView extends InlineApp {
     }
 
     /**
-     * 是否仍有「动着的状态」需要动画帧：忙（回合/压缩）或后台任务在跑。
+     * 是否仍有「动着的状态」需要动画帧：忙（回合/压缩）、后台任务在跑，或 goal 倒计时未到期（Task 11）。
      *
      * <p>Task 8 已接线（fix round M-5 预留点）：{@code computeFollowUpFlags} 每批尾调用
      * {@code coordinator.updateAnimationDemand(animationDemandActive(), ANIMATION_FRAME_DELAY)}
      * ——active 时保持至多一个在飞的 66ms 一次性帧任务（到期 publish VIEW，下一批续排），
      * 静止时立即取消。空闲静态界面没有动画 timer。
+     *
+     * <p>goal 倒计时（Task 11）是第三条活跃链：verdict 放行待发轮后状态机已回空闲、deadline
+     * 在未来——没有这条，批会停在这里，deadline 永远等不到「下一帧再看」。66ms 帧每拍跑一个
+     * 批，goalSlotTick 现算 deadline（到期即派发），同时 {@code goalLeadingSpan} 的 ⏳ 数字
+     * 逐帧现算跳动（Task 10 的渲染在本帧驱动下活起来）。
      */
     private boolean animationDemandActive() {
         return !state.isIdle() || state.isCompacting()
                 || state.backgroundRunningCount() > 0
-                || onSubmit.hasInFlightSubagents();
+                || onSubmit.hasInFlightSubagents()
+                || goalCountdownActive();
+    }
+
+    /**
+     * goal 倒计时是否仍在走（deadline 现算）：挂起的自动轮在等 gap 到期。
+     * 评估在飞<b>不算</b>——「评估中」是静态等待（verdict 的 publish 自会唤醒批），无须帧驱动。
+     */
+    private boolean goalCountdownActive() {
+        GoalManager gm = onSubmit.goal();
+        if (gm == null) return false;
+        Long deadline = gm.gapDeadlineEpochMs();
+        return deadline != null && System.currentTimeMillis() < deadline;
     }
 
     /** computeFollowUpFlags 读到的本批 dirty bits（context-usage 判据用）。 */
@@ -1304,6 +1345,8 @@ public final class CodeTuiView extends InlineApp {
         ctxUsageController.stop();
         state.setUiChangeListener(null);
         onSubmit.setUiChangeListener(null);
+        GoalManager gm = onSubmit.goal();
+        if (gm != null) gm.setUiChangeListener(null);
         contextUsageExecutor.shutdownNow();
         updateScheduler.shutdownNow();
     }
@@ -2107,6 +2150,7 @@ public final class CodeTuiView extends InlineApp {
                     ? "已取消当前回合" + (dropped > 0 ? "，丢弃 " + dropped + " 条排队" : "")
                             + (refill.isEmpty() ? "" : "，插话已放回输入框")
                     : "");
+            goalOnEsc();                         // goal 两级 Esc（Task 11）：真实转移才覆写上面的通用提示
             return EventResult.HANDLED;
         }
         boolean isEnter = k.code() == KeyCode.ENTER || k.isChar('\r') || k.isChar('\n');
@@ -2526,6 +2570,7 @@ public final class CodeTuiView extends InlineApp {
             body = expandTextPlaceholders(body, textPlaceholders);
             clearInput();
             releaseBrake();
+            goalUserDispatch();                  // 与 releaseBrake 同位（用户提交即对话边界）
             String queuedSkill = pendingSkill;       // 一次性：同普通提交，取走挂载
             pendingSkill = null;
             if (busy()) state.enqueue(body, queuedSkill);
@@ -2567,7 +2612,8 @@ public final class CodeTuiView extends InlineApp {
         // 自动回合无限套娃」，人一开口就说明这个前提不成立了。必须挂在提交上而不是每次按键——
         // 挂按键则用户随手一个方向键就把刹车松开，等于没有刹车。
         releaseBrake();
-        ConversationState.SubmissionSnapshot snapshot = state.submissionSnapshot();
+        goalUserDispatch();                      // goal 同位挂钩（Task 11）：PAUSED→RUNNING、清挂起轮/倒计时、
+        ConversationState.SubmissionSnapshot snapshot = state.submissionSnapshot();   // 推对话边界使在飞评估过期（spec §5.2）
         boolean subagentsInFlight = onSubmit.hasInFlightSubagents();
         SubmissionRoute route = submissionRoute(snapshot, subagentsInFlight, skill);
         if (route != SubmissionRoute.DISPATCH) {
@@ -2708,6 +2754,136 @@ public final class CodeTuiView extends InlineApp {
     private static String humanElapsed(Instant from) {
         long ms = Math.max(0, Duration.between(from, Instant.now()).toMillis());
         return ms == 0 ? "0s" : ConversationState.formatQuotaRemaining(ms);
+    }
+
+    // ── goal 空闲批槽 + 评估调度 + 两级 Esc + 一行式总结（Task 11） ──────────
+
+    /**
+     * goal 槽的一拍（只在 UI 线程空闲批调用，{@code processUpdatesInsideBatch} 的 {@code !busy()}
+     * 段、排队用户消息之后、后台结果送达之前）：评估启动或自动轮 dispatch。
+     *
+     * <p><b>UI 线程纪律红线</b>：自动轮 dispatch 只发生在这里（UI 线程空闲批）——评估回调跑在
+     * goal-evaluator executor 线程上、只调 {@code GoalManager}（自身线程安全），它经
+     * {@code UiChangeSource} publish 回 UI 线程产生下一批，绝不反向触碰 View 的
+     * {@code current}/{@code lastShownModel}。每批最多一个自动动作：本方法返回
+     * {@code true}（dispatch 了自动轮）时调用方立即 return，后台结果让到下一批。
+     *
+     * <p>槽位顺序（spec §5）：插话 &gt; 排队用户消息 &gt; <b>goal 槽</b> &gt; 后台结果——
+     * 用户的排队消息插队会让 goal 顺延一批，这正是「用户排的队优先」。
+     *
+     * @return true = 本批已 dispatch 自动轮（调用方须立即收批）
+     */
+    private boolean goalSlotTick() {
+        GoalManager gm = onSubmit.goal();
+        if (gm == null) return false;
+        if (gm.hasAutoTurnPending()) {
+            Long deadline = gm.gapDeadlineEpochMs();
+            if (deadline != null && System.currentTimeMillis() < deadline) {
+                return false;                // 倒计时中：等下一动画帧再看（animationDemandActive 已保持帧链）
+            }
+            String prompt = gm.takeAutoTurn();
+            if (prompt == null) return false;    // 决策点熔断（预算/轮数→终态）：总结由 goalNoticeIfTransitioned 驱动
+            dispatch(prompt, null);              // UI 线程空闲批 dispatch——红线
+            return true;
+        }
+        if (gm.phase() == GoalPhase.RUNNING && !gm.evaluationInFlight()) {
+            GoalEvaluationRunner runner = onSubmit.goalRunner();
+            GoalEvaluator evaluator = onSubmit.goalEvaluator();
+            if (runner == null || evaluator == null) return false;   // 三件套未装配齐：评估无从发起
+            long epoch = gm.beginEvaluation();   // 锁内 CAS：RUNNING && !evalInFlight && !autoTurnPending
+            if (epoch < 0) return false;
+            GoalTurnMaterial material = onSubmit.collectGoalMaterial();
+            gm.recordTurnMaterial(material != null ? material : new GoalTurnMaterial("", 0, null));
+            try {
+                // Runner 契约（Task 7）：回调恰一次、异常剥壳原样送达（CompletionException 已 unwrap），
+                // 故此处按原始类型分流协议失败与调用失败。回调即终点：三个入口各自自清在飞标志。
+                runner.submit(epoch, evaluator, gm.buildEvaluationInput(),
+                        v -> gm.onVerdict(epoch, v),                     // executor 线程→锁内改锁外 publish
+                        ex -> {
+                            if (ex instanceof GoalVerdict.GoalProtocolException pe) {
+                                gm.onProtocolFailure(epoch, pe.getMessage());
+                            } else {
+                                gm.onEvaluationFailure(epoch, ex);
+                            }
+                        });
+            } catch (RuntimeException e) {
+                // 池已关（退出竞态，RejectedExecutionException 等）：按调用失败收账，自清在飞标志不留悬挂
+                gm.onEvaluationFailure(epoch, e);
+            }
+            // 评估在飞不算「本批一个动作」（无 dispatch），调用方可继续 deliverBackgroundResults
+        }
+        return false;
+    }
+
+    /**
+     * goal 两级 Esc（spec §3.3）：RUNNING（自动轮在飞/评估中/倒计时中）→ PAUSED(ESC)（第一级，
+     * 取消待发轮与倒计时）；PAUSED(ESC) → CANCELLED（第二级）。PAUSED 非 ESC 不升级、
+     * INACTIVE/终态 no-op——两级判定与转移全部在 {@code pauseByEsc()} 内，这里只负责把
+     * <b>真实发生的转移</b>翻译成输入框上方的可见提示（未转移时不动既有 notice）。
+     *
+     * <p>挂两处：输入框 Esc 分支（用户正面按 Esc）与 {@code cancelTurnFor} 尾部（模态「中断本回合」
+     * 同为叫停手势）。在飞轮本身的取消仍由既有取消路径完成，第一级暂停只接管 goal 状态机侧。
+     */
+    private void goalOnEsc() {
+        GoalManager gm = onSubmit.goal();
+        if (gm == null) return;
+        GoalPhase before = gm.phase();
+        gm.pauseByEsc();
+        GoalPhase after = gm.phase();
+        if (after == before) return;             // no-op：不打扰既有提示（「已取消当前回合」等）
+        if (after == GoalPhase.PAUSED) {
+            state.setNotice("◎ goal 已暂停，发送任意消息继续");
+        } else if (after.isTerminal()) {
+            state.setNotice("◎ goal 已取消");
+        }
+    }
+
+    /** goal 上次快照相位 / 暂停原因（goalNoticeIfTransitioned 的差分基线）。只在 UI 线程（批内）读写。 */
+    private GoalPhase lastGoalPhase;
+    private PauseReason lastGoalPauseReason;
+
+    /**
+     * goal 变迁一行式总结（spec §3.4）：对比上次快照的 phase/pauseReason，变迁进<b>终态</b>或
+     * <b>PAUSED</b> 时 {@code pushInfo} 一行进 scrollback——
+     * <ul>
+     *   <li>终态：{@code ◎ goal 终态：SATISFIED — reason（N/M，token x/y）}；</li>
+     *   <li>暂停：{@code ◎ goal 已暂停（STALLED）：reason}。</li>
+     * </ul>
+     * 与 dirty bits 无关，纯靠快照差分（评估回调改状态机 → publish 唤醒批 → 这里看到差分），
+     * 重复调用不重复打印。挂在批顶（每批一次）；goalSlotTick 的决策点熔断（takeAutoTurn 进终态）
+     * 发生在批中，故槽后还有一次补算——终态后动画帧停摆，只靠批顶那次可能要等下一次用户输入。
+     */
+    private void goalNoticeIfTransitioned() {
+        GoalManager gm = onSubmit.goal();
+        if (gm == null) return;
+        GoalStateSnapshot s = gm.snapshot();
+        GoalPhase phase = s.phase();
+        PauseReason reason = s.pauseReason();
+        boolean changed = phase != lastGoalPhase || !java.util.Objects.equals(reason, lastGoalPauseReason);
+        lastGoalPhase = phase;
+        lastGoalPauseReason = reason;
+        if (!changed) return;
+        if (phase.isTerminal()) {
+            String summary = s.lastSummary();
+            String stats = "（" + s.turnsUsed() + "/" + s.maxTurns()
+                    + "，token " + s.tokenSpent() + (s.tokenBudget() > 0 ? "/" + s.tokenBudget() : "") + "）";
+            state.pushInfo("◎ goal 终态：" + phase.name()
+                    + (summary.isEmpty() ? "" : " — " + summary) + stats);
+        } else if (phase == GoalPhase.PAUSED && reason != null) {
+            String summary = s.lastSummary();
+            state.pushInfo("◎ goal 已暂停（" + reason + "）" + (summary.isEmpty() ? "" : "：" + summary));
+        }
+    }
+
+    /**
+     * 用户消息即将送达模型（dispatch / 插话提交 / 排队出队）：goal 侧记一次对话边界。
+     * 与 {@code releaseBrake} 同位同况——它挂在用户提交处，本方法与它一一配对
+     * （{@link GoalManager#onUserDispatch}：PAUSED→RUNNING、重置熔断计数、清挂起轮与倒计时、
+     * 推进 dispatchSerial 使在飞评估的判定过期）。INACTIVE/终态 no-op。
+     */
+    private void goalUserDispatch() {
+        GoalManager gm = onSubmit.goal();
+        if (gm != null) gm.onUserDispatch();
     }
 
 
@@ -3349,6 +3525,7 @@ public final class CodeTuiView extends InlineApp {
         state.cancelCurrent();
         state.clearQueued();
         state.setNotice(notice);
+        goalOnEsc();                         // 模态中断也是用户叫停：goal 同走两级 Esc 语义（Task 11）
     }
 
     /** 清作答态并从 state 的模态队列摘除该问询（避免 UI 批再次进入）。 */
