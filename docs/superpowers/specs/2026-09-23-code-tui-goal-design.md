@@ -1,7 +1,7 @@
 # code-tui /goal 功能设计（MVP）
 
 - 日期：2026-09-23
-- 状态：待评审
+- 状态：已批准·已实现（计划：docs/superpowers/plans/2026-09-29-code-tui-goal.md）
 - 参考：Claude Code `/goal`（v2.1.139+）、OpenAI Codex `/goal`（v0.128+）
 - 前置评审：三路 subagent 审核（架构代码验证 / 产品对标 / 熔断矩阵与测试），修订已并入本文
 

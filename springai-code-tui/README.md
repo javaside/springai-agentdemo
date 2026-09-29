@@ -99,6 +99,7 @@ export DEEPSEEK_API_KEY=你的key
 | 编码与联网工具 | 文件读写、Shell、Grep/Glob、任务计划、网页抓取、博查中文搜索、Brave 英文搜索、向用户提问 |
 | 权限与安全 | 有副作用的调用执行前审批；`Shift+Tab` 切换默认、自动接受编辑、计划、跳过权限检查四种模式 |
 | 子 agent 与计划 | `Task`、`ParallelTasks`、后台任务、计划面板和任务面板 |
+| 自主目标循环 | `/goal` 设定完成条件，agent 跨轮自主推进：独立小模型逐轮评估、结论注入下一轮，三重熔断 + 两级 Esc |
 | 会话与记忆 | `-c` 恢复会话、自动/手动上下文压缩、项目级长期记忆、`AGENTS.md` 项目指令 |
 | 扩展与多模态 | MCP、Skills、视觉输入、回合中插话 |
 | 终端注意提示 | 任务完成或需要你回答/确认时，改写 tab 标题（`⏳ 等待你的输入` / `✓ 已完成`）并响一声铃——切去别的窗口也看得出它在等你（见 [docs/guide/reference.md](docs/guide/reference.md#终端注意提示tab-标题--响铃)） |
@@ -121,6 +122,7 @@ DeepSeek 现役内置模型为 `deepseek-flash`（快 · 便宜 · 支持图片�
 - `/skills`、`/skill`：查看、指定技能；`/reload`：重扫技能目录并重载 MCP 配置（改动即时生效，无需重启）。
 - `/mcp`：运行期管理 MCP 服务（Enter 启停、`r` 重载配置）。
 - `/tasks`：查看后台任务。
+- `/goal <条件>`：设定目标循环——agent 跨轮自主推进（每轮结束由独立小模型评估是否达成，未达成则带着结论继续），配轮数 / 无进展 / token 预算三重熔断与两级 Esc（暂停 → 终止，发消息即恢复）；`/goal` 查看状态面板与最近评估轨迹，`/goal stop` 清除。
 - `/continue`：继续执行恢复会话中未完成的计划。
 - `Shift+Tab`：循环切换权限模式。
 - `Esc`：取消当前回合。
@@ -144,6 +146,24 @@ DEEPSEEK_API_KEY=你的key
 ```
 
 还可以配置各家的 `*_BASE_URL`、`*_MODELS`，以及 LLM 超时、子 agent 并发数、联网搜索 Key、GitHub 提交署名（`CODETUI_CO_AUTHOR`，默认关闭）和 `JAVA_OPTS`。请以 `bin/config.env.example` 中的说明为准，避免在多处维护重复的配置清单。
+
+### /goal 目标循环
+
+`/goal` 的评估器、熔断与节奏全部由 `CODETUI_GOAL_*` 环境变量调节（同上可写进 `bin/config.env`）：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `CODETUI_GOAL_EVALUATOR_MODEL` | 空 | 独立评估器模型（`providerId:modelId`）；空 = 跟随当前模型 |
+| `CODETUI_GOAL_MAX_TURNS` | 25 | 自动轮上限（用户消息轮不计入） |
+| `CODETUI_GOAL_STALLED_LIMIT` | 3 | 连续「无进展」判定达到该次数即暂停（STALLED） |
+| `CODETUI_GOAL_TOKEN_BUDGET` | 5000000 | 本 goal 的 token 预算（相对激活时的增量计账）；0 = 关闭 |
+| `CODETUI_GOAL_TURN_GAP_SECONDS` | 3 | 轮间可视倒计时秒数；0 = 背靠背连发 |
+| `CODETUI_GOAL_ERROR_RETRY` | 2 | 回合错误自动续跑次数（连续 `+1` 次即暂停） |
+| `CODETUI_GOAL_EVAL_FAIL_LIMIT` | 2 | 评估器调用异常 / 超时达到该次数即暂停（EVALUATOR） |
+| `CODETUI_GOAL_PROTOCOL_FAIL_LIMIT` | 3 | 评估输出解析失败达到该次数即暂停（PROTOCOL） |
+| `CODETUI_GOAL_EVAL_TIMEOUT_SECONDS` | 60 | 单次评估调用的超时 |
+
+熔断均为暂停语义（发消息可恢复并清零计数）；预算与轮数只在自动轮派发决策点清算，进行中的轮放行到轮末。
 
 ### 项目数据
 
