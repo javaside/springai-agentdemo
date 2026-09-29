@@ -11,6 +11,9 @@ import io.github.javaside.springai.codetui.agent.seam.PlanOutcome;
 import io.github.javaside.springai.codetui.agent.seam.PlanRequest;
 import io.github.javaside.springai.codetui.agent.seam.QuestionSpec;
 import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
+import io.github.javaside.springai.codetui.agent.goal.GoalManager;
+import io.github.javaside.springai.codetui.agent.goal.GoalPhase;
+import io.github.javaside.springai.codetui.agent.goal.GoalStateSnapshot;
 import io.github.javaside.springai.codetui.agent.mcp.McpConfigLoader;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.PermissionBehavior;
@@ -79,6 +82,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -369,6 +373,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/mcp",     "管理 MCP 服务器（启停 / r 重载配置）"),
             new SlashCommand("/permissions", "查看权限模式与生效规则"),
             new SlashCommand("/tasks",   "查看后台任务（可展开结果 / 终止）"),
+            new SlashCommand("/goal",    "设定/查看目标循环（/goal stop 清除）"),
             new SlashCommand("/continue", "继续执行上一批未完成的计划"),
             new SlashCommand("/queue",   "排到下一回合再发（默认 Enter 是立即插话）"),
             new SlashCommand("/help",    "显示可用命令与快捷键"),
@@ -2501,6 +2506,11 @@ public final class CodeTuiView extends InlineApp {
             else dispatch(prompt, null);
             return;
         }
+        if (cmd.equals("/goal") || cmd.startsWith("/goal ")) {   // 目标循环：参数切分照 /queue 先例（cmd 是整行 strip 后文本）
+            clearInput();
+            handleGoalCommand(cmd.substring("/goal".length()).strip());
+            return;
+        }
         // 显式排到下一回合。<b>刻意不用 Alt+Enter</b>：那个键已是输入框换行，且在区分不了修饰键的
         // 终端（Apple Terminal 等）上到达时就是裸 Enter——用户以为排了队实际走了插话，静默错路由。
         // 斜杠命令是纯文本判定，与终端无关。（`/queue 内容` 含空格，不会误开补全菜单，见 slashMenuActive）
@@ -2620,6 +2630,86 @@ public final class CodeTuiView extends InlineApp {
             lastShownModel = m;
         }
     }
+
+    // ── /goal 命令面（Task 10；空闲批槽/Esc 接线在 Task 11） ─────────────
+
+    /**
+     * {@code /goal} 分发：{@code /goal <条件>} 设定（activate 立即立起状态；首轮自动轮由空闲批的
+     * goal 槽发出，忙碌时同样成立）、{@code /goal stop|clear} 清除、裸 {@code /goal} 打开状态面板。
+     *
+     * <p>设定<b>刻意不设忙碌闸门</b>：activate 只改 Manager 状态机，不发模型调用、不碰在飞回合——
+     * 「跑着长任务时先把目标挂上」恰是主场景。条件超 4000 字符在 View 预判（Manager 也会拒，
+     * 这里提前给完整文案免得用户重打一遍）；Manager 抛出的 {@link IllegalArgumentException}
+     * 转成 notice——拒绝要在输入框上方看得见，而不是沉进 scrollback。
+     */
+    private void handleGoalCommand(String rest) {
+        GoalManager gm = onSubmit.goal();
+        if (gm == null) { state.setNotice("goal 未启用"); return; }
+        if (rest.isEmpty()) { printGoalPanel(gm.snapshot()); return; }
+        if (rest.equals("clear") || rest.equals("stop")) {
+            GoalStateSnapshot before = gm.snapshot();
+            if (before.phase() == GoalPhase.INACTIVE) { state.setNotice("没有进行中的 goal"); return; }
+            gm.clear(rest);                        // via 记实际子命令（stop/clear），审计日志可分辨
+            state.pushInfo("◎ goal 已清除：" + before.condition());
+            return;
+        }
+        if (rest.length() > 4000) { state.setNotice("条件超 4000 字符（当前 " + rest.length() + "），请精简"); return; }
+        if (onSubmit.permissionMode() == PermissionMode.DEFAULT) {   // 循环的自动轮会提交工具调用：
+            // DEFAULT 档每轮都要人点批准，「自主循环」实际退化为「每轮被打断」。不说这句，
+            // 用户只会觉得 goal 时灵时不灵——其实是每轮都停在审批上。
+            state.pushInfo("（提示：当前权限档位为 DEFAULT，循环会停下等批准；建议 Shift+Tab 切到 ACCEPT_EDITS/BYPASS。）");
+        }
+        try {
+            gm.activate(rest);                     // 状态立即立起；首轮由空闲批 goal 槽发出（忙碌时同样成立）
+        } catch (IllegalArgumentException e) {
+            state.setNotice(e.getMessage());       // 空/超长条件：Manager 抛、View 转 notice
+            return;
+        }
+        state.pushInfo("◎ goal 已设定（上限 " + gm.snapshot().maxTurns() + " 轮）：" + rest);
+    }
+
+    /**
+     * goal 状态面板（scrollback 逐行，非 live 面板——live 指示走状态栏 leading）。
+     *
+     * <p>包级可见便于测试直接喂手工快照（{@code GoalStateSnapshot} 是公共 record；Manager 侧
+     * recentTraces 投影未接线前真快照恒为空轨迹，面板行本身照常渲染）。
+     * INACTIVE（从未设定）不铺面板——空条件的面板全是 null/0，给一句用法提示更有用；
+     * 终态<b>照常铺</b>：终态报告（条件/相位/结论）必须活到用户敲下一个 goal 为止，
+     * 否则「为什么停了」在界面上无迹可查。
+     */
+    void printGoalPanel(GoalStateSnapshot s) {
+        if (s.phase() == GoalPhase.INACTIVE || s.condition() == null) {
+            state.setNotice("尚未设定 goal：/goal <条件> 设定，/goal stop 清除");
+            return;
+        }
+        state.pushInfo("◎ goal：" + s.condition());
+        state.pushInfo("  状态：" + goalPhaseText(s));
+        state.pushInfo("  token：" + s.tokenSpent()
+                + (s.tokenBudget() > 0 ? " / " + s.tokenBudget() + "（预算）" : "（预算关闭）"));
+        state.pushInfo("  stalled 连击：" + s.stalledStreak());
+        if (s.activatedAt() != null) state.pushInfo("  已运行：" + humanElapsed(s.activatedAt()));
+        if (!s.lastSummary().isEmpty()) state.pushInfo("  最近结论：" + s.lastSummary());
+        if (!s.recentTraces().isEmpty()) {
+            state.pushInfo("  最近轨迹：");
+            for (GoalStateSnapshot.GoalEvalTrace t : s.recentTraces()) {
+                state.pushInfo("  " + t.turn() + ". " + t.verdict() + " — " + t.reason());
+            }
+        }
+    }
+
+    /** 面板状态行：PAUSED 带原因（如 {@code PAUSED(ESC)}），其余直接枚举名；轮次一律 N/M。 */
+    private static String goalPhaseText(GoalStateSnapshot s) {
+        String base = s.phase() == GoalPhase.PAUSED && s.pauseReason() != null
+                ? "PAUSED(" + s.pauseReason() + ")" : s.phase().name();
+        return base + " · " + s.turnsUsed() + "/" + s.maxTurns() + " 轮";
+    }
+
+    /** 运行时长人读化（45s / 2m30s / 3h5m 同 {@link ConversationState#formatQuotaRemaining} 口径）；负值（时钟偏移）钳 0。 */
+    private static String humanElapsed(Instant from) {
+        long ms = Math.max(0, Duration.between(from, Instant.now()).toMillis());
+        return ms == 0 ? "0s" : ConversationState.formatQuotaRemaining(ms);
+    }
+
 
     // ── /model 模型选择器 ───────────────────────────────────────────────
     /** 打开选择器：高亮定位到当前所选模型。 */
@@ -4191,42 +4281,43 @@ public final class CodeTuiView extends InlineApp {
         }
         // 忙时的 notice 后缀。<b>空串必须判</b>：不判会渲染出一段悬空的 " · "。
         String ns = notice.isEmpty() ? "" : " · " + notice;
-        Span mode = modeTag(onSubmit.permissionMode());
+        // goal 循环指示放<b>最前</b>（比 modeTag 更前）：它是「后台还挂着什么在跑」，优先级高于
+        // 「现在的工具调用会不会问你」。两者都缺席时 leading 为空表，行形与从前完全一致。
+        List<Span> leading = statusLeading(goalLeadingSpan(), modeTag(onSubmit.permissionMode()));
         // 项目名 projectSuffix 一律拼在<b>最后</b>、不进任何宽度预算：空间不够时终端先截它
         //（行尾被动挨截，同 backgroundStatusSuffix 的纪律反向版——modeTag 靠行首保，项目名靠行尾让）。
         // 绝不能塞进 idleHint 的 dynamicSuffix 或 fitToolSummary 的 overhead：那会把
         // 「Enter 发送 / Esc 取消」挤掉——80 列下这些键位提示是既有测试钉死的保障。
         if (draining != null) return richText(statusBar.shimmer(draining,
-                qs + ijs + ns + " · Ctrl+C 退出" + projectSuffix, THINK, animTick, mode));
+                qs + ijs + ns + " · Ctrl+C 退出" + projectSuffix, THINK, animTick, leading));
         String cacheHit = ctxUsage.cacheHitSuffix();
         return switch (state.status()) {
             case IDLE -> {
-                int modeWidth = mode == null ? 0 : displayWidth(mode.content());
+                int leadingWidth = 0;
+                for (Span sp : leading) leadingWidth += displayWidth(sp.content());
                 String hint = idleHint(statusModelLabel(),
                         ctxUsage.suffix() + backgroundStatusSuffix(),
-                        terminalWidth() - modeWidth);
+                        terminalWidth() - leadingWidth);
                 // 项目名接在 idleHint 降级结果之后：帮助组/Enter 让位时它不受影响，超宽由终端截尾。
-                yield mode == null
-                        ? richText(Text.from(Line.from(StatusBar.cacheHitSpans(hint + projectSuffix, HINT))))
-                        : richText(Text.from(Line.from(withLeading(mode, StatusBar.cacheHitSpans(hint + projectSuffix, HINT)))));
+                yield richText(Text.from(Line.from(withLeading(leading, StatusBar.cacheHitSpans(hint + projectSuffix, HINT)))));
             }
             case THINKING -> richText(statusBar.shimmer("● 思考中…",
-                    qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出" + projectSuffix, THINK, animTick, mode));
+                    qs + ijs + ns + cacheHit + " · Esc 取消 · Ctrl+C 退出" + projectSuffix, THINK, animTick, leading));
             case RETRYING -> {
                 String label = state.retryLabel() == null ? "↻ 重试中" : state.retryLabel();
                 // 限额等待时每帧从 deadline 现算倒计时（动画帧持续重绘，无 ticker）；普通重试回落静态文本。
                 String backoff = quotaBackoffText(state, System.currentTimeMillis());
                 String backoffTail = terminalWidth() >= 100 && backoff != null ? " · 退避 " + backoff : "";
                 String suffix = qs + ijs + ns + backoffTail + " · Esc 取消" + projectSuffix;
-                yield richText(statusBar.shimmer(label, suffix, THINK, animTick, mode));
+                yield richText(statusBar.shimmer(label, suffix, THINK, animTick, leading));
             }
             case RUNNING_TOOL -> {
                 // fitToolSummary 的 overhead 只算「Esc 取消」段——项目名是要被终端截尾的让位者，
                 // 把它算进预算会过度收窄工具摘要（保护一个可牺牲的东西）。
                 String suffix = qs + ijs + ns + cacheHit + " · Esc 取消";
-                String s = fitToolSummary(state.activeToolSummary(), state.activeTool(), suffix, mode);
+                String s = fitToolSummary(state.activeToolSummary(), state.activeTool(), suffix, leading);
                 yield richText(statusBar.shimmer("⏺ 运行 " + state.activeTool() + (s.isEmpty() ? "" : ": " + s) + "…",
-                        suffix + projectSuffix, RUNNING, animTick, mode));
+                        suffix + projectSuffix, RUNNING, animTick, leading));
             }
         };
     }
@@ -4274,12 +4365,13 @@ public final class CodeTuiView extends InlineApp {
      * <p>留 {@code ≥12} 列给摘要：再窄就只剩省略号，不如不显示；此时尾部照旧会被终端截，
      * 但那是终端真的放不下，不是被我们自己挤掉的。
      */
-    private String fitToolSummary(String summary, String toolName, String suffix, Span leading) {
+    private String fitToolSummary(String summary, String toolName, String suffix, List<Span> leading) {
         if (summary == null || summary.isEmpty()) {
             return "";
         }
-        // 固定开销：「⏺ 运行 」+ 工具名 + 「: 」+ 结尾「…」+ 后缀 + 权限模式前导标签。
-        int leadingWidth = leading == null ? 0 : displayWidth(leading.content());
+        // 固定开销：「⏺ 运行 」+ 工具名 + 「: 」+ 结尾「…」+ 后缀 + 前导段（goal 指示 / 权限模式标签）。
+        int leadingWidth = 0;
+        for (Span sp : leading) leadingWidth += displayWidth(sp.content());
         int overhead = displayWidth("⏺ 运行 : …") + displayWidth(toolName) + displayWidth(suffix) + leadingWidth;
         int room = terminalWidth() - overhead;
         if (room >= displayWidth(summary)) {
@@ -4341,10 +4433,64 @@ public final class CodeTuiView extends InlineApp {
         };
     }
 
-    /** 在富文本状态行前插入权限模式标签，不修改调用方提供的 Span 列表。 */
-    static List<Span> withLeading(Span leading, List<Span> rest) {
-        List<Span> spans = new ArrayList<>(rest.size() + 1);
-        spans.add(leading);
+    /**
+     * 状态栏行首的 goal 循环指示：未启用 / INACTIVE / 终态返回 {@code null}（不占位，同 modeTag 的
+     * DEFAULT 纪律），其余各态各占一小段、恒以 {@code " · "} 收尾便于与后续内容拼排：
+     * <ul>
+     *   <li>{@code RUNNING}：评估在飞 → {@code ◎ goal 评估中}；有 gap 倒计时 → {@code ◎ goal ⏳3s}
+     *       （deadline 每次现算——状态栏只在重绘帧被读，无新增 ticker）；否则 {@code ◎ goal N/M}
+     *       （回合正跑 / 待发轮间隙之外的常态）。</li>
+     *   <li>{@code PAUSED}：{@code ◎ goal 已暂停}——等用户任意消息恢复，这是最该被余光扫到的态。</li>
+     *   <li>终态：循环已结束，常驻指示退场（报告进 scrollback 面板，见 {@code /goal}）。</li>
+     * </ul>
+     *
+     * <p>倒计时/评估在飞不在 {@link GoalStateSnapshot} 里（快照只含状态机本体），经
+     * {@code evaluationInFlight()} / {@code gapDeadlineEpochMs()} 直查；{@code snapshot()} 仍只调一次，
+     * 相位与 N/M 一次读齐。包级可见便于单测（同 {@link #modeTag} 先例）。
+     */
+    Span goalLeadingSpan() {
+        GoalManager gm = onSubmit.goal();
+        if (gm == null) return null;
+        return goalLeadingSpan(gm.snapshot(), gm.evaluationInFlight(), gm.gapDeadlineEpochMs(),
+                System.currentTimeMillis());
+    }
+
+    /** {@link #goalLeadingSpan()} 的纯函数体：快照 + 在飞标志 + 倒计时 deadline + 当前时刻 → 前导段。 */
+    static Span goalLeadingSpan(GoalStateSnapshot s, boolean evalInFlight, Long gapDeadlineEpochMs, long nowMillis) {
+        if (s == null || s.phase() == GoalPhase.INACTIVE) return null;
+        if (s.phase() != GoalPhase.RUNNING && s.phase() != GoalPhase.PAUSED) return null;   // 终态退场
+        String text;
+        Style style;
+        if (s.phase() == GoalPhase.PAUSED) {
+            text = "◎ goal 已暂停";
+            style = THINK;                        // 暂停=等待（黄），同「思考/等待」族的既有语义
+        } else if (evalInFlight) {
+            text = "◎ goal 评估中";
+            style = RUNNING;
+        } else if (gapDeadlineEpochMs != null) {
+            long remain = gapDeadlineEpochMs - nowMillis;
+            text = "◎ goal ⏳" + (remain > 0 ? ConversationState.formatQuotaRemaining(remain) : "0s");
+            style = RUNNING;
+        } else {
+            text = "◎ goal " + s.turnsUsed() + "/" + s.maxTurns();
+            style = RUNNING;                      // 青色，同「⏺ 运行」族——后台确实有活挂着
+        }
+        return Span.styled(text + " · ", style);
+    }
+
+    /**
+     * 状态行前导段拼装：goal 指示在最前、modeTag 次之；缺席者跳过，全缺返回空表
+     * （不产生悬空前缀，同 statusLine 对 qs/ijs 的空串纪律）。
+     */
+    static List<Span> statusLeading(Span goal, Span mode) {
+        if (goal == null) return mode == null ? List.of() : List.of(mode);
+        return mode == null ? List.of(goal) : List.of(goal, mode);
+    }
+
+    /** 在富文本状态行前插入前导段（goal 指示 / 权限模式标签），不修改调用方提供的 Span 列表。 */
+    static List<Span> withLeading(List<Span> leading, List<Span> rest) {
+        List<Span> spans = new ArrayList<>(rest.size() + leading.size());
+        spans.addAll(leading);
         spans.addAll(rest);
         return spans;
     }
