@@ -27,6 +27,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 | `clear_smoke.py` | `/help` 后 `/clear` 真清屏并恢复欢迎横幅。 | 本地 |
 | `edit_shortcut_smoke.py` | 输入编辑快捷键及边界行为。 | 本地 |
 | `event_driven_fairness_smoke.py` | 5,000 行流式输出期间的按键公平性、完整性、延迟和静止后 2.2s 零终端字节。 | 本地 SSE 桩 |
+| `goal_smoke.py` | `/goal` 自主循环一轮 UNSAT→SAT 闭环：wireGoal/View goal 槽/评估器路由接线真凭据（主桩请求序列 + 评估桩请求体）、`◎ goal` 状态指示与终态一行式总结、C1 评估标记落库存活（非尾/未被 fold 混入或销毁）；ZHIPU_BASE_URL 显式指向本地桩。 | 本地双桩（主链 SSE + 评估器非流式 JSON） |
 | `interjection_smoke.py` | 忙时插话 UI、模型消息顺序及 Esc 回填。 | 本地 SSE 桩 |
 | `memory_smoke.py` | 长时记忆工具装配与存储目录。 | 本地 |
 | `model_memory_smoke.py` | `/model` 选择持久化及重启恢复。 | 本地 |
@@ -50,6 +51,7 @@ mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/table_render_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/resize_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/stalled_terminal_smoke.py
+/usr/bin/python3 springai-code-tui/src/test/resources/scripts/goal_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/permission_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/quota_wait_smoke.py
 /usr/bin/python3 springai-code-tui/src/test/resources/scripts/interjection_smoke.py
