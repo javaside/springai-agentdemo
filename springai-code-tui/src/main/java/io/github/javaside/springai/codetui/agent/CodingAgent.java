@@ -7,6 +7,7 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -24,7 +25,12 @@ import reactor.core.scheduler.Schedulers;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
+import io.github.javaside.springai.codetui.agent.interjection.InterjectionText;
 import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionStrategy;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
+import io.github.javaside.springai.codetui.agent.goal.GoalManager;
+import io.github.javaside.springai.codetui.agent.goal.GoalTurnMaterial;
 import io.github.javaside.springai.codetui.agent.llm.ModelOption;
 import io.github.javaside.springai.codetui.agent.llm.RetryingStreamChatModel;
 import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
@@ -71,8 +77,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 并把 Spring AI 的响应流「翻译」成纯 Java 的 {@link AgentListener} 事件。
  *
  * <p><b>接缝纪律</b>：{@link ChatClientResponse} 等 Spring AI 类型<b>不得</b>泄漏进
- * {@link AgentListener}——{@code handleChunk/handleError/handleComplete} 都是本类私有，
- * 只把抽取出的纯文本 / Throwable 交给 listener。
+ * {@link AgentListener}——{@code handleChunk/handleError/handleComplete} 都是本类内部方法
+ * （仅 handleError 为测试直调放宽到包级），只把抽取出的纯文本 / Throwable 交给 listener。
  *
  * <p><b>turnId 归属</b>：{@link #activeTurnId} 由本类拥有（每次 submit 自增），
  * <b>不</b>再与 AgentTools 共享；工具 / Todo 事件的 turnId 走 ToolContext / ThreadLocal（见 Task 5/6）。
@@ -119,6 +125,13 @@ public final class CodingAgent implements SubmitHandler {
     private final Interjections interjections;
     /** 可空（测试桩）：会话级 token 用量累加器；contextStats() 读快照、clearContext() 清零。 */
     private final TokenUsageAccumulator usageAccumulator;
+    /**
+     * /goal 三件套（两段式 {@link #bindGoal} 装配后才有值；桩路径/未装配为 null，各挂点 null 守卫降级）。
+     * volatile 同 {@link #activeTurnL1Sink} 纪律：装配期一次性写入，之后只读。
+     */
+    private volatile GoalManager goalManager;
+    private volatile GoalEvaluationRunner goalRunner;
+    private volatile GoalEvaluator goalEvaluator;
     /** 系统提示词估算 token（装配期快照，每回合固定重发）；contextStats() 分类展示用，单-client 桩路径为 0。 */
     private final long systemPromptTokens;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
@@ -766,7 +779,9 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
-     * 终态错误入口：包装（而非复制）——前缀非空时构造 {@code RuntimeException(prefix + 根因串, err)} 后
+     * 终态错误入口（包级可见便于测试直调，同 {@link #runCompaction}/{@code sessionId()} 先例；
+     * 接缝纪律不变——Spring AI 类型仍不出本类，对外只发纯文本 / Throwable）。
+     * 包装（而非复制）——前缀非空时构造 {@code RuntimeException(prefix + 根因串, err)} 后
      * 委托 {@link #handleError}（复用 log/onError/trim 三件事，禁止复制方法体）；前缀空则原样直传。
      * 入口对 CancellationException 直接 return（本 CE 全仓唯一生产者是 disposed 检查；防 composite 参数反序等
      * 未来改动打开 error-beats-cancel 窗口，Esc 后屏幕不得出现「⚠ 出错：回合已取消」）。末尾补一次 blank 清除。
@@ -1135,6 +1150,10 @@ public final class CodingAgent implements SubmitHandler {
             // 的补历史插到一个对不上的位置。整体丢弃（未送达的也一并丢——用户主动清空了上下文）。
             interjections.drainForRefill();
         }
+        if (goalManager != null) {
+            // 同理：活动 goal 是冲着旧会话定的，会话没了还让它驱动自动轮等于对着空气干活。
+            goalManager.clear("clear-context");
+        }
     }
 
     // ── 插话门面（队列是唯一事实来源，这里只转发；interjections==null 的桩路径全退化为无操作） ──
@@ -1211,6 +1230,84 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public boolean removePermissionRule(PermissionRule rule) {
         return permissionEngine != null && permissionEngine.removeRule(rule);
+    }
+
+    // ── /goal 接线（两段式 bind + 门面转发；未 bind 的桩路径各取用口返回 null） ──
+
+    /**
+     * 两段式接 goal 三件套（照 {@code AgentTools.wireL1} 先例）：构造不收 goal——三件套里
+     * {@code goalManager} 同时要喂给 {@code AgentTools.build}（工具装饰循环），构造入参排不进
+     * 23 参 telescoping 链；装配期在 {@code wireL1} 旁调本方法一次性 bind。
+     *
+     * <p><b>包内公开的原因</b>：内部要经 {@code () -> sessionId} 把「当前会话 id」闭包给
+     * {@code GoalManager}（评估结论落库）——{@code sessionId} 字段/包私有访问器出了本包不可见，
+     * 跨包调用方（{@code CodeTuiApplication}）须经 {@code AgentTools} 的桥接方法进来。
+     *
+     * <p>三个依赖都允许为 null（测试桩按需给）：null 守卫只存字段，各消费点自行降级。
+     * 只在装配期调用一次，volatile 字段直写即可（同 {@link #activeTurnL1Sink} 纪律）。
+     */
+    void bindGoal(GoalManager goalManager, GoalEvaluationRunner goalRunner, GoalEvaluator goalEvaluator) {
+        this.goalManager = goalManager;
+        this.goalRunner = goalRunner;
+        this.goalEvaluator = goalEvaluator;
+        if (goalManager != null) {
+            goalManager.bindSession(sessionService, () -> this.sessionId);
+        }
+    }
+
+    @Override
+    public GoalManager goal() {
+        return goalManager;
+    }
+
+    @Override
+    public GoalEvaluationRunner goalRunner() {
+        return goalRunner;
+    }
+
+    @Override
+    public GoalEvaluator goalEvaluator() {
+        return goalEvaluator;
+    }
+
+    /**
+     * 一轮结束后的评估素材：从会话尾部<b>倒扫</b>（形状照 {@link #lastUserHasResumeNotice}）——
+     * 尾部 {@code [interjection]} 包裹的 UserMessage 跳过并取 unwrap 原文；第一条「真实」UserMessage
+     * 即本轮边界、停；区间内最后一条 AssistantMessage 取全文（即本轮收尾文本），ToolResponseMessage
+     * 按条目数累计工具调用数。
+     *
+     * <p>会话无事件（或只有从未开轮的空壳）时返回 {@code ("", 0, null)} 全空素材——调用方
+     * {@code GoalManager.recordTurnMaterial} 照收，评估器只见「无内容的一轮」，不需要特判。
+     */
+    @Override
+    public GoalTurnMaterial collectGoalMaterial() {
+        if (sessionService == null) {
+            return new GoalTurnMaterial("", 0, null);   // 桩路径无会话存储：无从倒扫，按全空处理
+        }
+        String sid = sessionId;   // 快照（纪律同 contextStats）：倒扫中途 /clear 换 volatile 会致素材跨会话拼接
+        List<SessionEvent> events = sessionService.getEvents(sid);
+        String assistantTail = null;
+        int tools = 0;
+        String interjection = null;
+        for (int i = events.size() - 1; i >= 0; i--) {
+            Message m = events.get(i).getMessage();
+            if (m instanceof UserMessage um) {
+                String t = um.getText() == null ? "" : um.getText();
+                if (t.startsWith(InterjectionText.OPEN)) {
+                    if (interjection == null) interjection = InterjectionText.unwrap(t);
+                    continue;                                   // 跳过尾部插话
+                }
+                break;                                          // 最近一条真实用户消息 = 本轮边界
+            }
+            if (m instanceof ToolResponseMessage trm) {
+                tools += trm.getResponses().size();
+                continue;
+            }
+            if (m instanceof AssistantMessage am && assistantTail == null) {
+                assistantTail = am.getText() == null ? "" : am.getText();
+            }
+        }
+        return new GoalTurnMaterial(assistantTail == null ? "" : assistantTail, tools, interjection);
     }
 
     /** 当前会话 id（包级可见，供测试断言换会话是否生效）。 */
@@ -1335,11 +1432,20 @@ public final class CodingAgent implements SubmitHandler {
         }
     }
 
-    private void handleError(Throwable err, long turnId) {
+    /**
+     * 回合以错误收场（包级可见便于测试直调，同 {@code runCompaction} 先例）：log / onError / 裁悬空
+     * tool_calls 三件事不变，末尾把原始 err 通知 goal 状态机熔断计数——<b>传原始 err</b>，
+     * EmptyStream/Cancellation 的根因豁免解包由 {@code GoalManager.onTurnError} 内部统一做
+     * （口径只有一处，agent 侧不得预判哪些异常该豁免）。
+     */
+    void handleError(Throwable err, long turnId) {
         log.error("回合 {} 出错", turnId, err);
         listener.onError(turnId, err);
         // 报错也裁掉悬空 tool_calls 尾巴：既避免坏历史下轮 400，又保留已完成任务与计划以便 /continue 续跑。
         trimDanglingToolCalls();
+        if (goalManager != null) {
+            goalManager.onTurnError(err);
+        }
     }
 
     private void handleComplete(long turnId) {
@@ -1348,6 +1454,9 @@ public final class CodingAgent implements SubmitHandler {
         // 空 user）只能在这里清。onTurnComplete 之前完成，-c 恢复/压缩读取到的都是干净历史。
         String sid = sessionId;   // 快照（纪律同 trimDanglingToolCalls）：本方法跑在 reactive 线程，/clear 在 UI 线程换 volatile
         purgeBlankUserEvents(sid);
+        if (goalManager != null) {
+            goalManager.onTurnCompleted();   // 成功收场先于 UI 终态事件：goal 记账（errorStreak 清零）不被本轮渲染截断
+        }
         listener.onTurnComplete(turnId);
     }
 

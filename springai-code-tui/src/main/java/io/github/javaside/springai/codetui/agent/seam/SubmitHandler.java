@@ -1,5 +1,9 @@
 package io.github.javaside.springai.codetui.agent.seam;
 
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
+import io.github.javaside.springai.codetui.agent.goal.GoalManager;
+import io.github.javaside.springai.codetui.agent.goal.GoalTurnMaterial;
 import io.github.javaside.springai.codetui.agent.llm.ProviderModel;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
@@ -171,6 +175,23 @@ public interface SubmitHandler {
      * 默认空串，便于回显桩/测试桩省略。
      */
     default String backgroundDigestForContinue() { return ""; }
+
+    // ── /goal 自主循环（goal 面板与评估调度用；默认 null=无 goal 子系统，桩/回显实现零改动） ──
+
+    /** goal 状态机（UI goal 槽的唯一取用口；未装配为 {@code null}，调用方自行降级）。 */
+    default GoalManager goal() { return null; }
+
+    /** 评估调度器（单线程 daemon + 超时归类）；未装配为 {@code null}。 */
+    default GoalEvaluationRunner goalRunner() { return null; }
+
+    /** 评估器（裸 client 四行协议）；未装配为 {@code null}。 */
+    default GoalEvaluator goalEvaluator() { return null; }
+
+    /**
+     * 一轮结束后的评估素材（会话尾倒扫：末条 assistant 文本 / 工具调用数 / 用户插话原文）。
+     * 默认 {@code null}——未装配 goal 时评估调度方本就不会来取。
+     */
+    default GoalTurnMaterial collectGoalMaterial() { return null; }
 
     /**
      * 一条可送达的后台任务结果。<b>刻意是 UI 层能直接消费的扁平结构</b>——

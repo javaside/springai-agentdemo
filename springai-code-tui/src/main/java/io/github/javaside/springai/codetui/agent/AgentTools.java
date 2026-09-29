@@ -19,6 +19,8 @@ import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionS
 import io.github.javaside.springai.codetui.agent.compaction.PreflightCompactionAdvisor;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
 import io.github.javaside.springai.codetui.agent.interjection.Interjections;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
 import io.github.javaside.springai.codetui.agent.goal.GoalManager;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
@@ -1028,6 +1030,22 @@ public final class AgentTools {
     public static void wireL1(AgentRuntime rt, CodingAgent agent) {
         rt.bridge().bind(agent::onL1Retry);
         rt.quotaBridge().bind(agent::onL1QuotaWait);
+    }
+
+    /**
+     * 把 goal 三件套两段式接进 {@code CodingAgent}（Task 9，镜像 {@link #wireL1} 的桥接形状）：
+     * {@code CodingAgent.bindGoal} 是<b>包私有</b>方法——内部要闭包「当前会话 id」给
+     * {@code GoalManager} 评估结论落库，出了 agent 包不可见；{@code CodeTuiApplication}
+     * （codetui 包）直接调会编译失败，须经本方法在 agent 包内转接。
+     *
+     * <p>{@code goalManager} 取自 {@link AgentRuntime#goalManager()}——<b>必须</b>与 build 第 7 参
+     * 那一份 same（状态机只有一份，View goal 槽也从 runtime 取；另建一个等于 UI 永远看不到真相）。
+     * {@code runner}/{@code evaluator} 由装配方建好传入；三者均可为 null（无 goal 子系统的桩路径，
+     * bindGoal 侧 null 守卫降级）。
+     */
+    public static void wireGoal(AgentRuntime rt, CodingAgent agent,
+                                GoalEvaluationRunner runner, GoalEvaluator evaluator) {
+        agent.bindGoal(rt.goalManager(), runner, evaluator);
     }
 
     /**

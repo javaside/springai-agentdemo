@@ -15,8 +15,10 @@ import io.github.javaside.springai.codetui.agent.llm.StreamIdleTimeoutProvider;
 import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
 import io.github.javaside.springai.codetui.agent.llm.UsageRecordingProvider;
 import io.github.javaside.springai.codetui.agent.llm.ZhipuProvider;
+import io.github.javaside.springai.codetui.agent.goal.ChatClientGoalEvaluator;
 import io.github.javaside.springai.codetui.agent.goal.GoalConfig;
 import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
 import io.github.javaside.springai.codetui.agent.goal.GoalManager;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.DangerousPaths;
@@ -126,15 +128,15 @@ public class CodeTuiApplication {
         // ——在这里同步算只会数到 0。
         McpRegistry mcpRegistry = McpRegistry.init(root, state, permissionEngine);
 
-        // goal 循环（spec §6/§7）：配置读 env 一次，状态机与评估调度器在此建成<b>唯一实例</b>，随后共享：
-        // goalManager 经 build 第 7 参 → runtime.goalManager()（View goal 槽与 Task 9 的
-        // agent.bindGoal(...) 都从这一份取）；goalRunner（评估线程池）由 Task 9 的 bindGoal 接进
-        // agent，本任务先建好、只负责退出路径 close。另建一个等于 UI 永远看不到真相
-        // （同 AgentRuntime.interjections 字段的先例措辞）。goalRunner 建在 try 之外，退出路径
-        // finally 里 close（与 mcpRegistry.close() 同一纪律）。
+        // goal 循环（spec §6/§7）：配置读 env 一次，状态机 / 评估调度器 / 评估器在此建成<b>唯一实例</b>，随后共享：
+        // goalManager 经 build 第 7 参 → runtime.goalManager()（View goal 槽与 wireGoal 的 bindGoal
+        // 都从这一份取）；goalRunner（评估线程池）与 goalEvaluator（裸 client 评估器）由 wireGoal 接进
+        // agent。另建一个等于 UI 永远看不到真相（同 AgentRuntime.interjections 字段的先例措辞）。
+        // goalRunner 建在 try 之外，退出路径 finally 里 close（与 mcpRegistry.close() 同一纪律）。
         GoalConfig goalConfig = GoalConfig.fromEnv();
         GoalManager goalManager = new GoalManager(goalConfig, usageAccumulator);
         GoalEvaluationRunner goalRunner = new GoalEvaluationRunner(goalConfig);
+        GoalEvaluator goalEvaluator = ChatClientGoalEvaluator.create(registry, goalConfig);
 
         // 从此处起装配 runtime/agent/view 直至 view.run() 全程 try/finally 关 MCP：
         // init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
@@ -156,6 +158,9 @@ public class CodeTuiApplication {
             // 这里在 CodingAgent 构造完成后 bind（agent::onL1Retry 是包私有方法，跨包方法引用编译失败，
             // 故必须经 AgentTools.wireL1 在 agent 包内接线——见 wireL1 javadoc）。
             AgentTools.wireL1(runtime, agent);
+            // goal 三件套同一形状的两段式接线（bindGoal 包私有，经 wireGoal 在 agent 包内转接）：
+            // agent 从此把回合错误/完成/清空通知 goal 状态机，并能倒扫会话尾供评估器取素材。
+            AgentTools.wireGoal(runtime, agent, goalRunner, goalEvaluator);
 
             // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
             // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
