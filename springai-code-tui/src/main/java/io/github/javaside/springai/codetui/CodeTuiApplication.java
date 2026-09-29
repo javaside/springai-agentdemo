@@ -15,6 +15,9 @@ import io.github.javaside.springai.codetui.agent.llm.StreamIdleTimeoutProvider;
 import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
 import io.github.javaside.springai.codetui.agent.llm.UsageRecordingProvider;
 import io.github.javaside.springai.codetui.agent.llm.ZhipuProvider;
+import io.github.javaside.springai.codetui.agent.goal.GoalConfig;
+import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
+import io.github.javaside.springai.codetui.agent.goal.GoalManager;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.permission.DangerousPaths;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
@@ -123,6 +126,16 @@ public class CodeTuiApplication {
         // ——在这里同步算只会数到 0。
         McpRegistry mcpRegistry = McpRegistry.init(root, state, permissionEngine);
 
+        // goal 循环（spec §6/§7）：配置读 env 一次，状态机与评估调度器在此建成<b>唯一实例</b>，随后共享：
+        // goalManager 经 build 第 7 参 → runtime.goalManager()（View goal 槽与 Task 9 的
+        // agent.bindGoal(...) 都从这一份取）；goalRunner（评估线程池）由 Task 9 的 bindGoal 接进
+        // agent，本任务先建好、只负责退出路径 close。另建一个等于 UI 永远看不到真相
+        // （同 AgentRuntime.interjections 字段的先例措辞）。goalRunner 建在 try 之外，退出路径
+        // finally 里 close（与 mcpRegistry.close() 同一纪律）。
+        GoalConfig goalConfig = GoalConfig.fromEnv();
+        GoalManager goalManager = new GoalManager(goalConfig, usageAccumulator);
+        GoalEvaluationRunner goalRunner = new GoalEvaluationRunner(goalConfig);
+
         // 从此处起装配 runtime/agent/view 直至 view.run() 全程 try/finally 关 MCP：
         // init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
         int exitCode = 0;
@@ -131,7 +144,7 @@ public class CodeTuiApplication {
             // （L2 白名单），结构上保证两层开关永不漂移（勿在此处或 build 内再 fromEnv 一次）。
             StreamRetryConfig cfg = StreamRetryConfig.fromEnv();
             AgentTools.AgentRuntime runtime =
-                    AgentTools.build(registry, root, state, mcpRegistry, permissionEngine, cfg);
+                    AgentTools.build(registry, root, state, mcpRegistry, permissionEngine, cfg, goalManager);
             CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
                     runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
@@ -162,6 +175,10 @@ public class CodeTuiApplication {
         } finally {
             // 保证任何路径（含装配期抛异常）都关闭 MCP 子进程（有界 2s），避免孤儿进程
             mcpRegistry.close();
+            // goal 评估线程池同一纪律：任何退出路径都关池。close 幂等；池是 daemon、在飞评估照跑完
+            // 不拖 JVM（见 GoalEvaluationRunner 类注释），关闭后再 submit 抛 RejectedExecutionException
+            // 是 app 退出路径的正常竞态。
+            goalRunner.close();
         }
         // /exit 后立即终止 JVM。HTTP 客户端会留下非 daemon 线程——实测 OkHttp（OpenAI/智谱/Anthropic
         // 走这条）的 "OkHttp Dispatcher" 线程 keep-alive 达 60s，若不强制退出，进程会在 /exit 后卡 ~60s 才自然

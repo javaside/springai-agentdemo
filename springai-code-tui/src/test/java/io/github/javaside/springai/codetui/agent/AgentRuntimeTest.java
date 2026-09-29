@@ -13,6 +13,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.javaside.springai.codetui.agent.seam.StubListener;
 
@@ -74,6 +75,15 @@ class AgentRuntimeTest {
             if (prevHome == null) System.clearProperty("user.home");
             else System.setProperty("user.home", prevHome);
         }
+    }
+
+    @Test
+    void build_withoutGoalManager_leavesGoalUnwired(@TempDir Path root) {
+        // 兼容重载（不传 goalManager 的旧签名）委托时传 null——源兼容的契约：旧调用点不破，
+        // runtime 其余组件照常，只是没有 goal 循环（生产装配只有 CodeTuiApplication 一处传真实例）。
+        AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
+        assertNull(rt.goalManager(), "兼容重载不传 goalManager → goal 未装配（null）");
+        assertNotNull(rt.client(), "goal 未装配不影响其余组件：ChatClient 照常装配");
     }
 
     @Test

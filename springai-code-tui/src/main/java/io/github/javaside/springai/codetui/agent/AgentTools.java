@@ -19,6 +19,7 @@ import io.github.javaside.springai.codetui.agent.compaction.NotifyingCompactionS
 import io.github.javaside.springai.codetui.agent.compaction.PreflightCompactionAdvisor;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectingChatModel;
 import io.github.javaside.springai.codetui.agent.interjection.Interjections;
+import io.github.javaside.springai.codetui.agent.goal.GoalManager;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
@@ -355,19 +356,41 @@ public final class AgentTools {
     }
 
     /**
-     * 同 {@link #build(ProviderRegistry, Path, AgentListener, McpRegistry, PermissionEngine)}，
-     * 仅 {@link StreamRetryConfig}（L1/L2 总闸）由调用方显式传入。
+     * 向后兼容重载：goal 未装配（{@link AgentRuntime#goalManager()} 为 null），其余同
+     * {@link #build(ProviderRegistry, Path, AgentListener, McpRegistry, PermissionEngine, StreamRetryConfig, GoalManager)}
+     * ——retryConfig 仍由调用方显式注入（为什么必须注入见彼处 javadoc，逐字相同）。
      *
-     * <p><b>为什么必须注入、而不是在 build 内读环境变量</b>：测试无法安全修改 {@code System.getenv}，
-     * 而开发者本机真设了 {@code CODETUI_STREAM_RETRY} 会让链序断言随机红。注入重载让守卫测试逐档
-     * 断言开关语义（off/l2 → 不包装直通，l1/all → 包 RetryingStreamChatModel）；默认重载走
-     * {@link StreamRetryConfig#fromEnv()}（生产入口 {@code CodeTuiApplication} 调 5-arg 重载即此路径）。
+     * <p><b>null 的语义</b>：goal 循环状态机<b>由调用方创建并传入</b>（生产装配只有
+     * {@code CodeTuiApplication} 一处，它自己构造后经第 7 参传入）；本重载保持旧签名源兼容，
+     * 旧调用点（测试为主）不破、runtime 其余组件照常，只是没有 goal 循环。
      *
      * @param retryConfig L1/L2 计费总闸（CODETUI_STREAM_RETRY：all/l1/l2/off），见 {@link StreamRetryConfig}
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
                                       McpRegistry mcpRegistry, PermissionEngine permissionEngine,
                                       StreamRetryConfig retryConfig) {
+        return build(registry, root, listener, mcpRegistry, permissionEngine, retryConfig, null);
+    }
+
+    /**
+     * 生产装配（全参）：与 6-arg 兼容重载的唯一差别是多第 7 参 {@code goalManager}。
+     *
+     * <p><b>为什么 retryConfig 必须注入、而不是在 build 内读环境变量</b>：测试无法安全修改
+     * {@code System.getenv}，而开发者本机真设了 {@code CODETUI_STREAM_RETRY} 会让链序断言随机红。
+     * 注入重载让守卫测试逐档断言开关语义（off/l2 → 不包装直通，l1/all → 包 RetryingStreamChatModel）；
+     * 默认重载走 {@link StreamRetryConfig#fromEnv()}（生产入口 {@code CodeTuiApplication} 调本
+     * 7-arg 重载即此路径）。
+     *
+     * @param retryConfig L1/L2 计费总闸（CODETUI_STREAM_RETRY：all/l1/l2/off），见 {@link StreamRetryConfig}
+     * @param goalManager goal 循环状态机，<b>由调用方创建并传入</b>——build 不新建、只原样透传进
+     *                    {@link AgentRuntime#goalManager()}，与 View goal 槽/CodingAgent（Task 9 的
+     *                    bindGoal）共享同一实例，另建一个等于 UI 永远看不到真相（同 interjections 先例）。
+     *                    <b>null = goal 未装配</b>：兼容重载（5/6 参）一律传 null，runtime 其余组件照常，
+     *                    只是没有 goal 循环；生产装配只有 {@code CodeTuiApplication} 一处传真实例。
+     */
+    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
+                                      McpRegistry mcpRegistry, PermissionEngine permissionEngine,
+                                      StreamRetryConfig retryConfig, GoalManager goalManager) {
         java.util.Objects.requireNonNull(permissionEngine, "permissionEngine 不可为 null：漏传等于全线无权限层");
         // 不设 allowedDirectory：沙箱是库的 opt-in 特性，空列表即放行任何路径
         // （见 FileSystemTools.validateAllowedAccess：allowedDirectories.isEmpty() → 直接返回放行）。
@@ -722,7 +745,8 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
-                backgroundRegistry, backgroundResults, interjections, systemPromptTokens, bridge, quotaBridge);
+                backgroundRegistry, backgroundResults, interjections, goalManager,
+                systemPromptTokens, bridge, quotaBridge);
     }
 
     /**
@@ -953,6 +977,9 @@ public final class AgentTools {
      * @param visionModels        每个 provider 的视觉兑现装饰器，键同 {@code clients}；供 {@code /context} 按激活 provider 读 {@code lastSnapshot()}
      * @param interjections       插话队列，全 provider 共用一个实例；与 {@code clients} 的 {@link InterjectingChatModel} 装饰层是同一个对象，
      *                            {@code CodingAgent} 拿它做门面与回合末补历史。另建一个等于 UI 投的话永远没人取
+     * @param goalManager         goal 循环状态机，与 View goal 槽/CodingAgent.bindGoal 共享同一实例——
+     *                            另建一个等于 UI 永远看不到真相（照 interjections 字段先例措辞）。
+     *                            <b>null = goal 未装配</b>（兼容重载路径）：runtime 其余组件照常，只是没有 goal 循环
      * @param backgroundRegistry  后台任务注册表（进程内、不落盘）；{@code TaskOutput} / {@code ListTasks} / {@code /tasks} 面板共用
      * @param backgroundResults   后台结果限幅存储；超长正文落 artifacts 并在返回文本里给出路径
      * @param systemPromptTokens  装配期一次性估算的系统提示词 token 数，供 {@code /context} 与状态栏用同一分母
@@ -979,6 +1006,7 @@ public final class AgentTools {
                                BackgroundTaskRegistry backgroundRegistry,
                                TaskResultStore backgroundResults,
                                Interjections interjections,
+                               GoalManager goalManager,
                                long systemPromptTokens,
                                L1ReporterBridge bridge,
                                L1QuotaBridge quotaBridge) {
