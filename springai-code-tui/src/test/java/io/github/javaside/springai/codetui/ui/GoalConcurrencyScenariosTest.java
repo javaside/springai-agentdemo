@@ -499,7 +499,7 @@ class GoalConcurrencyScenariosTest {
     // ── 场景⑫：终态僵尸防护 + 多熔断唯一原因 ───────────────────────────
 
     @Test
-    @DisplayName("场景⑫ 预算+轮数同批为真：原因唯一 BUDGET_EXCEEDED（预算优先）；终态后 drain 任意批无任何 submit/eval")
+    @DisplayName("场景⑫ 预算+轮数同批为真：评估启动前预算决策点（M7）先行清算，原因唯一 BUDGET_EXCEEDED；终态后 drain 无任何 submit/eval")
     void zombieTerminalGuardAndPriority(@TempDir Path root) {
         Rig rig = rig(new GoalHandler(Map.of(GoalConfig.TURN_GAP_ENV, "0",
                 GoalConfig.MAX_TURNS_ENV, "1", GoalConfig.TOKEN_BUDGET_ENV, "500")), root);
@@ -509,18 +509,17 @@ class GoalConcurrencyScenariosTest {
 
         rig.v().tickForTest();                    // 自动轮 1（submit 记 600）
         assertEquals(1, rig.h().submitted.size());
-        rig.v().tickForTest();                    // 评估 1
-        await(() -> rig.h().evaluator.calls.get() >= 1, "评估 1 应发起");
-        rig.h().evaluator.enqueue(unsat("继续推进", false, null));
-        await(() -> !gm.evaluationInFlight(), "verdict 1 应落账");
-        assertEquals(GoalPhase.RUNNING, gm.phase(), "软超限：verdict 照常放行置 pending");
-        assertTrue(gm.hasAutoTurnPending());
 
-        rig.v().tickForTest();                    // 决策点：预算（600≥500）与轮数（1+1>1）同真
+        // 决策点（M7 后前移到评估启动前）：轮 1 之后耗量 600 ≥ 500 已超限——空闲批先撞
+        // beginEvaluation 的预算检查：置在飞<b>之前</b>清算，评估调用一次都不发（不再白烧一次评估）。
+        rig.v().tickForTest();                    // goal 槽：评估启动前预算熔断
 
         assertEquals(GoalPhase.BUDGET_EXCEEDED, gm.phase(),
                 "spec §7 优先级：预算先于轮数清算——原因唯一 BUDGET_EXCEEDED 而非 MAX_TURNS");
         assertEquals(1, gm.snapshot().turnsUsed(), "第 2 轮未发生");
+        assertEquals(0, rig.h().evaluator.calls.get(),
+                "预算超限在评估启动前已清算：评估器一次都不该被调（M7 决策点）");
+        assertFalse(gm.evaluationInFlight());
         drainUntilLine(rig.v(), rig.sink(), "◎ goal 终态：BUDGET_EXCEEDED");
 
         int submittedAtTerminal = rig.h().submitted.size();

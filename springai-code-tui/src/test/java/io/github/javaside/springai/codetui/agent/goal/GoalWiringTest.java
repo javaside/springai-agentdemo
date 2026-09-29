@@ -56,7 +56,7 @@ class GoalWiringTest {
         GoalConfig config = GoalConfig.from(k ->
                 GoalConfig.EVALUATOR_MODEL_ENV.equals(k) ? "ghost:ghost" : null);   // registry 无 ghost 家
 
-        // 断言式接管：本类的 logger 走 slf4j→logback，JUL 版 ExpectedLog 的 Handler 收不到它——
+        // 断言式接管：本类的 logger 走 slf4j→logback，JUL Handler 收不到它——
         // pom 里的 jul-to-slf4j 桥只单向 JUL→SLF4J，logback 事件永不回流 JUL（实测确认，见 task-8 报告）。
         // 故按任务纪律改用同款 ListAppender（照 GoalEvaluatorGuardTest 的既有做法）。
         Logger logger = (Logger) LoggerFactory.getLogger(ChatClientGoalEvaluator.class);

@@ -779,7 +779,8 @@ public final class CodingAgent implements SubmitHandler {
     }
 
     /**
-     * 终态错误入口（包级可见便于测试直调，同 {@link #runCompaction}/{@code sessionId()} 先例；
+     * 终态错误入口（<b>private</b> 薄包装；包级可见的放宽在委托目标 {@link #handleError}——
+     * 「包级可见便于测试直调」同 {@code runCompaction}/{@code sessionId()} 先例，本方法自身不放宽；
      * 接缝纪律不变——Spring AI 类型仍不出本类，对外只发纯文本 / Throwable）。
      * 包装（而非复制）——前缀非空时构造 {@code RuntimeException(prefix + 根因串, err)} 后
      * 委托 {@link #handleError}（复用 log/onError/trim 三件事，禁止复制方法体）；前缀空则原样直传。

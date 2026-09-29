@@ -55,7 +55,8 @@ import java.util.regex.Pattern;
  * → PAUSED(STALLED)；{@link #onTurnError} 非豁免根因连续达 {@code errorRetry+1} → PAUSED(ERROR)；
  * {@link #onEvaluationFailure} 达 {@code evalFailLimit} → PAUSED(EVALUATOR)；{@link #onProtocolFailure}
  * 达 {@code protocolFailLimit} → PAUSED(PROTOCOL)。用户插话（{@link #onUserDispatch}）重置全部计数。
- * 预算/轮数是<b>软超限</b>：只在 {@link #takeAutoTurn} 决策点清算（预算优先于轮数），在飞轮放行到轮末。
+ * 预算/轮数是<b>软超限</b>：只在决策点清算——{@link #takeAutoTurn}（发轮前）与 {@link #beginEvaluation}
+ * （评估启动前）两处，均预算优先于轮数；在飞轮放行到轮末、在飞评估放行到回调。
  *
  * <p><b>评估「回调即终点」</b>：{@link #beginEvaluation} CAS 置在飞并锁存 {@code dispatchSerial}；
  * onVerdict / onEvaluationFailure / onProtocolFailure 三回调：旧代迟到或终态 → 完全 no-op（不动
@@ -195,6 +196,7 @@ public final class GoalManager implements UiChangeSource {
             throw new IllegalArgumentException("goal 条件超 4000 字符（当前 " + condition.length() + "）");
         }
         long version;
+        long epochForLog;
         synchronized (this) {
             this.condition = condition;
             this.epoch = goalIds.incrementAndGet();
@@ -214,10 +216,11 @@ public final class GoalManager implements UiChangeSource {
             this.lastEvalReason = null;       // 首轮：prompt 写「（首轮）」
             this.stateLedger = "";
             this.lastSummary = "";
+            epochForLog = this.epoch;         // 锁内捕获：锁外读字段会与下一次 activate 换代竞态（M3）
             version = changed();
         }
         publish(version);
-        log.info("goal 已激活（epoch={}，maxTurns={}，预算={}）：{}", epoch, config.maxTurns(),
+        log.info("goal 已激活（epoch={}，maxTurns={}，预算={}）：{}", epochForLog, config.maxTurns(),
                 config.tokenBudget(), condition);
     }
 
@@ -336,6 +339,10 @@ public final class GoalManager implements UiChangeSource {
      * （有待发轮时先发轮、不评估）；否则 -1，状态零变更。置位同时<b>锁存当前
      * {@code dispatchSerial}</b>——三回调以「epoch + 该锁存值」双校验识别评估输入是否过期。
      *
+     * <p><b>预算决策点（spec §7「评估启动前」，M7）</b>：置位前先判 {@link #budgetExceeded}——
+     * 超限即 {@code terminateLocked(BUDGET_EXCEEDED)} 并返回 -1（不评估），优先级序与
+     * {@link #takeAutoTurn} 一致：预算 &gt; 轮数。在飞评估不受此点影响（回调照常处理到门）。
+     *
      * <p>终点：同代回调（onVerdict / onEvaluationFailure / onProtocolFailure）自清在飞标志
      * （「回调即终点」），activate 换代复位，终态清零——无独立 endEvaluation。
      */
@@ -344,9 +351,14 @@ public final class GoalManager implements UiChangeSource {
         long captured;
         synchronized (this) {
             if (phase != GoalPhase.RUNNING || evalInFlight || autoTurnPending) return -1;
-            evalInFlight = true;
-            evalSerialLatch = dispatchSerial;   // 锁存评估输入所见的对话边界
-            captured = this.epoch;        // 锁内捕获：锁外读会与 activate 换代竞态，放行陈旧 verdict
+            if (budgetExceededLocked()) {
+                terminateLocked(GoalPhase.BUDGET_EXCEEDED);   // 评估启动前清算：不再烧一次评估调用
+                captured = -1;
+            } else {
+                evalInFlight = true;
+                evalSerialLatch = dispatchSerial;   // 锁存评估输入所见的对话边界
+                captured = this.epoch;        // 锁内捕获：锁外读会与 activate 换代竞态，放行陈旧 verdict
+            }
             version = changed();
         }
         publish(version);

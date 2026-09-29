@@ -144,6 +144,42 @@ class CodeTuiViewGoalCommandTest {
     }
 
     @Test
+    @DisplayName("M4 终态下 /goal stop：clear 是 no-op，打「没有进行中的 goal」而非谎报「已清除」")
+    void goalStopOnTerminalPhaseGivesNoticeNotFalseClear(@TempDir Path root) {
+        ConversationState s = new ConversationState();
+        GoalHandler h = new GoalHandler();
+        CodeTuiView v = new CodeTuiView(s, h, root);
+
+        // 终态一：SATISFIED（自然终局——循环已结束，无事可清）
+        h.gm.activate("目标 A");
+        h.gm.onVerdict(h.gm.currentEpoch(),
+                new GoalVerdict(GoalVerdict.Outcome.SATISFIED, "全部完成", false, null, ""));
+        assertEquals(GoalPhase.SATISFIED, h.gm.phase(), "前置：终态");
+        submit(v, "/goal stop");
+        assertEquals(GoalPhase.SATISFIED, h.gm.phase(), "clear 对终态 no-op：相位不得被改写");
+        List<String> lines = drain(s);
+        assertTrue(lines.isEmpty(), "不得谎报「已清除」，实际：" + lines);
+        assertFalse(s.notice().isEmpty(), "应打 notice「没有进行中的 goal」，实际：\"" + s.notice() + "\"");
+        assertTrue(s.notice().contains("没有进行中的 goal"), "notice 文案，实际：" + s.notice());
+
+        // 终态报告面板仍可裸 /goal 查看（stop 的 notice 不代表报告消失）
+        s.setNotice("");
+        submit(v, "/goal");
+        List<String> panel = drain(s);
+        assertTrue(anyContains(panel, "目标 A") && anyContains(panel, "SATISFIED"),
+                "终态报告面板仍可 /goal 查看，实际：" + panel);
+
+        // 终态二：CLEARED（已清过再 stop——同样 no-op + notice）
+        h.gm.activate("目标 B");
+        h.gm.clear("stop");
+        assertEquals(GoalPhase.CLEARED, h.gm.phase());
+        submit(v, "/goal stop");
+        assertEquals(GoalPhase.CLEARED, h.gm.phase());
+        assertTrue(drain(s).isEmpty(), "CLEARED 下 stop 同样不得谎报已清除");
+        assertTrue(s.notice().contains("没有进行中的 goal"), "CLEARED 下同样给 notice，实际：" + s.notice());
+    }
+
+    @Test
     @DisplayName("终态报告存活到下一个 goal：SATISFIED 后 /goal 仍见该次结论；重设后旧结论退场")
     void terminalReportSurvivesUntilNextGoal(@TempDir Path root) {
         ConversationState s = new ConversationState();

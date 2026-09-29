@@ -40,7 +40,7 @@ public record GoalVerdict(Outcome outcome, String reason, boolean stalled, Strin
     private static final String PROGRESS_MARKER = "PROGRESS:";
     private static final String STATE_MARKER = "STATE:";
     private static final String FENCE = "```";
-    private static final String STALLED_VALUE = "STALLED";
+    private static final String ADVANCING_VALUE = "ADVANCING";
     private static final int ABBREV_MAX_CODE_POINTS = 200;
 
     /**
@@ -69,7 +69,10 @@ public record GoalVerdict(Outcome outcome, String reason, boolean stalled, Strin
             } else if (upper.startsWith(REASON_MARKER)) {
                 reason = s.substring(REASON_MARKER.length()).strip();
             } else if (upper.startsWith(PROGRESS_MARKER)) {
-                stalled = upper.substring(PROGRESS_MARKER.length()).strip().equals(STALLED_VALUE);
+                // M8 收紧（保守口径，与缺行同向）：PROGRESS 值大小写不敏感地<b>恰等于</b> ADVANCING 才算推进；
+                // 其余一切取值（含带尾缀的 "advancing."、拼错的 "progressing"、空值）一律 stalled——
+                // 宁可误报停滞触发熔断，也不放过一轮假推进。
+                stalled = !upper.substring(PROGRESS_MARKER.length()).strip().equals(ADVANCING_VALUE);
             } else if (upper.startsWith(STATE_MARKER)) {
                 ledger = s.substring(STATE_MARKER.length()).strip();
             }

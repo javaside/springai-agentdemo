@@ -234,6 +234,46 @@ class GoalManagerFuseTest {
         assertFalse(new GoalManager(cfg(10, 2, 1000L, 1, 2, 3), null).budgetExceeded());
     }
 
+    // ── M7：评估启动前的预算决策点（spec §7「评估启动前」） ─────────────
+
+    @Test
+    void beginEvaluationClearsBudgetBeforeStartingEvaluation() {
+        // 轮 1 发走后耗量超限（600+900 ≥ 1000）→ 下一批先撞 takeAutoTurn 那侧的 pending；
+        // 这里构造「无 pending、纯空闲」的形态：插话轮烧掉 pending 后，评估启动前清算预算。
+        TokenUsageAccumulator acc = new TokenUsageAccumulator();
+        GoalManager gm = new GoalManager(cfg(10, 2, 1000L, 1, 2, 3), acc);
+        gm.activate("g");
+        assertNotNull(gm.takeAutoTurn());                     // 轮 1：pending 清、turnsUsed=1
+        acc.record(new FakeUsage(600, 0));
+        acc.record(new FakeUsage(0, 900));                    // 增量 1500 ≥ 1000
+        assertTrue(gm.budgetExceeded(), "前置：预算软超限");
+
+        assertEquals(-1L, gm.beginEvaluation(), "评估启动前预算超限 → -1（不再烧一次评估调用）");
+        assertEquals(GoalPhase.BUDGET_EXCEEDED, gm.phase(), "评估启动前清算 → BUDGET_EXCEEDED 终态");
+        assertFalse(gm.evaluationInFlight(), "未置在飞标志");
+
+        // 未超限对照：同样无 pending 的空闲形态 → 正常置位评估
+        TokenUsageAccumulator acc2 = new TokenUsageAccumulator();
+        GoalManager gm2 = new GoalManager(cfg(10, 2, 100_000L, 1, 2, 3), acc2);
+        gm2.activate("g");
+        gm2.takeAutoTurn();
+        acc2.record(new FakeUsage(100, 0));
+        assertTrue(gm2.beginEvaluation() > 0, "未超限：评估照常可发起");
+    }
+
+    @Test
+    void beginEvaluationBudgetTakesPriorityOverMaxTurns() {
+        // 预算与轮数同真：beginEvaluation 决策点预算优先（BUDGET > MAX_TURNS，与 takeAutoTurn 同序）
+        TokenUsageAccumulator acc = new TokenUsageAccumulator();
+        GoalManager gm = new GoalManager(cfg(1, 2, 1000L, 1, 2, 3), acc);   // maxTurns=1
+        gm.activate("g");
+        gm.takeAutoTurn();                                    // 唯一轮已用：轮数同样耗尽
+        acc.record(new FakeUsage(2000, 0));
+        assertEquals(-1L, gm.beginEvaluation());
+        assertEquals(GoalPhase.BUDGET_EXCEEDED, gm.phase(),
+                "spec §7 优先级：预算先于轮数清算——原因唯一 BUDGET_EXCEEDED 而非 MAX_TURNS");
+    }
+
     @Test
     void errorStreakAndEmptyStreamExempt() {
         // errorRetry=1 → 连续 2 次普通错误 → PAUSED(ERROR)

@@ -43,6 +43,24 @@ class GoalVerdictParseTest {
     }
 
     @Test
+    void progressTightenedToExplicitAdvancing() {   // M8：保守收紧
+        // 只有明确以 ADVANCING 开头才算推进
+        assertFalse(GoalVerdict.parse("VERDICT: UNSATISFIED\nPROGRESS: ADVANCING").stalled(),
+                "规范值 ADVANCING：推进");
+        assertFalse(GoalVerdict.parse("VERDICT: UNSATISFIED\nPROGRESS: advancing").stalled(),
+                "小写规范值（大小写不敏感）：推进");
+        // 其余一切取值一律 stalled（保守——宁可熔断也不放过假推进）
+        assertTrue(GoalVerdict.parse("VERDICT: UNSATISFIED\nPROGRESS: advancing.").stalled(),
+                "「advancing.」带尾缀：旧 equals(STALLED) 口径会误判成推进，收紧后 stalled");
+        assertTrue(GoalVerdict.parse("VERDICT: UNSATISFIED\nPROGRESS: progressing").stalled(),
+                "拼错值：stalled");
+        assertTrue(GoalVerdict.parse("VERDICT: UNSATISFIED\nPROGRESS: ").stalled(),
+                "空值：stalled");
+        assertTrue(GoalVerdict.parse("VERDICT: UNSATISFIED\nPROGRESS: stalled").stalled(),
+                "规范值 STALLED：stalled");
+    }
+
+    @Test
     void missingStateLedgerIsNull() {   // 调用方沿用旧账本
         GoalVerdict v = GoalVerdict.parse("VERDICT: UNSATISFIED\nREASON: r\nPROGRESS: advancing");
         assertNull(v.stateLedger());

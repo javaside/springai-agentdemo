@@ -476,7 +476,8 @@ public final class CodeTuiView extends InlineApp {
         state.setUiChangeListener(coordinator);
         onSubmit.setUiChangeListener(coordinator);
         // goal 状态机第三路（Task 11）：评估回调跑在 goal-evaluator executor 线程上、只调
-        // GoalManager（自身线程安全，红线）——它经 UiChangeSource 锁外 publish 回 UI 线程，
+        // GoalManager（自身线程安全，红线）——超时路径则跑在 goal-eval-watchdog（或完成）线程，
+        // 两条线程都要求回调非阻塞（M2）。它经 UiChangeSource 锁外 publish 回 UI 线程，
         // 本条绑定就是那条回路的最后一跳。没它的话 verdict 后的待发轮/终态要等下一次
         // 用户按键才有批来消费（空闲态没有别的唤醒源），自主循环会静默卡死。
         // 生产装配里 bindGoal 早于 View 构造（CodeTuiApplication wireGoal → new CodeTuiView），
@@ -2694,7 +2695,12 @@ public final class CodeTuiView extends InlineApp {
         if (rest.isEmpty()) { printGoalPanel(gm.snapshot()); return; }
         if (rest.equals("clear") || rest.equals("stop")) {
             GoalStateSnapshot before = gm.snapshot();
-            if (before.phase() == GoalPhase.INACTIVE) { state.setNotice("没有进行中的 goal"); return; }
+            // M4 守卫扩到终态：clear() 对 CLEARED/SATISFIED 等终态是 no-op，再打「已清除」是谎报——
+            // 终态时循环早已结束，无事可清；终态报告面板仍可裸 /goal 查看。
+            if (before.phase() == GoalPhase.INACTIVE || before.phase().isTerminal()) {
+                state.setNotice("没有进行中的 goal（终态报告可用 /goal 查看）");
+                return;
+            }
             gm.clear(rest);                        // via 记实际子命令（stop/clear），审计日志可分辨
             state.pushInfo("◎ goal 已清除：" + before.condition());
             return;
@@ -2763,7 +2769,8 @@ public final class CodeTuiView extends InlineApp {
      * 段、排队用户消息之后、后台结果送达之前）：评估启动或自动轮 dispatch。
      *
      * <p><b>UI 线程纪律红线</b>：自动轮 dispatch 只发生在这里（UI 线程空闲批）——评估回调跑在
-     * goal-evaluator executor 线程上、只调 {@code GoalManager}（自身线程安全），它经
+     * goal-evaluator executor 线程（超时路径在 goal-eval-watchdog/完成线程，回调必须非阻塞，M2）、
+     * 只调 {@code GoalManager}（自身线程安全），它经
      * {@code UiChangeSource} publish 回 UI 线程产生下一批，绝不反向触碰 View 的
      * {@code current}/{@code lastShownModel}。每批最多一个自动动作：本方法返回
      * {@code true}（dispatch 了自动轮）时调用方立即 return，后台结果让到下一批。

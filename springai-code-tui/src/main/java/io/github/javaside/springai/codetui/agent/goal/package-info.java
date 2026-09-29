@@ -9,7 +9,9 @@
  * goal-evaluator）绝不触碰 View 状态，只 publish 结果，迟到 verdict 按 epoch 丢弃。
  *
  * <p><b>锁纪律</b>：{@code GoalManager} 照 {@code Interjections} 先例——锁内改状态、锁外
- * publish；评估"在飞"标志用 CAS 置位、{@code finally} 复位，防异常静默死锁。
+ * publish；评估「在飞」标志 CAS 置位，终点是<b>回调即终点</b>：onVerdict / onEvaluationFailure /
+ * onProtocolFailure 三回调 epoch 相符即自清（旧代迟到或终态 no-op，serial 过期/暂停丢弃只清标志），
+ * activate 换代与终态单调兜底复位——无独立的 endEvaluation/finally 复位。
  *
  * <p><b>依赖方向</b>：叶子级纯逻辑层，零 UI 依赖，便于单测（状态机/解析/熔断全 fake）。
  */
