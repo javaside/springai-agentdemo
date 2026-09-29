@@ -303,16 +303,23 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      * -c 恢复启动：把历史消息回放进 scrollback（仿 Claude Code --continue），直观重现上次对话，
      * 而非只提示「已恢复 N 条」。转换出的定稿行走正常输出队列通道下沉，故排在欢迎横幅之后、首条新输入之前。
      * 同时从历史里最后一次 TodoWrite 调用重建 todo 面板——面板状态不落盘，仅靠回放重建，
-     * 见 {@link HistoryReplay#lastTodoSnapshot}。空历史则什么都不做。
+     * 见 {@link HistoryReplay#lastTodoSnapshot}。头部检测到 goal 痕迹（自动轮/评估标记，
+     * {@link HistoryReplay#hasGoalTraces}）时追加一行「已失效」提示。空历史则什么都不做。
      */
     public void replayHistory(List<Message> messages) {
         List<OutputLine> body = HistoryReplay.toReplayLines(messages);
         if (body.isEmpty()) return;
         List<String> lastTodo = HistoryReplay.lastTodoSnapshot(messages);
+        boolean goalTraces = HistoryReplay.hasGoalTraces(messages);
         Change change;
         synchronized (this) {
             pending.add(new OutputLine("↺ 已恢复上次会话（" + HistoryReplay.userTurns(messages) + " 轮对话）",
                     OutputLine.Kind.INFO));
+            if (goalTraces) {
+                // goal 只活在进程内存态（spec §1「退出即失」）：历史里有痕迹就说明上次有个没跑完的
+                // goal、它已经不在了。不说清楚，用户会一直等一个永远不会来的自动轮。
+                pending.add(new OutputLine("上次会话有未完成 goal，已失效", OutputLine.Kind.INFO));
+            }
             pending.addAll(body);
             pending.add(new OutputLine("──── 以上为历史 · 可继续对话，或 /continue 续跑未完成的计划 ────",
                     OutputLine.Kind.INFO));

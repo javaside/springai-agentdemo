@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
+import io.github.javaside.springai.codetui.agent.goal.GoalText;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectionText;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;
@@ -272,6 +273,102 @@ class HistoryReplayTest {
         assertEquals(List.of(Kind.ASSISTANT, Kind.USER, Kind.ASSISTANT, Kind.ASSISTANT, Kind.USER, Kind.ASSISTANT),
                 out.stream().map(OutputLine::kind).toList());
         assertEquals(2, HistoryReplay.userTurns(history), "用户轮数");
+    }
+
+    // ── goal 合成消息（自动轮 / 评估结论标记，Task 13） ──
+
+    /**
+     * 自动轮的 user message 以 {@code [goal 继续 N/M]} 开头（GoalText.continuePrefix）。
+     * 它是 goal 驱动的合成消息、不是用户说的话——回放不得渲成用户块（否则 {@code -c} 之后
+     * 满屏重复的循环 prompt 正文），只渲一行 INFO 指路。
+     */
+    @Test
+    void autoTurnMessageRendersAsSingleInfoLine() {
+        String stored = GoalText.continuePrefix(2, 25)
+                + "\n目标：迁移完成且测试全绿\n评估器结论（上一轮）：还差登录页\n\n请继续推进。……";
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals(1, out.size(), "自动轮只渲一行（不重放正文）");
+        assertEquals(Kind.INFO, out.get(0).kind());
+        assertEquals("◎ goal 继续（自动轮，详情见评估轨迹）", out.get(0).text());
+    }
+
+    /** 评估结论合成块（appendEvaluationEvent 落库形态）：一行 INFO 渲 unwrap 后的「结论：原因」。 */
+    @Test
+    void evalMarkerRendersAsSingleInfoLine() {
+        String stored = GoalText.wrapEvaluation("UNSATISFIED", "还差登录页");
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals(1, out.size(), "评估结论只渲一行（不重放为用户消息）");
+        assertEquals(Kind.INFO, out.get(0).kind());
+        assertEquals("◎ goal 评估：UNSATISFIED：还差登录页", out.get(0).text());
+    }
+
+    /** 终局结论同样一行 INFO——恢复时能看出「上次是怎么结束的」。 */
+    @Test
+    void evalMarkerWithSatisfiedVerdictAlsoRenders() {
+        String stored = GoalText.wrapEvaluation("SATISFIED", "全部测试通过");
+        List<OutputLine> out = HistoryReplay.toReplayLines(List.of(new UserMessage(stored)));
+        assertEquals(1, out.size());
+        assertEquals("◎ goal 评估：SATISFIED：全部测试通过", out.get(0).text());
+    }
+
+    /**
+     * goal 合成消息都不是用户对话轮：自动轮与评估结论标记若计入，「已恢复 N 轮对话」会被
+     * 循环轮次撑大——与插话同一条不变量（合成消息 ≠ 用户说话）。
+     */
+    @Test
+    void goalSyntheticMessagesDoNotCountAsUserTurns() {
+        List<Message> history = List.of(
+                new UserMessage("问题一"),
+                new UserMessage(GoalText.continuePrefix(1, 25) + "\n目标：迁移"),
+                new AssistantMessage("推进中"),
+                new UserMessage(GoalText.wrapEvaluation("UNSATISFIED", "还差登录页")));
+        assertEquals(1, HistoryReplay.userTurns(history), "自动轮与评估标记都不得计入用户轮数");
+    }
+
+    /** 头部检测：历史里有任一 goal 痕迹（自动轮或评估标记）即视为「上次有未完成 goal」。 */
+    @Test
+    void hasGoalTracesDetectsBothMarkers() {
+        assertTrue(HistoryReplay.hasGoalTraces(List.of(
+                new UserMessage("问题一"),
+                new UserMessage(GoalText.continuePrefix(3, 25) + "\n目标：迁移"))));
+        assertTrue(HistoryReplay.hasGoalTraces(List.of(
+                new UserMessage(GoalText.wrapEvaluation("UNSATISFIED", "还差登录页")))));
+        assertFalse(HistoryReplay.hasGoalTraces(List.of(
+                new UserMessage("问题一"), new AssistantMessage("答一"))));
+        assertFalse(HistoryReplay.hasGoalTraces(null));
+        assertFalse(HistoryReplay.hasGoalTraces(List.of()));
+    }
+
+    /**
+     * 恢复提示接线（ConversationState.replayHistory）：goal 只活在进程内存态（spec §1 决策
+     * 「退出即失」），恢复的历史里有痕迹就说明上次有个没跑完的 goal、它已经不在了——
+     * 不说清楚，用户会一直等一个永远不会来的自动轮。无 goal 痕迹时不得多出这行。
+     */
+    @Test
+    void replayHistoryAppendsGoalInvalidatedNoticeOnlyWhenTracesPresent() {
+        ConversationState withGoal = new ConversationState();
+        withGoal.replayHistory(List.of(
+                new UserMessage("问题一"),
+                new AssistantMessage("答一"),
+                new UserMessage(GoalText.continuePrefix(1, 25) + "\n目标：迁移"),
+                new AssistantMessage("推进中")));
+        List<String> lines = drainPending(withGoal);
+        assertTrue(lines.stream().anyMatch(l -> l.contains("上次会话有未完成 goal，已失效")),
+                "应有一行失效提示，实际：" + lines);
+
+        ConversationState withoutGoal = new ConversationState();
+        withoutGoal.replayHistory(List.of(
+                new UserMessage("问题一"), new AssistantMessage("答一")));
+        assertTrue(drainPending(withoutGoal).stream().noneMatch(l -> l.contains("goal")),
+                "无 goal 痕迹不得多出提示行");
+    }
+
+    private static List<String> drainPending(ConversationState s) {
+        List<String> lines = new java.util.ArrayList<>();
+        for (OutputLine ol; (ol = s.pollPending()) != null; ) {
+            lines.add(ol.text());
+        }
+        return lines;
     }
 
     // ── -c 恢复时重建 todo 面板 ──

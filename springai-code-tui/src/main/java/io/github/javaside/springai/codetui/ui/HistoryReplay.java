@@ -1,6 +1,7 @@
 package io.github.javaside.springai.codetui.ui;
 
 import io.github.javaside.springai.codetui.agent.AgentTools;
+import io.github.javaside.springai.codetui.agent.goal.GoalText;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectionText;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
@@ -39,6 +40,19 @@ final class HistoryReplay {
         for (Message m : messages) {
             switch (m.getMessageType()) {
                 case USER -> {
+                    String stored = safe(m.getText());
+                    // goal 合成消息（GoalText）：自动轮与评估结论标记都不是用户说的话——
+                    // 各渲一行 INFO 指路（详情看 goal 轨迹/评估标记聚合行），不重放正文为用户块，
+                    // 否则 -c 之后满屏重复的循环 prompt。
+                    if (GoalText.isContinueMessage(stored)) {
+                        out.add(new OutputLine("◎ goal 继续（自动轮，详情见评估轨迹）", Kind.INFO));
+                        continue;
+                    }
+                    if (stored.startsWith(GoalText.EVAL_OPEN)) {
+                        out.add(new OutputLine("◎ goal 评估："
+                                + GoalText.unwrapEvaluation(stored).replaceAll("\\R+", " "), Kind.INFO));
+                        continue;
+                    }
                     out.add(new OutputLine("", Kind.ASSISTANT));                 // 回合间留白，与 onUserMessage 一致
                     // 会话持久化的是「注入后」的有效文本；实时 UI 只显示用户原文（onUserMessage 传 text 而非
                     // effectiveText），回放须一致，故剥掉 CodingAgent.injectSkill 注入的 <skill_instruction> 前缀。
@@ -50,7 +64,7 @@ final class HistoryReplay {
                     // 超长用户块与实时 onUserMessage 同规则折叠（foldUserEcho）：重开会话回放
                     // 照登全文的话，粘贴折叠只是把刷屏从当时挪到了重开之后。
                     out.add(new OutputLine("› " + ConversationState.foldUserEcho(stripFileReferences(
-                            stripSkillInstruction(InterjectionText.unwrap(safe(m.getText()))))), Kind.USER));
+                            stripSkillInstruction(InterjectionText.unwrap(stored)))), Kind.USER));
                 }
                 case ASSISTANT -> {
                     String text = m.getText();
@@ -114,6 +128,10 @@ final class HistoryReplay {
      *
      * <p><b>插话不算一轮</b>：它是回合<b>进行中</b>补的一条 user 消息，属于当时那一轮，
      * 不是新起的一轮。算进去的话「已恢复 N 轮对话」会比用户记得的多出几轮。
+     *
+     * <p><b>goal 合成消息同样不算</b>（Task 13）：自动轮（{@code [goal 继续 N/M]}）与评估结论
+     * 标记（{@code [goal 评估]}）都是程序合成、不是用户说话——一个跑满 25 轮的 goal 会让
+     * 「已恢复 N 轮」凭空多出 25+ 条。
      */
     static long userTurns(List<Message> messages) {
         if (messages == null) {
@@ -122,7 +140,26 @@ final class HistoryReplay {
         return messages.stream()
                 .filter(m -> m.getMessageType() == org.springframework.ai.chat.messages.MessageType.USER)
                 .filter(m -> !safe(m.getText()).startsWith(InterjectionText.OPEN))
+                .filter(m -> !GoalText.isContinueMessage(safe(m.getText())))
+                .filter(m -> !safe(m.getText()).startsWith(GoalText.EVAL_OPEN))
                 .count();
+    }
+
+    /**
+     * 历史里是否有 goal 痕迹（任一 USER 消息是自动轮或评估结论标记）——恢复方
+     * {@code ConversationState.replayHistory} 据此提示「上次会话有未完成 goal，已失效」：
+     * goal 只活在进程内存态（spec §1「退出即失」），历史里有痕迹即说明它没跑完就没了。
+     */
+    static boolean hasGoalTraces(List<Message> messages) {
+        if (messages == null) {
+            return false;
+        }
+        for (Message m : messages) {
+            if (m.getMessageType() != org.springframework.ai.chat.messages.MessageType.USER) continue;
+            String t = safe(m.getText());
+            if (GoalText.isContinueMessage(t) || t.startsWith(GoalText.EVAL_OPEN)) return true;
+        }
+        return false;
     }
 
     private static String safe(String s) {
