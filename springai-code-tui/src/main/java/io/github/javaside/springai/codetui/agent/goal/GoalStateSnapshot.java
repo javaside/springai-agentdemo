@@ -16,7 +16,7 @@ import java.util.List;
  * @param tokenBudget   token 预算（0=预算关闭）
  * @param stalledStreak 连续停滞轮数（熔断计数）
  * @param activatedAt   激活时间；未设定 goal 为 {@code null}
- * @param recentTraces  最近的评估轨迹（面板滚动行，最多 8 条；Task 5 接入滚动记录前为空表）
+ * @param recentTraces  最近的评估轨迹（面板滚动行：onVerdict 放行时入账，≤8 条 FIFO，含终局 verdict）
  * @param lastSummary   最近一条结论摘要（达成/不可达原因等；空串=尚无）
  */
 public record GoalStateSnapshot(

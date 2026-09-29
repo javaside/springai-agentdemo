@@ -7,6 +7,8 @@ import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
 import io.github.javaside.springai.codetui.ui.update.UiDirty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 
 import java.time.Clock;
@@ -74,6 +76,9 @@ public final class GoalManager implements UiChangeSource {
     /** 滚动记录上限：评估器只见最近 8 轮（spec §4 FIFO）。 */
     static final int MAX_HISTORY = 8;
 
+    /** 评估轨迹上限（recentTraces 投影，spec §3.4 面板「最近轨迹」行数）。 */
+    static final int MAX_TRACES = 8;
+
     /** agent 末文本入滚动记录的尾部截断预算（字符）；{@link GoalText#tail} 码点对齐不劈代理对。 */
     static final int ASSISTANT_TAIL_CHARS = 2000;
 
@@ -115,6 +120,13 @@ public final class GoalManager implements UiChangeSource {
     private Instant activatedAt;
     /** 滚动轮记录（≤{@link #MAX_HISTORY} 条 FIFO，Task 5）：评估素材「最近几轮」最小快照；锁内读写。 */
     private final Deque<GoalTurnRecord> history = new ArrayDeque<>();
+    /**
+     * 评估轨迹（≤{@link #MAX_TRACES} 条 FIFO）：onVerdict <b>放行</b>时按评估发生的轮次入账
+     * （{@code snapshot()} 的 recentTraces 投影源，goal 面板「最近轨迹」）。与 {@link #history} 分账——
+     * 滚动记录是<b>评估器的输入素材</b>（落记录先于评估、内容是轮内发生了什么），轨迹是<b>评估器的
+     * 输出结论</b>（含终局 verdict），两者时序与消费方都不同。锁内读写；activate 换代清空。
+     */
+    private final Deque<GoalStateSnapshot.GoalEvalTrace> evalTraces = new ArrayDeque<>();
     /** 上一轮评估结论（onVerdict 放行时更新；{@code null}=首轮，prompt 写「（首轮）」）。 */
     private String lastEvalReason;
     private String stateLedger = "";
@@ -190,6 +202,7 @@ public final class GoalManager implements UiChangeSource {
             this.evalInFlight = false;        // 旧 goal 在途评估按 epoch 丢弃
             this.activatedAt = Instant.now(clock);
             this.history.clear();             // 新 goal 不见旧滚动记录（换代即清）
+            this.evalTraces.clear();          // 轨迹同理：新 goal 不背旧账
             this.lastEvalReason = null;       // 首轮：prompt 写「（首轮）」
             this.stateLedger = "";
             this.lastSummary = "";
@@ -349,10 +362,16 @@ public final class GoalManager implements UiChangeSource {
      * UNSATISFIED → stalled 计数（达 {@code stalledLimit} → PAUSED(STALLED)，不置 pending）、
      * 否则恒置下一自动轮 pending 与 gap 倒计时——绝不允许「pending=false 等 deadline 叫醒」
      * 的断流形态。
+     *
+     * <p><b>放行路径的两条出账</b>（只对真正生效的判定；丢弃的 verdict 不落账）：
+     * 评估轨迹入 {@link #evalTraces}（锁内）；评估结论落库 {@link #appendEvaluationEvent}
+     * （锁外，失败只记日志不影响评估主流程）。
      */
     public void onVerdict(long epoch, GoalVerdict verdict) {
         Objects.requireNonNull(verdict, "verdict");
         long version = 0;
+        String appliedVerdictLine = null;      // 非 null = 放行（落库在锁外做，IO 不进监视器）
+        String appliedReason = null;
         synchronized (this) {
             if (epoch != this.epoch || phase.isTerminal()) return;   // 旧代迟到/终态：完全 no-op
             boolean wasInFlight = evalInFlight;
@@ -362,6 +381,11 @@ public final class GoalManager implements UiChangeSource {
                 // 判定过期，丢弃但清标志放行恢复后重评
                 if (wasInFlight) version = changed();
             } else {
+                evalTraces.addLast(new GoalStateSnapshot.GoalEvalTrace(
+                        turnsUsed, verdict.outcome().name(), verdict.reason()));
+                while (evalTraces.size() > MAX_TRACES) evalTraces.pollFirst();
+                appliedVerdictLine = verdict.outcome().name();
+                appliedReason = verdict.reason();
                 switch (verdict.outcome()) {
                     case SATISFIED -> {
                         lastSummary = verdict.reason();
@@ -390,6 +414,9 @@ public final class GoalManager implements UiChangeSource {
             }
         }
         publish(version);
+        if (appliedVerdictLine != null) {
+            appendEvaluationEvent(appliedVerdictLine, appliedReason);   // 锁外：落库失败不伤主流程
+        }
     }
 
     /**
@@ -639,10 +666,10 @@ public final class GoalManager implements UiChangeSource {
                 var snap = usage.snapshot();
                 spent = (snap.promptTokens() - basePromptTokens) + (snap.completionTokens() - baseCompletionTokens);
             }
-            // recentTraces：滚动记录 → UI 投影留待下游接线（Task 9），暂为空表
+            // recentTraces：onVerdict 放行时入账的评估轨迹 ≤8 条（面板「最近轨迹」的投影源）
             return new GoalStateSnapshot(phase, pauseReason, condition, turnsUsed, config.maxTurns(),
                     Math.max(0, spent), config.tokenBudget(), stalledStreak, activatedAt,
-                    List.of(), lastSummary);
+                    List.copyOf(evalTraces), lastSummary);
         }
     }
 
@@ -655,5 +682,33 @@ public final class GoalManager implements UiChangeSource {
     public void bindSession(SessionService sessionService, Supplier<String> sessionIdSupplier) {
         this.sessionService = sessionService;
         this.sessionIdSupplier = sessionIdSupplier;
+    }
+
+    /**
+     * 评估结论落库（spec §3.4，Task 13）：把<b>放行</b>的 verdict 包成
+     * {@link GoalText#wrapEvaluation} 合成块、经 {@link SessionService#appendEvent} 独立追加一条
+     * UserMessage 事件。三条纪律：
+     * <ul>
+     *   <li><b>不进对话上下文</b>——评估器输入靠内存滚动记录（{@link #history}），落库事件只是
+     *       供 {@code -c} 恢复时 HistoryReplay 渲一行「◎ goal 评估：…」的审计痕迹；</li>
+     *   <li><b>未接线静默跳过</b>——sessionService 或 sessionId 任一 null（桩路径/装配前）直接返回；</li>
+     *   <li><b>失败不抛</b>——IO/仓库异常 log.warn 吞掉，评估主流程（状态机已推进）不受落库影响。</li>
+     * </ul>
+     * 只在 {@link #onVerdict} 放行路径的<b>锁外</b>调用（IO 不进监视器，同 publish 纪律）。
+     */
+    private void appendEvaluationEvent(String verdictLine, String reason) {
+        SessionService ss;
+        String sid;
+        synchronized (this) {
+            ss = this.sessionService;
+            sid = this.sessionIdSupplier == null ? null : this.sessionIdSupplier.get();
+        }
+        if (ss == null || sid == null) return;
+        try {
+            ss.appendEvent(SessionEvent.builder().sessionId(sid)
+                    .message(new UserMessage(GoalText.wrapEvaluation(verdictLine, reason))).build());
+        } catch (RuntimeException e) {
+            log.warn("goal 评估结论落库失败（{}）：{}", verdictLine, e.toString());
+        }
     }
 }

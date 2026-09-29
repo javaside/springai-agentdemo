@@ -2717,8 +2717,8 @@ public final class CodeTuiView extends InlineApp {
     /**
      * goal 状态面板（scrollback 逐行，非 live 面板——live 指示走状态栏 leading）。
      *
-     * <p>包级可见便于测试直接喂手工快照（{@code GoalStateSnapshot} 是公共 record；Manager 侧
-     * recentTraces 投影未接线前真快照恒为空轨迹，面板行本身照常渲染）。
+     * <p>包级可见便于测试直接喂手工快照（{@code GoalStateSnapshot} 是公共 record；真快照的
+     * recentTraces 由 Manager 在 onVerdict 放行时入账）。
      * INACTIVE（从未设定）不铺面板——空条件的面板全是 null/0，给一句用法提示更有用；
      * 终态<b>照常铺</b>：终态报告（条件/相位/结论）必须活到用户敲下一个 goal 为止，
      * 否则「为什么停了」在界面上无迹可查。
