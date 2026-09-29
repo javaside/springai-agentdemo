@@ -1251,7 +1251,9 @@ public final class CodingAgent implements SubmitHandler {
         this.goalRunner = goalRunner;
         this.goalEvaluator = goalEvaluator;
         if (goalManager != null) {
-            goalManager.bindSession(sessionService, () -> this.sessionId);
+            // C1：评估结论落库改为中段插入（getEvents + replaceEvents），须把仓库一并闭包给
+            // GoalManager——service 只有 append（尾部）语义，中段插入写回必须走 repository。
+            goalManager.bindSession(sessionService, sessionRepository, () -> this.sessionId);
         }
     }
 

@@ -17,13 +17,16 @@ import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -111,9 +114,34 @@ class GoalConcurrencyScenariosTest {
         }
     }
 
-    /** 记录型会话存储：评估结论落库（appendEvaluationEvent）与压缩重写（⑭）的唯一观测面。 */
+    /**
+     * 记录型 {@link SessionService}（读端）：getEvents 回放一份共享事件表。评估结论标记（C1 中段插入）
+     * 与压缩重写（⑭）的唯一观测面。注意 {@code SessionService.findById} 返回 {@code Session}、
+     * {@code SessionRepository.findById} 返回 {@code Optional}——两接口同名不同型，无法由同一个类实现，
+     * 故仓库视图（{@link #repoView}）挂在同一份事件表上。
+     */
     private static class RecordingSessionService implements SessionService {
         final List<SessionEvent> events = new CopyOnWriteArrayList<>();
+
+        /** 同一份事件表的仓库视图（C1 中段插入的写回端）。 */
+        final SessionRepository repoView = new SessionRepository() {
+            @Override public void replaceEvents(String sessionId, List<SessionEvent> evts) {
+                events.clear();
+                events.addAll(evts);
+            }
+            @Override public boolean replaceEvents(String sessionId, List<SessionEvent> evts, long expectedVersion) {
+                replaceEvents(sessionId, evts);
+                return true;
+            }
+            @Override public void appendEvent(SessionEvent e) { events.add(e); }
+            @Override public Session save(Session s) { throw new UnsupportedOperationException(); }
+            @Override public java.util.Optional<Session> findById(String id) { throw new UnsupportedOperationException(); }
+            @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
+            @Override public List<String> findExpiredSessionIds(Instant before) { throw new UnsupportedOperationException(); }
+            @Override public void delete(String id) { throw new UnsupportedOperationException(); }
+            @Override public long getEventVersion(String id) { return events.size(); }
+            @Override public List<SessionEvent> findEvents(String id, EventFilter f) { return List.copyOf(events); }
+        };
 
         @Override public void appendEvent(SessionEvent e) { events.add(e); }
         @Override public List<SessionEvent> getEvents(String id, EventFilter f) { return List.copyOf(events); }
@@ -131,6 +159,12 @@ class GoalConcurrencyScenariosTest {
         void simulateCompaction(String summary) {
             events.clear();
             events.add(SessionEvent.builder().sessionId("s").message(new UserMessage(summary)).build());
+        }
+
+        /** 评估结论标记条数（C1 后的落库观测面：中段插入，标记不占尾部）。 */
+        long markerCount() {
+            return events.stream().filter(e -> e.getMessage() instanceof UserMessage um
+                    && um.getText() != null && um.getText().startsWith(GoalText.EVAL_OPEN)).count();
         }
     }
 
@@ -152,12 +186,34 @@ class GoalConcurrencyScenariosTest {
             this.usage = env.containsKey(GoalConfig.TOKEN_BUDGET_ENV) ? new TokenUsageAccumulator() : null;
             this.gm = new GoalManager(config, usage);
             this.runner = new GoalEvaluationRunner(config);
-            this.gm.bindSession(sessions, () -> sessionId);   // 评估结论落库接线（Task 9 两段式的桩侧等价）
+            // 评估结论落库接线（Task 9 两段式的桩侧等价；C1 后 service+repository 双参——中段插入的两端）
+            this.gm.bindSession(sessions, sessions.repoView, () -> sessionId);
         }
 
         @Override public Disposable submit(String text) {
             submitted.add(text);
             submitThreads.add(Thread.currentThread());
+            // 镜像 CodingAgent 的会话落库形状（C1 后评估结论落库需要 AssistantMessage 锚点）：
+            // 镜像 foldTrailingUserIntoOutbound（尾部 user 折走删除）+ 一轮完整对话
+            // user → assistant(tool_calls) → tool → assistant(收尾)——评估标记插在收尾 assistant
+            // 之前、恒非尾事件，且不与任何 user 相邻成双。
+            List<SessionEvent> evs = List.copyOf(sessions.events);
+            if (!evs.isEmpty() && evs.get(evs.size() - 1).getMessage() instanceof UserMessage) {
+                sessions.repoView.replaceEvents(sessionId, evs.subList(0, evs.size() - 1));
+            }
+            String callId = "call-" + submitted.size();
+            sessions.appendEvent(SessionEvent.builder().sessionId(sessionId)
+                    .message(new UserMessage(text)).build());
+            sessions.appendEvent(SessionEvent.builder().sessionId(sessionId)
+                    .message(AssistantMessage.builder().content("(委派)")
+                            .toolCalls(List.of(new AssistantMessage.ToolCall(callId, "function", "bash", "{}")))
+                            .build()).build());
+            sessions.appendEvent(SessionEvent.builder().sessionId(sessionId)
+                    .message(ToolResponseMessage.builder()
+                            .responses(List.of(new ToolResponseMessage.ToolResponse(callId, "bash", "exit 0")))
+                            .build()).build());
+            sessions.appendEvent(SessionEvent.builder().sessionId(sessionId)
+                    .message(new AssistantMessage("（轮完成）")).build());
             if (usage != null) usage.record(new FakeUsage(600, 0));   // 模拟一轮对话耗量（预算断言用）
             return () -> { };
         }
@@ -523,22 +579,24 @@ class GoalConcurrencyScenariosTest {
         gm.activate("迁移完成且测试全绿");
 
         // 8 轮完整循环：滚动记录恰满 8 条（每次评估起评前落一条素材）。
-        // await 同时等「在飞标志清 + 标记事件到账」——onVerdict 锁内清标志、锁外才 appendEvaluationEvent，
+        // await 同时等「在飞标志清 + 标记事件到账」——onVerdict 锁内清标志、锁外才做中段插入落库，
         // 只等标志会与落库竞态（真跑抓到过：expected 1 but was 0）。
+        // 事件计数口径（C1 后）：submit 桩每轮落 4 条轮事件、评估标记中段插入 1 条——标记数才是落库观测量。
         for (int i = 1; i <= 8; i++) {
             final int n = i;
             rig.v().tickForTest();                // 自动轮 i
             drainUntil(rig.v(), () -> rig.h().evaluator.calls.get() >= n, "评估 " + n + " 应起评");
             rig.h().evaluator.enqueue(unsat("轮" + n + "未完", false, "已完成：" + n + "/8"));
             final int expectedMarkers = n;
-            await(() -> !gm.evaluationInFlight() && rig.h().sessions.events.size() == expectedMarkers,
+            await(() -> !gm.evaluationInFlight() && rig.h().sessions.markerCount() == expectedMarkers,
                     "verdict " + n + " 应落账且结论标记到账");
             if (n < 8) {
                 drainUntilSubmitted(rig.v(), rig.h(), n + 1);
             }
         }
         assertEquals(8, gm.buildEvaluationInput().recentTurns().size(), "前置：滚动记录恰 8 条");
-        assertEquals(8, rig.h().sessions.events.size(), "前置：8 条评估结论标记已独立落库");
+        assertEquals(8, rig.h().sessions.markerCount(), "前置：8 条评估结论标记已独立落库（中段插入）");
+        assertEquals(8 * 5, rig.h().sessions.events.size(), "前置：8 轮 ×（4 轮事件 + 1 标记）");
 
         // 触发压缩（replaceEvents 语义）：全部会话事件换成一条摘要——goal 滚动记录是内存态，不受影响
         rig.h().sessions.simulateCompaction("（历史已压缩：前 8 轮完成迁移主体）");
@@ -547,27 +605,45 @@ class GoalConcurrencyScenariosTest {
                 "压缩中途存活：滚动记录是 Manager 内存态，不随会话事件重写丢失");
 
         // 压缩后的评估：输入仍含 8 轮（第 9 条素材入账、FIFO 挤掉最旧）
-        int eventsBeforeEval = rig.h().sessions.events.size();
-        rig.v().tickForTest();                    // 自动轮 9（第 8 个 verdict 置的 pending）
+        rig.v().tickForTest();                    // 自动轮 9（第 8 个 verdict 置的 pending；
+        //   submit 桩按 fold 语义折走压缩摘要那条尾部 user 再落轮 9 的 4 条事件）
         assertEquals(9, rig.h().submitted.size());
         drainUntil(rig.v(), () -> rig.h().evaluator.calls.get() >= 9, "压缩后评估 9 应起评");
         assertEquals(8, rig.h().evaluator.inputs.get(8).recentTurns().size(),
                 "评估输入仍含 8 轮滚动记录（压缩不缩水评估视野）");
 
-        // 守卫①：评估不写对话上下文——评估前后会话事件的增量只有「评估结论标记」这一类合成事件
-        // （await 连标记到账一起等，理由同上：落库在锁外、晚于在飞标志清除）
+        // 守卫①：评估不写对话上下文——本轮 submit 落完轮事件之后，评估全程新增事件恰一条（结论标记，
+        // C1 中段插入：标记插在收尾 assistant 之前、不在序列末尾——差分按「移除标记后与原序列逐位相等」计）
+        List<SessionEvent> eventsBeforeEval = List.copyOf(rig.h().sessions.events);
         rig.h().evaluator.enqueue(satisfied("全部完成"));
-        await(() -> !gm.evaluationInFlight() && rig.h().sessions.events.size() == eventsBeforeEval + 1,
+        await(() -> !gm.evaluationInFlight() && rig.h().sessions.events.size() == eventsBeforeEval.size() + 1,
                 "终局 verdict 应落账且结论标记到账");
         assertEquals(GoalPhase.SATISFIED, gm.phase());
-        List<SessionEvent> delta = rig.h().sessions.events.subList(
-                eventsBeforeEval, rig.h().sessions.events.size());
-        assertEquals(1, delta.size(), "评估全程新增事件恰一条（结论标记）");
-        for (SessionEvent e : delta) {
-            String text = e.getMessage().getText();
-            assertTrue(text.startsWith(GoalText.EVAL_OPEN) && text.endsWith(GoalText.EVAL_CLOSE),
-                    "评估只允许落 wrapEvaluation 标记事件，不得塞 assistant/user 轮，实际：" + text);
-            assertTrue(text.contains("SATISFIED"), "终局结论在标记里，实际：" + text);
+        List<SessionEvent> after = List.copyOf(rig.h().sessions.events);
+        int markerIdx = -1;
+        for (int i = 0; i < after.size(); i++) {
+            String t = after.get(i).getMessage().getText();
+            if (t != null && t.startsWith(GoalText.EVAL_OPEN)) {
+                assertEquals(-1, markerIdx, "压缩重写后只应有一条标记");
+                markerIdx = i;
+            }
+        }
+        assertTrue(markerIdx >= 0, "应存在一条评估标记，实际：" + after);
+        String markerText = after.get(markerIdx).getMessage().getText();
+        assertTrue(markerText.startsWith(GoalText.EVAL_OPEN) && markerText.endsWith(GoalText.EVAL_CLOSE),
+                "评估只允许落 wrapEvaluation 标记事件，不得塞 assistant/user 轮，实际：" + markerText);
+        assertTrue(markerText.contains("SATISFIED"), "终局结论在标记里，实际：" + markerText);
+        List<SessionEvent> withoutMarker = new ArrayList<>(after);
+        withoutMarker.remove(markerIdx);
+        assertEquals(eventsBeforeEval, withoutMarker, "除标记外事件零改动（评估不写对话上下文）");
+        // C1 序列形态：标记插在最后一条 assistant 之前（非尾事件），全程无相邻双 user
+        assertTrue(markerIdx + 1 < after.size()
+                        && after.get(markerIdx + 1).getMessage() instanceof AssistantMessage,
+                "标记后必跟 assistant（恒非尾事件，fold 够不到）");
+        for (int i = 1; i < after.size(); i++) {
+            assertFalse(after.get(i - 1).getMessage() instanceof UserMessage
+                            && after.get(i).getMessage() instanceof UserMessage,
+                    "相邻双 user（下标 " + (i - 1) + "/" + i + "）会触发折叠/400 形状");
         }
 
         // 守卫②：自动轮 dispatch 全落 UI 线程（测试态即断言 submit 全在 drain 调用线程）

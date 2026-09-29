@@ -7,13 +7,16 @@ import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
 import io.github.javaside.springai.codetui.ui.update.UiDirty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
@@ -47,7 +50,8 @@ import java.util.regex.Pattern;
  * 一次，no-op 不推进版本；listener 抛出的 {@link RuntimeException} 被隔离成日志。
  *
  * <p><b>熔断矩阵</b>（spec §7 同时为真时原因唯一：STALLED &gt; ERROR &gt; EVALUATOR &gt; PROTOCOL）：
- * 四族独立计数——UNSATISFIED+stalled 与协议失败同入 {@code stalledStreak}，达 {@code stalledLimit}
+ * 四族独立计数——UNSATISFIED 停滞判定（PROGRESS=stalled <b>或本轮零工具调用</b>，后者是
+ * {@link #recordTurnMaterial} 锁存的机器信号）与协议失败同入 {@code stalledStreak}，达 {@code stalledLimit}
  * → PAUSED(STALLED)；{@link #onTurnError} 非豁免根因连续达 {@code errorRetry+1} → PAUSED(ERROR)；
  * {@link #onEvaluationFailure} 达 {@code evalFailLimit} → PAUSED(EVALUATOR)；{@link #onProtocolFailure}
  * 达 {@code protocolFailLimit} → PAUSED(PROTOCOL)。用户插话（{@link #onUserDispatch}）重置全部计数。
@@ -132,8 +136,12 @@ public final class GoalManager implements UiChangeSource {
     private String stateLedger = "";
     private String lastSummary = "";
 
-    /** 评估结论落库接线（Task 9 由 CodingAgent 两段式调用；均 null 时评估结论不落库）。 */
+    /**
+     * 评估结论落库接线（Task 9 由 CodingAgent 两段式调用；service/repository 或 sessionId 任一缺失时
+     * 评估结论不落库——repository 缺失时<b>中段插入无从写回</b>，静默跳过而非退回尾部追加）。
+     */
     private volatile SessionService sessionService;
+    private volatile SessionRepository sessionRepository;
     private volatile Supplier<String> sessionIdSupplier;
 
     /** 生产构造。 */
@@ -398,7 +406,11 @@ public final class GoalManager implements UiChangeSource {
                         version = changed();
                     }
                     case UNSATISFIED -> {
-                        stalledStreak = verdict.stalled() ? stalledStreak + 1 : 0;
+                        // spec §7 停滞口径：PROGRESS=stalled 或本轮零工具调用（机器信号）——
+                        // 评估器说 advancing 但一轮一个工具都没碰，同样算停滞（PauseReason.STALLED 的 javadoc 承诺）。
+                        // 机器信号读最近一条滚动记录：无素材（未 recordTurnMaterial）= 无信号，不误伤。
+                        boolean stalledSignal = verdict.stalled() || zeroToolCallsLastTurnLocked();
+                        stalledStreak = stalledSignal ? stalledStreak + 1 : 0;
                         if (verdict.stateLedger() != null) stateLedger = verdict.stateLedger();
                         lastEvalReason = verdict.reason();   // 下一自动轮 prompt 的「上一轮结论」
                         if (stalledStreak >= config.stalledLimit()) {
@@ -620,6 +632,8 @@ public final class GoalManager implements UiChangeSource {
      * 「当前轮次 + 上一轮评估结论 + {@link GoalText#tail} 2000 字符码点安全尾部 + 工具调用数 +
      * 用户插话原文」落 {@link GoalTurnRecord}，超 {@link #MAX_HISTORY} 条 {@code pollFirst}
      * 挤掉最旧。属内部评估素材（{@link GoalStateSnapshot} 不含它）——不改可见状态，不推 UI 版本。
+     * 工具调用数同时是 stalled 熔断的<b>机器信号</b>（spec §7「本轮零工具调用」，见
+     * {@link #zeroToolCallsLastTurnLocked}）——最近一条记录即「本轮」。
      */
     public void recordTurnMaterial(GoalTurnMaterial material) {
         Objects.requireNonNull(material, "material");
@@ -629,6 +643,16 @@ public final class GoalManager implements UiChangeSource {
                     material.toolCallCount(), material.userInterjection()));
             while (history.size() > MAX_HISTORY) history.pollFirst();
         }
+    }
+
+    /**
+     * 锁内机器信号（spec §7）：最近一条滚动记录（= 被评估那轮的素材）工具调用数为 0。
+     * 无素材（从未 {@link #recordTurnMaterial}，如单测直调链）= 无信号 → {@code false}，
+     * 不把「没记录」误判成「零工具」。
+     */
+    private boolean zeroToolCallsLastTurnLocked() {
+        GoalTurnRecord last = history.peekLast();
+        return last != null && last.toolCallCount() == 0;
     }
 
     /**
@@ -676,37 +700,62 @@ public final class GoalManager implements UiChangeSource {
     // ── 落库接线（Task 9） ─────────────────────────────────────────────
 
     /**
-     * 接会话存储（Task 9 由 CodingAgent 两段式调用）。两者均 null 时评估结论不落库；
-     * 只在装配期调用一次，故 volatile 字段直写即可。
+     * 接会话存储（Task 9 由 CodingAgent 两段式调用）。读走 {@code sessionService.getEvents}、
+     * 写回 {@code sessionRepository.replaceEvents}（中段插入没有 append 语义可用）；sessionId 由
+     * supplier 现取。三者任一未接线（null）时评估结论不落库；只在装配期调用一次，volatile 字段直写即可。
      */
-    public void bindSession(SessionService sessionService, Supplier<String> sessionIdSupplier) {
+    public void bindSession(SessionService sessionService, SessionRepository sessionRepository,
+                            Supplier<String> sessionIdSupplier) {
         this.sessionService = sessionService;
+        this.sessionRepository = sessionRepository;
         this.sessionIdSupplier = sessionIdSupplier;
     }
 
     /**
-     * 评估结论落库（spec §3.4，Task 13）：把<b>放行</b>的 verdict 包成
-     * {@link GoalText#wrapEvaluation} 合成块、经 {@link SessionService#appendEvent} 独立追加一条
-     * UserMessage 事件。三条纪律：
+     * 评估结论落库（spec §3.4，Task 13；C1 改中段插入）：把<b>放行</b>的 verdict 包成
+     * {@link GoalText#wrapEvaluation} 合成块，作为一条 UserMessage 事件<b>插到会话最后一条
+     * AssistantMessage 之前</b>（照 {@code CodingAgent.persistInterjection} 的中段插入先例，
+     * getEvents → 插入 → replaceEvents 写回）。四条纪律：
      * <ul>
+     *   <li><b>绝不追加尾部</b>（C1）：{@code CodingAgent.submit} 每回合无条件
+     *       {@code foldTrailingUserIntoOutbound}——尾部 UserMessage 会被折进出站文本并从会话删除。
+     *       追加尾部 = 轨迹被销毁 + 用户下一条消息被混成「[goal 评估]…\n\n&lt;用户文本&gt;」。插在
+     *       最后一条 assistant 之前保证标记恒非尾事件（后面必跟 assistant），fold 永远够不到它；</li>
+     *   <li><b>无 AssistantMessage 则跳过</b>——找不到锚点（空会话/纯 user 壳）时不落库；
+     *       追加尾部只会重演 fold 事故；</li>
      *   <li><b>不进对话上下文</b>——评估器输入靠内存滚动记录（{@link #history}），落库事件只是
      *       供 {@code -c} 恢复时 HistoryReplay 渲一行「◎ goal 评估：…」的审计痕迹；</li>
-     *   <li><b>未接线静默跳过</b>——sessionService 或 sessionId 任一 null（桩路径/装配前）直接返回；</li>
-     *   <li><b>失败不抛</b>——IO/仓库异常 log.warn 吞掉，评估主流程（状态机已推进）不受落库影响。</li>
+     *   <li><b>失败不抛</b>——IO/仓库异常 log.warn 吞掉，评估主流程（状态机已推进）不受落库影响；
+     *       未接线（service/repository/sessionId 任一 null）静默跳过。</li>
      * </ul>
      * 只在 {@link #onVerdict} 放行路径的<b>锁外</b>调用（IO 不进监视器，同 publish 纪律）。
      */
     private void appendEvaluationEvent(String verdictLine, String reason) {
         SessionService ss;
+        SessionRepository repo;
         String sid;
         synchronized (this) {
             ss = this.sessionService;
+            repo = this.sessionRepository;
             sid = this.sessionIdSupplier == null ? null : this.sessionIdSupplier.get();
         }
-        if (ss == null || sid == null) return;
+        if (ss == null || repo == null || sid == null) return;
         try {
-            ss.appendEvent(SessionEvent.builder().sessionId(sid)
+            List<SessionEvent> events = ss.getEvents(sid);
+            int lastAssistant = -1;
+            for (int i = events.size() - 1; i >= 0; i--) {
+                if (events.get(i).getMessage() instanceof AssistantMessage) {
+                    lastAssistant = i;
+                    break;
+                }
+            }
+            if (lastAssistant < 0) return;   // 无锚点：跳过落库（宁缺勿尾部）
+            List<SessionEvent> out = new ArrayList<>(events.size() + 1);
+            out.addAll(events.subList(0, lastAssistant));
+            out.add(SessionEvent.builder().sessionId(sid)
                     .message(new UserMessage(GoalText.wrapEvaluation(verdictLine, reason))).build());
+            out.addAll(events.subList(lastAssistant, events.size()));
+            repo.replaceEvents(sid, List.copyOf(out));
         } catch (RuntimeException e) {
             log.warn("goal 评估结论落库失败（{}）：{}", verdictLine, e.toString());
         }

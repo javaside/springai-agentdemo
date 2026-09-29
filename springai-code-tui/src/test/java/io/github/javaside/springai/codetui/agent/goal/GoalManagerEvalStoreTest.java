@@ -2,40 +2,46 @@ package io.github.javaside.springai.codetui.agent.goal;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * /goal 评估结论的两条出账（Task 13 A+B）：
+ * /goal 评估结论的两条出账（Task 13 A+B；C1 后落库改为<b>中段插入</b>）：
  *
  * <ol>
  *   <li><b>落库（A，spec §3.4）</b>：onVerdict <b>放行</b>的 verdict 经
- *       {@link GoalText#wrapEvaluation} 合成块独立 appendEvent 一条 UserMessage——
- *       不进对话上下文（评估器输入靠内存滚动记录）；被丢弃的 verdict（Esc 暂停迟到 / serial 过期 /
- *       终态 no-op）<b>不落库</b>——落一条从未生效的结论等于污染 transcript（集成场景⑨「/clear 后
- *       transcript 不复活」的守卫源头在这里）；未 bindSession 静默跳过；落库失败 log.warn 不抛，
- *       评估主流程不受影响。</li>
+ *       {@link GoalText#wrapEvaluation} 合成块插到会话<b>最后一条 AssistantMessage 之前</b>——
+ *       绝不追加尾部（C1：{@code CodingAgent.submit} 每回合 {@code foldTrailingUserIntoOutbound}
+ *       会把尾部 UserMessage 折进出站并删除，追加尾部 = 轨迹被毁 + 用户消息被混入标记）；无
+ *       AssistantMessage 则跳过。不进对话上下文（评估器输入靠内存滚动记录）；被丢弃的 verdict
+ *       （Esc 暂停迟到 / serial 过期 / 终态 no-op）<b>不落库</b>；未接线静默跳过；落库失败
+ *       log.warn 不抛。</li>
  *   <li><b>recentTraces 投影（B）</b>：snapshot() 把 onVerdict 放行时入账的
  *       {@link GoalStateSnapshot.GoalEvalTrace}（turn / verdict / reason）≤8 条 FIFO 投给
- *       goal 面板「最近轨迹」——轨迹按<b>评估发生的轮次</b>对齐（轮 N 的评估记 N），终局 verdict
- *       （SATISFIED/IMPOSSIBLE）也在账上，恢复与事后可查都靠它。</li>
+ *       goal 面板「最近轨迹」。</li>
  * </ol>
  */
 class GoalManagerEvalStoreTest {
@@ -46,26 +52,106 @@ class GoalManagerEvalStoreTest {
 
     // ── 装置 ────────────────────────────────────────────────────────────
 
-    /** 记录型 SessionService：只记 appendEvent，getEvents/getMessages 回放（同 CodingAgentGoalTest 桩形）。 */
-    private static class RecordingSessionService implements SessionService {
-        final List<SessionEvent> appended = new CopyOnWriteArrayList<>();
+    /**
+     * 记录型 {@link SessionService}（读端）：getEvents 回放一份共享事件表。
+     * 注意 {@code SessionService.findById} 返回 {@code Session}、{@code SessionRepository.findById}
+     * 返回 {@code Optional<Session>}——两接口同名不同型，<b>无法由同一个类实现</b>，故写成
+     * 「一份事件表 + service/repo 两个视图」（C1 中段插入的读写两端）。
+     */
+    private static class RecordingStore implements SessionService {
+        final List<SessionEvent> events = new CopyOnWriteArrayList<>();
 
-        @Override public void appendEvent(SessionEvent e) { appended.add(e); }
-        @Override public List<SessionEvent> getEvents(String id, EventFilter f) { return List.copyOf(appended); }
-        @Override public List<Message> getMessages(String id) { return appended.stream().map(SessionEvent::getMessage).toList(); }
+        @Override public void appendEvent(SessionEvent e) { events.add(e); }
+        @Override public List<SessionEvent> getEvents(String id, EventFilter f) { return List.copyOf(events); }
+        @Override public List<Message> getMessages(String id) { return events.stream().map(SessionEvent::getMessage).toList(); }
         @Override public Session create(CreateSessionRequest r) { throw new UnsupportedOperationException(); }
-        @Override public Session findById(String id) { throw new UnsupportedOperationException(); }
+        @Override public Session findById(String id) { return null; }
         @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
         @Override public void delete(String id) { throw new UnsupportedOperationException(); }
         @Override public int deleteExpiredSessions(Instant i) { throw new UnsupportedOperationException(); }
         @Override public CompactionResult compact(String id, CompactionTrigger t, CompactionStrategy s) {
             throw new UnsupportedOperationException();
         }
+
+        /** 评估结论标记条数（唯一观测面：fold 之后标记还活着几条）。 */
+        long markerCount() {
+            return events.stream().filter(e -> e.getMessage() instanceof UserMessage um
+                    && um.getText() != null && um.getText().startsWith(GoalText.EVAL_OPEN)).count();
+        }
+
+        /**
+         * 镜像 {@code CodingAgent.foldTrailingUserIntoOutbound}（C1 事故现场）：会话尾部若残留
+         * UserMessage，折进出站文本并<b>从会话删除</b>；返回合并后的出站文本。
+         */
+        String foldTrailingUserIntoOutbound() {
+            List<SessionEvent> evs = List.copyOf(events);
+            if (evs.isEmpty() || !(evs.get(evs.size() - 1).getMessage() instanceof UserMessage prev)) {
+                return "";
+            }
+            String prevText = prev.getText();
+            replaceAll(evs.subList(0, evs.size() - 1));
+            return prevText == null || prevText.isBlank() ? "" : prevText;
+        }
+
+        /** 共享事件表的整表替换（fold 与仓库视图共用一个写法）。 */
+        private void replaceAll(List<SessionEvent> evts) {
+            events.clear();
+            events.addAll(evts);
+        }
+
+        /**
+         * 落一条带 tool 调用的完整轮形状（SessionMemoryAdvisor 的落库次序）：
+         * user → assistant(tool_calls) → tool → assistant(收尾)。
+         */
+        void appendToolTurn(String userText) {
+            events.add(SessionEvent.builder().sessionId("s").message(new UserMessage(userText)).build());
+            events.add(SessionEvent.builder().sessionId("s").message(asstWithCalls("call-1")).build());
+            events.add(SessionEvent.builder().sessionId("s").message(toolResult("call-1")).build());
+            events.add(SessionEvent.builder().sessionId("s").message(new AssistantMessage("本轮收尾")).build());
+        }
     }
 
-    /** 落库必炸的 SessionService：断言失败被吞成日志、评估主流程不受影响。 */
-    private static final class FailingSessionService extends RecordingSessionService {
-        @Override public void appendEvent(SessionEvent e) { throw new IllegalStateException("磁盘炸了"); }
+    /** 同一份事件表的 {@link SessionRepository} 视图（C1 写回端：replaceEvents）。 */
+    private static class RecordingRepo implements SessionRepository {
+        private final List<SessionEvent> events;
+
+        RecordingRepo(List<SessionEvent> events) { this.events = events; }
+
+        @Override public void appendEvent(SessionEvent e) { events.add(e); }
+        @Override public void replaceEvents(String sessionId, List<SessionEvent> evts) {
+            events.clear();
+            events.addAll(evts);
+        }
+        @Override public boolean replaceEvents(String sessionId, List<SessionEvent> evts, long expectedVersion) {
+            replaceEvents(sessionId, evts);
+            return true;
+        }
+        @Override public Session save(Session s) { throw new UnsupportedOperationException(); }
+        @Override public Optional<Session> findById(String id) { throw new UnsupportedOperationException(); }
+        @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
+        @Override public List<String> findExpiredSessionIds(Instant before) { throw new UnsupportedOperationException(); }
+        @Override public void delete(String id) { throw new UnsupportedOperationException(); }
+        @Override public long getEventVersion(String id) { return events.size(); }
+        @Override public List<SessionEvent> findEvents(String id, EventFilter f) { return List.copyOf(events); }
+    }
+
+    /** 落库必炸的仓库（C1 的写回端）：断言失败被吞成日志、评估主流程不受影响。 */
+    private static final class FailingRepo extends RecordingRepo {
+        FailingRepo(List<SessionEvent> events) { super(events); }
+
+        @Override public void replaceEvents(String sessionId, List<SessionEvent> evts) {
+            throw new IllegalStateException("磁盘炸了");
+        }
+    }
+
+    private static AssistantMessage asstWithCalls(String callId) {
+        return AssistantMessage.builder().content("(调工具)")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(callId, "function", "bash", "{}"))).build();
+    }
+
+    private static ToolResponseMessage toolResult(String callId) {
+        return ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(callId, "bash", "exit 0"))).build();
     }
 
     private static GoalVerdict unsat(String reason) {
@@ -80,25 +166,136 @@ class GoalManagerEvalStoreTest {
         gm.onVerdict(epoch, verdict);
     }
 
-    // ── A：评估结论落库 ─────────────────────────────────────────────────
+    /** 序列形态断言：任何相邻两事件都不得同为 UserMessage（无连续双 user）。 */
+    private static void assertNoConsecutiveUsers(List<SessionEvent> events) {
+        for (int i = 1; i < events.size(); i++) {
+            assertFalse(events.get(i - 1).getMessage() instanceof UserMessage
+                            && events.get(i).getMessage() instanceof UserMessage,
+                    "相邻双 user 事件（下标 " + (i - 1) + "/" + i + "）会被出站 sanitize 折叠，"
+                            + "实际序列：" + describe(events));
+        }
+    }
+
+    private static List<String> describe(List<SessionEvent> events) {
+        List<String> out = new ArrayList<>();
+        for (SessionEvent e : events) {
+            String t = e.getMessage().getText();
+            out.add(e.getMessage().getClass().getSimpleName() + "(" + (t == null ? "" : t.replaceAll("\\R+", " ")) + ")");
+        }
+        return out;
+    }
+
+    // ── A：评估结论落库（C1 中段插入） ─────────────────────────────────
 
     @Test
-    @DisplayName("放行 verdict 恰落一条 wrapEvaluation 合成块 UserMessage（sessionId 取 supplier）")
-    void appliedVerdictAppendsWrappedMarkerEvent() {
+    @DisplayName("放行 verdict 的标记插到最后一条 AssistantMessage 之前：恒非尾事件、恰一条、形态与序列守卫")
+    void appliedVerdictInsertsMarkerBeforeLastAssistant() {
         GoalManager gm = new GoalManager(cfg(), null);
-        RecordingSessionService sessions = new RecordingSessionService();
-        gm.bindSession(sessions, () -> "s-42");
+        RecordingStore store = new RecordingStore();
+        gm.bindSession(store, new RecordingRepo(store.events), () -> "s-42");
         gm.activate("迁移完成且测试全绿");
+        store.appendToolTurn("[goal 继续 1/25]…");     // CodingAgent 侧已完成的第一轮（4 事件）
 
         runTurn(gm, unsat("还差登录页"));
 
-        assertEquals(1, sessions.appended.size(), "放行 verdict 恰落一条事件");
-        SessionEvent e = sessions.appended.get(0);
-        assertEquals("s-42", e.getSessionId(), "落库取 sessionIdSupplier 的当前值");
-        assertInstanceOf(UserMessage.class, e.getMessage(), "落库形态是合成 UserMessage");
-        assertEquals(GoalText.wrapEvaluation("UNSATISFIED", "还差登录页"), e.getMessage().getText(),
+        assertEquals(1, store.markerCount(), "放行 verdict 恰落一条标记事件");
+        assertEquals(5, store.events.size(), "中段插入：原 4 事件一条不少");
+        SessionEvent marker = store.events.get(3);
+        assertInstanceOf(UserMessage.class, marker.getMessage(), "落库形态是合成 UserMessage");
+        assertEquals("s-42", marker.getSessionId(), "落库取 sessionIdSupplier 的当前值");
+        assertEquals(GoalText.wrapEvaluation("UNSATISFIED", "还差登录页"), marker.getMessage().getText(),
                 "文本为 wrapEvaluation 合成块");
-        assertTrue(e.getMessage().getText().startsWith(GoalText.EVAL_OPEN), "行首判定标记（HistoryReplay 靠它识别）");
+        assertTrue(marker.getMessage().getText().startsWith(GoalText.EVAL_OPEN), "行首判定标记（HistoryReplay 靠它识别）");
+        // 插入点：最后一条 AssistantMessage 之前 → 标记后面必跟 assistant（恒非尾事件，fold 够不到）
+        assertInstanceOf(AssistantMessage.class, store.events.get(4).getMessage(),
+                "标记插在最后一条 assistant 之前：其后必是 assistant（标记不在尾部）");
+        assertInstanceOf(ToolResponseMessage.class, store.events.get(2).getMessage(),
+                "标记之前是本轮 tool 结果（真实轮形状的中段）");
+        assertNoConsecutiveUsers(store.events);
+    }
+
+    @Test
+    @DisplayName("C1 集成（fold 语义）：submit 桩折走尾部 user 后标记存活；用户消息与自动轮 prompt 不含被折入的标记")
+    void markerSurvivesFoldSemanticsIntegration() {
+        GoalManager gm = new GoalManager(cfg(), null);
+        RecordingStore store = new RecordingStore();
+        gm.bindSession(store, new RecordingRepo(store.events), () -> "s");
+        gm.activate("迁移完成且测试全绿");
+
+        // 第一轮（自动轮）：prompt 派发（桩记录出站）→ 轮完成（user/tool/assistant 落库）→ 评估落库标记
+        String prompt1 = gm.takeAutoTurn();
+        assertNotNull(prompt1);
+        assertFalse(prompt1.contains(GoalText.EVAL_OPEN), "首轮自动轮 prompt 不含评估标记（尚无结论）");
+        store.appendToolTurn(prompt1);
+        long epoch1 = gm.beginEvaluation();                    // 轮已派发：无 pending 阻塞
+        assertTrue(epoch1 > 0, "前置：评估可发起");
+        gm.onVerdict(epoch1, unsat("还差登录页"));
+        assertEquals(1, store.markerCount(), "前置：第一轮结论标记已落库");
+
+        // 用户插话（spec §5.2 对话语义：清挂起轮、推对话边界），随后 submit：
+        // 装置镜像 CodingAgent.submit 先 foldTrailingUserIntoOutbound——尾部是 assistant
+        // （标记在 assistant 前的中段）→ 折不到标记，出站只有用户原文。
+        gm.onUserDispatch();
+        String foldedFromTail = store.foldTrailingUserIntoOutbound();
+        assertTrue(foldedFromTail.isEmpty(), "尾部是 assistant：fold 空手而归（折不到中段标记）");
+        String userOutbound = "改用另一个方案";
+        assertFalse(userOutbound.contains(GoalText.EVAL_OPEN),
+                "用户消息出站不得混入被折的评估标记（C1 旧症状：[goal 评估]…\\n\\n<用户文本>）");
+        store.appendToolTurn(userOutbound);
+        assertEquals(1, store.markerCount(), "标记在 fold 之后存活（没被折走删除）");
+        // 标记仍非尾事件（其后还有本轮 assistant）
+        assertFalse(store.events.get(store.events.size() - 1).getMessage() instanceof UserMessage um
+                && um.getText().startsWith(GoalText.EVAL_OPEN), "标记不得成为尾事件");
+
+        // 用户轮结束 → 第二次评估（插话已清 pending，评估输入含该轮）→ 第二条标记
+        long epoch2 = gm.beginEvaluation();
+        assertTrue(epoch2 > 0, "用户轮后应可发起评估");
+        gm.onVerdict(epoch2, unsat("第二处还没改"));
+        assertEquals(2, store.markerCount(), "第二条结论标记落库");
+        // 下一自动轮 prompt 同样不含标记（评估结论只进内存/prompt 行，不折入出站）
+        String prompt2 = gm.takeAutoTurn();
+        assertNotNull(prompt2);
+        assertFalse(prompt2.contains(GoalText.EVAL_OPEN), "自动轮 prompt 不含被折入的标记（评估输入走内存滚动记录）");
+        store.appendToolTurn(prompt2);
+
+        // 序列形态：三轮 + 两条标记后，任何位置都不出现连续双 user（中段插入的天然保证）
+        assertNoConsecutiveUsers(store.events);
+        // 且两条标记各插在自己那轮最后一条 assistant 之前（审计顺序与轮次对齐）
+        int firstMarker = indexOfMarker(store, 0);
+        int secondMarker = indexOfMarker(store, firstMarker + 1);
+        assertInstanceOf(AssistantMessage.class, store.events.get(firstMarker + 1).getMessage(),
+                "标记 1 后跟 assistant");
+        assertInstanceOf(AssistantMessage.class, store.events.get(secondMarker + 1).getMessage(),
+                "标记 2 后跟 assistant");
+        assertTrue(firstMarker < secondMarker, "标记按评估顺序排列");
+    }
+
+    /** 找第 n 条评估标记事件的下标。 */
+    private static int indexOfMarker(RecordingStore store, int from) {
+        for (int i = from; i < store.events.size(); i++) {
+            if (store.events.get(i).getMessage() instanceof UserMessage um
+                    && um.getText() != null && um.getText().startsWith(GoalText.EVAL_OPEN)) {
+                return i;
+            }
+        }
+        throw new AssertionError("找不到评估标记（from=" + from + "）：" + describe(store.events));
+    }
+
+    @Test
+    @DisplayName("无 AssistantMessage 则跳过落库（空会话/纯 user 壳不硬插——宁缺勿尾部）")
+    void noAssistantMessageSkipsPersistence() {
+        GoalManager gm = new GoalManager(cfg(), null);
+        RecordingStore store = new RecordingStore();
+        gm.bindSession(store, new RecordingRepo(store.events), () -> "s");
+        gm.activate("g");
+        // 会话空壳：只有一条 user（如上个回合 after() 未落 assistant 的残留形状）
+        store.events.add(SessionEvent.builder().sessionId("s").message(new UserMessage("残留 user")).build());
+
+        runTurn(gm, unsat("无锚点"));
+
+        assertEquals(0, store.markerCount(), "无 AssistantMessage 锚点：跳过落库（追加尾部只会重演 fold 事故）");
+        assertEquals(1, store.events.size(), "会话零改写");
+        assertEquals(GoalPhase.RUNNING, gm.phase(), "跳过落库不影响评估主流程");
     }
 
     @Test
@@ -106,40 +303,46 @@ class GoalManagerEvalStoreTest {
     void droppedVerdictsAreNotPersisted() {
         // (a) Esc 暂停后的迟到 SATISFIED：判定丢弃（spec §3.3），不得落库
         GoalManager a = new GoalManager(cfg(), null);
-        RecordingSessionService sa = new RecordingSessionService();
-        a.bindSession(sa, () -> "s1");
+        RecordingStore sa = new RecordingStore();
+        a.bindSession(sa, new RecordingRepo(sa.events), () -> "s1");
         a.activate("g");
-        a.takeAutoTurn();
+        storeTurn(sa, a.takeAutoTurn());
         long ea = a.beginEvaluation();
         a.pauseByEsc();
         a.onVerdict(ea, new GoalVerdict(GoalVerdict.Outcome.SATISFIED, "迟到", false, null, "raw"));
-        assertTrue(sa.appended.isEmpty(), "PAUSED 丢弃的 verdict 不得落库");
+        assertEquals(0, sa.markerCount(), "PAUSED 丢弃的 verdict 不得落库");
 
         // (b) 评估在飞期间插话（dispatchSerial 过期，spec §5.2 单槽作废）：不落库
         GoalManager b = new GoalManager(cfg(), null);
-        RecordingSessionService sb = new RecordingSessionService();
-        b.bindSession(sb, () -> "s2");
+        RecordingStore sb = new RecordingStore();
+        b.bindSession(sb, new RecordingRepo(sb.events), () -> "s2");
         b.activate("g");
-        b.takeAutoTurn();
+        storeTurn(sb, b.takeAutoTurn());
         long eb = b.beginEvaluation();
         b.onUserDispatch();                          // 插话：锁存 serial 过期
         b.onVerdict(eb, unsat("过期判定"));
-        assertTrue(sb.appended.isEmpty(), "serial 过期的 verdict 不得落库");
+        assertEquals(0, sb.markerCount(), "serial 过期的 verdict 不得落库");
 
         // (c) /clear（终态）后的迟到 verdict：完全 no-op，不落库（场景⑨守卫源头）
         GoalManager c = new GoalManager(cfg(), null);
-        RecordingSessionService sc = new RecordingSessionService();
-        c.bindSession(sc, () -> "s3");
+        RecordingStore sc = new RecordingStore();
+        c.bindSession(sc, new RecordingRepo(sc.events), () -> "s3");
         c.activate("g");
-        c.takeAutoTurn();
+        storeTurn(sc, c.takeAutoTurn());
         long ec = c.beginEvaluation();
         c.clear("clear-context");
         c.onVerdict(ec, unsat("清空后迟到"));
-        assertTrue(sc.appended.isEmpty(), "终态 no-op 的 verdict 不得落库");
+        assertEquals(0, sc.markerCount(), "终态 no-op 的 verdict 不得落库");
+    }
+
+    /** 桩侧轮形状：user prompt → assistant 收尾（丢弃路径的落库与否不受形状影响，最简两事件即可）。 */
+    private static void storeTurn(RecordingStore store, String prompt) {
+        store.events.add(SessionEvent.builder().sessionId("s").message(new UserMessage(prompt)).build());
+        store.events.add(SessionEvent.builder().sessionId("s").message(new AssistantMessage("收尾")).build());
     }
 
     @Test
-    @DisplayName("未 bindSession 静默跳过；appendEvent 抛异常只记日志、评估主流程照常推进")
+    @DisplayName("未 bindSession 静默跳过；replaceEvents 抛异常只记日志、评估主流程照常推进")
     void noBindingOrFailingStoreDoesNotBreakEvaluation() {
         // 未接线：不落库也不抛
         GoalManager plain = new GoalManager(cfg(), null);
@@ -147,9 +350,20 @@ class GoalManagerEvalStoreTest {
         runTurn(plain, unsat("无会话"));
         assertEquals(GoalPhase.RUNNING, plain.phase(), "未接线不影响状态机");
 
-        // 接线但 appendEvent 抛：log.warn 不抛出（此处 runTurn 不炸即为断言），轮次照常入账
+        // 只接 service 不接 repository（C1 后中段插入无从写回）：静默跳过
+        GoalManager noRepo = new GoalManager(cfg(), null);
+        RecordingStore storeOnly = new RecordingStore();
+        noRepo.bindSession(storeOnly, null, () -> "s");
+        noRepo.activate("g");
+        storeOnly.appendToolTurn("[goal 继续 1/25]…");
+        runTurn(noRepo, unsat("无仓库"));
+        assertEquals(0, storeOnly.markerCount(), "缺 repository：中段插入无写回端，静默跳过");
+        assertEquals(GoalPhase.RUNNING, noRepo.phase());
+
+        // 接线但 replaceEvents 抛：log.warn 不抛出（此处 runTurn 不炸即为断言），轮次照常入账
         GoalManager failing = new GoalManager(cfg(), null);
-        failing.bindSession(new FailingSessionService(), () -> "s");
+        RecordingStore failingStore = new RecordingStore();
+        failing.bindSession(failingStore, new FailingRepo(failingStore.events), () -> "s");
         failing.activate("g");
         runTurn(failing, unsat("落库失败"));
         assertEquals(1, failing.snapshot().turnsUsed(), "落库失败不影响评估主流程记账");
@@ -210,5 +424,17 @@ class GoalManagerEvalStoreTest {
         // 换代：新 goal 不背旧账
         gm.activate("新目标");
         assertTrue(gm.snapshot().recentTraces().isEmpty(), "activate 换代清空轨迹");
+    }
+
+    // ── 自检：装置形状（防桩自身漂移） ─────────────────────────────────
+
+    @Test
+    @DisplayName("装置自检：fold 桩真能折走尾部 user（旧 C1 事故的复现前提）")
+    void fixtureFoldActuallyFoldsTrailingUser() {
+        RecordingStore store = new RecordingStore();
+        store.events.add(SessionEvent.builder().sessionId("s").message(new UserMessage("尾巴 user")).build());
+        String folded = store.foldTrailingUserIntoOutbound();
+        assertEquals("尾巴 user", folded, "折走尾部 user 的文本");
+        assertTrue(store.events.isEmpty(), "尾部 user 已从会话删除（fold 语义）");
     }
 }

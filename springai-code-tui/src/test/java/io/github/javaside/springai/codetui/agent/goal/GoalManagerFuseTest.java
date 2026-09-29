@@ -137,6 +137,51 @@ class GoalManagerFuseTest {
         assertEquals(0, gm2.snapshot().stalledStreak());
     }
 
+    // ── I1：stalled 熔断的「本轮零工具调用」机器信号（spec §7） ──────────
+
+    @Test
+    void zeroToolCallTurnCountsAsStalledEvenWhenVerdictAdvancing() {
+        GoalConfig c = cfg(10, 2, 0L, 1, 2, 3);                 // stalledLimit=2
+        GoalManager gm = new GoalManager(c, null);
+        gm.activate("g");
+
+        // 评估器说 advancing，但本轮一个工具都没调用（机器信号）→ streak+1
+        long e1 = takeThenBegin(gm);
+        gm.recordTurnMaterial(new GoalTurnMaterial("嘴上说在推进", 0, null));
+        gm.onVerdict(e1, unsat(false));                          // stalled=false 也不行：零工具即停滞
+        assertEquals(1, gm.snapshot().stalledStreak(), "零工具轮按停滞记账（spec §7 机器信号）");
+
+        // 第二轮同形 → 达 stalledLimit=2 → PAUSED(STALLED)
+        long e2 = takeThenBegin(gm);
+        gm.recordTurnMaterial(new GoalTurnMaterial("还是没动工具", 0, null));
+        gm.onVerdict(e2, unsat(false));
+        assertEquals(GoalPhase.PAUSED, gm.phase(), "零工具连击同样触发 STALLED 熔断");
+        assertEquals(PauseReason.STALLED, gm.snapshot().pauseReason());
+
+        // 有工具调用且 advancing → 重置（对照）
+        GoalManager gm2 = new GoalManager(c, null);
+        gm2.activate("g");
+        long f1 = takeThenBegin(gm2);
+        gm2.recordTurnMaterial(new GoalTurnMaterial("真干活", 3, null));
+        gm2.onVerdict(f1, unsat(true));                          // stalled=true 但有工具：仍按 verdict 计 1
+        assertEquals(1, gm2.snapshot().stalledStreak());
+        long f2 = takeThenBegin(gm2);
+        gm2.recordTurnMaterial(new GoalTurnMaterial("真干活第二轮", 2, null));
+        gm2.onVerdict(f2, unsat(false));                         // advancing + 工具>0 → 清零
+        assertEquals(0, gm2.snapshot().stalledStreak(), "advancing 且有工具调用：连击重置");
+    }
+
+    @Test
+    void noRecordedMaterialMeansNoMachineSignal() {
+        // 从未 recordTurnMaterial（单测直调链/素材缺失）：机器信号缺位，只按 verdict.stalled() 计账——
+        // 「没记录」不得误判成「零工具」（stalledStreakFromVerdictAndReset 全链就是这个前提，此处钉死）
+        GoalManager gm = new GoalManager(cfg(10, 2, 0L, 1, 2, 3), null);
+        gm.activate("g");
+        long e = takeThenBegin(gm);
+        gm.onVerdict(e, unsat(false));                           // 无素材 + advancing → 重置
+        assertEquals(0, gm.snapshot().stalledStreak(), "无素材=无机器信号，不误伤 advancing 重置");
+    }
+
     @Test
     void verdictAlwaysSetsPendingAndGapDeadline() {
         // gap>0：pending 恒真 + gapDeadlineEpochMs = now + gap*1000（deadline 只负责延迟）
