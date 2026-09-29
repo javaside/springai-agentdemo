@@ -277,13 +277,15 @@ public final class GoalManager implements UiChangeSource {
      */
     public long beginEvaluation() {
         long version;
+        long captured;
         synchronized (this) {
             if (phase != GoalPhase.RUNNING || evalInFlight || autoTurnPending) return -1;
             evalInFlight = true;
+            captured = this.epoch;        // 锁内捕获：锁外读会与 activate 换代竞态，放行陈旧 verdict
             version = changed();
         }
         publish(version);
-        return epoch;
+        return captured;
     }
 
     /** 评估是否在飞（锁内读；goal 槽防重复发起）。 */
