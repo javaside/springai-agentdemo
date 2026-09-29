@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent.goal;
 
+import io.github.javaside.springai.codetui.agent.llm.EmptyStreamException;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
 import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
@@ -12,6 +13,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -39,10 +41,19 @@ import java.util.concurrent.atomic.AtomicLong;
  * listener（UI 醒来要回读本对象的 synchronized 快照，锁内通知等于邀请死锁）；真实变化恰好记账
  * 一次，no-op 不推进版本；listener 抛出的 {@link RuntimeException} 被隔离成日志。
  *
- * <p><b>本 Task 边界</b>：只做状态机。熔断矩阵（stalled/error/evaluator/protocol 计数达限暂停、
- * 预算/轮数软超限口径、dispatchSerial 锁存校验）与滚动记录/完整 prompt 文案分别是 Task 4/5 的
- * 扩展——相关计数器字段已占位，{@link #onVerdict} 只做简版计数与断流防护（UNSATISFIED 恒置
- * pending），不触发暂停。
+ * <p><b>熔断矩阵</b>（spec §7 同时为真时原因唯一：STALLED &gt; ERROR &gt; EVALUATOR &gt; PROTOCOL）：
+ * 四族独立计数——UNSATISFIED+stalled 与协议失败同入 {@code stalledStreak}，达 {@code stalledLimit}
+ * → PAUSED(STALLED)；{@link #onTurnError} 非豁免根因连续达 {@code errorRetry+1} → PAUSED(ERROR)；
+ * {@link #onEvaluationFailure} 达 {@code evalFailLimit} → PAUSED(EVALUATOR)；{@link #onProtocolFailure}
+ * 达 {@code protocolFailLimit} → PAUSED(PROTOCOL)。用户插话（{@link #onUserDispatch}）重置全部计数。
+ * 预算/轮数是<b>软超限</b>：只在 {@link #takeAutoTurn} 决策点清算（预算优先于轮数），在飞轮放行到轮末。
+ *
+ * <p><b>评估「回调即终点」</b>：{@link #beginEvaluation} CAS 置在飞并锁存 {@code dispatchSerial}；
+ * onVerdict / onEvaluationFailure / onProtocolFailure 三回调在 epoch 相符时自清在飞标志（无独立
+ * endEvaluation），其中 <b>serial 不符</b>（评估在飞期间用户插话——spec §5.2「挂起 verdict 单槽」：
+ * 插话改变上下文，旧判断过期）则丢弃判定、只清标志让下一空闲批重评。
+ *
+ * <p><b>本 Task 边界</b>：滚动记录与完整 prompt 文案是 Task 5 的扩展。
  */
 public final class GoalManager implements UiChangeSource {
 
@@ -73,8 +84,12 @@ public final class GoalManager implements UiChangeSource {
     private int turnsUsed;
     /** activate 时的 token 基线快照（预算只对增量计账）。 */
     private long basePromptTokens, baseCompletionTokens;
-    /** 熔断计数（占位：达限→暂停的判定在 Task 4 接线）。 */
+    /** 熔断计数（四族独立）：stalled（协议失败同账）/ turn 错误 / 评估失败 / 协议失败，达限 → PAUSED(对应原因)。 */
     private int stalledStreak, errorStreak, evalFailures, protocolFailures;
+    /** 对话边界序号：onUserDispatch / takeAutoTurn 各 +1——语义=「评估输入所见的最后对话边界」。 */
+    private long dispatchSerial;
+    /** {@link #beginEvaluation} 置位时锁存的 {@link #dispatchSerial}；回调比对以识别评估在飞期间的插话。 */
+    private long evalSerialLatch;
     /** 评估在飞标志（CAS 置位；同代回调即终点自清，activate 换代复位）。 */
     private boolean evalInFlight;
     private boolean autoTurnPending;
@@ -240,20 +255,25 @@ public final class GoalManager implements UiChangeSource {
     }
 
     /**
-     * 用户派发了一轮对话。PAUSED 任意原因→RUNNING 并重置熔断计数；<b>并清
-     * autoTurnPending/gapDeadline</b>——用户插话使挂起的自动轮与旧 verdict 作废（spec §5.2
-     * 「挂起 verdict 单槽」）。<b>不置 pending</b>：用户轮结束后 goal 槽照常发起评估（评估输入
-     * 含该轮插话原文），verdict 再决定下一自动轮。INACTIVE/终态 no-op。
+     * 用户派发了一轮对话。<b>推进 dispatchSerial</b>（一次轮对话一次变化），PAUSED 任意原因→RUNNING
+     * 并<b>重置全部熔断计数</b>（插话打断连击）；并清 autoTurnPending/gapDeadline——用户插话使挂起
+     * 的自动轮与旧 verdict 作废（spec §5.2「挂起 verdict 单槽」），serial+1 同时使在飞评估的锁存
+     * serial 过期（其迟到判定将被丢弃、在飞标志由该回调自清）。<b>不置 pending</b>：用户轮结束后
+     * goal 槽照常发起评估（评估输入含该轮插话原文），verdict 再决定下一自动轮。INACTIVE/终态 no-op。
      */
     public void onUserDispatch() {
         long version = 0;
         synchronized (this) {
             if (phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
+            dispatchSerial++;                 // 对话边界推进：使先前锁存的评估 serial 过期
             boolean real = false;
             if (phase == GoalPhase.PAUSED) {
                 phase = GoalPhase.RUNNING;
                 pauseReason = null;
-                stalledStreak = errorStreak = evalFailures = protocolFailures = 0;   // 对应计数重置
+                real = true;
+            }
+            if (stalledStreak != 0 || errorStreak != 0 || evalFailures != 0 || protocolFailures != 0) {
+                stalledStreak = errorStreak = evalFailures = protocolFailures = 0;   // 插话打断熔断连击
                 real = true;
             }
             if (autoTurnPending || gapDeadlineEpochMs != null) {
@@ -270,10 +290,11 @@ public final class GoalManager implements UiChangeSource {
 
     /**
      * CAS 置评估在飞：仅 RUNNING 且无在飞评估且无待发自动轮时置位并返回当前 epoch
-     * （有待发轮时先发轮、不评估）；否则 -1，状态零变更。
+     * （有待发轮时先发轮、不评估）；否则 -1，状态零变更。置位同时<b>锁存当前
+     * {@code dispatchSerial}</b>——三回调以「epoch + 该锁存值」双校验识别评估输入是否过期。
      *
-     * <p>终点：同代回调（{@link #onVerdict}）自清在飞标志（「回调即终点」），activate 换代复位，
-     * 终态清零——无独立 endEvaluation。dispatchSerial 锁存校验是 Task 4 扩展。
+     * <p>终点：同代回调（onVerdict / onEvaluationFailure / onProtocolFailure）自清在飞标志
+     * （「回调即终点」），activate 换代复位，终态清零——无独立 endEvaluation。
      */
     public long beginEvaluation() {
         long version;
@@ -281,6 +302,7 @@ public final class GoalManager implements UiChangeSource {
         synchronized (this) {
             if (phase != GoalPhase.RUNNING || evalInFlight || autoTurnPending) return -1;
             evalInFlight = true;
+            evalSerialLatch = dispatchSerial;   // 锁存评估输入所见的对话边界
             captured = this.epoch;        // 锁内捕获：锁外读会与 activate 换代竞态，放行陈旧 verdict
             version = changed();
         }
@@ -296,35 +318,47 @@ public final class GoalManager implements UiChangeSource {
     }
 
     /**
-     * 评估器判定入口（简版：熔断计数达限→暂停是 Task 4 扩展）。旧代迟到或终态单调 no-op；
-     * 同代先自清在飞标志（回调即终点），随后 SATISFIED/IMPOSSIBLE → 终态并记摘要；
-     * UNSATISFIED → 简版停滞计数（不触发暂停）、合并 STATE 账本、恒置下一自动轮 pending
-     * 与倒计时 deadline——绝不允许「pending=false 等 deadline 叫醒」的断流形态。
+     * 评估器判定入口。门：旧代迟到（epoch 不符）或终态单调 → 完全 no-op（不动当前代标志）；
+     * epoch 相符即自清在飞标志（回调即终点），但 <b>serial 不符</b>（评估在飞期间用户插话/
+     * 自动轮派发，spec §5.2「挂起 verdict 单槽」：插话改变上下文，旧判断过期）则丢弃判定、
+     * 只清标志（好让下一空闲批重评）。放行后：SATISFIED/IMPOSSIBLE → 终态并记摘要；
+     * UNSATISFIED → stalled 计数（达 {@code stalledLimit} → PAUSED(STALLED)，不置 pending）、
+     * 否则恒置下一自动轮 pending 与 gap 倒计时——绝不允许「pending=false 等 deadline 叫醒」
+     * 的断流形态。
      */
     public void onVerdict(long epoch, GoalVerdict verdict) {
         Objects.requireNonNull(verdict, "verdict");
         long version = 0;
         synchronized (this) {
             if (epoch != this.epoch || phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
-            evalInFlight = false;             // 回调即终点（同代才清）
-            switch (verdict.outcome()) {
-                case SATISFIED -> {
-                    lastSummary = verdict.reason();
-                    terminateLocked(GoalPhase.SATISFIED);
-                    version = changed();
-                }
-                case IMPOSSIBLE -> {
-                    lastSummary = verdict.reason();
-                    terminateLocked(GoalPhase.IMPOSSIBLE);
-                    version = changed();
-                }
-                case UNSATISFIED -> {
-                    stalledStreak = verdict.stalled() ? stalledStreak + 1 : 0;   // 占位：达限熔断 Task 4
-                    if (verdict.stateLedger() != null) stateLedger = verdict.stateLedger();
-                    autoTurnPending = true;
-                    gapDeadlineEpochMs = config.turnGapSeconds() > 0
-                            ? clock.millis() + config.turnGapSeconds() * 1000L : null;
-                    version = changed();
+            boolean wasInFlight = evalInFlight;
+            evalInFlight = false;             // 回调即终点（同代即清，serial 过期同样清）
+            if (dispatchSerial != evalSerialLatch) {   // 评估期间发生对话边界：判定过期，丢弃但放行重评
+                if (wasInFlight) version = changed();
+            } else {
+                switch (verdict.outcome()) {
+                    case SATISFIED -> {
+                        lastSummary = verdict.reason();
+                        terminateLocked(GoalPhase.SATISFIED);
+                        version = changed();
+                    }
+                    case IMPOSSIBLE -> {
+                        lastSummary = verdict.reason();
+                        terminateLocked(GoalPhase.IMPOSSIBLE);
+                        version = changed();
+                    }
+                    case UNSATISFIED -> {
+                        stalledStreak = verdict.stalled() ? stalledStreak + 1 : 0;
+                        if (verdict.stateLedger() != null) stateLedger = verdict.stateLedger();
+                        if (stalledStreak >= config.stalledLimit()) {
+                            pauseLocked(PauseReason.STALLED);   // 熔断即断流：不置 pending/deadline
+                        } else {
+                            autoTurnPending = true;
+                            gapDeadlineEpochMs = config.turnGapSeconds() > 0
+                                    ? clock.millis() + config.turnGapSeconds() * 1000L : null;
+                        }
+                        version = changed();
+                    }
                 }
             }
         }
@@ -332,17 +366,103 @@ public final class GoalManager implements UiChangeSource {
     }
 
     /**
-     * 一轮对话以错误收场（简版：只做终态单调防护与计数占位——EmptyStream/Cancellation 豁免、
-     * errorRetry 达限→PAUSED(ERROR) 是 Task 4 扩展）。终态/未激活 no-op。
+     * 评估器调用失败入口（超时/抛错同归此）。门同 {@link #onVerdict}（epoch + serial）；放行后
+     * {@code evalFailures+1}，达 {@code evalFailLimit} → PAUSED(EVALUATOR)。
+     */
+    public void onEvaluationFailure(long epoch, Throwable cause) {
+        long version = 0;
+        synchronized (this) {
+            if (epoch != this.epoch || phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
+            boolean wasInFlight = evalInFlight;
+            evalInFlight = false;             // 回调即终点（同代即清，serial 过期同样清）
+            if (dispatchSerial != evalSerialLatch) {   // 评估期间插话：失败判定同样过期
+                if (wasInFlight) version = changed();
+            } else {
+                evalFailures++;
+                if (evalFailures >= config.evalFailLimit()) pauseLocked(PauseReason.EVALUATOR);
+                version = changed();
+            }
+        }
+        publish(version);
+    }
+
+    /**
+     * 评估器输出协议失败入口（无 VERDICT 行/非法取值）。门同 {@link #onVerdict}（epoch + serial）；
+     * 放行后 {@code protocolFailures+1} 且<b>按 UNSATISFIED+stalled 同账</b>记一轮停滞（但不派发
+     * 新轮：不置 pending/deadline）；stalled 达限优先 PAUSED(STALLED)（spec §7 STALLED &gt;
+     * PROTOCOL），否则达 {@code protocolFailLimit} → PAUSED(PROTOCOL)，原始输出摘要记入 lastSummary。
+     */
+    public void onProtocolFailure(long epoch, String rawOutput) {
+        long version = 0;
+        synchronized (this) {
+            if (epoch != this.epoch || phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
+            boolean wasInFlight = evalInFlight;
+            evalInFlight = false;             // 回调即终点（同代即清，serial 过期同样清）
+            if (dispatchSerial != evalSerialLatch) {   // 评估期间插话：失败判定同样过期
+                if (wasInFlight) version = changed();
+            } else {
+                protocolFailures++;
+                stalledStreak++;              // 按 UNSATISFIED+stalled 记账（不额外烧轮）
+                if (stalledStreak >= config.stalledLimit()) {
+                    pauseLocked(PauseReason.STALLED);
+                } else if (protocolFailures >= config.protocolFailLimit()) {
+                    lastSummary = abbreviateRaw(rawOutput);
+                    pauseLocked(PauseReason.PROTOCOL);
+                }
+                version = changed();
+            }
+        }
+        publish(version);
+    }
+
+    /**
+     * 一轮对话以错误收场。仅 RUNNING 计账（INACTIVE/终态/PAUSED 的迟到事件 no-op，不改判既有
+     * 暂停原因）；根因（cause 链走到底）为 {@link EmptyStreamException}（瞬态空流，交评估器判
+     * stalled）或 {@link CancellationException}（Esc 取消）→ 豁免不计；其余 {@code errorStreak+1}，
+     * 达 {@code errorRetry+1} 连续 → PAUSED(ERROR)。
      */
     public void onTurnError(Throwable rootCause) {
         long version = 0;
         synchronized (this) {
-            if (phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
-            errorStreak++;                    // 占位：豁免与达限熔断 Task 4
+            if (phase != GoalPhase.RUNNING) return;
+            Throwable root = unwrapRoot(rootCause);
+            if (root instanceof EmptyStreamException || root instanceof CancellationException) return;
+            if (++errorStreak > config.errorRetry()) pauseLocked(PauseReason.ERROR);
             version = changed();
         }
         publish(version);
+    }
+
+    /** 一轮对话正常收场：errorStreak 清零（成功重置错误连击）。INACTIVE/终态 no-op；无错误零变更。 */
+    public void onTurnCompleted() {
+        long version = 0;
+        synchronized (this) {
+            if (phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
+            if (errorStreak != 0) {
+                errorStreak = 0;
+                version = changed();
+            }
+        }
+        publish(version);
+    }
+
+    /** 根因解包：沿 cause 链走到底（自引用/超长链防御，{@code null} 原样返回）。 */
+    private static Throwable unwrapRoot(Throwable t) {
+        Throwable root = t;
+        for (int i = 0; i < 32 && root != null; i++) {
+            Throwable cause = root.getCause();
+            if (cause == null || cause == root) break;
+            root = cause;
+        }
+        return root;
+    }
+
+    /** 协议失败摘要：压平空白 + 码点安全截 200 码点（照 {@code GoalVerdict} 缩略口径）。 */
+    private static String abbreviateRaw(String raw) {
+        if (raw == null) return "";
+        String flat = raw.strip().replaceAll("\\s+", " ");
+        if (flat.codePointCount(0, flat.length()) <= 200) return flat;
+        return flat.substring(0, flat.offsetByCodePoints(0, 200)) + "…";
     }
 
     // ── 自动轮派发（UI 线程空闲批） ────────────────────────────────────
@@ -355,9 +475,11 @@ public final class GoalManager implements UiChangeSource {
     }
 
     /**
-     * 取走挂起的自动轮 prompt（UI 线程空闲批调用）：轮次 +1、预算与轮数复检、清 pending 与
-     * 倒计时。无可发轮返回 null；预算超限 → {@link GoalPhase#BUDGET_EXCEEDED}、轮数耗尽 →
-     * {@link GoalPhase#MAX_TURNS}（进终态并返回 null）。决策点顺序：phase → budget → maxTurns。
+     * 取走挂起的自动轮 prompt（UI 线程空闲批调用）：轮次 +1、<b>推进 dispatchSerial</b>
+     * （自动轮也是对话边界）、预算与轮数复检、清 pending 与倒计时。无可发轮返回 null；
+     * 预算超限 → {@link GoalPhase#BUDGET_EXCEEDED}、轮数耗尽 → {@link GoalPhase#MAX_TURNS}
+     * （进终态并返回 null）。决策点顺序：phase → budget → maxTurns（软超限口径：在飞轮
+     * 放行到轮末，判定只在决策点）。
      */
     public String takeAutoTurn() {
         String prompt;
@@ -374,6 +496,7 @@ public final class GoalManager implements UiChangeSource {
                 prompt = null;
             } else {
                 turnsUsed++;
+                dispatchSerial++;             // 对话边界推进：先前锁存的评估 serial 至此过期
                 autoTurnPending = false;
                 gapDeadlineEpochMs = null;
                 prompt = buildAutoTurnPromptLocked();
@@ -397,6 +520,17 @@ public final class GoalManager implements UiChangeSource {
         var snap = usage.snapshot();
         long spent = (snap.promptTokens() - basePromptTokens) + (snap.completionTokens() - baseCompletionTokens);
         return spent >= config.tokenBudget();
+    }
+
+    /**
+     * 预算是否软超限（对 activate 基线的增量计账：spent = Δprompt + Δcompletion ≥ budget）。
+     * 预算 0=关闭、未注入 accumulator → 恒 {@code false}；只读，不触发任何状态转移——
+     * 终结只在 {@link #takeAutoTurn} 决策点发生。
+     */
+    public boolean budgetExceeded() {
+        synchronized (this) {
+            return budgetExceededLocked();
+        }
     }
 
     /** 锁内合成自动轮 prompt。简版；完整文案（语言跟随条件/上轮结论/累积进度）Task 5。 */
