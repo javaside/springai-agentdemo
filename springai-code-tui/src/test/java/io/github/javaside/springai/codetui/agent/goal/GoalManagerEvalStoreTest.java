@@ -29,14 +29,16 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * /goal 评估结论的两条出账（Task 13 A+B；C1 后落库改为<b>中段插入</b>）：
+ * /goal 评估结论的两条出账（Task 13 A+B；C1 后落库改为<b>中段插入</b>；R2 后写回改为 <b>CAS 重试</b>）：
  *
  * <ol>
  *   <li><b>落库（A，spec §3.4）</b>：onVerdict <b>放行</b>的 verdict 经
  *       {@link GoalText#wrapEvaluation} 合成块插到会话<b>最后一条 AssistantMessage 之前</b>——
  *       绝不追加尾部（C1：{@code CodingAgent.submit} 每回合 {@code foldTrailingUserIntoOutbound}
  *       会把尾部 UserMessage 折进出站并删除，追加尾部 = 轨迹被毁 + 用户消息被混入标记）；无
- *       AssistantMessage 则跳过。不进对话上下文（评估器输入靠内存滚动记录）；被丢弃的 verdict
+ *       AssistantMessage 则跳过。写回走 {@code replaceEvents(sid, events, expectedVersion)} CAS
+ *       变体（R2：落库在评估器线程，与 UI 线程 fold RMW 交错，盲写会覆盖窗口内他人写入的
+ *       用户事件）——版本不符重读重试 ≤3 次，耗尽放弃（标记丢失良性）；被丢弃的 verdict
  *       （Esc 暂停迟到 / serial 过期 / 终态 no-op）<b>不落库</b>；未接线静默跳过；落库失败
  *       log.warn 不抛。</li>
  *   <li><b>recentTraces 投影（B）</b>：snapshot() 把 onVerdict 放行时入账的
@@ -111,9 +113,17 @@ class GoalManagerEvalStoreTest {
         }
     }
 
-    /** 同一份事件表的 {@link SessionRepository} 视图（C1 写回端：replaceEvents）。 */
+    /**
+     * 同一份事件表的 {@link SessionRepository} 视图（C1 写回端；R2 后 GoalManager 只走 3 参 CAS
+     * 变体）。本桩以 {@code events.size()} 充当版本号——直接改表（fold 桩/竞态注入）即自然 +1，
+     * 与 {@code FileSessionRepository}「version 随每次成功写回 +1」的语义对齐。
+     */
     private static class RecordingRepo implements SessionRepository {
-        private final List<SessionEvent> events;
+        final List<SessionEvent> events;
+        /** 3 参 CAS 变体被调次数：断言写回确实走 CAS 路径、且重试次数符合预期。 */
+        int casCalls;
+        /** 每次 CAS 收到的 expectedVersion（GoalManager 侧应来自 getEventVersion 读取门面）。 */
+        final List<Long> expectedVersions = new ArrayList<>();
 
         RecordingRepo(List<SessionEvent> events) { this.events = events; }
 
@@ -122,7 +132,14 @@ class GoalManagerEvalStoreTest {
             events.clear();
             events.addAll(evts);
         }
+        /**
+         * CAS 变体，镜像 {@code FileSessionRepository} 语义：版本不符 → 表不变、返回 {@code false}
+         * （R2 失败信号就是布尔返回值，不抛异常）；命中 → 提交、返回 {@code true}。
+         */
         @Override public boolean replaceEvents(String sessionId, List<SessionEvent> evts, long expectedVersion) {
+            casCalls++;
+            expectedVersions.add(expectedVersion);
+            if (expectedVersion != events.size()) return false;   // CAS 未命中：不变、false
             replaceEvents(sessionId, evts);
             return true;
         }
@@ -141,6 +158,37 @@ class GoalManagerEvalStoreTest {
 
         @Override public void replaceEvents(String sessionId, List<SessionEvent> evts) {
             throw new IllegalStateException("磁盘炸了");
+        }
+    }
+
+    /**
+     * 竞态桩（R2）：第一次 CAS 前模拟「他人抢先写入」——往共享表追加一条 user 事件（版本随之 +1，
+     * 恰使首次 CAS 以旧版本号未命中、返回 {@code false}，即 {@code FileSessionRepository} 的失败
+     * 信号）；第二次放行提交。另记录每次提交的整表，供断言「重试时重读了含他人写入的新状态」。
+     */
+    private static final class RacyRepo extends RecordingRepo {
+        final List<List<SessionEvent>> submittedLists = new ArrayList<>();
+
+        RacyRepo(List<SessionEvent> events) { super(events); }
+
+        @Override public boolean replaceEvents(String sessionId, List<SessionEvent> evts, long expectedVersion) {
+            if (casCalls == 0) {
+                // 竞态窗口：GoalManager 已读完版本/事件，他人（UI 线程）此刻抢先落库
+                events.add(SessionEvent.builder().sessionId("s").message(new UserMessage("用户插话抢先")).build());
+            }
+            submittedLists.add(List.copyOf(evts));
+            return super.replaceEvents(sessionId, evts, expectedVersion);
+        }
+    }
+
+    /** 恒冲突桩（R2 放弃路径）：每次 CAS 都未命中，断言重试 ≤3 次后放弃且绝不盲写覆盖。 */
+    private static final class AlwaysConflictingRepo extends RecordingRepo {
+        AlwaysConflictingRepo(List<SessionEvent> events) { super(events); }
+
+        @Override public boolean replaceEvents(String sessionId, List<SessionEvent> evts, long expectedVersion) {
+            casCalls++;
+            expectedVersions.add(expectedVersion);
+            return false;
         }
     }
 
@@ -188,16 +236,20 @@ class GoalManagerEvalStoreTest {
     // ── A：评估结论落库（C1 中段插入） ─────────────────────────────────
 
     @Test
-    @DisplayName("放行 verdict 的标记插到最后一条 AssistantMessage 之前：恒非尾事件、恰一条、形态与序列守卫")
+    @DisplayName("放行 verdict 的标记插到最后一条 AssistantMessage 之前：走 CAS 变体一次命中、恒非尾事件、形态与序列守卫")
     void appliedVerdictInsertsMarkerBeforeLastAssistant() {
         GoalManager gm = new GoalManager(cfg(), null);
         RecordingStore store = new RecordingStore();
-        gm.bindSession(store, new RecordingRepo(store.events), () -> "s-42");
+        RecordingRepo repo = new RecordingRepo(store.events);
+        gm.bindSession(store, repo, () -> "s-42");
         gm.activate("迁移完成且测试全绿");
         store.appendToolTurn("[goal 继续 1/25]…");     // CodingAgent 侧已完成的第一轮（4 事件）
 
         runTurn(gm, unsat("还差登录页"));
 
+        // R2 CAS 路径：写回恰走一次 3 参 CAS 变体（正常路径无竞态、一次命中），版本号取自 getEventVersion
+        assertEquals(1, repo.casCalls, "写回走 CAS 变体且恰一次（盲写 2 参 replaceEvents 已废除）");
+        assertEquals(List.of(4L), repo.expectedVersions, "expectedVersion=读时快照（4 事件 → 版本 4）");
         assertEquals(1, store.markerCount(), "放行 verdict 恰落一条标记事件");
         assertEquals(5, store.events.size(), "中段插入：原 4 事件一条不少");
         SessionEvent marker = store.events.get(3);
@@ -212,6 +264,52 @@ class GoalManagerEvalStoreTest {
         assertInstanceOf(ToolResponseMessage.class, store.events.get(2).getMessage(),
                 "标记之前是本轮 tool 结果（真实轮形状的中段）");
         assertNoConsecutiveUsers(store.events);
+    }
+
+    @Test
+    @DisplayName("CAS 竞态重试：首次未命中（他人抢先写入）→ 重读重试第二次命中，标记与他人的写入都存活")
+    void casConflictRetriesAndPreservesConcurrentWrite() {
+        GoalManager gm = new GoalManager(cfg(), null);
+        RecordingStore store = new RecordingStore();
+        RacyRepo repo = new RacyRepo(store.events);
+        gm.bindSession(store, repo, () -> "s");
+        gm.activate("g");
+        store.appendToolTurn("[goal 继续 1/25]…");     // 4 事件 → 版本 4
+
+        runTurn(gm, unsat("竞态窗口"));
+
+        assertEquals(2, repo.casCalls, "首次 CAS 未命中后恰好重试一次命中（不第三读、不放弃）");
+        assertEquals(List.of(4L, 5L), repo.expectedVersions,
+                "重试前重读版本：他人抢先写入已使版本 4→5（旧号 4 撞不上，重读拿新号）");
+        assertTrue(repo.submittedLists.get(1).stream().anyMatch(e -> e.getMessage() instanceof UserMessage um
+                        && "用户插话抢先".equals(um.getText())),
+                "重试提交的整表须含他人抢先写入的事件（重读拿新状态拼标记，绝不覆盖他人写入）");
+        assertEquals(1, store.markerCount(), "重试命中后标记存活");
+        assertTrue(store.events.stream().anyMatch(e -> e.getMessage() instanceof UserMessage um
+                        && "用户插话抢先".equals(um.getText())),
+                "他人抢先写入的事件在最终会话中存活（旧盲写实现会把它整个抹掉——本测试的存在理由）");
+        assertEquals(6, store.events.size(), "4 轮事件 + 抢先 user + 标记，一条不少");
+        assertNoConsecutiveUsers(store.events);
+    }
+
+    @Test
+    @DisplayName("CAS 重试耗尽（3 次均未命中）→ 放弃落库：不抛、不盲写覆盖，评估主流程照常推进")
+    void casExhaustedGivesUpWithoutOverwriting() {
+        GoalManager gm = new GoalManager(cfg(), null);
+        RecordingStore store = new RecordingStore();
+        AlwaysConflictingRepo repo = new AlwaysConflictingRepo(store.events);
+        gm.bindSession(store, repo, () -> "s");
+        gm.activate("g");
+        store.appendToolTurn("[goal 继续 1/25]…");
+
+        runTurn(gm, unsat("一直冲突"));
+
+        assertEquals(3, repo.casCalls, "重试上限恰 3 次（放弃后不再碰仓库）");
+        assertEquals(List.of(4L, 4L, 4L), repo.expectedVersions, "每次重试都重读版本（无变化恒 4）");
+        assertEquals(0, store.markerCount(), "重试耗尽：标记本轮丢失（良性，宁丢勿覆盖）");
+        assertEquals(4, store.events.size(), "绝不盲写：会话保持原状，他人窗口内的写入不被旧表覆盖");
+        assertEquals(GoalPhase.RUNNING, gm.phase(), "落库放弃不影响评估主流程");
+        assertTrue(gm.hasAutoTurnPending(), "UNSAT 照常置下一轮 pending");
     }
 
     @Test

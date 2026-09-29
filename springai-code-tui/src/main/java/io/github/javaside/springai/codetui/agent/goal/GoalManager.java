@@ -84,6 +84,9 @@ public final class GoalManager implements UiChangeSource {
     /** 评估轨迹上限（recentTraces 投影，spec §3.4 面板「最近轨迹」行数）。 */
     static final int MAX_TRACES = 8;
 
+    /** 评估结论落库 CAS 重试上限：3 次均遇并发写入则放弃（标记丢失良性，绝不覆盖他人写入）。 */
+    private static final int CAS_RETRIES = 3;
+
     /** agent 末文本入滚动记录的尾部截断预算（字符）；{@link GoalText#tail} 码点对齐不劈代理对。 */
     static final int ASSISTANT_TAIL_CHARS = 2000;
 
@@ -712,9 +715,11 @@ public final class GoalManager implements UiChangeSource {
     // ── 落库接线（Task 9） ─────────────────────────────────────────────
 
     /**
-     * 接会话存储（Task 9 由 CodingAgent 两段式调用）。读走 {@code sessionService.getEvents}、
-     * 写回 {@code sessionRepository.replaceEvents}（中段插入没有 append 语义可用）；sessionId 由
-     * supplier 现取。三者任一未接线（null）时评估结论不落库；只在装配期调用一次，volatile 字段直写即可。
+     * 接会话存储（Task 9 由 CodingAgent 两段式调用）。读走 {@code sessionService.getEvents}、写回
+     * {@code sessionRepository.replaceEvents} 的 <b>CAS 变体</b>（中段插入没有 append 语义可用，
+     * R2 后写回须带版本守卫）；版本号经 {@code sessionRepository.getEventVersion} 读取门面现取。
+     * sessionId 由 supplier 现取。三者任一未接线（null）时评估结论不落库；只在装配期调用一次，
+     * volatile 字段直写即可。
      */
     public void bindSession(SessionService sessionService, SessionRepository sessionRepository,
                             Supplier<String> sessionIdSupplier) {
@@ -724,10 +729,17 @@ public final class GoalManager implements UiChangeSource {
     }
 
     /**
-     * 评估结论落库（spec §3.4，Task 13；C1 改中段插入）：把<b>放行</b>的 verdict 包成
-     * {@link GoalText#wrapEvaluation} 合成块，作为一条 UserMessage 事件<b>插到会话最后一条
-     * AssistantMessage 之前</b>（照 {@code CodingAgent.persistInterjection} 的中段插入先例，
-     * getEvents → 插入 → replaceEvents 写回）。四条纪律：
+     * 评估结论落库（spec §3.4，Task 13；C1 改中段插入，R2 改 <b>CAS 写回</b>）：把<b>放行</b>的
+     * verdict 包成 {@link GoalText#wrapEvaluation} 合成块，作为一条 UserMessage 事件<b>插到会话最后
+     * 一条 AssistantMessage 之前</b>（照 {@code CodingAgent.persistInterjection} 的中段插入先例）。
+     * 本方法跑在评估器线程，与 UI 线程的 fold RMW（{@code CodingAgent.submit} 的
+     * {@code foldTrailingUserIntoOutbound} 等「getEvents → 改 → replaceEvents」读-改-写）天然交错，
+     * 盲写无版本守卫的 {@code replaceEvents(sid, events)} 会把窗口内他人写入的用户事件整个覆盖掉
+     * （会话+磁盘同丢）。故写回走 {@link SessionRepository#replaceEvents(String, List, long)} CAS
+     * 变体，重试环 ≤{@link #CAS_RETRIES} 次：<b>先</b>读版本（{@code getEventVersion}）<b>再</b>读
+     * 事件（顺序不可反——CAS 命中 ⇔ 版本读之后无人写入 ⇔ 所读事件恰为该版本的状态；先读事件则可能
+     * 拿旧表配新版本号照样盲写成功）；插入标记后 CAS 写回，版本不符（竞态）→ 重读重试；重试耗尽 →
+     * 放弃落库 {@code log.warn}（标记丢失属良性，<b>绝不覆盖他人写入</b>）。纪律：
      * <ul>
      *   <li><b>绝不追加尾部</b>（C1）：{@code CodingAgent.submit} 每回合无条件
      *       {@code foldTrailingUserIntoOutbound}——尾部 UserMessage 会被折进出站文本并从会话删除。
@@ -737,8 +749,8 @@ public final class GoalManager implements UiChangeSource {
      *       追加尾部只会重演 fold 事故；</li>
      *   <li><b>不进对话上下文</b>——评估器输入靠内存滚动记录（{@link #history}），落库事件只是
      *       供 {@code -c} 恢复时 HistoryReplay 渲一行「◎ goal 评估：…」的审计痕迹；</li>
-     *   <li><b>失败不抛</b>——IO/仓库异常 log.warn 吞掉，评估主流程（状态机已推进）不受落库影响；
-     *       未接线（service/repository/sessionId 任一 null）静默跳过。</li>
+     *   <li><b>失败不抛</b>——IO/仓库异常/CAS 重试耗尽 log.warn 吞掉，评估主流程（状态机已推进）
+     *       不受落库影响；未接线（service/repository/sessionId 任一 null）静默跳过。</li>
      * </ul>
      * 只在 {@link #onVerdict} 放行路径的<b>锁外</b>调用（IO 不进监视器，同 publish 纪律）。
      */
@@ -753,21 +765,29 @@ public final class GoalManager implements UiChangeSource {
         }
         if (ss == null || repo == null || sid == null) return;
         try {
-            List<SessionEvent> events = ss.getEvents(sid);
-            int lastAssistant = -1;
-            for (int i = events.size() - 1; i >= 0; i--) {
-                if (events.get(i).getMessage() instanceof AssistantMessage) {
-                    lastAssistant = i;
-                    break;
+            String markerText = GoalText.wrapEvaluation(verdictLine, reason);
+            for (int attempt = 1; attempt <= CAS_RETRIES; attempt++) {
+                // 先读版本后读事件（顺序不可反）：CAS 命中 ⇔ 版本读之后无人写入 ⇔ 所读事件恰为该版本状态；
+                // 反序则可能拿旧事件表配新版本号盲写成功，照样覆盖他人写入。
+                long expectedVersion = repo.getEventVersion(sid);
+                List<SessionEvent> events = ss.getEvents(sid);
+                int lastAssistant = -1;
+                for (int i = events.size() - 1; i >= 0; i--) {
+                    if (events.get(i).getMessage() instanceof AssistantMessage) {
+                        lastAssistant = i;
+                        break;
+                    }
                 }
+                if (lastAssistant < 0) return;   // 无锚点：跳过落库（宁缺勿尾部）
+                List<SessionEvent> out = new ArrayList<>(events.size() + 1);
+                out.addAll(events.subList(0, lastAssistant));
+                out.add(SessionEvent.builder().sessionId(sid).message(new UserMessage(markerText)).build());
+                out.addAll(events.subList(lastAssistant, events.size()));
+                if (repo.replaceEvents(sid, List.copyOf(out), expectedVersion)) return;   // CAS 命中
+                // 版本不符：窗口内他人（UI 线程 fold/插话补历史等 RMW）已写入 → 重读重试，绝不盲写覆盖
             }
-            if (lastAssistant < 0) return;   // 无锚点：跳过落库（宁缺勿尾部）
-            List<SessionEvent> out = new ArrayList<>(events.size() + 1);
-            out.addAll(events.subList(0, lastAssistant));
-            out.add(SessionEvent.builder().sessionId(sid)
-                    .message(new UserMessage(GoalText.wrapEvaluation(verdictLine, reason))).build());
-            out.addAll(events.subList(lastAssistant, events.size()));
-            repo.replaceEvents(sid, List.copyOf(out));
+            log.warn("goal 评估结论落库放弃（{}）：CAS 重试 {} 次均遇并发写入，本轮标记丢失（良性，不覆盖他人写入）",
+                    verdictLine, CAS_RETRIES);
         } catch (RuntimeException e) {
             log.warn("goal 评估结论落库失败（{}）：{}", verdictLine, e.toString());
         }
