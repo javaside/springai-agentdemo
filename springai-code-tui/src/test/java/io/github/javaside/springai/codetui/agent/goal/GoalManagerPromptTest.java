@@ -69,6 +69,16 @@ class GoalManagerPromptTest {
     }
 
     @Test
+    void autoTurnPromptUnlimitedMaxTurnsRendersInfinity() {
+        GoalManager gm = new GoalManager(new GoalConfig(0, 3, 0, 0, 2, 2, 3, 60, ""), null);
+        gm.activate("迁移 AuthService");
+        String p = gm.takeAutoTurn();
+        assertTrue(p.startsWith("[goal 继续 1/∞]"), "无上限时前缀写 ∞，实际：" + p);
+        assertTrue(GoalText.isContinueMessage(p), "HistoryReplay 识别契约对 ∞ 前缀同样成立");
+        assertEquals(0, gm.buildEvaluationInput().maxTurns(), "评估输入如实携带 0=无上限");
+    }
+
+    @Test
     void rollingHistoryCapsAt8AndCarriesInterjection() {
         GoalManager gm = new GoalManager(cfg(), null);
         gm.activate("g");

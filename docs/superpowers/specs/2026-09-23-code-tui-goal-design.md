@@ -2,6 +2,7 @@
 
 - 日期：2026-09-23
 - 状态：已批准·已实现（计划：docs/superpowers/plans/2026-09-29-code-tui-goal.md）
+- 变更：2026-09-29 起轮数与 token 预算**默认均无上限**（0=关/∞），对齐 Claude Code/Codex「不设默认闸门」口径；机制不变，仅默认值（见 §7/§9）
 - 参考：Claude Code `/goal`（v2.1.139+）、OpenAI Codex `/goal`（v0.128+）
 - 前置评审：三路 subagent 审核（架构代码验证 / 产品对标 / 熔断矩阵与测试），修订已并入本文
 
@@ -167,9 +168,9 @@ STATE: <压缩的累积进度账本（checklist 风格）>
 
 | 熔断 | 默认 | 口径 | 结果 |
 |---|---|---|---|
-| maxTurns | 25 | **只计自动轮**（含 onError 续跑轮），dispatch 时 +1；用户插话轮不烧配额 | 终态 MAX_TURNS |
+| maxTurns | 0（无上限） | **只计自动轮**（含 onError 续跑轮），dispatch 时 +1；用户插话轮不烧配额；0=无上限（显式设值钳 1–200） | 终态 MAX_TURNS |
 | stalled | 连续 3 轮 | streak 来源：PROGRESS=stalled **或** 本轮零工具调用（机器信号）；advancing 或真实用户输入重置 | PAUSED(STALLED) |
-| token 预算 | 5,000,000 | activate 时快照做差；主 agent + 评估器同一条 usage 采集链（天然聚合，测试钉住）；决策点（评估启动前 + dispatch 前）判定；**软超限**（在飞轮放行到轮末）；0=关 | 终态 BUDGET_EXCEEDED（总结用 STATE 账本生成，不额外烧一轮） |
+| token 预算 | 0（关闭） | activate 时快照做差；主 agent + 评估器同一条 usage 采集链（天然聚合，测试钉住）；决策点（评估启动前 + dispatch 前）判定；**软超限**（在飞轮放行到轮末）；0=关（默认，仅展示消耗） | 终态 BUDGET_EXCEEDED（总结用 STATE 账本生成，不额外烧一轮） |
 | onError | 连续 3 次尝试（2 次续跑） | 信号源：`CodingAgent.handleError` 通知；连续计数、成功重置；**Esc 取消不计**；空回复/拒答不算（交评估器判 stalled）；续跑轮计入 maxTurns 与预算 | PAUSED(ERROR) |
 | 评估器调用异常 | 连续 2 次 | 与解析失败分开计数 | PAUSED(EVALUATOR) |
 | 协议解析失败 | 连续 3 次 | 单次失败按 UNSATISFIED + PROGRESS=stalled 计 | PAUSED(PROTOCOL)，展示原始输出助诊断 |
@@ -186,9 +187,9 @@ STATE: <压缩的累积进度账本（checklist 风格）>
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `CODETUI_GOAL_EVALUATOR_MODEL` | 空 | 空=跟随当前模型（aux 回退） |
-| `CODETUI_GOAL_MAX_TURNS` | 25 | 自动轮上限 |
+| `CODETUI_GOAL_MAX_TURNS` | 0（无上限） | 自动轮上限；0=无上限，显式设值钳 1–200，无上限时展示 `N/∞` |
 | `CODETUI_GOAL_STALLED_LIMIT` | 3 | 连续 stalled 暂停阈值 |
-| `CODETUI_GOAL_TOKEN_BUDGET` | 5000000 | 0=关闭 |
+| `CODETUI_GOAL_TOKEN_BUDGET` | 0（关闭） | 0=关闭（默认无预算熔断） |
 | `CODETUI_GOAL_TURN_GAP_SECONDS` | 3 | 轮间倒计时，0=背靠背 |
 | `CODETUI_GOAL_ERROR_RETRY` | 2 | onError 自动续跑次数 |
 | `CODETUI_GOAL_EVAL_FAIL_LIMIT` | 2 | 评估器调用异常暂停阈值 |

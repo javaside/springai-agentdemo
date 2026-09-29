@@ -139,7 +139,7 @@ public final class ChatClientGoalEvaluator implements GoalEvaluator {
     static String renderUser(EvaluationInput in) {
         StringBuilder sb = new StringBuilder();
         sb.append("目标条件：").append(in.condition()).append('\n');
-        sb.append("轮次：").append(in.turn()).append('/').append(in.maxTurns()).append('\n');
+        sb.append("轮次：").append(in.turn()).append('/').append(GoalText.limitText(in.maxTurns())).append('\n');
         sb.append("连续停滞轮数：").append(in.stalledStreak()).append('\n');
         sb.append("上一轮 STATE 账本：").append(blank(in.stateLedger()) ? EMPTY_LEDGER : in.stateLedger()).append('\n');
         sb.append("最近 ").append(in.recentTurns().size()).append(" 轮记录：\n");

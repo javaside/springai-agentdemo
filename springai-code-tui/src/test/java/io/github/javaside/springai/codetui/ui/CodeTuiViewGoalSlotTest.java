@@ -154,8 +154,8 @@ class CodeTuiViewGoalSlotTest {
         v.tickForTest();
 
         assertEquals(1, h.submitted.size(), "空闲批应恰好派发一个自动轮：" + h.submitted);
-        assertTrue(h.submitted.get(0).startsWith("[goal 继续 1/25]"),
-                "自动轮 prompt 以 [goal 继续 1/25] 开头，实际：" + h.submitted.get(0));
+        assertTrue(h.submitted.get(0).startsWith("[goal 继续 1/∞]"),
+                "自动轮 prompt 以 [goal 继续 1/∞] 开头（默认无上限），实际：" + h.submitted.get(0));
         assertEquals(1, h.backgrounds.size(), "后台结果让路：本批不得送达");
 
         v.tickForTest();
@@ -217,7 +217,7 @@ class CodeTuiViewGoalSlotTest {
         await(() -> !h.gm.evaluationInFlight());
         drainUntilSubmitted(v, h, 2);             // verdict publish → UI 批 → 自动轮 2
 
-        assertTrue(h.submitted.get(1).startsWith("[goal 继续 2/25]"),
+        assertTrue(h.submitted.get(1).startsWith("[goal 继续 2/∞]"),
                 "自动轮 2，实际：" + h.submitted.get(1));
         assertTrue(h.submitted.get(1).contains("还差登录页"), "prompt 携带评估器结论");
     }
@@ -362,8 +362,8 @@ class CodeTuiViewGoalSlotTest {
         assertEquals(1, countLinesContaining(sink.lines, "◎ goal 终态：SATISFIED"),
                 "终态一行式总结恰一条，实际：" + sink.lines);
         assertTrue(sink.lines.stream().anyMatch(l -> l.contains("全部测试通过")
-                        && l.contains("1/25") && l.contains("token")),
-                "总结含 reason/N/M/token，实际：" + sink.lines);
+                        && l.contains("1/∞") && l.contains("token")),
+                "总结含 reason/N/M/token（默认无上限 → ∞），实际：" + sink.lines);
 
         v.tickForTest();
         assertEquals(1, countLinesContaining(sink.lines, "◎ goal 终态：SATISFIED"),

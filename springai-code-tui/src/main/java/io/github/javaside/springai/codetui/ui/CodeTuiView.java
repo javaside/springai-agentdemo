@@ -16,6 +16,7 @@ import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
 import io.github.javaside.springai.codetui.agent.goal.GoalManager;
 import io.github.javaside.springai.codetui.agent.goal.GoalPhase;
 import io.github.javaside.springai.codetui.agent.goal.GoalStateSnapshot;
+import io.github.javaside.springai.codetui.agent.goal.GoalText;
 import io.github.javaside.springai.codetui.agent.goal.GoalTurnMaterial;
 import io.github.javaside.springai.codetui.agent.goal.GoalVerdict;
 import io.github.javaside.springai.codetui.agent.goal.PauseReason;
@@ -2717,7 +2718,7 @@ public final class CodeTuiView extends InlineApp {
             state.setNotice(e.getMessage());       // 空/超长条件：Manager 抛、View 转 notice
             return;
         }
-        state.pushInfo("◎ goal 已设定（上限 " + gm.snapshot().maxTurns() + " 轮）：" + rest);
+        state.pushInfo("◎ goal 已设定（上限 " + GoalText.limitText(gm.snapshot().maxTurns()) + " 轮）：" + rest);
     }
 
     /**
@@ -2749,11 +2750,11 @@ public final class CodeTuiView extends InlineApp {
         }
     }
 
-    /** 面板状态行：PAUSED 带原因（如 {@code PAUSED(ESC)}），其余直接枚举名；轮次一律 N/M。 */
+    /** 面板状态行：PAUSED 带原因（如 {@code PAUSED(ESC)}），其余直接枚举名；轮次一律 N/M（无上限 → N/∞）。 */
     private static String goalPhaseText(GoalStateSnapshot s) {
         String base = s.phase() == GoalPhase.PAUSED && s.pauseReason() != null
                 ? "PAUSED(" + s.pauseReason() + ")" : s.phase().name();
-        return base + " · " + s.turnsUsed() + "/" + s.maxTurns() + " 轮";
+        return base + " · " + s.turnsUsed() + "/" + GoalText.limitText(s.maxTurns()) + " 轮";
     }
 
     /** 运行时长人读化（45s / 2m30s / 3h5m 同 {@link ConversationState#formatQuotaRemaining} 口径）；负值（时钟偏移）钳 0。 */
@@ -2872,7 +2873,7 @@ public final class CodeTuiView extends InlineApp {
         if (!changed) return;
         if (phase.isTerminal()) {
             String summary = s.lastSummary();
-            String stats = "（" + s.turnsUsed() + "/" + s.maxTurns()
+            String stats = "（" + s.turnsUsed() + "/" + GoalText.limitText(s.maxTurns())
                     + "，token " + s.tokenSpent() + (s.tokenBudget() > 0 ? "/" + s.tokenBudget() : "") + "）";
             state.pushInfo("◎ goal 终态：" + phase.name()
                     + (summary.isEmpty() ? "" : " — " + summary) + stats);
@@ -4656,7 +4657,7 @@ public final class CodeTuiView extends InlineApp {
             text = "◎ goal ⏳" + (remain > 0 ? ConversationState.formatQuotaRemaining(remain) : "0s");
             style = RUNNING;
         } else {
-            text = "◎ goal " + s.turnsUsed() + "/" + s.maxTurns();
+            text = "◎ goal " + s.turnsUsed() + "/" + GoalText.limitText(s.maxTurns());
             style = RUNNING;                      // 青色，同「⏺ 运行」族——后台确实有活挂着
         }
         return Span.styled(text + " · ", style);

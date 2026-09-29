@@ -73,6 +73,8 @@ class CodeTuiViewGoalCommandTest {
         List<String> lines = drain(s);
         assertTrue(anyContains(lines, "goal 已设定") && anyContains(lines, "迁移完成且测试全绿"),
                 "应回显设定成功与条件原文，实际：" + lines);
+        assertTrue(anyContains(lines, "上限 ∞ 轮"),
+                "默认无上限时回显 ∞（不得写成「上限 0 轮」），实际：" + lines);
         assertTrue(anyContains(lines, "Shift+Tab"),
                 "DEFAULT 档应提示切档（循环会停下等批准），实际：" + lines);
     }
@@ -215,10 +217,10 @@ class CodeTuiViewGoalCommandTest {
         assertNull(v.goalLeadingSpan(), "未启用/INACTIVE：不占位（modeTag 同纪律）");
 
         h.gm.activate("推进迁移");
-        assertEquals("◎ goal 0/25 · ", v.goalLeadingSpan().content(), "RUNNING：N/M");
+        assertEquals("◎ goal 0/∞ · ", v.goalLeadingSpan().content(), "RUNNING：N/M（默认无上限 → ∞）");
 
         h.gm.takeAutoTurn();                              // 首轮发走：turnsUsed=1
-        assertEquals("◎ goal 1/25 · ", v.goalLeadingSpan().content());
+        assertEquals("◎ goal 1/∞ · ", v.goalLeadingSpan().content());
 
         h.gm.beginEvaluation();                           // 评估在飞（verdict 的唯一合法入口：serial 在此锁存）
         assertEquals("◎ goal 评估中 · ", v.goalLeadingSpan().content());
@@ -230,8 +232,8 @@ class CodeTuiViewGoalCommandTest {
                 "UNSATISFIED 放行后置 gap 倒计时，deadline 现算，实际：" + counting);
 
         h.gm.takeAutoTurn();                              // 第二轮发走：turnsUsed=2、倒计时清
-        assertEquals("◎ goal 2/25 · ", v.goalLeadingSpan().content());
-        assertTrue(ViewScreen.of(v).contains("◎ goal 2/25"),
+        assertEquals("◎ goal 2/∞ · ", v.goalLeadingSpan().content());
+        assertTrue(ViewScreen.of(v).contains("◎ goal 2/∞"),
                 "leading 必须真上状态行（分支顺序类缺陷只测纯函数测不到），实际：\n" + ViewScreen.of(v));
 
         h.gm.pauseByEsc();                                // Esc 一级：RUNNING→PAUSED

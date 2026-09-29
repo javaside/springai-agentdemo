@@ -97,6 +97,21 @@ class GoalManagerFuseTest {
     }
 
     @Test
+    void maxTurnsZeroMeansUnlimitedAutoTurns() {
+        GoalManager gm = new GoalManager(cfg(0, 2, 0L, 1, 2, 3), null);   // maxTurns=0=无上限、budget=0=关
+        gm.activate("g");                         // activate 置首轮 pending
+        // 跑过旧默认 25 的量级（此处 30 轮）也不得触发 MAX_TURNS 终态
+        for (int i = 1; i <= 30; i++) {
+            assertNotNull("第 " + i + " 轮应可派发（无上限）", gm.takeAutoTurn());
+            long e = gm.beginEvaluation();
+            assertNotEquals(-1L, e);
+            gm.onVerdict(e, unsat(false));        // advancing → 置下一轮 pending
+            assertEquals(GoalPhase.RUNNING, gm.phase());
+        }
+        assertEquals(30, gm.snapshot().turnsUsed());
+    }
+
+    @Test
     void stalledStreakFromVerdictAndReset() {
         GoalConfig c = cfg(10, 2, 0L, 1, 2, 3);                 // stalledLimit=2
         GoalManager gm = new GoalManager(c, null);

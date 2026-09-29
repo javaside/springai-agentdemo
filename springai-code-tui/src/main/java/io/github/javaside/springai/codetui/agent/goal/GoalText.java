@@ -21,20 +21,29 @@ public final class GoalText {
     public static final String EVAL_CLOSE = "[/goal 评估]";
 
     private static final String CONTINUE_MARKER = "[goal 继续 ";
-    private static final Pattern CONTINUE_PREFIX = Pattern.compile("^\\[goal 继续 \\d+/\\d+\\]");
+    private static final Pattern CONTINUE_PREFIX = Pattern.compile("^\\[goal 继续 \\d+/(\\d+|∞)\\]");
     private static final String REASON_SEPARATOR = "：";
 
     private GoalText() {
     }
 
     /**
-     * 自动轮 user message 的前缀标记 {@code [goal 继续 N/M]}（英文数字形式，语言仅作标记）。
+     * 自动轮 user message 的前缀标记 {@code [goal 继续 N/M]}（英文数字形式，语言仅作标记）；
+     * {@code m <= 0}（无上限）渲染为 {@code ∞}。
      *
      * @param n 已用自动轮次
-     * @param m 自动轮上限
+     * @param m 自动轮上限（0=无上限）
      */
     public static String continuePrefix(int n, int m) {
-        return CONTINUE_MARKER + n + "/" + m + "]";
+        return CONTINUE_MARKER + n + "/" + limitText(m) + "]";
+    }
+
+    /**
+     * 上限的展示文本：{@code >0} 原样数字，否则 {@code ∞}（0=无上限）。前缀、评估器 prompt、
+     * 状态栏/面板/终态总结共用，口径必须一致（改一处不改其余会把 N/∞ 与 N/0 混写）。
+     */
+    public static String limitText(int maxTurns) {
+        return maxTurns > 0 ? Integer.toString(maxTurns) : "∞";
     }
 
     /** 该文本是否为自动轮消息（行首带 {@link #continuePrefix} 标记）。 */

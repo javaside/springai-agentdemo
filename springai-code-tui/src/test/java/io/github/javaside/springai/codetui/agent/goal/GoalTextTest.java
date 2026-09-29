@@ -14,6 +14,14 @@ class GoalTextTest {
     }
 
     @Test
+    void continuePrefixUnlimitedRendersInfinityAndStillMatches() {
+        assertEquals("[goal 继续 3/∞]", GoalText.continuePrefix(3, 0));
+        String msg = GoalText.continuePrefix(3, 0) + "\n目标：迁移完成";
+        assertTrue(GoalText.isContinueMessage(msg),
+                "∞ 前缀同样要被 HistoryReplay 的识别契约覆盖，实际：" + msg);
+    }
+
+    @Test
     void evaluationWrapUnwrap() {
         String wrapped = GoalText.wrapEvaluation("UNSATISFIED", "还有 2 处未迁移");
         assertTrue(wrapped.startsWith(GoalText.EVAL_OPEN));

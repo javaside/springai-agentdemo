@@ -29,9 +29,11 @@ public record GoalConfig(int maxTurns, int stalledLimit, long tokenBudget, int t
 
     private static final Logger log = LoggerFactory.getLogger(GoalConfig.class);
 
-    static final int DEFAULT_MAX_TURNS = 25, MIN_MAX_TURNS = 1, MAX_MAX_TURNS = 200;
+    /** maxTurns：0=无上限（默认，对齐 Claude Code/Codex 不设默认轮数闸门）；显式设值钳 [1,200]。 */
+    static final int DEFAULT_MAX_TURNS = 0, MIN_MAX_TURNS = 0, MAX_MAX_TURNS = 200;
     static final int DEFAULT_STALLED_LIMIT = 3, MIN_STALLED_LIMIT = 1, MAX_STALLED_LIMIT = 10;
-    static final long DEFAULT_TOKEN_BUDGET = 5_000_000L, MAX_TOKEN_BUDGET = Long.MAX_VALUE; // 0=关
+    /** tokenBudget：0=关闭（默认；对齐两家无默认预算熔断，仅监控展示）。 */
+    static final long DEFAULT_TOKEN_BUDGET = 0L, MAX_TOKEN_BUDGET = Long.MAX_VALUE;
     static final int DEFAULT_TURN_GAP = 3, MIN_TURN_GAP = 0, MAX_TURN_GAP = 60;
     static final int DEFAULT_ERROR_RETRY = 2, MIN_ERROR_RETRY = 0, MAX_ERROR_RETRY = 10;
     static final int DEFAULT_EVAL_FAIL_LIMIT = 2, MIN_EVAL_FAIL_LIMIT = 1, MAX_EVAL_FAIL_LIMIT = 10;

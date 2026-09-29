@@ -154,9 +154,9 @@ DEEPSEEK_API_KEY=你的key
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `CODETUI_GOAL_EVALUATOR_MODEL` | 空 | 独立评估器模型（`providerId:modelId`）；空 = 跟随当前模型 |
-| `CODETUI_GOAL_MAX_TURNS` | 25 | 自动轮上限（用户消息轮不计入） |
+| `CODETUI_GOAL_MAX_TURNS` | 0（无上限） | 自动轮上限（用户消息轮不计入）；0 = 无上限（对齐 Claude Code/Codex 默认不设轮数闸门），显式设值钳 1–200 |
 | `CODETUI_GOAL_STALLED_LIMIT` | 3 | 连续「无进展」判定达到该次数即暂停（STALLED） |
-| `CODETUI_GOAL_TOKEN_BUDGET` | 5000000 | 本 goal 的 token 预算（相对激活时的增量计账）；0 = 关闭 |
+| `CODETUI_GOAL_TOKEN_BUDGET` | 0（关闭） | 本 goal 的 token 预算（相对激活时的增量计账）；0 = 关闭（默认无预算熔断，仅展示消耗） |
 | `CODETUI_GOAL_TURN_GAP_SECONDS` | 3 | 轮间可视倒计时秒数；0 = 背靠背连发 |
 | `CODETUI_GOAL_ERROR_RETRY` | 2 | 回合错误自动续跑次数（连续 `+1` 次即暂停） |
 | `CODETUI_GOAL_EVAL_FAIL_LIMIT` | 2 | 评估器调用异常 / 超时达到该次数即暂停（EVALUATOR） |
@@ -164,6 +164,8 @@ DEEPSEEK_API_KEY=你的key
 | `CODETUI_GOAL_EVAL_TIMEOUT_SECONDS` | 60 | 单次评估调用的超时 |
 
 熔断均为暂停语义（发消息可恢复并清零计数）；预算与轮数只在自动轮派发决策点清算，进行中的轮放行到轮末。
+轮数与预算默认均无上限——停止只靠评估器判定（SATISFIED/IMPOSSIBLE）与 STALLED/ERROR/EVALUATOR/PROTOCOL 四族熔断及两级 Esc；
+长任务无人值守前建议显式设 `CODETUI_GOAL_MAX_TURNS` / `CODETUI_GOAL_TOKEN_BUDGET` 兜底。无上限时界面与前缀展示 `N/∞`。
 
 ### 项目数据
 

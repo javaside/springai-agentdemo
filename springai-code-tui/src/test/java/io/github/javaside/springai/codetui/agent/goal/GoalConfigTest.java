@@ -8,9 +8,9 @@ class GoalConfigTest {
     @Test
     void defaultsWhenEnvUnset() {
         GoalConfig c = GoalConfig.from(name -> null);
-        assertEquals(25, c.maxTurns());
+        assertEquals(0, c.maxTurns());          // 0=无上限（对齐 Claude Code/Codex 默认不设轮数闸门）
         assertEquals(3, c.stalledLimit());
-        assertEquals(5_000_000L, c.tokenBudget());
+        assertEquals(0L, c.tokenBudget());      // 0=关闭（默认无预算熔断）
         assertEquals(3, c.turnGapSeconds());
         assertEquals(2, c.errorRetry());
         assertEquals(2, c.evalFailLimit());
@@ -47,9 +47,11 @@ class GoalConfigTest {
     @Test
     void clampsOutOfRangeIntoBounds() {
         GoalConfig c = GoalConfig.from(name -> "CODETUI_GOAL_MAX_TURNS".equals(name) ? "99999" : null);
-        assertEquals(200, c.maxTurns());
+        assertEquals(200, c.maxTurns());        // 显式设值仍钳上界 200
         GoalConfig zero = GoalConfig.from(name -> "CODETUI_GOAL_MAX_TURNS".equals(name) ? "0" : null);
-        assertEquals(1, zero.maxTurns());
+        assertEquals(0, zero.maxTurns());       // 0=无上限，不钳到 1
+        GoalConfig negative = GoalConfig.from(name -> "CODETUI_GOAL_MAX_TURNS".equals(name) ? "-1" : null);
+        assertEquals(0, negative.maxTurns());   // 负值钳到下界 0（=无上限）
     }
 
     @Test
@@ -61,7 +63,7 @@ class GoalConfigTest {
     @Test
     void invalidNumberFallsBackToDefault() {
         GoalConfig c = GoalConfig.from(name -> "CODETUI_GOAL_MAX_TURNS".equals(name) ? "abc" : null);
-        assertEquals(25, c.maxTurns());
+        assertEquals(0, c.maxTurns());          // 坏值回退默认 0（无上限）
     }
 
     @Test

@@ -350,7 +350,7 @@ class GoalConcurrencyScenariosTest {
         rig.h().evaluator.enqueue(unsat("重评：还差登录页", false, null));
         await(() -> !gm.evaluationInFlight(), "重评 verdict 应落账");
         drainUntilSubmitted(rig.v(), rig.h(), 3);
-        assertTrue(rig.h().submitted.get(2).startsWith("[goal 继续 2/25]"),
+        assertTrue(rig.h().submitted.get(2).startsWith("[goal 继续 2/∞]"),
                 "自动轮 2 前缀，实际：" + rig.h().submitted.get(2));
         assertTrue(rig.h().submitted.get(2).contains("重评：还差登录页"),
                 "第 2 轮 prompt 携带重评结论（旧结论已被作废），实际：" + rig.h().submitted.get(2));
@@ -455,7 +455,7 @@ class GoalConcurrencyScenariosTest {
         assertTrue(gm.hasAutoTurnPending(), "旧 verdict 不得动新 goal 的待发轮");
 
         drainUntilSubmitted(rig.v(), rig.h(), 2); // 新 goal 首轮
-        assertTrue(rig.h().submitted.get(1).startsWith("[goal 继续 1/25]"),
+        assertTrue(rig.h().submitted.get(1).startsWith("[goal 继续 1/∞]"),
                 "新 goal 轮次从 1 重新计数，实际：" + rig.h().submitted.get(1));
     }
 

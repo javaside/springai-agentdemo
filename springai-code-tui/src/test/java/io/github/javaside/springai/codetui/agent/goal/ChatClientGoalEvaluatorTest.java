@@ -132,6 +132,14 @@ class ChatClientGoalEvaluatorTest {
         assertTrue(empty.contains("（尚无）"), "零记录给占位，不留悬空标题: " + empty);
     }
 
+    /** maxTurns=0=无上限：轮次行渲染 N/∞，评估器不得把它读成「只剩 0 轮」。 */
+    @Test
+    void renderUserUnlimitedTurnsRendersInfinity() {
+        String u = ChatClientGoalEvaluator.renderUser(
+                new EvaluationInput("migrate", 3, 0, 0, "", List.of()));
+        assertTrue(u.contains("轮次：3/∞"), "无上限时轮次行写 N/∞，实际：" + u);
+    }
+
     /** 系统协议的锚点行不许被顺手改写（prompt 契约，改动必须过 here）。 */
     @Test
     void systemPromptCarriesProtocolContract() {

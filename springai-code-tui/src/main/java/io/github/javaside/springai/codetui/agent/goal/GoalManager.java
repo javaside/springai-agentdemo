@@ -223,8 +223,8 @@ public final class GoalManager implements UiChangeSource {
             version = changed();
         }
         publish(version);
-        log.info("goal 已激活（epoch={}，maxTurns={}，预算={}）：{}", epochForLog, config.maxTurns(),
-                config.tokenBudget(), condition);
+        log.info("goal 已激活（epoch={}，maxTurns={}，预算={}）：{}", epochForLog, GoalText.limitText(config.maxTurns()),
+                config.tokenBudget() > 0 ? config.tokenBudget() : "关闭", condition);
     }
 
     /** 清空为 {@link GoalPhase#CLEARED} 终态；INACTIVE（以及已 CLEARED）时 no-op。 */
@@ -562,7 +562,7 @@ public final class GoalManager implements UiChangeSource {
      * （自动轮也是对话边界）、预算与轮数复检、清 pending 与倒计时。无可发轮返回 null；
      * 预算超限 → {@link GoalPhase#BUDGET_EXCEEDED}、轮数耗尽 → {@link GoalPhase#MAX_TURNS}
      * （进终态并返回 null）。决策点顺序：phase → budget → maxTurns（软超限口径：在飞轮
-     * 放行到轮末，判定只在决策点）。
+     * 放行到轮末，判定只在决策点）。maxTurns=0=无上限（默认）：轮数清算恒跳过。
      */
     public String takeAutoTurn() {
         String prompt;
@@ -573,7 +573,7 @@ public final class GoalManager implements UiChangeSource {
                 terminateLocked(GoalPhase.BUDGET_EXCEEDED);
                 version = changed();
                 prompt = null;
-            } else if (turnsUsed + 1 > config.maxTurns()) {
+            } else if (config.maxTurns() > 0 && turnsUsed + 1 > config.maxTurns()) {
                 terminateLocked(GoalPhase.MAX_TURNS);
                 version = changed();
                 prompt = null;

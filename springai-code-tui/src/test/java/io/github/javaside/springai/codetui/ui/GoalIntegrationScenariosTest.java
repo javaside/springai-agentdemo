@@ -200,8 +200,8 @@ class GoalIntegrationScenariosTest {
 
         rig.v().tickForTest();                    // 自动轮 1
         assertEquals(1, rig.h().submitted.size());
-        assertTrue(rig.h().submitted.get(0).startsWith("[goal 继续 1/25]"),
-                "首轮 prompt 以 [goal 继续 1/25] 开头，实际：" + rig.h().submitted.get(0));
+        assertTrue(rig.h().submitted.get(0).startsWith("[goal 继续 1/∞]"),
+                "首轮 prompt 以 [goal 继续 1/∞] 开头（默认无上限），实际：" + rig.h().submitted.get(0));
         assertTrue(rig.h().submitted.get(0).contains("（首轮）"), "首轮无上轮结论");
 
         rig.v().tickForTest();                    // goal 槽发起评估 1
@@ -210,7 +210,7 @@ class GoalIntegrationScenariosTest {
         await(() -> !gm.evaluationInFlight(), "verdict 1 应经 executor 回调落账");
         drainUntilSubmitted(rig.v(), rig.h(), 2);
 
-        assertTrue(rig.h().submitted.get(1).startsWith("[goal 继续 2/25]"),
+        assertTrue(rig.h().submitted.get(1).startsWith("[goal 继续 2/∞]"),
                 "自动轮 2 前缀，实际：" + rig.h().submitted.get(1));
         assertTrue(rig.h().submitted.get(1).contains("还差登录页"),
                 "第 2 轮 prompt 携带第 1 轮评估结论，实际：" + rig.h().submitted.get(1));
@@ -221,7 +221,7 @@ class GoalIntegrationScenariosTest {
         await(() -> !gm.evaluationInFlight(), "verdict 2 应落账");
         drainUntilSubmitted(rig.v(), rig.h(), 3);
 
-        assertTrue(rig.h().submitted.get(2).startsWith("[goal 继续 3/25]"));
+        assertTrue(rig.h().submitted.get(2).startsWith("[goal 继续 3/∞]"));
         assertTrue(rig.h().submitted.get(2).contains("还差设置页"), "第 3 轮 prompt 携带第 2 轮结论");
         assertTrue(rig.h().submitted.get(2).contains("已完成：DB 迁移"),
                 "STATE 账本随 verdict 透传进累积进度行，实际：" + rig.h().submitted.get(2));
@@ -239,7 +239,7 @@ class GoalIntegrationScenariosTest {
         assertEquals(1, countLinesContaining(rig.sink().lines, "◎ goal 终态：SATISFIED"),
                 "终态一行式总结恰一条，实际：" + rig.sink().lines);
         assertTrue(rig.sink().lines.stream().anyMatch(l -> l.contains("全部测试通过")
-                        && l.contains("3/25") && l.contains("token")),
+                        && l.contains("3/∞") && l.contains("token")),
                 "总结含 reason/N/M/token，实际：" + rig.sink().lines);
     }
 
@@ -298,7 +298,7 @@ class GoalIntegrationScenariosTest {
         assertEquals(GoalPhase.RUNNING, gm.phase(), "清零后单次 stalled 不刹车");
         assertEquals(1, gm.snapshot().stalledStreak());
         drainUntilSubmitted(rig.v(), rig.h(), 7);
-        assertTrue(rig.h().submitted.get(6).startsWith("[goal 继续 6/25]"),
+        assertTrue(rig.h().submitted.get(6).startsWith("[goal 继续 6/∞]"),
                 "用户轮不烧配额：恢复后自动轮次续到 6，实际：" + rig.h().submitted.get(6));
     }
 
