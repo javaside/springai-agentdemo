@@ -279,9 +279,11 @@ class GoalManagerFuseTest {
         gm3.onEvaluationFailure(a, new RuntimeException("t"));   // eval 1/2
         assertEquals(GoalPhase.RUNNING, gm3.phase());
         long b = gm3.beginEvaluation();
+        assertNotEquals(-1L, b);
         gm3.onProtocolFailure(b, "bad");                         // 若 eval 泄入 protocol（1+1=2）此处应已停
         assertEquals(GoalPhase.RUNNING, gm3.phase());
         long c = gm3.beginEvaluation();
+        assertNotEquals(-1L, c);
         gm3.onProtocolFailure(c, "bad2");                        // protocol 2/2 → 仅 protocol 家族触发
         assertEquals(GoalPhase.PAUSED, gm3.phase());
         assertEquals(PauseReason.PROTOCOL, gm3.snapshot().pauseReason());
@@ -407,6 +409,51 @@ class GoalManagerFuseTest {
         gm3.onUserDispatch();
         gm3.onProtocolFailure(p, "garbage");
         assertEquals(GoalPhase.RUNNING, gm3.phase());
+        assertEquals(0, gm3.snapshot().stalledStreak());
+        assertFalse(gm3.evaluationInFlight());
+    }
+
+    @Test
+    void pausedDiscardsLateVerdictButClearsInFlight() {
+        // spec §3.3「在途评估不硬中断」：Esc 暂停（评估在飞）后迟到的判定只清自己的在飞标志，
+        // 不得 terminate/pause 改判；恢复 RUNNING 后由下一空闲批重评。
+        // a) verdict：PAUSED(ESC) 下迟到的 SATISFIED 不终态、不写摘要
+        GoalManager gm = new GoalManager(cfg(10, 2, 1000L, 1, 2, 3), null);
+        gm.activate("g");
+        long e = takeThenBegin(gm);
+        assertTrue(gm.evaluationInFlight());
+        gm.pauseByEsc();                                          // 评估在飞期间第一级 Esc
+        assertEquals(GoalPhase.PAUSED, gm.phase());
+        assertEquals(PauseReason.ESC, gm.snapshot().pauseReason());
+        gm.onVerdict(e, new GoalVerdict(GoalVerdict.Outcome.SATISFIED, "迟到的完成判定", false, null, "raw"));
+        assertEquals(GoalPhase.PAUSED, gm.phase());               // 不被迟到 SATISFIED 硬中断成终态
+        assertEquals(PauseReason.ESC, gm.snapshot().pauseReason());
+        assertFalse(gm.evaluationInFlight());                     // 但自己的在飞标志自清（wasInFlight 才推版本）
+        assertEquals("", gm.snapshot().lastSummary());            // 判定被丢弃：摘要不写入
+
+        // 恢复 RUNNING 后在飞已清、无 pending 阻塞 → 下一空闲批可立即重评
+        gm.onUserDispatch();
+        assertEquals(GoalPhase.RUNNING, gm.phase());
+        assertNotEquals(-1L, gm.beginEvaluation());
+
+        // b) onEvaluationFailure 同构：PAUSED(ESC) 下迟到失败不记账（evalFailLimit=1，计入必停）
+        GoalManager gm2 = new GoalManager(cfg(10, 2, 1000L, 1, 1, 3), null);
+        gm2.activate("g");
+        long f = takeThenBegin(gm2);
+        gm2.pauseByEsc();
+        gm2.onEvaluationFailure(f, new RuntimeException("late"));
+        assertEquals(GoalPhase.PAUSED, gm2.phase());
+        assertEquals(PauseReason.ESC, gm2.snapshot().pauseReason());   // 不改判为 EVALUATOR
+        assertFalse(gm2.evaluationInFlight());
+
+        // c) onProtocolFailure 同构：PAUSED(ESC) 下迟到协议失败不记停滞账
+        GoalManager gm3 = new GoalManager(cfg(10, 2, 1000L, 1, 2, 3), null);
+        gm3.activate("g");
+        long q = takeThenBegin(gm3);
+        gm3.pauseByEsc();
+        gm3.onProtocolFailure(q, "late garbage");
+        assertEquals(GoalPhase.PAUSED, gm3.phase());
+        assertEquals(PauseReason.ESC, gm3.snapshot().pauseReason());
         assertEquals(0, gm3.snapshot().stalledStreak());
         assertFalse(gm3.evaluationInFlight());
     }

@@ -49,9 +49,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * 预算/轮数是<b>软超限</b>：只在 {@link #takeAutoTurn} 决策点清算（预算优先于轮数），在飞轮放行到轮末。
  *
  * <p><b>评估「回调即终点」</b>：{@link #beginEvaluation} CAS 置在飞并锁存 {@code dispatchSerial}；
- * onVerdict / onEvaluationFailure / onProtocolFailure 三回调在 epoch 相符时自清在飞标志（无独立
- * endEvaluation），其中 <b>serial 不符</b>（评估在飞期间用户插话——spec §5.2「挂起 verdict 单槽」：
- * 插话改变上下文，旧判断过期）则丢弃判定、只清标志让下一空闲批重评。
+ * onVerdict / onEvaluationFailure / onProtocolFailure 三回调：旧代迟到或终态 → 完全 no-op（不动
+ * 当前代标志）；epoch 相符即自清在飞标志（无独立 endEvaluation），但 <b>phase≠RUNNING</b>
+ * （PAUSED/INACTIVE——spec §3.3「在途评估不硬中断」，Esc/熔断暂停后的迟到判定一律丢弃，不得
+ * terminate/pause 改判）或 <b>serial 不符</b>（评估在飞期间用户插话——spec §5.2「挂起 verdict
+ * 单槽」：插话改变上下文，旧判断过期）则丢弃判定、只清标志，让恢复 RUNNING 后的下一空闲批重评。
  *
  * <p><b>本 Task 边界</b>：滚动记录与完整 prompt 文案是 Task 5 的扩展。
  */
@@ -319,9 +321,11 @@ public final class GoalManager implements UiChangeSource {
 
     /**
      * 评估器判定入口。门：旧代迟到（epoch 不符）或终态单调 → 完全 no-op（不动当前代标志）；
-     * epoch 相符即自清在飞标志（回调即终点），但 <b>serial 不符</b>（评估在飞期间用户插话/
-     * 自动轮派发，spec §5.2「挂起 verdict 单槽」：插话改变上下文，旧判断过期）则丢弃判定、
-     * 只清标志（好让下一空闲批重评）。放行后：SATISFIED/IMPOSSIBLE → 终态并记摘要；
+     * epoch 相符即自清在飞标志（回调即终点），但 <b>phase≠RUNNING</b>（PAUSED/INACTIVE，spec §3.3
+     * 「在途评估不硬中断」：如 Esc 暂停后迟到的 SATISFIED 不得 terminate）或 <b>serial 不符</b>
+     * （评估在飞期间用户插话/自动轮派发，spec §5.2「挂起 verdict 单槽」：插话改变上下文，旧判断
+     * 过期）则丢弃判定、只清标志（好让恢复 RUNNING 后的下一空闲批重评）。放行后：SATISFIED/IMPOSSIBLE
+     * → 终态并记摘要；
      * UNSATISFIED → stalled 计数（达 {@code stalledLimit} → PAUSED(STALLED)，不置 pending）、
      * 否则恒置下一自动轮 pending 与 gap 倒计时——绝不允许「pending=false 等 deadline 叫醒」
      * 的断流形态。
@@ -330,10 +334,12 @@ public final class GoalManager implements UiChangeSource {
         Objects.requireNonNull(verdict, "verdict");
         long version = 0;
         synchronized (this) {
-            if (epoch != this.epoch || phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
+            if (epoch != this.epoch || phase.isTerminal()) return;   // 旧代迟到/终态：完全 no-op
             boolean wasInFlight = evalInFlight;
-            evalInFlight = false;             // 回调即终点（同代即清，serial 过期同样清）
-            if (dispatchSerial != evalSerialLatch) {   // 评估期间发生对话边界：判定过期，丢弃但放行重评
+            evalInFlight = false;             // 回调即终点（同代即清，PAUSED/serial 过期同样清）
+            if (phase != GoalPhase.RUNNING || dispatchSerial != evalSerialLatch) {
+                // PAUSED/INACTIVE（spec §3.3 迟到判定不硬中断）或评估期间发生对话边界（§5.2）：
+                // 判定过期，丢弃但清标志放行恢复后重评
                 if (wasInFlight) version = changed();
             } else {
                 switch (verdict.outcome()) {
@@ -366,16 +372,17 @@ public final class GoalManager implements UiChangeSource {
     }
 
     /**
-     * 评估器调用失败入口（超时/抛错同归此）。门同 {@link #onVerdict}（epoch + serial）；放行后
+     * 评估器调用失败入口（超时/抛错同归此）。门同 {@link #onVerdict}（epoch + phase + serial）；放行后
      * {@code evalFailures+1}，达 {@code evalFailLimit} → PAUSED(EVALUATOR)。
      */
     public void onEvaluationFailure(long epoch, Throwable cause) {
         long version = 0;
         synchronized (this) {
-            if (epoch != this.epoch || phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
+            if (epoch != this.epoch || phase.isTerminal()) return;   // 旧代迟到/终态：完全 no-op
             boolean wasInFlight = evalInFlight;
-            evalInFlight = false;             // 回调即终点（同代即清，serial 过期同样清）
-            if (dispatchSerial != evalSerialLatch) {   // 评估期间插话：失败判定同样过期
+            evalInFlight = false;             // 回调即终点（同代即清，PAUSED/serial 过期同样清）
+            if (phase != GoalPhase.RUNNING || dispatchSerial != evalSerialLatch) {
+                // PAUSED/INACTIVE（spec §3.3）或评估期间插话：失败判定同样过期，丢弃但清标志
                 if (wasInFlight) version = changed();
             } else {
                 evalFailures++;
@@ -387,7 +394,7 @@ public final class GoalManager implements UiChangeSource {
     }
 
     /**
-     * 评估器输出协议失败入口（无 VERDICT 行/非法取值）。门同 {@link #onVerdict}（epoch + serial）；
+     * 评估器输出协议失败入口（无 VERDICT 行/非法取值）。门同 {@link #onVerdict}（epoch + phase + serial）；
      * 放行后 {@code protocolFailures+1} 且<b>按 UNSATISFIED+stalled 同账</b>记一轮停滞（但不派发
      * 新轮：不置 pending/deadline）；stalled 达限优先 PAUSED(STALLED)（spec §7 STALLED &gt;
      * PROTOCOL），否则达 {@code protocolFailLimit} → PAUSED(PROTOCOL)，原始输出摘要记入 lastSummary。
@@ -395,10 +402,11 @@ public final class GoalManager implements UiChangeSource {
     public void onProtocolFailure(long epoch, String rawOutput) {
         long version = 0;
         synchronized (this) {
-            if (epoch != this.epoch || phase == GoalPhase.INACTIVE || phase.isTerminal()) return;
+            if (epoch != this.epoch || phase.isTerminal()) return;   // 旧代迟到/终态：完全 no-op
             boolean wasInFlight = evalInFlight;
-            evalInFlight = false;             // 回调即终点（同代即清，serial 过期同样清）
-            if (dispatchSerial != evalSerialLatch) {   // 评估期间插话：失败判定同样过期
+            evalInFlight = false;             // 回调即终点（同代即清，PAUSED/serial 过期同样清）
+            if (phase != GoalPhase.RUNNING || dispatchSerial != evalSerialLatch) {
+                // PAUSED/INACTIVE（spec §3.3）或评估期间插话：失败判定同样过期，丢弃但清标志
                 if (wasInFlight) version = changed();
             } else {
                 protocolFailures++;
