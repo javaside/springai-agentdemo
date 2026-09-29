@@ -106,6 +106,52 @@ class GoalEvaluationRunnerTest {
     }
 
     /**
+     * ★ I2 排队不计入超时：第一笔评估阻塞 300ms、timeout=150ms → 第一笔如期超时；趁它仍占着唯一
+     * 线程立刻 submit 第二笔（快速返回）——第二笔在队里等了 ~150ms 才开跑，超时必须从<b>它开跑</b>
+     * 起算，不得误报 TimeoutException（旧 {@code orTimeout} 在 submit 时武装，排队等待照样烧超时预算，
+     * 会把健康的第二笔误判成假 PAUSED(EVALUATOR)）。
+     */
+    @Test
+    void queueWaitNotCountedTowardTimeout() throws Exception {
+        try (GoalEvaluationRunner r = new GoalEvaluationRunner(testCfg(), 150)) {
+            CountDownLatch firstFailed = new CountDownLatch(1);
+            AtomicReference<Throwable> firstErr = new AtomicReference<>();
+            r.submit(1, in -> {                       // 第一笔：卡住唯一的评估线程 300ms
+                        TimeUnit.MILLISECONDS.sleep(300);
+                        return satisfied();
+                    }, sampleInput(),
+                    v -> {
+                    },
+                    x -> {
+                        firstErr.set(x);
+                        firstFailed.countDown();
+                    });
+            assertTrue(firstFailed.await(2, TimeUnit.SECONDS), "前置：第一笔应如期超时");
+            assertInstanceOf(TimeoutException.class, firstErr.get(), "第一笔超时原样送达，实收: " + firstErr.get());
+
+            // 第二笔：排队 ~150ms（第一笔线程未让出）后开跑、快速返回——不得误超时
+            CountDownLatch secondDone = new CountDownLatch(1);
+            AtomicReference<GoalVerdict> secondVerdict = new AtomicReference<>();
+            AtomicReference<Throwable> secondErr = new AtomicReference<>();
+            r.submit(2, in -> satisfied(), sampleInput(),
+                    v -> {
+                        secondVerdict.set(v);
+                        secondDone.countDown();
+                    },
+                    x -> {
+                        secondErr.set(x);
+                        secondDone.countDown();
+                    });
+            assertTrue(secondDone.await(2, TimeUnit.SECONDS),
+                    "第二笔评估应有回调（超时/成功至少一路）——线程没起来或回调被吞");
+            assertEquals(GoalVerdict.Outcome.SATISFIED,
+                    secondVerdict.get() == null ? null : secondVerdict.get().outcome(),
+                    "第二笔排队等待不计入超时：正常快速返回必须成功送达（旧 orTimeout 会在队列里烧光 150ms 预算）");
+            assertNull(secondErr.get(), "第二笔不得误报超时/异常，实收: " + secondErr.get());
+        }
+    }
+
+    /**
      * ★ 异常路径：评估器抛出的异常<b>原样</b>（同一实例）送达 onFailure。
      *
      * <p>样本特意用 {@link GoalVerdict.GoalProtocolException}：调用处靠 instanceof 把它分流到
