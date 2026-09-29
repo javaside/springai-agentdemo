@@ -11,11 +11,14 @@ import org.springframework.ai.session.SessionService;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 /**
  * /goal 自主循环的状态机核心：RUNNING / PAUSED(原因) / 六个终态，外加「代」（epoch）防陈旧。
@@ -55,7 +58,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * terminate/pause 改判）或 <b>serial 不符</b>（评估在飞期间用户插话——spec §5.2「挂起 verdict
  * 单槽」：插话改变上下文，旧判断过期）则丢弃判定、只清标志，让恢复 RUNNING 后的下一空闲批重评。
  *
- * <p><b>本 Task 边界</b>：滚动记录与完整 prompt 文案是 Task 5 的扩展。
+ * <p><b>滚动记录与评估素材</b>（spec §4）：{@link #recordTurnMaterial} 锁内落 ≤8 条 FIFO 轮记录
+ * （agent 末文本经 {@link GoalText#tail} 2000 字符码点安全截断、含用户插话原文，activate 换代清空），
+ * {@link #buildEvaluationInput} 锁内一次性取齐评估器输入；自动轮 prompt（spec §4.1）语言跟随条件
+ * （含 CJK → 中文模板，否则英文模板），携带上一轮评估结论（首轮「（首轮）」）与累积进度账本
+ * （空「（尚无）」）。
  */
 public final class GoalManager implements UiChangeSource {
 
@@ -63,6 +70,15 @@ public final class GoalManager implements UiChangeSource {
 
     /** activate 条件的最大长度；超出拒绝而非静默截断。 */
     static final int MAX_CONDITION_LENGTH = 4000;
+
+    /** 滚动记录上限：评估器只见最近 8 轮（spec §4 FIFO）。 */
+    static final int MAX_HISTORY = 8;
+
+    /** agent 末文本入滚动记录的尾部截断预算（字符）；{@link GoalText#tail} 码点对齐不劈代理对。 */
+    static final int ASSISTANT_TAIL_CHARS = 2000;
+
+    /** prompt 语言判定：条件含 CJK 统一表意文字 → 中文模板，否则英文模板（spec §4.1）。 */
+    private static final Pattern CJK = Pattern.compile("[\\u4e00-\\u9fff]");
 
     private final GoalConfig config;
     /** 会话级 token 累加器；可 null=预算永不清算。 */
@@ -97,7 +113,10 @@ public final class GoalManager implements UiChangeSource {
     private boolean autoTurnPending;
     private Long gapDeadlineEpochMs;
     private Instant activatedAt;
-    // Task 5：private final Deque<GoalTurnRecord> history = new ArrayDeque<>();（≤8，滚动记录）
+    /** 滚动轮记录（≤{@link #MAX_HISTORY} 条 FIFO，Task 5）：评估素材「最近几轮」最小快照；锁内读写。 */
+    private final Deque<GoalTurnRecord> history = new ArrayDeque<>();
+    /** 上一轮评估结论（onVerdict 放行时更新；{@code null}=首轮，prompt 写「（首轮）」）。 */
+    private String lastEvalReason;
     private String stateLedger = "";
     private String lastSummary = "";
 
@@ -170,7 +189,8 @@ public final class GoalManager implements UiChangeSource {
             this.gapDeadlineEpochMs = null;
             this.evalInFlight = false;        // 旧 goal 在途评估按 epoch 丢弃
             this.activatedAt = Instant.now(clock);
-            // Task 5：history.clear() 随滚动记录字段一并恢复
+            this.history.clear();             // 新 goal 不见旧滚动记录（换代即清）
+            this.lastEvalReason = null;       // 首轮：prompt 写「（首轮）」
             this.stateLedger = "";
             this.lastSummary = "";
             version = changed();
@@ -356,6 +376,7 @@ public final class GoalManager implements UiChangeSource {
                     case UNSATISFIED -> {
                         stalledStreak = verdict.stalled() ? stalledStreak + 1 : 0;
                         if (verdict.stateLedger() != null) stateLedger = verdict.stateLedger();
+                        lastEvalReason = verdict.reason();   // 下一自动轮 prompt 的「上一轮结论」
                         if (stalledStreak >= config.stalledLimit()) {
                             pauseLocked(PauseReason.STALLED);   // 熔断即断流：不置 pending/deadline
                         } else {
@@ -541,9 +562,57 @@ public final class GoalManager implements UiChangeSource {
         }
     }
 
-    /** 锁内合成自动轮 prompt。简版；完整文案（语言跟随条件/上轮结论/累积进度）Task 5。 */
+    /**
+     * 锁内合成自动轮 prompt（spec §4.1 完整文案）：语言跟随条件（{@link #CJK} 命中 → 中文模板，
+     * 否则英文对照模板）；评估器结论行首轮写「（首轮）」/ "(first turn)"，累积进度空写
+     * 「（尚无）」/ "(none yet)"。须持有监视器（读 condition/turnsUsed/lastEvalReason/stateLedger）。
+     */
     private String buildAutoTurnPromptLocked() {
-        return GoalText.continuePrefix(turnsUsed, config.maxTurns()) + "\n目标：" + condition;
+        boolean zh = CJK.matcher(condition).find();
+        String reasonLine = (zh ? "评估器结论（上一轮）：" : "Evaluator verdict (previous turn): ")
+                + (lastEvalReason == null ? (zh ? "（首轮）" : "(first turn)") : lastEvalReason);
+        String ledgerLine = (zh ? "累积进度：" : "Cumulative progress: ")
+                + (stateLedger == null || stateLedger.isBlank()
+                        ? (zh ? "（尚无）" : "(none yet)") : stateLedger);
+        if (zh) {
+            return GoalText.continuePrefix(turnsUsed, config.maxTurns())
+                    + "\n目标：" + condition + "\n" + reasonLine + "\n" + ledgerLine + "\n\n"
+                    + "请继续推进。本轮结束时必须给出可复验的审计证据：执行过的命令与退出码、变更的文件列表；\n"
+                    + "若认为目标已达成，请附上验证命令的原始输出。不要重复已完成的工作。";
+        }
+        return GoalText.continuePrefix(turnsUsed, config.maxTurns())
+                + "\nGoal: " + condition + "\n" + reasonLine + "\n" + ledgerLine + "\n\n"
+                + "Please continue. At the end of this turn you must provide reproducible audit evidence: the commands you ran and their exit codes, and the list of files you changed;\n"
+                + "if you believe the goal is achieved, attach the raw output of the verification command. Do not repeat completed work.";
+    }
+
+    // ── 滚动记录与评估素材（Task 5） ────────────────────────────────────
+
+    /**
+     * 记录一轮素材（评估启动前由 View 空闲批调用；CodingAgent 收集接线在 Task 9）：锁内按
+     * 「当前轮次 + 上一轮评估结论 + {@link GoalText#tail} 2000 字符码点安全尾部 + 工具调用数 +
+     * 用户插话原文」落 {@link GoalTurnRecord}，超 {@link #MAX_HISTORY} 条 {@code pollFirst}
+     * 挤掉最旧。属内部评估素材（{@link GoalStateSnapshot} 不含它）——不改可见状态，不推 UI 版本。
+     */
+    public void recordTurnMaterial(GoalTurnMaterial material) {
+        Objects.requireNonNull(material, "material");
+        synchronized (this) {
+            history.addLast(new GoalTurnRecord(turnsUsed, lastEvalReason,
+                    GoalText.tail(material.assistantTail(), ASSISTANT_TAIL_CHARS),
+                    material.toolCallCount(), material.userInterjection()));
+            while (history.size() > MAX_HISTORY) history.pollFirst();
+        }
+    }
+
+    /**
+     * 评估器输入快照：锁内一次性取齐条件/轮次/上限/停滞连击/账本/最近轮记录
+     * （{@link EvaluationInput} 持防御性不可变副本；Task 6 的 {@code GoalEvaluator} 消费）。
+     */
+    public EvaluationInput buildEvaluationInput() {
+        synchronized (this) {
+            return new EvaluationInput(condition, turnsUsed, config.maxTurns(),
+                    stalledStreak, stateLedger, List.copyOf(history));
+        }
     }
 
     // ── 只读视图 ───────────────────────────────────────────────────────
@@ -570,7 +639,7 @@ public final class GoalManager implements UiChangeSource {
                 var snap = usage.snapshot();
                 spent = (snap.promptTokens() - basePromptTokens) + (snap.completionTokens() - baseCompletionTokens);
             }
-            // recentTraces：Task 5 接入滚动记录前为空表
+            // recentTraces：滚动记录 → UI 投影留待下游接线（Task 9），暂为空表
             return new GoalStateSnapshot(phase, pauseReason, condition, turnsUsed, config.maxTurns(),
                     Math.max(0, spent), config.tokenBudget(), stalledStreak, activatedAt,
                     List.of(), lastSummary);
