@@ -39,12 +39,23 @@ class LlmProviderTest {
         AnthropicProvider p = new AnthropicProvider("fake-key");
         assertEquals("anthropic", p.id());
         assertTrue(p.available());
-        assertEquals("claude-opus-5", p.defaultModel());
+        assertEquals("claude-opus-5-5", p.defaultModel());
         assertTrue(p.chatModel() != null);
         org.springframework.ai.anthropic.AnthropicChatOptions opts =
-                (org.springframework.ai.anthropic.AnthropicChatOptions) p.options("claude-opus-5");
-        assertEquals("claude-opus-5", opts.getModel());
+                (org.springframework.ai.anthropic.AnthropicChatOptions) p.options("claude-opus-5-5");
+        assertEquals("claude-opus-5-5", opts.getModel());
         assertEquals(8192, opts.getMaxTokens());
+    }
+
+    /** claude 5.5（2026-09 下旬发布）进默认清单且为新默认；上代 opus-5/sonnet-5 保留为 legacy。 */
+    @Test
+    void anthropic_defaultListIncludesClaude55() {
+        AnthropicProvider p = new AnthropicProvider("fake-key");
+        List<String> ids = p.models().stream().map(ModelOption::id).toList();
+        assertTrue(ids.contains("claude-opus-5-5"));
+        assertTrue(ids.contains("claude-sonnet-5-5"));
+        assertTrue(ids.contains("claude-opus-5"));
+        assertTrue(ids.contains("claude-sonnet-5"));
     }
 
     @Test

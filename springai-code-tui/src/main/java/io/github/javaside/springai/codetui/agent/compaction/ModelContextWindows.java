@@ -30,6 +30,9 @@ public final class ModelContextWindows {
             Map.entry("zhipu:glm-4.6v", 128_000L),
             Map.entry("zhipu:glm-4.5v", 64_000L),
             Map.entry("anthropic:claude-fable-5-1", 1_000_000L),
+            // claude 5.5（2026-09 下旬发布，官方模型总览核实）：opus-5-5 / sonnet-5-5 均 1M 上下文。
+            Map.entry("anthropic:claude-opus-5-5", 1_000_000L),
+            Map.entry("anthropic:claude-sonnet-5-5", 1_000_000L),
             Map.entry("anthropic:claude-opus-5", 1_000_000L),
             Map.entry("anthropic:claude-fable-5", 1_000_000L),
             Map.entry("anthropic:claude-sonnet-5", 1_000_000L),
