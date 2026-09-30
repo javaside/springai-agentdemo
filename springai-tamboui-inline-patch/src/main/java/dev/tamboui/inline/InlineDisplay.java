@@ -68,6 +68,35 @@ public final class InlineDisplay implements AutoCloseable {
     /** 光标带半径：光标行上下各一行（顶边框/底边框正好落在此带内）。 */
     private static final int CURSOR_BAND_RADIUS = 1;
 
+    // ── Terminal.app 崩溃诱因二分开关（诊断专用，默认全关 = 行为与主线完全一致） ──
+    /** CODETUI_FORCE_FULLREDRAW=1：每帧全量重画（整行擦写，Claude Code/Ink 语义），
+     *  关闭行内差分补丁——用于检验「细粒度游标定位+片段写入」是否为 Terminal 崩溃诱因。
+     *  ⚠ 取值接受 1/true/yes：Boolean.parseBoolean 只认 "true"，"1" 会被静默判 false。 */
+    private static final boolean FORCE_FULL_REDRAW = envFlag("CODETUI_FORCE_FULLREDRAW");
+    /** CODETUI_BAND_OFF=1：禁用 IME 光标带修复重申（不再覆写光标行±1）。 */
+    private static final boolean BAND_REPAIR_OFF = envFlag("CODETUI_BAND_OFF");
+
+    /** 诊断开关取值：system property 优先（启动参数 --force-fullredraw 等落成），env 兜底；
+     *  1/true/yes（不区分大小写）为开，其余（含未设）为关。 */
+    static boolean envFlag(String name) {
+        String v = System.getProperty(name);
+        if (v == null || v.isBlank()) {
+            v = System.getenv(name);
+        }
+        return v != null && (v.equalsIgnoreCase("true") || v.equals("1") || v.equalsIgnoreCase("yes"));
+    }
+
+    /**
+     * scrollback 打印模式开关（2026-10-01 Terminal.app 崩溃根因修复）：
+     * <b>默认纯滚动模式</b>（Claude Code 语义：底行 CRLF 滚屏腾行 + EL 清残影 + live 区整块重画，
+     * 全程无 ESC[1L 中部插行）。真机二分定案：ESC[1L 插行 + 每批 live 重申会触发 Apple Terminal
+     * (2.15/470.2, macOS 26.5.2) 主线程内存管理崩溃（DisplayList/TSM 路径），纯滚动不触发。
+     * 设 CODETUI_INSERT_LINES=1（或启动参数 --insert-lines）可回退旧插行行为作对照/逃生。
+     */
+    private final boolean SCROLL_APPEND = !envFlag("CODETUI_INSERT_LINES");
+    /** 首帧是否已把 live 区钉到屏幕底部（纯滚动模式的前提，见 render 的钉底注释）。 */
+    private boolean bottomPinned;
+
     // ── 异步 pty 写（根治「输出时打字卡死」，见 AsyncPtyWriter 类注释） ──
     /**
      * 异步写线程（null = 同步直写的旧行为，测试与未接线路径）。
@@ -172,8 +201,16 @@ public final class InlineDisplay implements AutoCloseable {
     public void render(BiConsumer<Rect, Buffer> renderer, int contentHeight, int cursorX, int cursorY) {
         ensureInitialized();
         syncWidth();
+        StringBuilder pinBatch = null;
+        if (SCROLL_APPEND && !bottomPinned) {
+            // 钉底（一次性）：纯滚动模式靠「底行 CRLF 滚屏」腾行，live 区必须在屏幕最底。
+            // 启动时光标可能在屏幕任意处（banner 后的新窗口），CUD 999 被终端钳制到末行即可归位；
+            // 随后的 resizeDisplay 增高路径从底行发 CRLF 会把上方内容滚上去——与 Claude Code 一致。
+            pinBatch = new StringBuilder("\r\u001b[999B");
+            bottomPinned = true;
+        }
         int desiredHeight = Math.max(0, contentHeight);
-        StringBuilder batch = new StringBuilder();
+        StringBuilder batch = pinBatch != null ? pinBatch : new StringBuilder();
         if (desiredHeight <= 0) {
             resizeDisplay(0, batch, null);
             currentBuffer = Buffer.empty(Rect.of(width, 0));
@@ -196,6 +233,9 @@ public final class InlineDisplay implements AutoCloseable {
         targetX = Math.max(0, Math.min(targetX, Math.max(0, width - 1)));
         targetY = Math.max(0, Math.min(targetY, currentHeight - 1));
 
+        if (FORCE_FULL_REDRAW) {
+            previousFrameValid = false;   // 诊断开关：走全量重画分支（appendFullRedraw）
+        }
         if (previousFrameValid) {
             List<InlinePatch.PatchRun> runs = InlinePatch.runs(previousBuffer, currentBuffer);
             boolean bandTail = cursorBandRepairFramesLeft > 0;
@@ -266,13 +306,30 @@ public final class InlineDisplay implements AutoCloseable {
                 printBatch.append(message).append("\r\n");
                 return;
             }
-            appendHome(printBatch);
-            // 必须在正文之前清行：写满终端后光标处于右边界 pending-wrap 状态，
-            // 此时 EL 会在 Terminal.app 擦掉最后一个字符。先清再写，随后 CR/LF
-            // 取消 pending wrap 并显式换行，仍保持「一次 println = 一物理行」。
-            printBatch.append("\u001b[1L\u001b[K").append(message).append("\r\n");
-            lastCursorX = 0;
-            lastCursorY = 0;
+            if (SCROLL_APPEND) {
+                // 诊断模式（Claude Code 语义），一次 println 的正确序列（首版曾把正文写在 live 底行上、
+                // 旧 live 顶行残影未清——画面越滚越乱，本版已修正）：
+                // ① 光标到 live 底行（屏幕底行），CRLF 触发全屏上滚一行：旧 live 顶行上移到
+                //    H-ch-1（正文行），其余 live 行上移一格，底行腾为空白；
+                // ② 上移 ch 行到正文行，EL 清掉旧 live 顶行残影，写正文；
+                // ③ 下移回底行（live 区仍占 [H-ch, H-1]），lastCursorY=ch-1 使 home=up(ch-1)
+                //    恰落 live 顶——endPrintBatch 的 appendLiveRestore 整块覆写新旧残影。
+                down(printBatch, currentHeight - 1 - lastCursorY);
+                printBatch.append("\r\n");
+                up(printBatch, currentHeight);
+                printBatch.append("\u001b[K").append(message);
+                down(printBatch, currentHeight);
+                lastCursorX = 0;
+                lastCursorY = currentHeight - 1;
+            } else {
+                appendHome(printBatch);
+                // 必须在正文之前清行：写满终端后光标处于右边界 pending-wrap 状态，
+                // 此时 EL 会在 Terminal.app 擦掉最后一个字符。先清再写，随后 CR/LF
+                // 取消 pending wrap 并显式换行，仍保持「一次 println = 一物理行」。
+                printBatch.append("\u001b[1L\u001b[K").append(message).append("\r\n");
+                lastCursorX = 0;
+                lastCursorY = 0;
+            }
         } finally {
             if (ownBatch) endPrintBatch();
         }
@@ -536,8 +593,8 @@ public final class InlineDisplay implements AutoCloseable {
             // 光标带修复（见 cursorBandRepairFramesLeft 注释）：本帧有触及光标带的变更 → 立即重申
             // 并武装后续窗口；处于已武装窗口内 → 继续重申。整行覆写相同字形在终端上不可见，
             // 不用 EL（先擦后写才会闪）；窗口耗尽且无新触发时恢复静止零输出。
-            if (bandTouched) cursorBandRepairFramesLeft = CURSOR_BAND_REPAIR_FRAMES;
-            if (bandTouched || bandTail) {
+            if (bandTouched && !BAND_REPAIR_OFF) cursorBandRepairFramesLeft = CURSOR_BAND_REPAIR_FRAMES;
+            if ((bandTouched || bandTail) && !BAND_REPAIR_OFF) {
                 int from = Math.max(0, targetY - CURSOR_BAND_RADIUS);
                 int to = Math.min(currentHeight - 1, targetY + CURSOR_BAND_RADIUS);
                 for (int bandRow = from; bandRow <= to; bandRow++) {

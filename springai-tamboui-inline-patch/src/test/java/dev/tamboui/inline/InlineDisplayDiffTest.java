@@ -180,6 +180,50 @@ class InlineDisplayDiffTest {
 
     @Test
     void printBatchClearsBeforeContentNeverAtTheRightMargin() {
+        // 旧插行模式（CODETUI_INSERT_LINES=1）的协议边界契约：每行先 ESC[1L 插入、
+        // EL 清理，再写正文；正文之后不能有会擦除右边界字符的 EL。
+        // 2026-10-01 起默认已切纯滚动模式（Apple Terminal 崩溃根因修复），本用例
+        // 显式回退旧模式钉住旧契约；纯滚动模式的等价契约由
+        // printBatchScrollAppendClearsBeforeContent 钉。
+        System.setProperty("CODETUI_INSERT_LINES", "1");
+        try {
+            InlineDisplay display = display(1);
+            render(display, "LIVE", null, 0, 0);
+            backend.resetCounts();
+
+            display.beginPrintBatch();
+            display.println("A".repeat(39) + "E");
+            display.println("SC[K");
+            display.println(dev.tamboui.text.Text.styled("中".repeat(20), Style.EMPTY.fg(Color.YELLOW)));
+            display.println(dev.tamboui.text.Text.from(dev.tamboui.text.Line.from(
+                    dev.tamboui.text.Span.styled("B".repeat(39), Style.EMPTY.fg(Color.BLUE)),
+                    dev.tamboui.text.Span.styled("E", Style.EMPTY.fg(Color.YELLOW)))));
+            display.println("");
+            display.endPrintBatch();
+
+            String raw = backend.outputUtf8();
+            String[] inserted = raw.split("\u001b\\[1L", -1);
+            assertEquals(6, inserted.length, raw);
+            for (int i = 1; i < inserted.length; i++) {
+                String line = inserted[i].substring(0, inserted[i].indexOf('\n'));
+                assertTrue(line.startsWith("\u001b[K"), "必须在正文之前清行：" + line);
+                assertFalse(line.substring(3).contains("\u001b[K"), "正文之后不得清行：" + line);
+                assertTrue(line.endsWith("\r"), "换行前须回到第 0 列，取消 pending wrap：" + line);
+            }
+            String plain = raw.replaceAll("\u001b\\[[0-9;]*m", "");
+            assertTrue(plain.contains("A".repeat(39) + "E\r\n"), plain);
+            assertTrue(plain.contains("SC[K\r\n"), plain);
+            assertTrue(plain.contains("中".repeat(20) + "\r\n"), plain);
+            assertTrue(plain.contains("B".repeat(39) + "E\r\n"), plain);
+        } finally {
+            System.clearProperty("CODETUI_INSERT_LINES");
+        }
+    }
+
+    @Test
+    void printBatchScrollAppendClearsBeforeContent() {
+        // 默认（纯滚动）模式的等价契约：全程零 ESC[1L；每条正文前有 EL 清残影；
+        // 正文带 CRLF 结尾（msg 行不落在 live 区内）。
         InlineDisplay display = display(1);
         render(display, "LIVE", null, 0, 0);
         backend.resetCounts();
@@ -187,29 +231,17 @@ class InlineDisplayDiffTest {
         display.beginPrintBatch();
         display.println("A".repeat(39) + "E");
         display.println("SC[K");
-        display.println(dev.tamboui.text.Text.styled("中".repeat(20), Style.EMPTY.fg(Color.YELLOW)));
-        display.println(dev.tamboui.text.Text.from(dev.tamboui.text.Line.from(
-                dev.tamboui.text.Span.styled("B".repeat(39), Style.EMPTY.fg(Color.BLUE)),
-                dev.tamboui.text.Span.styled("E", Style.EMPTY.fg(Color.YELLOW)))));
-        display.println("");
         display.endPrintBatch();
 
-        // 验证真实输出的协议边界，而不依赖 pyte 对 pending-wrap + EL 的处理：
-        // 每个插入行必须先清理，再写正文；正文之后不能有会擦除右边界字符的 EL。
         String raw = backend.outputUtf8();
-        String[] inserted = raw.split("\u001b\\[1L", -1);
-        assertEquals(6, inserted.length, raw);
-        for (int i = 1; i < inserted.length; i++) {
-            String line = inserted[i].substring(0, inserted[i].indexOf('\n'));
-            assertTrue(line.startsWith("\u001b[K"), "必须在正文之前清行：" + line);
-            assertFalse(line.substring(3).contains("\u001b[K"), "正文之后不得清行：" + line);
-            assertTrue(line.endsWith("\r"), "换行前须回到第 0 列，取消 pending wrap：" + line);
-        }
-        String plain = raw.replaceAll("\u001b\\[[0-9;]*m", "");
-        assertTrue(plain.contains("A".repeat(39) + "E\r\n"), plain);
-        assertTrue(plain.contains("SC[K\r\n"), plain);
-        assertTrue(plain.contains("中".repeat(20) + "\r\n"), plain);
-        assertTrue(plain.contains("B".repeat(39) + "E\r\n"), plain);
+        assertFalse(raw.contains("\u001b[1L"), "纯滚动模式不得出现插行：" + raw);
+        int idx = raw.indexOf("SC[K");
+        assertTrue(idx > 0, raw);
+        String before = raw.substring(0, idx);
+        assertTrue(before.endsWith("\u001b[K"), "正文前必须清残影（EL）：" + before);
+        String plain = raw.replaceAll("\u001b\\[[0-9;]*[A-Za-z]", "");
+        assertTrue(plain.contains("A".repeat(39) + "E"), plain);
+        assertTrue(plain.contains("SC[K"), plain);
     }
 
     @Test

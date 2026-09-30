@@ -59,6 +59,8 @@ public class CodeTuiApplication {
             System.out.print(usageText());
             return;
         }
+        // 渲染诊断开关（Terminal.app 崩溃诱因二分）：必须在任何 UI 类加载之前落成 property。
+        applyRenderDiagFlags(args);
         // 必须早于 HTTP 客户端 / MCP / TUI 初始化：JUL 默认 ConsoleHandler 会绕过
         // 行内渲染器直写 stderr，使真实光标与差分帧失步。保留告警及异常栈，统一写入文件。
         // 先移除旧 handlers（含已有桥接）再安装，重复初始化也只会保留一个桥接。
@@ -119,6 +121,13 @@ public class CodeTuiApplication {
         String rootNotice = overBroadRootNotice(root);
         if (!rootNotice.isEmpty()) {
             state.pushInfo(rootNotice);
+        }
+
+        // 诊断开关可见性（Terminal.app 崩溃诱因二分）：任一开关开启时开场明示，
+        // 避免「以为开了其实没开」让二分结论失真。三个开关默认全关=行为与主线一致。
+        String diagToggles = diagnosticTogglesNotice();
+        if (!diagToggles.isEmpty()) {
+            state.pushInfo("⚠ 渲染诊断开关生效中：" + diagToggles + "（用于 Terminal.app 崩溃定位，勿长期开启）");
         }
 
         // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
@@ -231,6 +240,63 @@ public class CodeTuiApplication {
     }
 
     /**
+     * 诊断开关取值：system property 优先（启动参数 {@code --force-fullredraw} 等在 main 顶部
+     * 落成 property，早于任何 UI 类加载），env 兜底；1/true/yes 为开。
+     * （Boolean.parseBoolean 只认 "true"，"1" 会被静默判 false——历史事故，勿再用。）
+     */
+    public static boolean envFlag(String name) {
+        String v = System.getProperty(name);
+        if (v == null || v.isBlank()) {
+            v = System.getenv(name);
+        }
+        return v != null && (v.equalsIgnoreCase("true") || v.equals("1") || v.equalsIgnoreCase("yes"));
+    }
+
+    /**
+     * 渲染诊断开关的启动参数名（与 {@code usageText()}、{@link StartupHelpTest} 三方同步）。
+     * 参数到开关名的映射：{@code --force-fullredraw → CODETUI_FORCE_FULLREDRAW} 等。
+     */
+    static final Map<String, String> RENDER_DIAG_FLAGS = Map.of(
+            "--force-fullredraw", "CODETUI_FORCE_FULLREDRAW",
+            "--band-off", "CODETUI_BAND_OFF",
+            "--preview-off", "CODETUI_PREVIEW_OFF",
+            "--insert-lines", "CODETUI_INSERT_LINES");
+
+    /**
+     * 把 {@code --force-fullredraw} / {@code --band-off} / {@code --preview-off} 三个启动参数
+     * 落成同名 system property（值 "1"），供 InlineDisplay / CodeTuiView 的静态开关在类加载时读取。
+     *
+     * <p><b>必须整串精确相等</b>（与 {@link #hasBypassFlag} 同纪律）：{@code --force-redraw}
+     * 这类前缀拼法不得误判。env 变量路径不受影响（property 优先、env 兜底）。
+     */
+    static void applyRenderDiagFlags(String[] args) {
+        for (String a : args) {
+            String prop = RENDER_DIAG_FLAGS.get(a);
+            if (prop != null) {
+                System.setProperty(prop, "1");
+            }
+        }
+    }
+
+    /** 收集生效中的渲染诊断开关名（见 InlineDisplay / CodeTuiView 的三个 env 开关）；空串=无。 */
+    static String diagnosticTogglesNotice() {
+        StringBuilder sb = new StringBuilder();
+        if (envFlag("CODETUI_FORCE_FULLREDRAW")) {
+            sb.append("FORCE_FULLREDRAW(每帧全量重画) ");
+        }
+        if (envFlag("CODETUI_BAND_OFF")) {
+            sb.append("BAND_OFF(禁用IME光标带) ");
+        }
+        if (envFlag("CODETUI_PREVIEW_OFF")) {
+            sb.append("PREVIEW_OFF(隐藏流式预览) ");
+        }
+        if (envFlag("CODETUI_INSERT_LINES")) {
+            sb.append("INSERT_LINES(旧插行模式) ");
+        }
+        return sb.toString().strip();
+    }
+
+    /**
      * 恢复上次用的模型（{@code <root>/.codetui/model.json}）。
      *
      * <p><b>为什么是「构造完 registry 之后 select」而不是做成构造入参</b>：
@@ -320,6 +386,10 @@ public class CodeTuiApplication {
                                                   （也接受 --permission-mode=plan 写法；优先级低于
                                                   --dangerously-skip-permissions，高于配置文件 defaultMode）
                   --dangerously-skip-permissions  启动即跳过权限询问（deny 规则与内置危险检查仍生效）
+                  --force-fullredraw              [诊断] 每帧全量重画（禁用行内差分片段）
+                  --band-off                      [诊断] 禁用 IME 光标带修复重申
+                  --preview-off                   [诊断] 隐藏流式预览残行
+                  --insert-lines                   [诊断] scrollback 回退旧插行模式（默认已纯滚动）
                   -h, --help                      显示本帮助并退出
                 """;
     }

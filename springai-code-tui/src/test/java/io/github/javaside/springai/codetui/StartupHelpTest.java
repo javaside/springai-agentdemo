@@ -3,7 +3,9 @@ package io.github.javaside.springai.codetui;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -47,11 +49,32 @@ class StartupHelpTest {
     void usageCoversAllFlags() {
         String usage = CodeTuiApplication.usageText();
         for (String flag : new String[]{"-c", "--continue", "--permission-mode",
-                "--dangerously-skip-permissions", "-h", "--help"}) {
+                "--dangerously-skip-permissions", "--force-fullredraw", "--band-off",
+                "--preview-off", "--insert-lines", "-h", "--help"}) {
             assertTrue(usage.contains(flag), "帮助文本应包含 " + flag);
         }
         for (String mode : new String[]{"default", "acceptEdits", "plan"}) {
             assertTrue(usage.contains(mode), "帮助文本应说明 --permission-mode 的合法取值 " + mode);
+        }
+    }
+
+    @Test
+    @DisplayName("渲染诊断启动参数：精确匹配落 property，前缀相近不得误判")
+    void renderDiagFlagsExactMatchOnly() {
+        java.util.Properties clean = (java.util.Properties) System.getProperties().clone();
+        try {
+            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--force-fullredraw", "--band-off"});
+            assertEquals("1", System.getProperty("CODETUI_FORCE_FULLREDRAW"));
+            assertEquals("1", System.getProperty("CODETUI_BAND_OFF"));
+            assertNull(System.getProperty("CODETUI_PREVIEW_OFF"));
+
+            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--force-redraw", "--previewoff", "--band"});
+            assertNull(System.getProperty("CODETUI_PREVIEW_OFF"), "前缀拼法不得误判");
+
+            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--preview-off"});
+            assertEquals("1", System.getProperty("CODETUI_PREVIEW_OFF"));
+        } finally {
+            System.setProperties(clean);
         }
     }
 }
