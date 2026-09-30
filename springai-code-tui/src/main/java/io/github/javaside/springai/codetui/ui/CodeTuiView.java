@@ -620,9 +620,6 @@ public final class CodeTuiView extends InlineApp {
         // 见字段注释）。tail 为空（无流式）时立即清空，保证回合结束预览行马上消失。
         // （Task 8）这里是节流的<b>最终采纳点</b>：唤醒侧由 computeFollowUpFlags 的
         // schedulePreview(剩余窗口) 按需安排，到期批到达时本判定决定是否真换内容。
-        // 诊断开关（默认关）：隐藏流式预览残行——Terminal 崩溃诱因二分（预览残行每 ~150ms
-        // 产生全新唯一字符串，是文本测量缓存增长的主要来源之一）。
-        if (PREVIEW_OFF) { lastPreviewedTail = ""; }
         String tail;
         String curTail = lastLine(state.streaming());
         long nowNanos = System.nanoTime();

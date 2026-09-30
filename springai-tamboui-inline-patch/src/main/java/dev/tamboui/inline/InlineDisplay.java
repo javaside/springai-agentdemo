@@ -68,14 +68,6 @@ public final class InlineDisplay implements AutoCloseable {
     /** 光标带半径：光标行上下各一行（顶边框/底边框正好落在此带内）。 */
     private static final int CURSOR_BAND_RADIUS = 1;
 
-    // ── Terminal.app 崩溃诱因二分开关（诊断专用，默认全关 = 行为与主线完全一致） ──
-    /** CODETUI_FORCE_FULLREDRAW=1：每帧全量重画（整行擦写，Claude Code/Ink 语义），
-     *  关闭行内差分补丁——用于检验「细粒度游标定位+片段写入」是否为 Terminal 崩溃诱因。
-     *  ⚠ 取值接受 1/true/yes：Boolean.parseBoolean 只认 "true"，"1" 会被静默判 false。 */
-    private static final boolean FORCE_FULL_REDRAW = envFlag("CODETUI_FORCE_FULLREDRAW");
-    /** CODETUI_BAND_OFF=1：禁用 IME 光标带修复重申（不再覆写光标行±1）。 */
-    private static final boolean BAND_REPAIR_OFF = envFlag("CODETUI_BAND_OFF");
-
     /** 诊断开关取值：system property 优先（启动参数 --force-fullredraw 等落成），env 兜底；
      *  1/true/yes（不区分大小写）为开，其余（含未设）为关。 */
     static boolean envFlag(String name) {
@@ -233,9 +225,6 @@ public final class InlineDisplay implements AutoCloseable {
         targetX = Math.max(0, Math.min(targetX, Math.max(0, width - 1)));
         targetY = Math.max(0, Math.min(targetY, currentHeight - 1));
 
-        if (FORCE_FULL_REDRAW) {
-            previousFrameValid = false;   // 诊断开关：走全量重画分支（appendFullRedraw）
-        }
         if (previousFrameValid) {
             List<InlinePatch.PatchRun> runs = InlinePatch.runs(previousBuffer, currentBuffer);
             boolean bandTail = cursorBandRepairFramesLeft > 0;
@@ -593,8 +582,8 @@ public final class InlineDisplay implements AutoCloseable {
             // 光标带修复（见 cursorBandRepairFramesLeft 注释）：本帧有触及光标带的变更 → 立即重申
             // 并武装后续窗口；处于已武装窗口内 → 继续重申。整行覆写相同字形在终端上不可见，
             // 不用 EL（先擦后写才会闪）；窗口耗尽且无新触发时恢复静止零输出。
-            if (bandTouched && !BAND_REPAIR_OFF) cursorBandRepairFramesLeft = CURSOR_BAND_REPAIR_FRAMES;
-            if ((bandTouched || bandTail) && !BAND_REPAIR_OFF) {
+            if (bandTouched) cursorBandRepairFramesLeft = CURSOR_BAND_REPAIR_FRAMES;
+            if (bandTouched || bandTail) {
                 int from = Math.max(0, targetY - CURSOR_BAND_RADIUS);
                 int to = Math.min(currentHeight - 1, targetY + CURSOR_BAND_RADIUS);
                 for (int bandRow = from; bandRow <= to; bandRow++) {

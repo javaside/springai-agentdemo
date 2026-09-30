@@ -49,8 +49,7 @@ class StartupHelpTest {
     void usageCoversAllFlags() {
         String usage = CodeTuiApplication.usageText();
         for (String flag : new String[]{"-c", "--continue", "--permission-mode",
-                "--dangerously-skip-permissions", "--force-fullredraw", "--band-off",
-                "--preview-off", "--insert-lines", "-h", "--help"}) {
+                "--dangerously-skip-permissions", "--insert-lines", "-h", "--help"}) {
             assertTrue(usage.contains(flag), "帮助文本应包含 " + flag);
         }
         for (String mode : new String[]{"default", "acceptEdits", "plan"}) {
@@ -63,16 +62,12 @@ class StartupHelpTest {
     void renderDiagFlagsExactMatchOnly() {
         java.util.Properties clean = (java.util.Properties) System.getProperties().clone();
         try {
-            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--force-fullredraw", "--band-off"});
-            assertEquals("1", System.getProperty("CODETUI_FORCE_FULLREDRAW"));
-            assertEquals("1", System.getProperty("CODETUI_BAND_OFF"));
-            assertNull(System.getProperty("CODETUI_PREVIEW_OFF"));
+            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--insert-lines"});
+            assertEquals("1", System.getProperty("CODETUI_INSERT_LINES"));
 
-            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--force-redraw", "--previewoff", "--band"});
-            assertNull(System.getProperty("CODETUI_PREVIEW_OFF"), "前缀拼法不得误判");
-
-            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--preview-off"});
-            assertEquals("1", System.getProperty("CODETUI_PREVIEW_OFF"));
+            System.clearProperty("CODETUI_INSERT_LINES");
+            CodeTuiApplication.applyRenderDiagFlags(new String[]{"--insert-line", "--insertlines"});
+            assertNull(System.getProperty("CODETUI_INSERT_LINES"), "前缀拼法不得误判");
         } finally {
             System.setProperties(clean);
         }

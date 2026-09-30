@@ -257,9 +257,6 @@ public class CodeTuiApplication {
      * 参数到开关名的映射：{@code --force-fullredraw → CODETUI_FORCE_FULLREDRAW} 等。
      */
     static final Map<String, String> RENDER_DIAG_FLAGS = Map.of(
-            "--force-fullredraw", "CODETUI_FORCE_FULLREDRAW",
-            "--band-off", "CODETUI_BAND_OFF",
-            "--preview-off", "CODETUI_PREVIEW_OFF",
             "--insert-lines", "CODETUI_INSERT_LINES");
 
     /**
@@ -280,20 +277,7 @@ public class CodeTuiApplication {
 
     /** 收集生效中的渲染诊断开关名（见 InlineDisplay / CodeTuiView 的三个 env 开关）；空串=无。 */
     static String diagnosticTogglesNotice() {
-        StringBuilder sb = new StringBuilder();
-        if (envFlag("CODETUI_FORCE_FULLREDRAW")) {
-            sb.append("FORCE_FULLREDRAW(每帧全量重画) ");
-        }
-        if (envFlag("CODETUI_BAND_OFF")) {
-            sb.append("BAND_OFF(禁用IME光标带) ");
-        }
-        if (envFlag("CODETUI_PREVIEW_OFF")) {
-            sb.append("PREVIEW_OFF(隐藏流式预览) ");
-        }
-        if (envFlag("CODETUI_INSERT_LINES")) {
-            sb.append("INSERT_LINES(旧插行模式) ");
-        }
-        return sb.toString().strip();
+        return envFlag("CODETUI_INSERT_LINES") ? "INSERT_LINES(旧插行模式)" : "";
     }
 
     /**
@@ -386,10 +370,7 @@ public class CodeTuiApplication {
                                                   （也接受 --permission-mode=plan 写法；优先级低于
                                                   --dangerously-skip-permissions，高于配置文件 defaultMode）
                   --dangerously-skip-permissions  启动即跳过权限询问（deny 规则与内置危险检查仍生效）
-                  --force-fullredraw              [诊断] 每帧全量重画（禁用行内差分片段）
-                  --band-off                      [诊断] 禁用 IME 光标带修复重申
-                  --preview-off                   [诊断] 隐藏流式预览残行
-                  --insert-lines                   [诊断] scrollback 回退旧插行模式（默认已纯滚动）
+                  --insert-lines                   scrollback 回退旧插行模式（默认纯滚动；崩溃修复对照用）
                   -h, --help                      显示本帮助并退出
                 """;
     }
