@@ -123,6 +123,30 @@ class ProviderThinkingOptionsTest {
                 provider.thinkingCapabilities("claude-fable-5-1").effortValues());
     }
 
+    /**
+     * claude 5.5（2026-09 下旬发布，官方 thinking 支持表核实）thinking always-on：
+     * opus-5-5 标 Always on、sonnet-5-5 的 disabled 全档 400——均不可禁用；effort 档位同 opus。
+     * 上代 opus-5 / sonnet-5 接受 disabled，新模型接入不得把它们误伤成不可关闭。
+     */
+    @Test
+    void anthropicClaude55FamilyCannotDisableThinking() {
+        AnthropicProvider provider = new AnthropicProvider("k");
+        assertFalse(provider.thinkingCapabilities("claude-opus-5-5").supportsDisable());
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.options("claude-opus-5-5", ThinkingConfig.disabled()));
+        assertFalse(provider.thinkingCapabilities("claude-sonnet-5-5").supportsDisable());
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.options("claude-sonnet-5-5", ThinkingConfig.disabled()));
+        assertEquals(List.of("low", "medium", "high", "max"),
+                provider.thinkingCapabilities("claude-opus-5-5").effortValues());
+        assertEquals(List.of("low", "medium", "high", "max"),
+                provider.thinkingCapabilities("claude-sonnet-5-5").effortValues());
+
+        // 上代仍可关闭（官方表：Opus 5 与 Sonnet 5 接受 disabled）
+        assertTrue(provider.thinkingCapabilities("claude-opus-5").supportsDisable());
+        assertTrue(provider.thinkingCapabilities("claude-sonnet-5").supportsDisable());
+    }
+
     @Test
     void customModelsUseProviderFallbackCapabilities() {
         assertTrue(new OpenAiProvider("k", null, "private-gpt").thinkingCapabilities("private-gpt").configurable());

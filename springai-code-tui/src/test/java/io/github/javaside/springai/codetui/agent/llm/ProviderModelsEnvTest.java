@@ -58,11 +58,14 @@ class ProviderModelsEnvTest {
     @Test
     void anthropic_noEnv_builtInDefault() {
         AnthropicProvider p = new AnthropicProvider("key", null, null);
-        assertEquals("claude-opus-5", p.defaultModel());
-        // 2026-09 在售：fable-5-1 / opus-5 / sonnet-5 / haiku-4-5，fable-5 与 opus-4-8 转上代保留。
-        assertEquals(6, p.models().size());
+        assertEquals("claude-opus-5-5", p.defaultModel());
+        // 2026-10 在售：opus-5-5 / sonnet-5-5（2026-09 下旬发布）/ fable-5-1 / haiku-4-5；
+        // 上代 opus-5 / sonnet-5 与 fable-5、opus-4-8 保留为 legacy。
+        assertEquals(8, p.models().size());
+        assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-sonnet-5-5")),
+                "新均衡档 claude-sonnet-5-5 应出现在内置清单");
         assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-fable-5-1")),
-                "新旗舰 claude-fable-5-1 应出现在内置清单");
+                "旗舰 claude-fable-5-1 应出现在内置清单");
         assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-fable-5")),
                 "上代旗舰 claude-fable-5 应保留在清单末尾");
     }
