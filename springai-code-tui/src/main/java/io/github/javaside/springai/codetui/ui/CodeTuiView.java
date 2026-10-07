@@ -3596,23 +3596,29 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 面板一行 → 若干物理行（软折行）：首行吃满 {@code width}，续行带 {@code contIndent} 缩进、
      * 按 {@code width - contIndent} 再折（缩进计入行宽，续行同样不得超终端）。
-     * 含 {@code \n} 的逻辑行先按段拆——text() 会把整块多行字符串塌成一行截断（{@code resultRows} 记录过同款坑）。
+     * 含 {@code \n} 的逻辑行先按段拆——text() 会把整块多行字符串塌成一行截断（{@code resultRows} 记录过同款坑）；
+     * 「顶格」只属于整条逻辑行的<b>第一个</b>物理行（前缀由调用方拼），{@code \n} 后的段首行按续行缩进——
+     * 否则第二段顶格、与折行续行不在一条竖线上（实机反馈的错位）。
      * 折行原语与 {@link #wrapSegments} 同源：{@code CharWidth.substringByWidth} 逐段截取、宽字符不切半、
      * 窄到放不下 1 个宽字符硬吃 1 个防死循环；不复用它是因为每行预算不同（首行/续行），其入口只收固定宽。
      */
     private static List<String> wrapPanelLine(String logical, int width, int contIndent) {
         List<String> out = new ArrayList<>();
+        boolean firstPhysical = true;   // 整条逻辑行仅首物理行顶格；跨段保持（不随 \n 重置）
         for (String seg : logical.split("\n", -1)) {
-            if (seg.isEmpty()) { out.add(""); continue; }   // 空逻辑行保持一行（与 wrapSegments 空行语义一致）
+            if (seg.isEmpty()) {                    // 空段（\n\n 或首尾裸 \n）：占一个空物理行
+                out.add("");
+                firstPhysical = false;              // 空行之后的段同样不该顶格
+                continue;
+            }
             String rest = seg;
-            boolean first = true;
             while (!rest.isEmpty()) {
-                int budget = first ? width : Math.max(1, width - contIndent);
+                int budget = firstPhysical ? width : Math.max(1, width - contIndent);
                 String take = dev.tamboui.text.CharWidth.substringByWidth(rest, budget);
                 if (take.isEmpty()) take = rest.substring(0, 1);
-                out.add(first ? take : " ".repeat(contIndent) + take);
+                out.add(firstPhysical ? take : " ".repeat(contIndent) + take);
                 rest = rest.substring(take.length());
-                first = false;
+                firstPhysical = false;
             }
         }
         return out;

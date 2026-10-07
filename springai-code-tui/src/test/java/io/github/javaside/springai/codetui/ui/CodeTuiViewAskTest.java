@@ -319,6 +319,26 @@ class CodeTuiViewAskTest {
     }
 
     @Test
+    void questionWithEmbeddedNewline_secondParagraphCarriesIndent() {
+        // 实机反馈：含 \n 的第二段首行顶格，与续行缩进不对齐、看起来散架。
+        // 根因：wrapPanelLine 的「本段首行」状态每段重置——第二段首行按首行处理（顶格 + 吃满整行宽）。
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        QuestionSpec q = new QuestionSpec("第一段短正文\n这是换行后的第二段", "口径",
+                List.of(new OptionSpec("A", "A 说明")), false);
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), q));
+        CodeTuiView v = view(s);
+        v.terminalWidthForTest(40);
+        v.tickForTest();
+        String screen = ViewScreen.of(v, 40);
+        assertTrue(screen.lines().anyMatch(l -> l.startsWith("    这是换行后的第二段")),
+                "换行后的段首行应与续行同缩进（4 空格），实际屏幕：\n" + screen);
+        assertTrue(screen.lines().noneMatch(l -> l.startsWith("这是换行后的第二段")),
+                "第二段首行不应顶格（顶格 = 首行状态未跨段），实际屏幕：\n" + screen);
+    }
+
+    @Test
     void freeTextEcho_wrapsLongTypedInput() {
         ConversationState s = new ConversationState();
         s.onTurnStarted(1);
