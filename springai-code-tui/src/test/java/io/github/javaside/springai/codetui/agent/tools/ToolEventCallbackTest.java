@@ -11,6 +11,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import io.github.javaside.springai.codetui.agent.seam.AskRequest;
 import io.github.javaside.springai.codetui.agent.seam.StubListener;
@@ -160,5 +161,94 @@ class ToolEventCallbackTest {
         ToolCallback probe = new ToolEventCallback(delegate, listener);
         probe.call("{}", new ToolContext(java.util.Map.of("turnId", 1L, "taskId", "task_42")));
         org.junit.jupiter.api.Assertions.assertEquals("task_42", seen.get());
+    }
+
+    /** 固定名/固定返回值的委托桩：提醒逻辑只关心工具名与返回文本。 */
+    private static final class FixedTool implements ToolCallback {
+        private final String name;
+        private final String out;
+
+        FixedTool(String name, String out) {
+            this.name = name;
+            this.out = out;
+        }
+
+        @Override public ToolDefinition getToolDefinition() {
+            return ToolDefinition.builder().name(name).description("d").inputSchema("{}").build();
+        }
+
+        @Override public String call(String toolInput) { return call(toolInput, null); }
+
+        @Override public String call(String toolInput, ToolContext toolContext) { return out; }
+    }
+
+    private static TodoStaleReminder reminderWithUnfinished(String content) {
+        TodoStaleReminder reminder = new TodoStaleReminder(2);
+        reminder.onControllerTodoWritten(List.of(new org.springaicommunity.agent.tools.TodoWriteTool.Todos.TodoItem(
+                content,
+                org.springaicommunity.agent.tools.TodoWriteTool.Todos.Status.in_progress,
+                content + "（进行中）")));
+        return reminder;
+    }
+
+    @Test
+    void staleTodoReminder_appendedAfterOnFinished_onlyForControllerCalls() {
+        TodoStaleReminder reminder = reminderWithUnfinished("钉住的任务");
+        RecordingListener recorder = new RecordingListener();
+        ToolCallback cb = new ToolEventCallback(new FixedTool("Bash", "raw-out"), recorder, reminder);
+        ToolContext ctx = new ToolContext(Map.of(ToolEventCallback.TURN_ID_KEY, 5L));
+
+        assertEquals("raw-out", cb.call("{}", ctx), "第 1 次未到阈值不加尾巴");
+        String second = cb.call("{}", ctx);
+        assertTrue(second.startsWith("raw-out\n\n[任务面板提醒]"),
+                "第 2 次到阈值追加提醒，实际=" + second);
+        assertTrue(second.contains("钉住的任务"), "提醒须含快照条目");
+        // UI 侧事件携带原始输出：提醒只给模型，scrollback 不受污染
+        assertEquals(2, recorder.events.stream()
+                        .filter(e -> e.startsWith("finished:5:Bash:")).count(), "两次调用各一条 finished");
+        assertTrue(recorder.events.contains("finished:5:Bash:raw-out:true"),
+                "onToolFinished 须收到原始输出（第 2 次的记录也不含提醒）");
+        assertTrue(recorder.events.stream().noneMatch(e -> e.contains("[任务面板提醒]")),
+                "任何 UI 事件都不得出现提醒文本");
+    }
+
+    @Test
+    void staleTodoReminder_neverForSubagentCalls_andNullReminderKeepsOldBehavior() {
+        TodoStaleReminder reminder = reminderWithUnfinished("t");
+        RecordingListener recorder = new RecordingListener();
+        ToolCallback cb = new ToolEventCallback(new FixedTool("Bash", "raw-out"), recorder, reminder);
+        ToolContext subagentCtx = new ToolContext(Map.of(
+                ToolEventCallback.TURN_ID_KEY, 5L, ToolEventCallback.TASK_ID_KEY, "sub-1"));
+        for (int i = 0; i < 5; i++) {
+            assertEquals("raw-out", cb.call("{}", subagentCtx), "taskId!=null 的调用永不提醒（第 " + (i + 1) + " 次）");
+        }
+
+        // 旧两参构造 = 停用：到阈值也不加尾巴（McpRegistry 等既有调用点行为不变）
+        ToolCallback legacy = new ToolEventCallback(new FixedTool("Bash", "raw-out"), recorder);
+        assertEquals("raw-out", legacy.call("{}", new ToolContext(Map.of(ToolEventCallback.TURN_ID_KEY, 5L))));
+        assertEquals("raw-out", legacy.call("{}", new ToolContext(Map.of(ToolEventCallback.TURN_ID_KEY, 5L))));
+    }
+
+    @Test
+    void staleTodoReminder_notAppendedOnFailure() {
+        TodoStaleReminder reminder = reminderWithUnfinished("t");
+        RecordingListener recorder = new RecordingListener();
+        ToolCallback boom = new ToolEventCallback(new ToolCallback() {
+            @Override public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder().name("Bash").description("d").inputSchema("{}").build();
+            }
+
+            @Override public String call(String toolInput) { return call(toolInput, null); }
+
+            @Override public String call(String toolInput, ToolContext toolContext) {
+                throw new RuntimeException("boom");
+            }
+        }, recorder, reminder);
+        ToolContext ctx = new ToolContext(Map.of(ToolEventCallback.TURN_ID_KEY, 5L));
+
+        assertThrows(RuntimeException.class, () -> boom.call("{}", ctx));
+        // 失败的调用不该提醒：阈值若被消耗，下一次成功调用将提前/延后触发——这里钉「异常路径不追加文本」即可
+        assertEquals("raw-out", new ToolEventCallback(new FixedTool("Bash", "raw-out"), recorder, reminder)
+                .call("{}", ctx), "异常后下一次成功调用第 1 次不提醒（计数未被异常消耗）");
     }
 }

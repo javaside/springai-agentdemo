@@ -35,10 +35,17 @@ public final class ToolEventCallback implements ToolCallback {
 
     private final ToolCallback delegate;
     private final AgentListener listener;
+    /** 可空：任务面板过期提醒（见 {@link TodoStaleReminder}）；null=停用，McpRegistry 等既有构造点维持原行为。 */
+    private final TodoStaleReminder reminder;
 
     public ToolEventCallback(ToolCallback delegate, AgentListener listener) {
+        this(delegate, listener, null);
+    }
+
+    public ToolEventCallback(ToolCallback delegate, AgentListener listener, TodoStaleReminder reminder) {
         this.delegate = delegate;
         this.listener = listener;
+        this.reminder = reminder;
     }
 
     @Override public ToolDefinition getToolDefinition() { return delegate.getToolDefinition(); }
@@ -57,7 +64,16 @@ public final class ToolEventCallback implements ToolCallback {
         CURRENT_TASK.set(taskId);
         try {
             String out = (toolContext == null) ? delegate.call(toolInput) : delegate.call(toolInput, toolContext);
-            listener.onToolFinished(turnId, taskId, name, out, true);
+            listener.onToolFinished(turnId, taskId, name, out, true);   // UI 只见原始输出
+            // 过期清单提醒追加在 onToolFinished 之后：模型看到过期状态，scrollback 不受污染。
+            // 只管控制器级调用（taskId==null）——子 agent 内部 todo 不上面板，提醒无意义。
+            // 异常路径不提醒：失败的调用没有「清单过期该更新」的证据。
+            if (reminder != null && taskId == null) {
+                String note = reminder.reminderOrNull(turnId, name);
+                if (note != null) {
+                    out = out + "\n\n" + note;
+                }
+            }
             return out;
         } catch (RuntimeException ex) {
             listener.onToolFinished(turnId, taskId, name, String.valueOf(ex.getMessage()), false);
