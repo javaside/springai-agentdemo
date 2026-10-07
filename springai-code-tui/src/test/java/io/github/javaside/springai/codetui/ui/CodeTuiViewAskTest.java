@@ -259,4 +259,103 @@ class CodeTuiViewAskTest {
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // Q2 → X
         assertEquals(Map.of("Q1?", "z", "Q2?", "X"), got.get());
     }
+
+    // ── 长内容软折行（实报：AskUserQuestion 问题/选项一长，面板右边显示不全） ──────────
+    // 面板 text() 是定宽渲染，超终端宽右截断——scrollback 有 TextWrap、tasks 面板有 clipToWidth、
+    // 权限面板有 summarizeOneLine，作答面板此前一处都没有。修复后必须折行而非截断：尾部标记上屏即证明。
+
+    @Test
+    void longQuestion_wrapsWithIndentInsteadOfTruncating() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        String longQuestion = "这是一个足够长的问题正文用来超过四十列终端宽度".repeat(3) + "问题结尾标记";
+        QuestionSpec q = new QuestionSpec(longQuestion, "口径",
+                List.of(new OptionSpec("A", "A 说明")), false);
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), q));
+        CodeTuiView v = view(s);
+        v.terminalWidthForTest(40);
+        v.tickForTest();
+        String screen = ViewScreen.of(v, 40);
+        assertTrue(screen.contains("问题结尾标记"), "长问题应折行完整显示而非右截断，实际屏幕：\n" + screen);
+        assertTrue(screen.lines().anyMatch(l -> l.startsWith("    ") && l.contains("问题结尾标记")),
+                "问题续行应带 4 空格缩进（首行是「  ❓ 」2 空格前缀），实际屏幕：\n" + screen);
+    }
+
+    @Test
+    void longOptionText_wrapsWithIndentInsteadOfTruncating() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        String longDesc = "这段选项说明文字非常长同样超过四十列终端宽度".repeat(3) + "说明结尾标记";
+        QuestionSpec q = new QuestionSpec("选哪个?", "选择",
+                List.of(new OptionSpec("选项甲", longDesc), new OptionSpec("选项乙", "乙 说明")), false);
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), q));
+        CodeTuiView v = view(s);
+        v.terminalWidthForTest(40);
+        v.tickForTest();
+        String screen = ViewScreen.of(v, 40);
+        assertTrue(screen.contains("说明结尾标记"), "长选项说明应折行完整显示而非右截断，实际屏幕：\n" + screen);
+        assertTrue(screen.lines().anyMatch(l -> l.startsWith("      ") && l.contains("说明结尾标记")),
+                "选项续行应带 6 空格缩进，实际屏幕：\n" + screen);
+    }
+
+    @Test
+    void questionWithEmbeddedNewline_keepsBothParagraphs() {
+        // text() 会把含 \n 的整块字符串塌成一行再截断（resultRows 注释记录过同款坑），折行前必须先拆段。
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        String firstPara = "第一段问题正文长到把第二段挤出四十列终端宽度".repeat(2);
+        QuestionSpec q = new QuestionSpec(firstPara + "\n第二段：换行后的尾部标记", "口径",
+                List.of(new OptionSpec("A", "A 说明")), false);
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), q));
+        CodeTuiView v = view(s);
+        v.terminalWidthForTest(40);
+        v.tickForTest();
+        String screen = ViewScreen.of(v, 40);
+        assertTrue(screen.contains("第二段：换行后的尾部标记"),
+                "内嵌换行的问题两段都应可见（先拆段再折行），实际屏幕：\n" + screen);
+    }
+
+    @Test
+    void questionWithEmbeddedNewline_secondParagraphCarriesIndent() {
+        // 实机反馈：含 \n 的第二段首行顶格，与续行缩进不对齐、看起来散架。
+        // 根因：wrapPanelLine 的「本段首行」状态每段重置——第二段首行按首行处理（顶格 + 吃满整行宽）。
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        QuestionSpec q = new QuestionSpec("第一段短正文\n这是换行后的第二段", "口径",
+                List.of(new OptionSpec("A", "A 说明")), false);
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), q));
+        CodeTuiView v = view(s);
+        v.terminalWidthForTest(40);
+        v.tickForTest();
+        String screen = ViewScreen.of(v, 40);
+        assertTrue(screen.lines().anyMatch(l -> l.startsWith("    这是换行后的第二段")),
+                "换行后的段首行应与续行同缩进（4 空格），实际屏幕：\n" + screen);
+        assertTrue(screen.lines().noneMatch(l -> l.startsWith("这是换行后的第二段")),
+                "第二段首行不应顶格（顶格 = 首行状态未跨段），实际屏幕：\n" + screen);
+    }
+
+    @Test
+    void freeTextEcho_wrapsLongTypedInput() {
+        ConversationState s = new ConversationState();
+        s.onTurnStarted(1);
+        AtomicReference<Map<String, String>> got = new AtomicReference<>();
+        s.onQuestionAsked(1, ask(got, new AtomicBoolean(), single("选?", "A", "B")));
+        CodeTuiView v = view(s);
+        v.terminalWidthForTest(40);
+        v.tickForTest();
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // A→B
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));    // B→「其他」
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));   // 进自由文本
+        String longTyped = "自定义输入内容足够长超过四十列".repeat(3) + "输入结尾标记";
+        for (char c : longTyped.toCharArray()) v.feedKeyForTest(KeyEvent.ofChar(c));
+        String screen = ViewScreen.of(v, 40);
+        // CJK 无空格可断、按显示宽度硬折，标记串可能跨折点——去空白后整段比对，钉住「一字不丢」。
+        String squashed = screen.replace(" ", "").replace("\n", "");
+        assertTrue(squashed.contains(longTyped),
+                "自由文本回显应折行完整显示而非右截断，实际屏幕：\n" + screen);
+    }
 }
