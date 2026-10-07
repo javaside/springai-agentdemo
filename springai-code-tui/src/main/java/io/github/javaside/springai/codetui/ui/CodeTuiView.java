@@ -3548,7 +3548,15 @@ public final class CodeTuiView extends InlineApp {
         state.removeModal(done);
     }
 
-    /** 作答面板：进度 + header + 问题文本 + 逐项选项（单选 ❯ 高亮）。 */
+    /**
+     * 作答面板：进度 + header + 问题文本 + 逐项选项（单选 ❯ 高亮）。
+     *
+     * <p><b>所有动态文本行都过 {@link #wrapPanelLine} 软折行</b>：面板 text() 是定宽渲染，超终端宽
+     * 右边直接被裁（实报「问题/选项一长显示不全」）。问询面板与别处不同——用户得读完整问题才能作答，
+     * 故选折行而非 clipToWidth 式截断；续行带缩进、样式沿用整条逻辑行的样式（高亮跨行保持）。
+     * 纵向不设上限（已与用户对齐的口径）：常规问询几行折不出屏幕；极端长文本会把面板顶高、
+     * 挤压上方 scrollback——接受该残余风险，换取问询内容一字不丢。
+     */
     private Element[] askChildren() {
         // scope(cond, el) 会「先构造 el 再按 cond 决定是否显示」——即本方法每次 render 都被调用（含非作答态），
         // 故必须先 null 判空，否则 activeAsk==null 时解引用会在渲染线程崩（单测只驱动按键、不跑 render，漏掉此路径）。
@@ -3556,24 +3564,58 @@ public final class CodeTuiView extends InlineApp {
         List<QuestionSpec> qs = activeAsk.questions();
         QuestionSpec q = qs.get(askQ);
         List<Element> els = new ArrayList<>();
+        int inner = Math.max(8, terminalWidth() - 2);   // 同 tasks 面板：整物理行（含 2 空格缩进）不超终端宽
         String progress = qs.size() > 1 ? "（第 " + (askQ + 1) + "/" + qs.size() + " 问）" : "";
-        els.add(text("  ❓ [" + q.header() + "] " + q.question() + progress).style(PICK_TITLE));
+        for (String ln : wrapPanelLine("  ❓ [" + q.header() + "] " + q.question() + progress, inner, 4)) {
+            els.add(text(ln).style(PICK_TITLE));
+        }
         for (int i = 0; i < q.options().size(); i++) {
             OptionSpec o = q.options().get(i);
             boolean sel = i == askOpt;
             String box = q.multiSelect() ? (askChecked.contains(i) ? "[✓] " : "[ ] ") : "";
-            els.add(text("  " + (sel ? "❯ " : "  ") + box + (i + 1) + ". " + o.label() + "   " + o.description())
-                    .style(sel ? PICK_SEL : PICK_DESC));
+            String row = "  " + (sel ? "❯ " : "  ") + box + (i + 1) + ". " + o.label() + "   " + o.description();
+            for (String ln : wrapPanelLine(row, inner, 6)) {
+                els.add(text(ln).style(sel ? PICK_SEL : PICK_DESC));
+            }
         }
         if (!q.multiSelect()) {   // 单选追加合成「其他」行；进子模式时再回显输入
             int otherIdx = q.options().size();
             boolean sel = askOpt == otherIdx;
-            els.add(text("  " + (sel ? "❯ " : "  ") + "✎ 其他（自定义输入）").style(sel ? PICK_SEL : PICK_DESC));
+            for (String ln : wrapPanelLine("  " + (sel ? "❯ " : "  ") + "✎ 其他（自定义输入）", inner, 6)) {
+                els.add(text(ln).style(sel ? PICK_SEL : PICK_DESC));
+            }
             if (askFreeText) {
-                els.add(text("     ▏" + askInput.text()).style(PICK_TITLE));   // 输入回显
+                for (String ln : wrapPanelLine("     ▏" + askInput.text(), inner, 6)) {
+                    els.add(text(ln).style(PICK_TITLE));   // 输入回显（长输入同样折行）
+                }
             }
         }
         return els.toArray(new Element[0]);
+    }
+
+    /**
+     * 面板一行 → 若干物理行（软折行）：首行吃满 {@code width}，续行带 {@code contIndent} 缩进、
+     * 按 {@code width - contIndent} 再折（缩进计入行宽，续行同样不得超终端）。
+     * 含 {@code \n} 的逻辑行先按段拆——text() 会把整块多行字符串塌成一行截断（{@code resultRows} 记录过同款坑）。
+     * 折行原语与 {@link #wrapSegments} 同源：{@code CharWidth.substringByWidth} 逐段截取、宽字符不切半、
+     * 窄到放不下 1 个宽字符硬吃 1 个防死循环；不复用它是因为每行预算不同（首行/续行），其入口只收固定宽。
+     */
+    private static List<String> wrapPanelLine(String logical, int width, int contIndent) {
+        List<String> out = new ArrayList<>();
+        for (String seg : logical.split("\n", -1)) {
+            if (seg.isEmpty()) { out.add(""); continue; }   // 空逻辑行保持一行（与 wrapSegments 空行语义一致）
+            String rest = seg;
+            boolean first = true;
+            while (!rest.isEmpty()) {
+                int budget = first ? width : Math.max(1, width - contIndent);
+                String take = dev.tamboui.text.CharWidth.substringByWidth(rest, budget);
+                if (take.isEmpty()) take = rest.substring(0, 1);
+                out.add(first ? take : " ".repeat(contIndent) + take);
+                rest = rest.substring(take.length());
+                first = false;
+            }
+        }
+        return out;
     }
 
     // ── 权限审批面板 ─────────────────────────────────────────────────────
