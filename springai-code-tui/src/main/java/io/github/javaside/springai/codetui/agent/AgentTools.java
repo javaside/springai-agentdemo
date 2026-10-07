@@ -52,6 +52,7 @@ import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
 import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
 import io.github.javaside.springai.codetui.agent.tools.RenamedToolCallback;
 import io.github.javaside.springai.codetui.agent.tools.TimeLimitedToolCallback;
+import io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder;
 import io.github.javaside.springai.codetui.agent.tools.TodoWriteToolAdapter;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.tools.TurnToolLimitWiring;
@@ -402,12 +403,20 @@ public final class AgentTools {
         ShellTools sh = ShellTools.builder().build();
         GrepTool grep = GrepTool.builder().workingDirectory(root).build();
         GlobTool glob = GlobTool.builder().workingDirectory(root).build();
+        // 任务面板过期提醒：装配期建唯一实例，下面 7 处装饰点与 /clear 重置（wireTodoReminder→CodingAgent）
+        // 共用同一份——另建一个等于装饰链在计数、/clear 清的是另一份，两边永不相交。
+        TodoStaleReminder todoReminder = TodoStaleReminder.fromEnv();
         TodoWriteTool todo = TodoWriteTool.builder()
                 // turnId/taskId 均走 ThreadLocal（handler 在工具 call 内同步触发），不读实时 activeTurnId。
                 // taskId 区分层级：null=控制器计划 todo（任务面板）；非空=子 agent 内部 todo（todo 面板）。
-                .todoEventHandler(todos ->
+                .todoEventHandler(todos -> {
                         listener.onTodoUpdated(ToolEventCallback.currentTurnId(),
-                                ToolEventCallback.currentTaskId(), toLines(todos)))
+                                ToolEventCallback.currentTaskId(), toLines(todos));
+                        // 控制器分支同步喂提醒器：刷新快照 + 复位计数；子 agent 内部 todo 不上面板，不喂。
+                        if (ToolEventCallback.currentTaskId() == null) {
+                            todoReminder.onControllerTodoWritten(todos.todos());
+                        }
+                })
                 .build();
 
         // 「裸」ChatClient（同模型、无工具、无记忆 advisor）：一份复用给两处内部 LLM 调用——
@@ -497,7 +506,7 @@ public final class AgentTools {
         for (int i = 0; i < all.size(); i++) {
             decorated[i] = new PermissionCallback(new ToolEventCallback(
                     new MediaExternalizingCallback(all.get(i), mediaStore, mediaHandler, root, visionBudget),
-                    listener),
+                    listener, todoReminder),
                     permissionEngine, listener);
             if (all.get(i) == reloadableSkill) {
                 decoratedSkillTool = decorated[i];   // 记住 Skill 代理装饰后的实例（供手动 /skill 复用）
@@ -533,7 +542,8 @@ public final class AgentTools {
         // Task / ParallelTasks 也包一层：它们类别是 INTERNAL、恒放行，包一层零行为差异，
         // 只为「所有工具走同一条链」——否则以后给它们加类别时会漏掉这两个。
         ToolCallback decoratedTaskTool =
-                new PermissionCallback(new ToolEventCallback(taskTool, listener), permissionEngine, listener);
+                new PermissionCallback(new ToolEventCallback(taskTool, listener, todoReminder),
+                        permissionEngine, listener);
 
         // 批量 ParallelTasks 工具：并发执行多个独立子 agent。parentTurnId 在工具线程（fan-out 前）从 ThreadLocal 取，
         // 再由 runAll 显式传入每个子任务闭包（子线程不读 ThreadLocal）。
@@ -542,7 +552,7 @@ public final class AgentTools {
                         subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()),
                 subagentRunner::runInBackground);
         ToolCallback decoratedParallelTool = new PermissionCallback(
-                new ToolEventCallback(parallelTool, listener), permissionEngine, listener);
+                new ToolEventCallback(parallelTool, listener, todoReminder), permissionEngine, listener);
 
         // 插话队列：UI 忙时投递，ChatModel 装饰层在下一次调用时取走随 prompt 送达。
         // 所有 provider 共用一个实例——插话与用哪家模型无关，切模型不该把没送出去的话弄丢。
@@ -559,16 +569,16 @@ public final class AgentTools {
                 new ToolEventCallback(
                         BackgroundTaskTool.create(backgroundRegistry, backgroundResults,
                                 resolveTaskOutputTimeout(), () -> interjections.pendingCount() > 0),
-                        listener),
+                        listener, todoReminder),
                 permissionEngine, listener);
 
         // ListTasks：同样<b>仅主 agent</b>——理由与 TaskOutput 逐字相同（子 agent 没有属于自己的后台任务）。
         ToolCallback decoratedListTasksTool = new PermissionCallback(
-                new ToolEventCallback(BackgroundTaskListTool.create(backgroundRegistry), listener),
+                new ToolEventCallback(BackgroundTaskListTool.create(backgroundRegistry), listener, todoReminder),
                 permissionEngine, listener);
 
         // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
-        ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine);
+        ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine, todoReminder);
 
         // ExitPlanMode：计划模式的唯一出口。同样<b>仅主 agent</b>——不进 decoratedList（照记忆工具的既有做法）：
         // 子 agent 没有自己的模式（继承主会话），提交计划只属于主 agent；给了它反而会让子 agent 替用户切模式。
@@ -577,7 +587,7 @@ public final class AgentTools {
         // 不包 MediaExternalizingCallback：返回值是纯文本，没有媒体可外置（与 Task/ParallelTasks 同）。
         PlanApprovalBridge planBridge = new PlanApprovalBridge(listener, permissionEngine::setMode);
         ToolCallback decoratedExitPlanTool = new PermissionCallback(
-                new ToolEventCallback(PlanApprovalBridge.exitPlanModeTool(planBridge), listener),
+                new ToolEventCallback(PlanApprovalBridge.exitPlanModeTool(planBridge), listener, todoReminder),
                 permissionEngine, listener);
 
         // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ ExitPlanMode（仅主 agent）+ Task + ParallelTasks + TaskOutput + ListTasks
@@ -748,7 +758,7 @@ public final class AgentTools {
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
                 backgroundRegistry, backgroundResults, interjections, goalManager,
-                systemPromptTokens, bridge, quotaBridge);
+                systemPromptTokens, bridge, quotaBridge, todoReminder);
     }
 
     /**
@@ -1011,7 +1021,8 @@ public final class AgentTools {
                                GoalManager goalManager,
                                long systemPromptTokens,
                                L1ReporterBridge bridge,
-                               L1QuotaBridge quotaBridge) {
+                               L1QuotaBridge quotaBridge,
+                               TodoStaleReminder todoReminder) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }
@@ -1046,6 +1057,15 @@ public final class AgentTools {
     public static void wireGoal(AgentRuntime rt, CodingAgent agent,
                                 GoalEvaluationRunner runner, GoalEvaluator evaluator) {
         agent.bindGoal(rt.goalManager(), runner, evaluator);
+    }
+
+    /**
+     * 把 {@link AgentRuntime#todoReminder()} 绑到 {@code CodingAgent}（镜像 {@link #wireGoal} 的两段式形状）：
+     * {@code CodingAgent.bindTodoReminder} 是<b>包私有</b>方法，跨包直调编译失败，须经本方法在 agent 包内转接。
+     * <b>必须传 runtime 里那份</b>——提醒器是装配期唯一实例，另建一个 /clear 就清不到装饰链正在用的那份。
+     */
+    public static void wireTodoReminder(AgentRuntime rt, CodingAgent agent) {
+        agent.bindTodoReminder(rt.todoReminder());
     }
 
     /**
@@ -1126,12 +1146,21 @@ public final class AgentTools {
      * {@code deny: MemoryDelete(*)} 时它得真管用。
      */
     static ToolCallback[] buildMemoryTools(Path root, AgentListener listener, PermissionEngine engine) {
+        return buildMemoryTools(root, listener, engine, null);
+    }
+
+    /**
+     * 完整形状：{@code reminder} 参与装饰（null=停用，向后兼容重载走这里）。
+     * 记忆工具仅主 agent 使用，控制器级调用照常计数/提醒（MemoryView 这类「读记忆」也算工作进展）。
+     */
+    static ToolCallback[] buildMemoryTools(Path root, AgentListener listener, PermissionEngine engine,
+                                           TodoStaleReminder reminder) {
         Path dir = memoryDir(root);
         AutoMemoryTools memoryTools = AutoMemoryTools.builder().memoriesDir(dir).build();
         ToolCallback[] raw = ToolCallbacks.from(memoryTools);
         ToolCallback[] decorated = new ToolCallback[raw.length];
         for (int i = 0; i < raw.length; i++) {
-            decorated[i] = new PermissionCallback(new ToolEventCallback(raw[i], listener), engine, listener);
+            decorated[i] = new PermissionCallback(new ToolEventCallback(raw[i], listener, reminder), engine, listener);
         }
         return decorated;
     }

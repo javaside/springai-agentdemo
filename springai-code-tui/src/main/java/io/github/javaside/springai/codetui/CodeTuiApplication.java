@@ -170,6 +170,8 @@ public class CodeTuiApplication {
             // goal 三件套同一形状的两段式接线（bindGoal 包私有，经 wireGoal 在 agent 包内转接）：
             // agent 从此把回合错误/完成/清空通知 goal 状态机，并能倒扫会话尾供评估器取素材。
             AgentTools.wireGoal(runtime, agent, goalRunner, goalEvaluator);
+            // 任务面板过期提醒接线（镜像 wireGoal）：/clear 时 CodingAgent 经此清空装饰链共用的那份快照。
+            AgentTools.wireTodoReminder(runtime, agent);
 
             // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
             // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
