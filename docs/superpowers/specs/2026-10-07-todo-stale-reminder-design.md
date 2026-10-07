@@ -1,6 +1,6 @@
 # TodoWrite 过期清单重注入（todo-stale-reminder）设计
 
-状态：已核准（2026-10-07，与 SKILL.md 文本修订一并拍板「两个修法并行」）。
+状态：已交付（2026-10-08，实施记录见 [plans/2026-10-07-todo-stale-reminder.md](../plans/2026-10-07-todo-stale-reminder.md)）。
 
 ## 背景与问题
 
