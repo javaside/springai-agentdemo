@@ -37,6 +37,27 @@ class TodoReminderLiveSpikeTest {
 
     private static final long TURN_TIMEOUT_MS = 180_000L;
 
+    /** 台账写入重定向：`>> progress.md` / `> ledger` / `tee -a progress.md`（同取证脚本 LEDGER_WRITE）。 */
+    private static final java.util.regex.Pattern LEDGER_WRITE = java.util.regex.Pattern.compile(
+            "(?:>>?|tee\\s+-a)\\s*[\"']?\\S*(?:progress\\.md|ledger)", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 一次台账写入标记：重定向式，或 python 内联脚本写回式（{@code s += ...} 后 {@code open(p,'w')}）。
+     *
+     * <p>只看 `>>` 会把任何带重定向的命令都算成完成动作，数字就没意义了——必须「台账路径 + 写入语义」同现，
+     * 与 {@code dev/session-forensics/todo_staleness.py} 的 {@code is_bookkeeping} 保持同一口径。
+     */
+    private static boolean isLedgerWrite(String toolInput) {
+        if (LEDGER_WRITE.matcher(toolInput).find()) {
+            return true;
+        }
+        String low = toolInput.toLowerCase();
+        if (!low.contains("progress.md") && !low.contains("ledger")) {
+            return false;
+        }
+        return toolInput.contains("s +=") || toolInput.contains("s+=") || toolInput.contains(".write(");
+    }
+
     /** 与 {@code TodoStaleReminder.COMMIT} 同口径（那份是包私有，跨包测试读不到）。 */
     private static final java.util.regex.Pattern COMMIT = java.util.regex.Pattern.compile(
             "(?<![\\w-])git\\s+(?:(?:-[A-Za-z]|--[A-Za-z][A-Za-z-]*)(?:=\\S+|\\s+\\S+)?\\s+)*commit\\b");
@@ -207,5 +228,158 @@ class TodoReminderLiveSpikeTest {
             System.out.println("[spike] 注入片段 = " + joined.substring(i, Math.min(joined.length(), i + 320))
                     .replace("\n", " ⏎ "));
         }
+    }
+
+    /**
+     * 受控对比实验：复刻根因文档 v7 的触发条件（台账工作流），量出「注入 → 响应」的现场数字。
+     *
+     * <p><b>为什么单开一个</b>：上面的用例是「一切顺利」的短脚本回合——模型每步都顺手更新清单，
+     * 提醒压根不该响（实测 5 次里 4 次如此）。真正会失守的是 SDD 那种形态：每完成一步先写一行台账
+     * （有格式模板、比 TodoWrite 便宜），清单被挤掉。本用例照这个形态给提示词，跑多轮连续回合
+     * （同一会话，上下文逐轮变长），统计：完成标记数 / 跳过更新数 / 注入数 / 注入后是否更新。
+     *
+     * <p><b>双臂对比</b>：把 {@code CODETUI_TODO_REMIND_EVERY=0} 设进进程环境即为对照组（提醒全关），
+     * 不设则默认 8（实验组）。两次 mvn 调用的输出可直接比对。
+     *
+     * <p><b>断言的边界</b>：只断言机制（护栏 + 至少真实跑过一轮）；跳过数/响应率是<b>观察值</b>，
+     * 只打印。样本量天然受限（真机、花钱、每轮几十秒），故这里给的是「现场印象」而不是统计结论——
+     * 统计结论要么等发布后的会话语料，要么另做大批量实验。
+     */
+    @Test
+    void ledgerWorkflow_measuresInjectionAndResponse() throws Exception {
+        // 刻意不用 @TempDir：会话文件必须留住，好让取证脚本（度量原问题的同一件工具）
+        // 在同一批数据上量「注入与响应率」——度量与干预同口径，且证据可事后复核。
+        Path work = Path.of("/tmp/codetui-live-spike",
+                java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
+        Files.createDirectories(work);
+        System.out.println("[measure] 工作目录（会话文件在 .codetui/sessions 下）= " + work);
+        new ProcessBuilder("git", "init", "-q").directory(work.toFile()).start().waitFor();
+        String hostHeadBefore = hostHead();
+        String hostStatusBefore = runHostGit("status", "--porcelain");
+
+        Recorder rec = new Recorder();
+        AtomicLong active = new AtomicLong();
+        AgentTools.AgentRuntime rt = AgentTools.build(
+                new ProviderRegistry(List.of(new DeepSeekProvider(System.getenv("DEEPSEEK_API_KEY")))),
+                work, rec);
+        String arm = rt.todoReminder().enabled() ? "treatment(默认阈值)" : "control(提醒已关)";
+        String sessionId = "todo-reminder-ledger";
+        CodingAgent agent = new CodingAgent(rt.client(), rec, sessionId, active,
+                rt.sessionService(), rt.manualStrategy(), rt.tokenCountEstimator());
+
+        int turns = 3;
+        int injections;
+        for (int t = 1; t <= turns; t++) {
+            int done = rec.completed.size();
+            Disposable d = agent.submit("""
+                    只在临时目录 %s 里工作（它已 git init）。**不要读写、更不要提交你当前所在的仓库**。
+                    工作方式照这个约定来：先用 TodoWrite 建一份清单，然后每完成一步，
+                    先在 progress.md 追加一行台账「Step N: complete（做了什么）」，再继续下一步。
+                    第 %d 批任务（每批两步）：① 创建 f%d.txt 内容为 step%d；② 用 git 提交这次改动
+                    （git 身份用 -c 内联，提交命令显式 -C 到临时目录）。做完停手，不要问我。"""
+                    .formatted(work, t, t, t));
+            long deadline = System.currentTimeMillis() + TURN_TIMEOUT_MS;
+            while (System.currentTimeMillis() < deadline
+                    && rec.completed.size() == done && rec.errors.isEmpty()) {
+                Thread.sleep(200);
+            }
+            d.dispose();
+            assertTrue(rec.errors.isEmpty(), "第 " + t + " 批报错：" + rec.errors);
+        }
+        injections = countInjections(rt, sessionId);   // 只算一次：循环里累加会把前几批重复计入
+
+        // ---- 统计（观察值）----
+        int ledgerMarks = 0;
+        int commitCount = 0;
+        int skips = 0;
+        // 「跳过更新」必须建立在「清单此刻确实有未完成项」之上，否则会把「清单已全部完成、
+        // 无需更新」也算成跳过——实测第一版就这么虚报过（commit → 接着写台账，清单当时全完成）。
+        // 口径与取证脚本一致（它只在 stale 时统计标记）。
+        int unfinished = 0;
+        for (int i = 0; i < rec.toolOrder.size(); i++) {
+            String name = rec.toolOrder.get(i);
+            if ("TodoWrite".equals(name)) {
+                unfinished = countUnfinished(rec.toolInputs.get(i));
+                continue;
+            }
+            if (!"Bash".equals(name)) {
+                continue;
+            }
+            String in = rec.toolInputs.get(i);
+            boolean ledger = isLedgerWrite(in);
+            boolean commit = COMMIT.matcher(in).find();
+            if (!ledger && !commit) {
+                continue;
+            }
+            if (ledger) {
+                ledgerMarks++;
+            }
+            if (commit) {
+                commitCount++;
+            }
+            String next = (i + 1 < rec.toolOrder.size()) ? rec.toolOrder.get(i + 1) : "?";
+            if (unfinished > 0 && !"TodoWrite".equals(next)) {
+                skips++;
+            }
+        }
+        int todoCalls = 0;
+        for (String n : rec.toolOrder) {
+            if ("TodoWrite".equals(n)) {
+                todoCalls++;
+            }
+        }
+        System.out.println("[measure] arm=" + arm + " turns=" + turns
+                + " marks(ledger/commit)=" + ledgerMarks + "/" + commitCount
+                + " skips(清单未完成时标记后仍未更新)=" + skips
+                + " injections=" + injections
+                + " responseRate=" + (injections == 0 ? "n/a" : "见会话消息（注入后是否出现 TodoWrite）")
+                + " todoCalls=" + todoCalls);
+        System.out.println("[measure] 工具序列 = " + rec.toolOrder);
+
+        // ---- 机制断言：跑过真实回合；护栏未破 ----
+        assertTrue(todoCalls > 0 || ledgerMarks > 0, "本实验要求模型至少干活（工具序列=" + rec.toolOrder + "）");
+        String hostStatusAfter = runHostGit("status", "--porcelain");
+        assertTrue(hostHeadBefore.equals(hostHead()), "本 spike 污染了宿主仓库 HEAD");
+        assertEquals(hostStatusBefore, hostStatusAfter, "本 spike 改动了宿主仓库工作树");
+    }
+
+    /** TodoWrite 入参里未完成项数（解析失败按 0——本指标只用于观察，不该让实验崩掉）。 */
+    private static int countUnfinished(String todoInput) {
+        try {
+            var arr = new tools.jackson.databind.ObjectMapper().readTree(todoInput).get("todos");
+            if (arr == null || !arr.isArray()) {
+                return 0;
+            }
+            int n = 0;
+            for (var it : arr) {
+                if (!"completed".equals(it.path("status").asText())) {
+                    n++;
+                }
+            }
+            return n;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** 会话里累计的提醒注入次数（工具返回尾部带提醒收尾句）。 */
+    private int countInjections(AgentTools.AgentRuntime rt, String sessionId) {
+        StringBuilder all = new StringBuilder();
+        for (Message m : rt.sessionService().getMessages(sessionId)) {
+            all.append(m.getText());
+            if (m instanceof org.springframework.ai.chat.messages.ToolResponseMessage trm) {
+                for (var r : trm.getResponses()) {
+                    all.append(r.responseData());
+                }
+            }
+        }
+        String joined = all.toString();
+        int n = 0;
+        int idx = 0;
+        while ((idx = joined.indexOf("[任务面板提醒]", idx)) >= 0) {
+            n++;
+            idx += 8;
+        }
+        return n;
     }
 }

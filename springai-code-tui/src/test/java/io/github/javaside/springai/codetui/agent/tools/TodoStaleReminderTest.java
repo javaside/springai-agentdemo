@@ -102,6 +102,25 @@ class TodoStaleReminderTest {
     }
 
     @Test
+    @DisplayName("台账写入也是完成事件（与取证脚本的完成标记口径一致）")
+    void ledgerWrite_isCompletionEvent_too() {
+        TodoStaleReminder r = new TodoStaleReminder(100);
+        r.onControllerTodoWritten(List.of(item("写台账后该更新的任务", Status.in_progress)));
+
+        // 真机实验实测形态：SDD 式工作流每完成一步先写一行台账，清单被挤掉
+        assertTrue(io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder
+                        .isCompletionEvent("Bash", "cat >> /p/progress.md << 'EOF'\nStep 1: complete\nEOF"),
+                "写 progress.md 台账应当被识别为完成事件");
+        assertTrue(TodoStaleReminder.isCompletionEvent("Bash",
+                        "python3 - <<'EOF'\np='.superpowers/sdd/x/progress.md'\ns=open(p).read()\ns += 'Step 2: complete'\nopen(p,'w').write(s)\nEOF"),
+                "python 内联脚本写回台账也是完成事件");
+        assertFalse(TodoStaleReminder.isCompletionEvent("Bash", "cat progress.md"),
+                "读台账不是完成事件（这正是不能用文件名草率判定的原因）");
+        assertFalse(TodoStaleReminder.isCompletionEvent("Bash", "echo hi >> notes.txt"),
+                "写别的文件不是完成事件");
+    }
+
+    @Test
     @DisplayName("提醒里的清单 JSON 能被真实 TodoWriteTool 原样接受（照抄即用契约）")
     void reminderJson_roundTripsThroughRealTodoWriteTool() {
         TodoStaleReminder r = new TodoStaleReminder(100);
