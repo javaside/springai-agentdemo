@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent.tools;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
@@ -227,6 +228,23 @@ class ToolEventCallbackTest {
         ToolCallback legacy = new ToolEventCallback(new FixedTool("Bash", "raw-out"), recorder);
         assertEquals("raw-out", legacy.call("{}", new ToolContext(Map.of(ToolEventCallback.TURN_ID_KEY, 5L))));
         assertEquals("raw-out", legacy.call("{}", new ToolContext(Map.of(ToolEventCallback.TURN_ID_KEY, 5L))));
+    }
+
+    @Test
+    @DisplayName("提醒器拿得到 toolInput：git commit 才算完成事件")
+    void eventAlignedReminder_usesToolInputToDetectCommit() {
+        TodoStaleReminder reminder = reminderWithUnfinished("提交后要更新的任务");
+        RecordingListener recorder = new RecordingListener();
+        ToolCallback cb = new ToolEventCallback(new FixedTool("Bash", "raw-out"), recorder, reminder);
+        ToolContext ctx = new ToolContext(Map.of(ToolEventCallback.TURN_ID_KEY, 11L));
+
+        assertEquals("raw-out", cb.call("cat README.md", ctx), "普通 Bash 命令不武装提醒");
+        assertEquals("raw-out", cb.call("cd /p && git commit -m \"docs: x\"", ctx),
+                "commit 当刻不提醒——此刻清单还没机会更新");
+        String after = cb.call("{}", ctx);
+        assertTrue(after.startsWith("raw-out\n\n[任务面板提醒]"),
+                "commit 后第一个跳过更新的调用应带提醒（toolInput 没透传给提醒器？），实际=" + after);
+        assertTrue(after.contains("提交后要更新的任务"), "提醒须含快照");
     }
 
     @Test

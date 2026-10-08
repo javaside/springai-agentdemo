@@ -69,7 +69,8 @@ public final class ToolEventCallback implements ToolCallback {
             // 只管控制器级调用（taskId==null）——子 agent 内部 todo 不上面板，提醒无意义。
             // 异常路径不提醒：失败的调用没有「清单过期该更新」的证据。
             if (reminder != null && taskId == null) {
-                String note = reminder.reminderOrNull(turnId, name);
+                // 传 toolInput：提醒器要靠它识别「这次调用是不是 git commit」这类完成事件
+                String note = reminder.reminderOrNull(turnId, name, toolInput);
                 if (note != null) {
                     out = out + "\n\n" + note;
                 }
