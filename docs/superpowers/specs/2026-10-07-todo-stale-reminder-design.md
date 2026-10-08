@@ -17,7 +17,8 @@
 存在感**：skill 正文与 TodoWrite 工具无绑定（"todos" 为泛指，工具名字样 0 次），台账指令有格式模板
 而「mark the todo complete」只是无绑定半句；叠加 **harness 没有任何机制把过期清单重新喂给模型**——
 一次遗漏永久持续。（注：skill 的台账指令与 TodoWrite 曾被表述为「双轨记账竞争」，复核后降格为
-「替代通道存在 + 更新指令真空」，竞争说不成立。）
+「替代通道存在 + 更新指令真空」，竞争说不成立。）根因的完整三层分析（通道错位 / 动作槽 / 零反馈）
+与排查过程见 [2026-10-07-todowrite-not-updated-root-cause.md](2026-10-07-todowrite-not-updated-root-cause.md)。
 
 配套动作（已撤销）：曾修订 `~/.codetui/skills/subagent-driven-development/SKILL.md`（流程图点名
 TodoWrite 等），2026-10-08 应用户要求恢复原样——第三方 skill 文本不可控（上游重同步即覆盖），
