@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
+import io.github.javaside.springai.codetui.agent.tools.ZhipuWebSearchTool;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.DefaultChatClient;
@@ -25,12 +26,12 @@ import io.github.javaside.springai.codetui.agent.seam.StubListener;
  * {@link ToolCallback} 列表（{@code DefaultChatClientRequestSpec.getToolCallbacks()}），
  * 让「运行时工具集」这个概念只有一个来源。
  *
- * <p><b>两个 env 门控的搜索工具单独补</b>：{@code BochaWebSearch} / {@code BraveWebSearch} 只在
- * 配了各自 API key 时才进 build()，无 key 的机器（含 CI）上装配产物里根本没有它们。
- * 但登记表必须常备这两条，否则配了 key 的机器上它们会落进 UNKNOWN。故这里用
- * {@code AgentTools} 自己那两个工厂方法拿假 key 各造一个补进来——仍是同一套构造逻辑，不是另抄一份。
+ * <p><b>三个 env 门控的搜索工具单独补</b>：{@code BochaWebSearch} / {@code BraveWebSearch} /
+ * {@code ZhipuWebSearch} 只在配了各自 API key 时才进 build()，无 key 的机器（含 CI）上装配产物里
+ * 根本没有它们。但登记表必须常备这三条，否则配了 key 的机器上它们会落进 UNKNOWN。故这里用
+ * {@code AgentTools} 自己那三个工厂方法拿假 key 各造一个补进来——仍是同一套构造逻辑，不是另抄一份。
  *
- * <p><b>这条补齐带一个已知缺口</b>：两个搜索工具是<b>无条件</b>补进来的，故它们豁免于
+ * <p><b>这条补齐带一个已知缺口</b>：三个搜索工具是<b>无条件</b>补进来的，故它们豁免于
  * 「僵尸条目」检查——实测把 {@code AgentTools.build()} 里的 {@code if (webSearch != null)} 整段删掉
  * （工具真的从产品里消失了），完整性测试仍 3/3 全绿。实践中这个洞很窄：改名仍会被抓到，
  * 删掉工厂方法本身是编译错误，只有「删调用点却留着工厂」这一种改法会漏。
@@ -54,7 +55,7 @@ public final class RuntimeToolSet {
     public static Map<String, ToolCallback> byRegisteredName(Path root) {
         List<ToolCallback> all = new ArrayList<>(assembledTools(root));
 
-        // env 门控的两个搜索工具：用 AgentTools 自己的工厂喂假 key 造出来，保证与生产同一套构造逻辑。
+        // env 门控的三个搜索工具：用 AgentTools 自己的工厂喂假 key 造出来，保证与生产同一套构造逻辑。
         BochaWebSearchTool bocha = AgentTools.createWebSearchTool("fake-key", null);
         if (bocha != null) {
             all.add(ToolCallbacks.from(bocha)[0]);
@@ -63,8 +64,12 @@ public final class RuntimeToolSet {
         if (brave != null) {
             all.add(brave);
         }
+        ZhipuWebSearchTool zhipu = AgentTools.createZhipuWebSearchTool("fake-key", null, null);
+        if (zhipu != null) {
+            all.add(ToolCallbacks.from(zhipu)[0]);
+        }
 
-        // 去重：机器上真配了 BOCHA/BRAVE key 时，build() 里已有一份，上面又补了一份。
+        // 去重：机器上真配了 BOCHA/BRAVE/ZHIPU key 时，build() 里已有一份，上面又补了一份。
         Map<String, ToolCallback> byName = new LinkedHashMap<>();
         for (ToolCallback c : all) {
             byName.putIfAbsent(c.getToolDefinition().name(), c);

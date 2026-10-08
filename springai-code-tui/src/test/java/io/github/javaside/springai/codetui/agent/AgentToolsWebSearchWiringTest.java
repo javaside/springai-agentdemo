@@ -3,6 +3,7 @@ import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
+import io.github.javaside.springai.codetui.agent.tools.ZhipuWebSearchTool;
 
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
@@ -68,34 +69,59 @@ class AgentToolsWebSearchWiringTest {
     }
 
     @Test
-    void guideIsEmptyWhenNeitherToolRegistered() {
-        assertEquals("", AgentTools.webSearchGuide(false, false),
-                "两家都没注册时，系统提示不应出现任何搜索相关指引");
+    void guideIsEmptyWhenNoToolRegistered() {
+        assertEquals("", AgentTools.webSearchGuide(false, false, false),
+                "三家都没注册时，系统提示不应出现任何搜索相关指引");
     }
 
     @Test
     void guideCoversBochaOnly() {
-        String guide = AgentTools.webSearchGuide(true, false);
+        String guide = AgentTools.webSearchGuide(true, false, false);
 
         assertTrue(guide.contains("BochaWebSearch"), "应点名博查工具，实际=" + guide);
+        assertFalse(guide.contains("ZhipuWebSearch"), "智谱没注册就不该提它，实际=" + guide);
         assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
         assertTrue(guide.contains("webFetch"), "应说明与 webFetch 的分工，实际=" + guide);
+        assertTrue(guide.contains("Sources"), "应要求列出来源，实际=" + guide);
+    }
+
+    @Test
+    void guideCoversZhipuOnly() {
+        String guide = AgentTools.webSearchGuide(false, true, false);
+
+        assertTrue(guide.contains("ZhipuWebSearch"), "应点名智谱工具，实际=" + guide);
+        assertFalse(guide.contains("BochaWebSearch"), "博查没注册就不该提它，实际=" + guide);
+        assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
+        assertTrue(guide.contains("webFetch"), "实际=" + guide);
+        assertTrue(guide.contains("include 与 freshness 不要同时传"),
+                "智谱的 include+freshness 同传坑应只在智谱注册时提示，实际=" + guide);
     }
 
     @Test
     void guideCoversBraveOnly() {
-        String guide = AgentTools.webSearchGuide(false, true);
+        String guide = AgentTools.webSearchGuide(false, false, true);
 
         assertTrue(guide.contains("BraveWebSearch"), "应点名 Brave 工具，实际=" + guide);
         assertFalse(guide.contains("BochaWebSearch"), "博查没注册就不该提它，实际=" + guide);
-        assertTrue(guide.contains("webFetch"), "应说明与 webFetch 的分工，实际=" + guide);
+        assertFalse(guide.contains("ZhipuWebSearch"), "智谱没注册就不该提它，实际=" + guide);
+        assertTrue(guide.contains("webFetch"), "实际=" + guide);
     }
 
     @Test
-    void guideExplainsDivisionWhenBothRegistered() {
-        String guide = AgentTools.webSearchGuide(true, true);
+    void guideExplainsBochaZhipuRedundancy() {
+        String guide = AgentTools.webSearchGuide(true, true, false);
+
+        assertTrue(guide.contains("BochaWebSearch") && guide.contains("ZhipuWebSearch"), "实际=" + guide);
+        assertTrue(guide.contains("互为冗余"), "两个国内源应说明互为冗余，实际=" + guide);
+        assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
+    }
+
+    @Test
+    void guideExplainsDivisionWhenAllRegistered() {
+        String guide = AgentTools.webSearchGuide(true, true, true);
 
         assertTrue(guide.contains("BochaWebSearch"), "实际=" + guide);
+        assertTrue(guide.contains("ZhipuWebSearch"), "实际=" + guide);
         assertTrue(guide.contains("BraveWebSearch"), "实际=" + guide);
         assertTrue(guide.contains("中文"), "应讲清中文走哪家，实际=" + guide);
         assertTrue(guide.contains("英文"), "应讲清英文走哪家，实际=" + guide);
@@ -106,10 +132,13 @@ class AgentToolsWebSearchWiringTest {
     @Test
     void noGuideVariantContainsTemplateBraces() {
         for (boolean bocha : new boolean[]{false, true}) {
-            for (boolean brave : new boolean[]{false, true}) {
-                String guide = AgentTools.webSearchGuide(bocha, brave);
-                assertTrue(!guide.contains("{") && !guide.contains("}"),
-                        "指引正文不得含花括号（bocha=" + bocha + ", brave=" + brave + "），实际=" + guide);
+            for (boolean zhipu : new boolean[]{false, true}) {
+                for (boolean brave : new boolean[]{false, true}) {
+                    String guide = AgentTools.webSearchGuide(bocha, zhipu, brave);
+                    assertTrue(!guide.contains("{") && !guide.contains("}"),
+                            "指引正文不得含花括号（bocha=" + bocha + ", zhipu=" + zhipu
+                                    + ", brave=" + brave + "），实际=" + guide);
+                }
             }
         }
     }
@@ -161,6 +190,41 @@ class AgentToolsWebSearchWiringTest {
         ToolCallback decorated = new ToolEventCallback(brave, new ConversationState());
 
         assertEquals("BraveWebSearch", decorated.getToolDefinition().name(),
+                "装饰链末端的注册名，实际=" + decorated.getToolDefinition().name());
+    }
+
+    @Test
+    void noZhipuKey_noZhipuTool() {
+        assertNull(AgentTools.createZhipuWebSearchTool(null, null, null), "未配 ZHIPU_API_KEY 时不应创建");
+        assertNull(AgentTools.createZhipuWebSearchTool("   ", null, null), "空白 key 时不应创建");
+    }
+
+    /** 注册名取 @Tool 注解而非方法名；子 agent 的 allow/deny 按注册名精确匹配，写错会静默失效。 */
+    @Test
+    void zhipuToolRegisteredNameIsZhipuWebSearch() {
+        ZhipuWebSearchTool tool = AgentTools.createZhipuWebSearchTool("fake-key", null, null);
+
+        assertNotNull(tool, "配了 key 就应创建");
+        List<String> names = Arrays.stream(ToolCallbacks.from(tool))
+                .map(c -> c.getToolDefinition().name()).toList();
+        assertEquals(List.of("ZhipuWebSearch"), names, "实际=" + names);
+    }
+
+    @Test
+    void zhipuCountAndEngineFromEnvReachTool() {
+        // 工厂把 env 解析结果交给 builder 的路径：非默认值能建出来不抛即可，解析语义已由工具单测钉住。
+        assertNotNull(AgentTools.createZhipuWebSearchTool("fake-key", "20", "search_pro"));
+    }
+
+    /** 完整装饰链之后注册名仍须保持——中间任何一层丢了名字，工具分发就会撞上别家。 */
+    @Test
+    void zhipuKeepsNameThroughFullDecorationChain() {
+        ZhipuWebSearchTool tool = AgentTools.createZhipuWebSearchTool("fake-key", null, null);
+
+        ToolCallback decorated = new ToolEventCallback(
+                ToolCallbacks.from(tool)[0], new ConversationState());
+
+        assertEquals("ZhipuWebSearch", decorated.getToolDefinition().name(),
                 "装饰链末端的注册名，实际=" + decorated.getToolDefinition().name());
     }
 }

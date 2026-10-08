@@ -540,6 +540,8 @@ def main():
             env.pop(k, None)
     env["TERM"] = "xterm-256color"            # 不设则渲染全空白
     env["ZHIPU_API_KEY"] = "sk-dummy-not-real"
+    # 注意：这把 key 现在也会让生成的 TUI 注册 ZhipuWebSearch——搜索工具不认 ZHIPU_BASE_URL，
+    # 被调用会真连 open.bigmodel.cn（烧真配额）。当前 stub 模型不会调它，改脚本做自由工具选择时留意。
     # ⚠ 必须显式覆盖：本机环境变量 ZHIPU_BASE_URL 可能是真实 Coding Plan 端点，
     # 不覆盖就打真网（烧真配额）。zhipu provider 走 spring-ai-openai（openai-java SDK），
     # baseUrl 后拼 chat/completions，桩端点任意路径都会命中。

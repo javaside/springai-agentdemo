@@ -51,6 +51,7 @@ public final class ToolRegistry {
         put("WebFetch",        ToolCategory.NETWORK_READ, "url",   false);
         put("BochaWebSearch",  ToolCategory.NETWORK_READ, "query", false);
         put("BraveWebSearch",  ToolCategory.NETWORK_READ, "query", false);
+        put("ZhipuWebSearch",  ToolCategory.NETWORK_READ, "query", false);
         // ── 内部（无外部副作用） ──
         put("TodoWrite",           ToolCategory.INTERNAL, null, false);
         put("Skill",               ToolCategory.INTERNAL, null, false);

@@ -66,7 +66,7 @@
 | 内部（无外部副作用） | `TodoWrite` `Skill` `AskUserQuestionTool` `Task` `ParallelTasks` `Memory*` | 放行 | 放行 |
 | 文件写 | `Write` `Edit` | **问** | **工作区内**放行，区外仍问 |
 | 命令 | `Bash` | 每段都在只读白名单内才放行，否则**问** | 额外放行 `mkdir`/`touch`/`mv`/`cp` 单段命令（见下方 ⚠️） |
-| 网络（只读） | `WebFetch` `BochaWebSearch` `BraveWebSearch` | **问**（所有模式，见下） | **问** |
+| 网络（只读） | `WebFetch` `BochaWebSearch` `ZhipuWebSearch` `BraveWebSearch` | **问**（所有模式，见下） | **问** |
 | 未登记 | 其余 + **全部 MCP 工具** | **问** | **问** |
 
 > **为什么网络工具在任何模式下都要问一次**：「只读」说的是对远端的影响，而请求本身是**本地发起的外发动作**——提示注入可以靠它把刚读到的内容拼进 URL 带走。首次按域名允许后（`WebFetch(https://docs.spring.io/:*)`）该域名不再询问。

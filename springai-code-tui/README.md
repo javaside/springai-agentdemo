@@ -88,6 +88,7 @@ export DEEPSEEK_API_KEY=你的key
 - 不要在 `$HOME`、系统关键目录或重要仓库的根目录运行。
 - 审批面板会展示调用目标和理由，不要未经检查就允许。
 - “跳过权限检查”模式会跳过全部权限检查，只应在完全清楚后果时使用。
+- 联网搜索会把查询词发给第三方搜索服务：博查与智谱是国内服务（查询词不出境），Brave 是美国公司（属于数据出境）。其中智谱搜索按次计费（0.01–0.05 元/次，无免费档），每次调用都是真实费用。
 
 完整安全边界见 [docs/guide/security.md](docs/guide/security.md)，权限规则与模式见 [docs/guide/permissions.md](docs/guide/permissions.md)。
 
@@ -96,7 +97,7 @@ export DEEPSEEK_API_KEY=你的key
 | 类别 | 能力 |
 |------|------|
 | 模型与 provider | DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI、OpenCode Go；`/model` 运行时切换，选择按项目记忆在 `.codetui/model.json` |
-| 编码与联网工具 | 文件读写、Shell、Grep/Glob、任务计划、网页抓取、博查中文搜索、Brave 英文搜索、向用户提问 |
+| 编码与联网工具 | 文件读写、Shell、Grep/Glob、任务计划、网页抓取、博查中文搜索、Brave 英文搜索、智谱联网搜索（按次计费）、向用户提问 |
 | 权限与安全 | 有副作用的调用执行前审批；`Shift+Tab` 切换默认、自动接受编辑、计划、跳过权限检查四种模式 |
 | 子 agent 与计划 | `Task`、`ParallelTasks`、后台任务、计划面板和任务面板 |
 | 自主目标循环 | `/goal` 设定完成条件，agent 跨轮自主推进：独立小模型逐轮评估、结论注入下一轮，三重熔断 + 两级 Esc |
