@@ -12,13 +12,12 @@
   「Task N 通过……记账并派 Task N+1」；
 - 最终 8 个 commit、7 任务全部完成，而任务面板全程冻结在「Task 1: in_progress」。
 
-定性（2026-10-08 复核修正）：**不是模型记账纪律差**（台账 8 次全中、skill 完成行格式逐字照抄），
-也不是工具描述写得差（业界全文，凡建清单的会话更新纪律教科书级）。是**决策时刻 TodoWrite 无指令
-存在感**：skill 正文与 TodoWrite 工具无绑定（"todos" 为泛指，工具名字样 0 次），台账指令有格式模板
-而「mark the todo complete」只是无绑定半句；叠加 **harness 没有任何机制把过期清单重新喂给模型**——
-一次遗漏永久持续。（注：skill 的台账指令与 TodoWrite 曾被表述为「双轨记账竞争」，复核后降格为
-「替代通道存在 + 更新指令真空」，竞争说不成立。）根因的完整三层分析（通道错位 / 动作槽 / 零反馈）
-与排查过程见 [2026-10-07-todowrite-not-updated-root-cause.md](2026-10-07-todowrite-not-updated-root-cause.md)。
+定性（2026-10-08 v6 终版，完整取证见 [2026-10-07-todowrite-not-updated-root-cause.md](2026-10-07-todowrite-not-updated-root-cause.md)）：
+不是模型纪律差（台账 8 次全中）、不是工具描述差（业界全文）、不是 skill（对照会话同一份
+skill 维护完美）、不是模型（均为 glm-5.3）。**区分变量是进入执行循环前会话内是否已有
+TodoWrite 使用节奏**（本会话规划期 0 次 vs 对照 9/11 次）：无节奏时首个完成点被 skill
+规定的台账动作轻取并自我锁定，叠加 harness 零反馈（过期清单永不回注）——漏一次漏到底。
+本设计的提醒器即因果链「固化」层的修复（定期重掷），「种子/放大」两层修法见根因文档。
 
 配套动作（已撤销）：曾修订 `~/.codetui/skills/subagent-driven-development/SKILL.md`（流程图点名
 TodoWrite 等），2026-10-08 应用户要求恢复原样——第三方 skill 文本不可控（上游重同步即覆盖），
