@@ -3,6 +3,7 @@ import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
+import io.github.javaside.springai.codetui.agent.tools.ZhipuWebSearchTool;
 
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
@@ -189,6 +190,41 @@ class AgentToolsWebSearchWiringTest {
         ToolCallback decorated = new ToolEventCallback(brave, new ConversationState());
 
         assertEquals("BraveWebSearch", decorated.getToolDefinition().name(),
+                "装饰链末端的注册名，实际=" + decorated.getToolDefinition().name());
+    }
+
+    @Test
+    void noZhipuKey_noZhipuTool() {
+        assertNull(AgentTools.createZhipuWebSearchTool(null, null, null), "未配 ZHIPU_API_KEY 时不应创建");
+        assertNull(AgentTools.createZhipuWebSearchTool("   ", null, null), "空白 key 时不应创建");
+    }
+
+    /** 注册名取 @Tool 注解而非方法名；子 agent 的 allow/deny 按注册名精确匹配，写错会静默失效。 */
+    @Test
+    void zhipuToolRegisteredNameIsZhipuWebSearch() {
+        ZhipuWebSearchTool tool = AgentTools.createZhipuWebSearchTool("fake-key", null, null);
+
+        assertNotNull(tool, "配了 key 就应创建");
+        List<String> names = Arrays.stream(ToolCallbacks.from(tool))
+                .map(c -> c.getToolDefinition().name()).toList();
+        assertEquals(List.of("ZhipuWebSearch"), names, "实际=" + names);
+    }
+
+    @Test
+    void zhipuCountAndEngineFromEnvReachTool() {
+        // 工厂把 env 解析结果交给 builder 的路径：非默认值能建出来不抛即可，解析语义已由工具单测钉住。
+        assertNotNull(AgentTools.createZhipuWebSearchTool("fake-key", "20", "search_pro"));
+    }
+
+    /** 完整装饰链之后注册名仍须保持——中间任何一层丢了名字，工具分发就会撞上别家。 */
+    @Test
+    void zhipuKeepsNameThroughFullDecorationChain() {
+        ZhipuWebSearchTool tool = AgentTools.createZhipuWebSearchTool("fake-key", null, null);
+
+        ToolCallback decorated = new ToolEventCallback(
+                ToolCallbacks.from(tool)[0], new ConversationState());
+
+        assertEquals("ZhipuWebSearch", decorated.getToolDefinition().name(),
                 "装饰链末端的注册名，实际=" + decorated.getToolDefinition().name());
     }
 }

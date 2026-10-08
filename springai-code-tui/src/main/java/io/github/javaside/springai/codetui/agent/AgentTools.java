@@ -56,6 +56,7 @@ import io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder;
 import io.github.javaside.springai.codetui.agent.tools.TodoWriteToolAdapter;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.tools.TurnToolLimitWiring;
+import io.github.javaside.springai.codetui.agent.tools.ZhipuWebSearchTool;
 import org.springaicommunity.agent.tools.AskUserQuestionTool;
 import org.springaicommunity.agent.tools.AutoMemoryTools;
 import org.springaicommunity.agent.tools.FileSystemTools;
@@ -90,8 +91,8 @@ import java.util.List;
 /**
  * AgentTools —— 组装编码 Agent 用的 {@link ChatClient} 的工厂。
  *
- * <p>把社区工具（FileSystem/Shell/Grep/Glob/TodoWrite/SmartWebFetch）与自写的 WebSearch（博查，
- * 仅在配了 BOCHA_API_KEY 时注册）用 {@link ToolEventCallback} 装饰后
+ * <p>把社区工具（FileSystem/Shell/Grep/Glob/TodoWrite/SmartWebFetch）与三家搜索工具（博查/智谱/Brave，
+ * 各自仅在配了 BOCHA_API_KEY / ZHIPU_API_KEY / BRAVE_API_KEY 时注册）用 {@link ToolEventCallback} 装饰后
  * 注册进 ChatClient，并配上 {@link SessionMemoryAdvisor} 会话记忆与 {@link AgentEnvironment} 环境系统提示。
  *
  * <p><b>网页获取（SmartWebFetch）</b>：{@link SmartWebFetchTool} 抓取网页→转 Markdown→用一个「裸」ChatClient
@@ -466,7 +467,8 @@ public final class AgentTools {
                 .build();
 
         // org.springframework.ai.support.ToolCallbacks（spring-ai-model）：@Tool 对象转 ToolCallback。
-        // 数量不固定：WebSearch 是条件注册（BOCHA_API_KEY 配了才有），故用 rawTools 列表而非定长参数。
+        // 数量不固定：搜索工具是条件注册（BOCHA_API_KEY / ZHIPU_API_KEY 配了才有；Brave 已是
+        // ToolCallback 走 all 段那条路），故用 rawTools 列表而非定长参数。
         // Skill 工具本身已是 ToolCallback（非 @Tool 对象），单独追加进列表；随后统一用 ToolEventCallback 装饰，
         // 使「技能被调用」也在 TUI 显示为一行工具活动。
         // TodoWrite 不直接注册库工具：其入参双层 todos 嵌套让模型频繁绑定失败（见 TodoWriteToolAdapter 类注释）。
@@ -487,9 +489,19 @@ public final class AgentTools {
         ToolCallback braveWebSearch =
                 createBraveWebSearchTool(System.getenv("BRAVE_API_KEY"), System.getenv("BRAVE_SEARCH_COUNT"));
 
+        // 智谱搜索（第三家，国内向）：ZHIPU_API_KEY 配了才注册。与博查/Brave 共存，
+        // 分工与冗余关系写在系统提示指引段（webSearchGuide）。
+        ZhipuWebSearchTool zhipuWebSearch = createZhipuWebSearchTool(
+                System.getenv("ZHIPU_API_KEY"),
+                System.getenv("ZHIPU_SEARCH_COUNT"),
+                System.getenv("ZHIPU_SEARCH_ENGINE"));
+
         List<Object> rawTools = new ArrayList<>(List.of(fs, sh, grep, glob, webFetch, askTool));
         if (webSearch != null) {
             rawTools.add(webSearch);
+        }
+        if (zhipuWebSearch != null) {
+            rawTools.add(zhipuWebSearch);   // @Tool 对象，与博查同路（统一走装饰链）
         }
         List<ToolCallback> all = new ArrayList<>(Arrays.asList(
                 ToolCallbacks.from(rawTools.toArray())));
@@ -676,7 +688,7 @@ public final class AgentTools {
 
         // 搜索指引：与工具注册状态严格同步——工具没注册就不给模型任何搜索提示，
         // 否则模型会去调一个不存在的工具。
-        String webSearchGuide = webSearchGuide(webSearch != null, false, braveWebSearch != null);
+        String webSearchGuide = webSearchGuide(webSearch != null, zhipuWebSearch != null, braveWebSearch != null);
 
         // 署名指引：抽出来供 defaultSystem 与下面的系统提示词估算共用，避免重复解析环境变量。
         String coAuthorGuideText = coAuthorGuide(System.getenv("CODETUI_CO_AUTHOR"));
@@ -975,6 +987,23 @@ public final class AgentTools {
         }
         return BochaWebSearchTool.builder(apiKey)
                 .resultCount(BochaWebSearchTool.resolveResultCount(countEnv))
+                .build();
+    }
+
+    /**
+     * 按 env 决定是否创建智谱搜索工具：{@code apiKey} 空即返回 null（不注册）。
+     * env 的<b>读取</b>在这里，<b>解析语义</b>（回退/钳制/白名单）在
+     * {@link ZhipuWebSearchTool#resolveResultCount} / {@link ZhipuWebSearchTool#resolveSearchEngine}。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static ZhipuWebSearchTool createZhipuWebSearchTool(String apiKey, String countEnv, String engineEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return null;
+        }
+        return ZhipuWebSearchTool.builder(apiKey)
+                .resultCount(ZhipuWebSearchTool.resolveResultCount(countEnv))
+                .searchEngine(ZhipuWebSearchTool.resolveSearchEngine(engineEnv))
                 .build();
     }
 
