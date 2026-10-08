@@ -185,6 +185,20 @@ class TodoReminderLiveSpikeTest {
                 todoAfterFirst++;
             }
         }
+        // ---- 机制断言（条件式）：出现「被识别的提交 + 下一次调用不是 TodoWrite」时，必须有注入 ----
+        // 条件式而非无条件：模型在提交后立刻更新清单时不该有提醒（那正是设计意图），此时断言自动空过。
+        boolean skipAfterCommit = false;
+        for (int i = 0; i + 1 < rec.toolOrder.size(); i++) {
+            if ("Bash".equals(rec.toolOrder.get(i)) && COMMIT.matcher(rec.toolInputs.get(i)).find()
+                    && !"TodoWrite".equals(rec.toolOrder.get(i + 1))) {
+                skipAfterCommit = true;
+            }
+        }
+        System.out.println("[spike] 出现过「提交后跳过更新」= " + skipAfterCommit);
+        if (skipAfterCommit) {
+            assertTrue(injected, "确认提交后跳过了更新，却没有任何注入——提醒链路断了");
+        }
+
         System.out.println("[spike] 首次建清单之后的 TodoWrite 调用次数 = " + todoAfterFirst
                 + "（>0 表示模型在回合内主动更新了清单）");
         System.out.println("[spike] 采样到的会话消息条数 = " + messages.size());
