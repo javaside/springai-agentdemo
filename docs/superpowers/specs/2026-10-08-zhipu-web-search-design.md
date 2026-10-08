@@ -136,8 +136,9 @@ ZHIPU_API_KEY 非空 ──→ createZhipuWebSearchTool(key, countEnv, engineEnv
 ZHIPU_API_KEY 为空 ──→ 不注册，指引段无智谱条目
 ```
 
-`resolveZhipuResultCount` / `resolveZhipuSearchEngine` 放 `AgentTools`（照
-`resolveBraveResultCount` 形状），env 读取在 `build`，解析语义纯函数可测。
+`resolveResultCount` / `resolveSearchEngine` 放 `ZhipuWebSearchTool` 静态方法（对齐
+`BochaWebSearchTool#resolveResultCount` 先例），env 读取在 `AgentTools`（`build` 读原始值、
+`createZhipuWebSearchTool` 传入），解析语义纯函数可测。
 
 ### 权限登记
 
