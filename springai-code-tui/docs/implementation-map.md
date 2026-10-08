@@ -515,6 +515,7 @@ tool_call 渲 `⏺ name 摘要` 且 `raw=null`（**不重绘 diff**，历史里�
 | `Memory*`（6 个） | `AutoMemoryTools` *(lib)* | **仅主 agent**，目录 `<root>/.codetui/memory` |
 | `BraveWebSearch` | 库 `BraveWebSearchTool` | 库版注册名是 `WebSearch`，与博查撞名，经 `RenamedToolCallback` 改名 + 换中文描述 + 套 `TimeLimitedToolCallback(20s)`；仅配 `BRAVE_API_KEY` 才注册 |
 | `BochaWebSearch` | `BochaWebSearchTool`（自写） | 仅配 `BOCHA_API_KEY` 才注册 |
+| `ZhipuWebSearch` | `ZhipuWebSearchTool`（自写 REST） | 仅配 `ZHIPU_API_KEY`（与大模型共用一把）才注册；不引官方 SDK，离线 stub 单测全覆盖 |
 | `Skill` | `ReloadableSkillTool` 代理 → 库 `SkillsTool` | **始终注册**，零技能退化成空 delegate |
 | `Task` `ParallelTasks` | `SubagentTool` | `ParallelTasks` 仅主 agent |
 | `TaskOutput` `ListTasks` | `background.BackgroundTaskTool` / `BackgroundTaskListTool` | 仅主 agent |
@@ -1183,7 +1184,7 @@ OSC 0/2 双发是因为不同终端认的不是同一个。`sanitize` 剥掉全�
 | 占位符 | 来源 | 时机 |
 | --- | --- | --- |
 | `{CO_AUTHOR_GUIDE}` | `coAuthorGuide(CODETUI_CO_AUTHOR)`，未配置返回空串（**默认关闭**） | 装配期 |
-| `{WEB_SEARCH_GUIDE}` | `webSearchGuide(bocha != null, brave != null)` 四态；**与工具注册状态严格同步**，都没注册就空串（否则模型去调不存在的工具） | 装配期 |
+| `{WEB_SEARCH_GUIDE}` | `webSearchGuide(bocha, zhipu, brave)` 三布尔、按注册状态条目拼装（三家已是 2³=8 态，if 硬编码不可维护）；**与工具注册状态严格同步**，都没注册就空串（否则模型去调不存在的工具） | 装配期 |
 | `{ENVIRONMENT_INFO}` | `AgentEnvironment.info()` *(lib)* | 装配期 |
 | `{GIT_STATUS}` | `quietGitStatus()` —— 装配期临时把 stdout 换成黑洞（库在「非 git 仓库」分支会 `System.out.println`，会漏进 TUI scrollback） | 装配期 |
 | `{AGENT_MODEL}` | 装配期烘焙 `provider.defaultModel()`；**每回合 submit 用实际所选覆盖** | 双阶段 |
@@ -1226,6 +1227,7 @@ OSC 0/2 双发是因为不同终端认的不是同一个。`sanitize` 剥掉全�
 | `CODETUI_MAX_TOTAL_TOOL_CALLS` | `TurnToolLimitWiring` | 回合内工具总量上限；**默认不限**，语义同上 |
 | `BOCHA_API_KEY` / `BOCHA_SEARCH_COUNT` | `AgentTools` | 配了才注册 `BochaWebSearch` |
 | `BRAVE_API_KEY` / `BRAVE_SEARCH_COUNT` | 同上 | 配了才注册 `BraveWebSearch` |
+| `ZHIPU_SEARCH_COUNT` / `ZHIPU_SEARCH_ENGINE` | 同上 | 配 `ZHIPU_API_KEY`（复用大模型段那把）才注册 `ZhipuWebSearch`；count 默认 8 钳 [1,50]，engine 白名单四值、非法回退 `search_std` |
 | `CODETUI_CO_AUTHOR` | `coAuthorGuide` | 未配置则提示词里无署名段 |
 | `CODETUI_VISION` | `VisionModels` | `off` 全局停用视觉 |
 | `DEEPSEEK_VISION_TRANSPORT` | `DeepSeekProvider` | 严格等于 `files` 才走 Files API |
