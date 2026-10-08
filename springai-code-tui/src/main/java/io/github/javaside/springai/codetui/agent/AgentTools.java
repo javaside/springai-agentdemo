@@ -489,12 +489,16 @@ public final class AgentTools {
         ToolCallback braveWebSearch =
                 createBraveWebSearchTool(System.getenv("BRAVE_API_KEY"), System.getenv("BRAVE_SEARCH_COUNT"));
 
-        // 智谱搜索（第三家，国内向）：ZHIPU_API_KEY 配了才注册。与博查/Brave 共存，
-        // 分工与冗余关系写在系统提示指引段（webSearchGuide）。
-        ZhipuWebSearchTool zhipuWebSearch = createZhipuWebSearchTool(
-                System.getenv("ZHIPU_API_KEY"),
-                System.getenv("ZHIPU_SEARCH_COUNT"),
-                System.getenv("ZHIPU_SEARCH_ENGINE"));
+        // 智谱搜索（第三家，国内向）：ZHIPU_API_KEY 配了才注册，ZHIPU_SEARCH_ENABLED=0 可显式关
+        // （key 与 LLM provider 共用，存在性表达不了「只要模型、不要按次计费的搜索」，见 zhipuSearchWanted）。
+        // 与博查/Brave 共存，分工与冗余关系写在系统提示指引段（webSearchGuide）。
+        ZhipuWebSearchTool zhipuWebSearch = zhipuSearchWanted(
+                System.getenv("ZHIPU_API_KEY"), System.getenv("ZHIPU_SEARCH_ENABLED"))
+                ? createZhipuWebSearchTool(
+                        System.getenv("ZHIPU_API_KEY"),
+                        System.getenv("ZHIPU_SEARCH_COUNT"),
+                        System.getenv("ZHIPU_SEARCH_ENGINE"))
+                : null;
 
         List<Object> rawTools = new ArrayList<>(List.of(fs, sh, grep, glob, webFetch, askTool));
         if (webSearch != null) {
@@ -1005,6 +1009,22 @@ public final class AgentTools {
                 .resultCount(ZhipuWebSearchTool.resolveResultCount(countEnv))
                 .searchEngine(ZhipuWebSearchTool.resolveSearchEngine(engineEnv))
                 .build();
+    }
+
+    /**
+     * 智谱搜索是否要注册：{@code apiKey} 非空，且 {@code ZHIPU_SEARCH_ENABLED}（trim 后）不是 {@code "0"}。
+     *
+     * <p><b>为何只有智谱有这个开关</b>：它的 key 与 LLM provider 共用（同一把 {@code ZHIPU_API_KEY}），
+     * key 的存在性表达不了「只要模型、不要按次计费的搜索」——没充标准余额、搜索走 Coding Plan
+     * 套餐 MCP 的用户需要显式关掉内置工具。博查/Brave 的 key 本就是为搜索单独配的，不存在此冲突，
+     * 不加开关。开关只认 {@code 0}：其他值一律视为开（回退语义，与 {@code resolve*} 系列一致），
+     * 避免用户随手填个 {@code false}/{@code no} 以为关了实际还开着。
+     */
+    static boolean zhipuSearchWanted(String apiKey, String enabledEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return false;
+        }
+        return !"0".equals(enabledEnv == null ? "" : enabledEnv.trim());
     }
 
     /**
