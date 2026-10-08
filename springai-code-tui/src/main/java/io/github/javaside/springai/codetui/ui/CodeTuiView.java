@@ -4288,6 +4288,12 @@ public final class CodeTuiView extends InlineApp {
     private Element[] todoChildren(List<String> todos) {
         List<Element> els = new ArrayList<>();
         els.add(text("📋 计划").style(TODO_TITLE));   // 主 agent（控制器）的 todo
+        // 过期标记：清单久未更新时明确告诉用户「这是旧状态」，把用户接回反馈回路
+        // （面板冻住而用户看不出，正是「建了清单不更新」能一路滑到底的原因之一）。
+        String staleMark = state.todoStaleMarker();
+        if (!staleMark.isEmpty()) {
+            els.add(text("  " + staleMark).style(TODO_STALE));
+        }
         int shown = Math.min(todos.size(), TODO_CAP);
         for (int i = 0; i < shown; i++) els.add(todoRow(todos.get(i)));
         if (todos.size() > TODO_CAP) {

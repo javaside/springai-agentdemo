@@ -69,6 +69,9 @@ final class Theme {
     static final Style MODE_PLAN   = Style.create().fg(Color.indexed(115)).bold();   // 计划模式=冷薄荷加粗（与暖橙的「自动接受编辑」拉开色相）
     static final Style TODO_TITLE = Style.create().fg(Color.YELLOW).bold();
     static final Style TODO_RUN   = Style.create().fg(Color.LIGHT_YELLOW).bold();  // 进行中：醒目
+    // 过期清单标记：清单久未更新，提醒用户「这是旧状态」。用暖橙——与 TODO_TITLE 的纯黄拉开，
+    // 但不至于像红那样像是错误（清单过期不是故障，是需要用户催一下）。
+    static final Style TODO_STALE = Style.create().fg(Color.indexed(215));
 
     // 欢迎横幅：暖橙品牌色作主调，边框退到柔和陶土色让框体后退；
     // 模型名用冷薄荷（与暖橙互补，凸显「当前模型」）；快捷键名提亮、说明用可读灰（避开近黑 DARK_GRAY）。
