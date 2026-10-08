@@ -45,18 +45,27 @@ mvn -pl springai-code-tui -am package -Pdist      # 产出 target/*-dist.tar.gz 
 | `CodingAgentSpikeTest` | `DEEPSEEK_API_KEY` |
 | `BochaWebSearchSmokeTest` | `BOCHA_API_KEY` |
 | `BraveWebSearchSmokeTest` | `BRAVE_API_KEY` |
+| `ZhipuWebSearchSmokeTest` | `ZHIPU_API_KEY` + `CODETUI_LIVE_TESTS=1`（双门控：联网花钱且墙钟不稳，默认不跑；余额不足时显式跳过） |
 | `McpStreamableHttpSmokeTest` | `CODETUI_MCP_SMOKE_URL` |
 | `QwenRealStreamingToolCallSmokeTest` | `DASHSCOPE_API_KEY` |
 
 新增这类测试请沿用同一门控模式。**测试里绝不能硬编码任何 key。**
 
-### 一条已知的 flaky
+### 已知的 flaky
 
 `CodingAgentSpikeTest.todoTurnIdBinding` 走真实 DeepSeek 调用、单回合 60s 上限，实测常在
 13–45s 之间浮动，偶尔会超时失败。撞上时**先单跑那一条确认**，不要以为是自己改坏了：
 
 ```bash
 mvn -pl springai-code-tui -am test -Dtest='CodingAgentSpikeTest#todoTurnIdBinding' -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+`McpRegistryNotificationTest.discardedStartupResultStillPublishesView` 观察到过负载偶发
+（2026-10-08 全量首跑假红一次；单跑 7/7 绿、全量复跑 0 失败、相关分支未触碰 MCP 代码）。
+撞上先单跑该类确认：
+
+```bash
+mvn -pl springai-code-tui -am test -Dtest='McpRegistryNotificationTest' -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 ## 提交约定
