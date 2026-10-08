@@ -1227,7 +1227,7 @@ OSC 0/2 双发是因为不同终端认的不是同一个。`sanitize` 剥掉全�
 | `CODETUI_MAX_TOTAL_TOOL_CALLS` | `TurnToolLimitWiring` | 回合内工具总量上限；**默认不限**，语义同上 |
 | `BOCHA_API_KEY` / `BOCHA_SEARCH_COUNT` | `AgentTools` | 配了才注册 `BochaWebSearch` |
 | `BRAVE_API_KEY` / `BRAVE_SEARCH_COUNT` | 同上 | 配了才注册 `BraveWebSearch` |
-| `ZHIPU_SEARCH_COUNT` / `ZHIPU_SEARCH_ENGINE` | 同上 | 配 `ZHIPU_API_KEY`（复用大模型段那把）才注册 `ZhipuWebSearch`；count 默认 8 钳 [1,50]，engine 白名单四值、非法回退 `search_std` |
+| `ZHIPU_SEARCH_COUNT` / `ZHIPU_SEARCH_ENGINE` / `ZHIPU_SEARCH_ENABLED` | 同上 | 配 `ZHIPU_API_KEY`（复用大模型段那把）才注册 `ZhipuWebSearch`；count 默认 8 钳 [1,50]，engine 白名单四值、非法回退 `search_std`；`ENABLED=0` 显式关（key 与 LLM 共用，存在性表达不了「只要模型不要付费搜索」，门控见 `AgentTools#zhipuSearchWanted`） |
 | `CODETUI_CO_AUTHOR` | `coAuthorGuide` | 未配置则提示词里无署名段 |
 | `CODETUI_VISION` | `VisionModels` | `off` 全局停用视觉 |
 | `DEEPSEEK_VISION_TRANSPORT` | `DeepSeekProvider` | 严格等于 `files` 才走 Files API |

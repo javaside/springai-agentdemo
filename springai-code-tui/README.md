@@ -97,7 +97,7 @@ export DEEPSEEK_API_KEY=你的key
 | 类别 | 能力 |
 |------|------|
 | 模型与 provider | DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI、OpenCode Go；`/model` 运行时切换，选择按项目记忆在 `.codetui/model.json` |
-| 编码与联网工具 | 文件读写、Shell、Grep/Glob、任务计划、网页抓取、博查中文搜索、Brave 英文搜索、智谱联网搜索（按次计费）、向用户提问 |
+| 编码与联网工具 | 文件读写、Shell、Grep/Glob、任务计划、网页抓取、博查中文搜索、Brave 英文搜索、智谱联网搜索（按次计费，`ZHIPU_SEARCH_ENABLED=0` 可关）、向用户提问 |
 | 权限与安全 | 有副作用的调用执行前审批；`Shift+Tab` 切换默认、自动接受编辑、计划、跳过权限检查四种模式 |
 | 子 agent 与计划 | `Task`、`ParallelTasks`、后台任务、计划面板和任务面板 |
 | 自主目标循环 | `/goal` 设定完成条件，agent 跨轮自主推进：独立小模型逐轮评估、结论注入下一轮，三重熔断 + 两级 Esc |
