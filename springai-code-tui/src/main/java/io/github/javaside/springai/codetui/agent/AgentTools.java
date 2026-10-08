@@ -676,7 +676,7 @@ public final class AgentTools {
 
         // 搜索指引：与工具注册状态严格同步——工具没注册就不给模型任何搜索提示，
         // 否则模型会去调一个不存在的工具。
-        String webSearchGuide = webSearchGuide(webSearch != null, braveWebSearch != null);
+        String webSearchGuide = webSearchGuide(webSearch != null, false, braveWebSearch != null);
 
         // 署名指引：抽出来供 defaultSystem 与下面的系统提示词估算共用，避免重复解析环境变量。
         String coAuthorGuideText = coAuthorGuide(System.getenv("CODETUI_CO_AUTHOR"));
@@ -887,38 +887,65 @@ public final class AgentTools {
      * 与 {@code ModelListEnv.parse} 一样把 env 值作为参数传入，测试才能不依赖真实环境变量。
      */
     /**
-     * 搜索指引段：按实际注册了哪些搜索工具四态渲染——都没注册就返回空串，模型看不到指引，
-     * 也就不会去调不存在的工具。
+     * 搜索指引段：按实际注册了哪些搜索工具动态拼装——都没注册就返回空串，模型看不到指引，
+     * 也就不会去调不存在的工具。三家已是 2^3 = 8 态，if 分支硬编码不可维护，改为
+     * 「总起 + 分工句 + 公共尾 + 各家专属坑」条目拼装，第四家只需在 {@link #divisionLine} 与
+     * 专属坑段各加一个条目。
+     *
+     * <p><b>跨工具分工只写在这里</b>（按注册状态渲染，绝不提不存在的工具）；工具自身的
+     * @Tool 描述只写自家能力与用法。
      *
      * <p>正文<b>不得含花括号</b>：它作为 param 值注入（与 AUTO_MEMORY / PROJECT_INSTRUCTIONS 同法），
      * 花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示渲染。
      */
-    static String webSearchGuide(boolean bocha, boolean brave) {
-        if (bocha && brave) {
-            return """
-                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时先搜索，别凭记忆臆断外部事实。
-                  两个搜索工具按内容语言分工：中文内容、国内站点、中文技术社区用 BochaWebSearch（返回长摘要，
-                  常常一次就够）；英文技术文档、GitHub issue、英文新闻用 BraveWebSearch（只返回简短描述）。
-                - 拿到网址后，需要网页原文细节就把该网址交给 webFetch 抓取。
-                - BochaWebSearch 的 freshness 一般不要传（默认不限时间效果最好）；
-                  BraveWebSearch 不要用 allowedDomains 限定域名（客户端过滤，白烧配额），改把 site:xxx 写进搜索词。
-                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+    static String webSearchGuide(boolean bocha, boolean zhipu, boolean brave) {
+        if (!bocha && !zhipu && !brave) {
+            return "";
         }
-        if (bocha) {
-            return """
-                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 BochaWebSearch 搜索，
-                  拿到标题、网址和摘要；需要网页原文细节时，再把该网址交给 webFetch 抓取。
-                - BochaWebSearch 的 freshness 参数一般不要传（默认不限时间效果最好），
-                  只有明确需要「最近一天 / 最近一周」的最新消息时才用。
-                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+        StringBuilder sb = new StringBuilder();
+        sb.append("- 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时先搜索，别凭记忆臆断外部事实。\n");
+        sb.append("  ").append(divisionLine(bocha, zhipu, brave)).append('\n');
+        sb.append("- 拿到网址后，需要网页原文细节就把该网址交给 webFetch 抓取。\n");
+        if (bocha || zhipu) {
+            sb.append("  国内源（").append(domesticNames(bocha, zhipu))
+              .append("）的 freshness 一般不要传：默认不限时间效果最好，硬指时间范围反而容易搜空。\n");
+        }
+        if (zhipu) {
+            sb.append("  ZhipuWebSearch 的 include 与 freshness 不要同时传：两者同时生效时结果条数限制会失效。\n");
         }
         if (brave) {
-            return """
-                - 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时，先用 BraveWebSearch 搜索，
-                  拿到标题、网址和简短描述；需要网页原文细节时，再把该网址交给 webFetch 抓取。
-                - BraveWebSearch 不要用 allowedDomains 限定域名（它是拿到结果后在客户端过滤的，白烧配额），
-                  想限定站点就把 site:xxx 直接写进搜索词。
-                - 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。""";
+            sb.append("  BraveWebSearch 不要用 allowedDomains 限定域名（客户端过滤，白烧配额），改把 site:xxx 写进搜索词。\n");
+        }
+        sb.append("- 回答里引用了搜索结果，就在末尾列出 Sources，用 markdown 链接列出你实际参考的网址。");
+        return sb.toString();
+    }
+
+    /** 分工句：国内源（博查/智谱）与 Brave 的组合各有措辞；只描述已注册的工具。 */
+    private static String divisionLine(boolean bocha, boolean zhipu, boolean brave) {
+        String domestic = domesticNames(bocha, zhipu);
+        if (!brave) {
+            if (bocha && zhipu) {
+                return "搜索工具：" + domestic + "，两家互为冗余：一家搜不到或额度耗尽时换另一家再试。";
+            }
+            return "搜索工具：" + domestic + "。";
+        }
+        if (domestic.isEmpty()) {
+            return "搜索工具：BraveWebSearch（主打英文技术文档、GitHub issue、英文新闻）。";
+        }
+        return "多个搜索工具按内容分工：中文内容、国内站点、中文技术社区用 " + domestic
+                + "（国内向，返回摘要）；英文技术文档、GitHub issue、英文新闻用 BraveWebSearch。";
+    }
+
+    /** 已注册的国内源工具名，两家时用斜杠连接；无国内源返回空串。 */
+    private static String domesticNames(boolean bocha, boolean zhipu) {
+        if (bocha && zhipu) {
+            return "BochaWebSearch / ZhipuWebSearch";
+        }
+        if (bocha) {
+            return "BochaWebSearch";
+        }
+        if (zhipu) {
+            return "ZhipuWebSearch";
         }
         return "";
     }
