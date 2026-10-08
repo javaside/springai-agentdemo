@@ -41,6 +41,24 @@ stdio 字段：`command`（必填，可执行命令）、`args`（可选，参�
 ```
 
 - **两种传输**：`type` 省略即 `"stdio"`（本地子进程，`npx` / `uvx` 一类）；远程 server 写 `"http"` 或 `"streamable-http"`（两种拼写都认）。`"sse"`（旧标准，官方已 deprecated）**暂未支持**，配了会记 WARN 并跳过。
+
+一个带鉴权的真实例子——智谱 GLM Coding Plan 的联网搜索 MCP（Streamable HTTP + Bearer header；提供 `webSearchPrime` 工具，按套餐积分计费，与标准 Web Search API 的账户余额互不相通）：
+
+```json
+{
+  "mcpServers": {
+    "web-search-prime": {
+      "type": "http",
+      "url": "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp",
+      "headers": { "Authorization": "Bearer ${ZHIPU_CODING_PLAN_API_KEY}" },
+      "timeoutMs": 30000
+    }
+  }
+}
+```
+
+注意 key 必须是 **Coding Plan 套餐 key**（个人版在「个人编程套餐 > 套餐概览」新建，团队版用团队专属 key），不是平台标准 API key——两把 key 不通用。工具注入名为 `mcp__web-search-prime__webSearchPrime`。
+
 - **`url`**（http 类型必填）：写完整端点地址，内部会拆成 baseUri + endpoint 两段。必须是 `http`/`https` 绝对地址，否则记 WARN 并跳过。
 - **`headers`**（可选）：其**值**支持 `${ENV_VAR}` 插值——token 留在环境变量里，配置文件只写引用，便于多机共用同一份 `mcp.json`。不含 `${}` 的字面值照常可用。**引用了未定义的环境变量 → 整条 server 跳过并记 WARN**，而不是带着字面量 `${TOKEN}` 去请求（那只会换来一个看不懂的 401）。
 - **工具命名**：发现的工具以 `mcp__<server>__<工具名>` 注入（如 `mcp__filesystem__read_file`），既避免与内置工具/多 server 间撞名，也便于在工具活动行一眼看出出处。段内非法字符会被归一。
