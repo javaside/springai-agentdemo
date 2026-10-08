@@ -132,6 +132,11 @@ public final class CodingAgent implements SubmitHandler {
     private volatile GoalManager goalManager;
     private volatile GoalEvaluationRunner goalRunner;
     private volatile GoalEvaluator goalEvaluator;
+    /**
+     * 任务面板过期提醒（可空：装配期 null，{@code wireTodoReminder} 后有值）。
+     * /clear 时经此清空快照与计数；volatile 同 {@link #goalManager} 纪律：装配期一次性写入，之后只读。
+     */
+    private volatile io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder todoReminder;
     /** 系统提示词估算 token（装配期快照，每回合固定重发）；contextStats() 分类展示用，单-client 桩路径为 0。 */
     private final long systemPromptTokens;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
@@ -1155,6 +1160,11 @@ public final class CodingAgent implements SubmitHandler {
             // 同理：活动 goal 是冲着旧会话定的，会话没了还让它驱动自动轮等于对着空气干活。
             goalManager.clear("clear-context");
         }
+        if (todoReminder != null) {
+            // 旧会话的清单快照留着，新会话第一次工具调用后就会被提醒「你的清单过期了」——
+            // 可新会话里的模型从没写过它，只会凭空重建一份清单。与 goalManager.clear 同理：整份丢弃。
+            todoReminder.reset();
+        }
     }
 
     // ── 插话门面（队列是唯一事实来源，这里只转发；interjections==null 的桩路径全退化为无操作） ──
@@ -1256,6 +1266,16 @@ public final class CodingAgent implements SubmitHandler {
             // GoalManager——service 只有 append（尾部）语义，中段插入写回必须走 repository。
             goalManager.bindSession(sessionService, sessionRepository, () -> this.sessionId);
         }
+    }
+
+    /**
+     * 装配后由 {@code AgentTools.wireTodoReminder} 绑定 runtime 里那份任务面板过期提醒器
+     * （两段式 bind，镜像 {@link #bindGoal}：{@code CodeTuiApplication} 跨包直调包私有方法编译不过）。
+     * <b>必须传 runtime 那一份</b>——装饰链里 7 处 {@code ToolEventCallback} 用的是同一实例，
+     * 另建一个等于 /clear 清不到正在用的那份。
+     */
+    void bindTodoReminder(io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder reminder) {
+        this.todoReminder = reminder;
     }
 
     @Override

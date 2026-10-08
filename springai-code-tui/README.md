@@ -167,6 +167,15 @@ DEEPSEEK_API_KEY=你的key
 轮数与预算默认均无上限——停止只靠评估器判定（SATISFIED/IMPOSSIBLE）与 STALLED/ERROR/EVALUATOR/PROTOCOL 四族熔断及两级 Esc；
 长任务无人值守前建议显式设 `CODETUI_GOAL_MAX_TURNS` / `CODETUI_GOAL_TOKEN_BUDGET` 兜底。无上限时界面与前缀展示 `N/∞`。
 
+### 任务面板过期提醒
+
+控制器建过 TodoWrite 清单后，若连续 N 次工具调用未再更新且清单仍有未完成项，会把清单快照追加进
+工具结果尾部提醒模型更新（只进模型上下文，scrollback 不显示）：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `CODETUI_TODO_REMIND_EVERY` | 8 | 触发阈值（控制器级工具调用次数）；清单更新后重新计数，`/clear` 清空快照；0 = 关闭 |
+
 ### 项目数据
 
 code-tui 在工作目录的 `.codetui/` 下保存项目级数据，主要包括：
