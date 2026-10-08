@@ -12,14 +12,17 @@
   「Task N 通过……记账并派 Task N+1」；
 - 最终 8 个 commit、7 任务全部完成，而任务面板全程冻结在「Task 1: in_progress」。
 
-定性：**不是模型记账纪律差**（台账 8 次全中），是 **subagent-driven-development skill
-的台账指令与 TodoWrite 双轨记账竞争**（skill 正文 "a ledger file, not only in todos"
-重笔墨、流程图 "mark todo complete" 只是脚注），叠加 **harness 没有任何机制把过期清单
-重新喂给模型**——一次遗漏永久持续。
+定性（2026-10-08 复核修正）：**不是模型记账纪律差**（台账 8 次全中、skill 完成行格式逐字照抄），
+也不是工具描述写得差（业界全文，凡建清单的会话更新纪律教科书级）。是**决策时刻 TodoWrite 无指令
+存在感**：skill 正文与 TodoWrite 工具无绑定（"todos" 为泛指，工具名字样 0 次），台账指令有格式模板
+而「mark the todo complete」只是无绑定半句；叠加 **harness 没有任何机制把过期清单重新喂给模型**——
+一次遗漏永久持续。（注：skill 的台账指令与 TodoWrite 曾被表述为「双轨记账竞争」，复核后降格为
+「替代通道存在 + 更新指令真空」，竞争说不成立。）
 
-配套动作（已另行交付）：`~/.codetui/skills/subagent-driven-development/SKILL.md` 已修订
-（流程图节点点名 TodoWrite、正文明确「台账与 TodoWrite 同一步双更新、面板只认 TodoWrite」）。
-本设计是 harness 侧的结构性兜底：不管哪条流程再犯，环境自己会把过期状态怼回模型眼前。
+配套动作（已撤销）：曾修订 `~/.codetui/skills/subagent-driven-development/SKILL.md`（流程图点名
+TodoWrite 等），2026-10-08 应用户要求恢复原样——第三方 skill 文本不可控（上游重同步即覆盖），
+且与工具无绑定关系、修订收益有限；过期清单的纠正**一律由本设计的 harness 兜底承担**，
+不管哪条流程再犯，环境自己会把过期状态怼回模型眼前。
 
 ## 目标
 
