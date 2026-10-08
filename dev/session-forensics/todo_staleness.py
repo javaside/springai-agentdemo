@@ -37,9 +37,13 @@
     /usr/bin/python3 dev/session-forensics/todo_staleness.py            # 自动扫本机全部会话根
     /usr/bin/python3 dev/session-forensics/todo_staleness.py DIR [DIR…] # 指定目录
 
-最近一次结果（2026-10-08，322 个会话 / 184 个建过清单 / 14 个 SDD，505 个完成标记）：
+最近一次结果（2026-10-08，322 个会话 / 184 个建过清单 / 14 个 SDD，519 个完成标记）：
 配对率非 SDD 0.63 vs SDD 0.37；冻结跨度 ≥50 且有完成标记的会话 23 个（非 SDD 20、SDD 3）；
 装载前 TodoWrite 次数与装载后配对率无关联（0 次组 0.28 vs ≥1 次组 0.41，组内跨满量程）。
+
+口径修订留痕（2026-10-08）：commit 识别原按 shell 语义锚定行首/分隔符，漏计了 30 次
+命令行开头就写 `git commit` 的提交（Bash 入参是 JSON，前面跟的是引号）；改为词边界后
+标记 505→519、配对 288→299、非 SDD 0.63 不变。结论方向不变，绝对计数更正。
 完整表格与解读见 docs/superpowers/specs/2026-10-07-todowrite-not-updated-root-cause.md。
 """
 import glob
@@ -81,9 +85,12 @@ def has_unfinished(items):
 
 # 写入重定向符后紧跟台账路径（可带引号）；`cat >> <abs>/progress.md << 'EOF'` 与 `echo x >> progress.md` 都命中
 LEDGER_WRITE = re.compile(r"(?:>>?|tee\s+-a)\s*[\"']?\S*(?:progress\.md|ledger)", re.I)
-# commit 必须出现在行首或命令分隔符之后：否则「讨论 commit 的命令」（例如本脚本的文档字符串、
-# `git log --grep='git commit'`）也会被当成一次提交，实测会把当前分析会话本身误计为标记
-COMMIT = re.compile(r"(?:^|[;&|]\s*|\n\s*)git\s+(?:-C\s+\S+\s+)?commit\b", re.M)
+# 用词边界而非「行首/分隔符」锚定：入参是 Bash 的 arguments JSON（{"command":"…"}），
+# 命令行开头的 git 前面跟的是引号。早期按 shell 语义锚定，导致「git commit -m x」这种最自然的写法
+# 被漏计——实测全语料有 30 次提交属于该形态（放宽后总命中 721）。与 TodoStaleReminder.COMMIT 同一口径。
+# 另：也允许 git 与子命令之间夹全局选项（git -C <dir> commit / git -c k=v commit）。
+COMMIT = re.compile(
+    r"(?<![\w-])git\s+(?:(?:-[A-Za-z]|--[A-Za-z][A-Za-z-]*)(?:=\S+|\s+\S+)?\s+)*commit\b")
 
 # 提醒器注入的标记与收尾（TodoStaleReminder.render 的两个锚点）。
 # 收尾句用来区分「真注入」与「读到了含该文本的文档」：注入是追加在工具结果<b>尾部</b>的，

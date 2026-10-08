@@ -58,11 +58,24 @@ public final class TodoStaleReminder {
     /**
      * 完成事件：{@code git commit} 出现在行首或命令分隔符之后。
      *
-     * <p>与取证脚本 {@code dev/session-forensics/todo_staleness.py} 的 {@code COMMIT} 同一口径
-     * （都要求不被引号包裹），改这里要同步改那里，否则「度量」与「干预」会漂移。
+     * <p>与取证脚本 {@code dev/session-forensics/todo_staleness.py} 的 {@code COMMIT} 同一口径，
+     * 改这里要同步改那里，否则「度量」与「干预」会漂移。
+     *
+     * <p><b>为什么用词边界而不是「行首/命令分隔符」锚定</b>：本方法的入参是 Bash 的
+     * {@code toolInput}，即 {@code {"command":"…"}} 的 <b>JSON 原文</b>——命令行开头的
+     * {@code git} 前面跟的是引号，不是行首也不是 {@code &&}。早期版本按 shell 语义锚定，
+     * 于是「{@code git commit -m x}」这种最自然的写法<b>永远不匹配</b>，而
+     * 「{@code cd X && git commit -m x}」恰好匹配——隐蔽到只有装配级用例才炸得出来
+     * （{@code AgentToolsTodoReminderEndToEndTest} 就是因此才建的）。
+     * 实测全语料有 30 次提交属于前一种写法，同理也一直被取证脚本漏计。
+     *
+     * <p><b>允许 git 与子命令之间夹全局选项</b>：{@code git -C <dir> commit}、
+     * {@code git -c user.email=… commit}、{@code git --no-pager commit} 都是真实写法。
+     * 代价是「命令里恰好写着 git commit 字面量」（如 {@code echo "git commit"}）会误判为完成事件——
+     * 可接受：误判只是多提醒一次，不是漏提醒。
      */
     private static final Pattern COMMIT = Pattern.compile(
-            "(?:^|[;&|]\\s*|\\n\\s*)git\\s+(?:-C\\s+\\S+\\s+)?commit\\b", Pattern.MULTILINE);
+            "(?<![\\w-])git\\s+(?:(?:-[A-Za-z]|--[A-Za-z][A-Za-z-]*)(?:=\\S+|\\s+\\S+)?\\s+)*commit\\b");
 
     private final int every;                                   // 0=停用
     private volatile long turnId = -1L;                       // 计数归属回合（切换即全复位）
