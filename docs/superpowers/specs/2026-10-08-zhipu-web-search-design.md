@@ -189,7 +189,7 @@ ZHIPU_API_KEY 为空 ──→ 不注册，指引段无智谱条目
 |---|---|
 | `src/package/bin/config.env.example` | 搜索段落改「三家」：加 `ZHIPU_SEARCH_COUNT` / `ZHIPU_SEARCH_ENGINE`；`ZHIPU_API_KEY` 在大模型段落已有，搜索段注明「复用」 |
 | `README.md` 工具清单 | 加 `ZhipuWebSearch`（需 `ZHIPU_API_KEY`，按次计费 0.01–0.05 元） |
-| `README.md` 安全披露 | 第三条对外出网通道：查询词发给智谱（国内服务，不出境，与博查同性质、与 Brave 不同）；**按次计费**是新维度——博查/Brave 免费档思维不适用于智谱 |
+| `README.md` 安全披露 | 第三条对外出网通道：查询词发给智谱（国内服务，不出境，与博查同性质、与 Brave 不同）；**按次计费**是新维度——Brave 的免费档思维不适用于智谱（博查同样按量计费） |
 | `docs/implementation-map.md` | 搜索工具一节加智谱 |
 | `docs/guide/permissions.md` / `docs/guide/security.md` | 工具清单与出网通道补智谱 |
 | `AgentTools` 类 javadoc / 行内注释 | 工具计数与条件注册说明补智谱 |
