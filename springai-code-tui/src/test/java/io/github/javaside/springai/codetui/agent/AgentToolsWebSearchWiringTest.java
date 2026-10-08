@@ -227,4 +227,21 @@ class AgentToolsWebSearchWiringTest {
         assertEquals("ZhipuWebSearch", decorated.getToolDefinition().name(),
                 "装饰链末端的注册名，实际=" + decorated.getToolDefinition().name());
     }
+
+    /**
+     * ZHIPU_SEARCH_ENABLED=0 显式关：智谱 key 与 LLM provider 共用，key 的存在性表达不了
+     * 「只要模型、不要按次计费的搜索」——没充标准余额、搜索走 Coding Plan 套餐 MCP 的用户靠它关掉内置工具。
+     */
+    @Test
+    void zhipuSearchWantedRequiresKeyAndNotDisabled() {
+        assertFalse(AgentTools.zhipuSearchWanted(null, null), "key 未配就不该要搜索");
+        assertFalse(AgentTools.zhipuSearchWanted("   ", "0"), "key 空白优先于开关判断");
+        assertTrue(AgentTools.zhipuSearchWanted("key", null), "配了 key 且未配开关 = 现行为（开）");
+        assertTrue(AgentTools.zhipuSearchWanted("key", " "), "开关空白视为未配 = 开");
+        assertFalse(AgentTools.zhipuSearchWanted("key", "0"), "0 = 显式关");
+        assertFalse(AgentTools.zhipuSearchWanted("key", " 0 "), "0 允许两侧空白");
+        assertTrue(AgentTools.zhipuSearchWanted("key", "1"), "只认 0：其他值不关（回退语义，与 resolve* 一致）");
+        assertTrue(AgentTools.zhipuSearchWanted("key", "false"),
+                "false 字面量不关——开关只认 0，config.env.example 已写明");
+    }
 }
