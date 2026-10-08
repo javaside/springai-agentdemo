@@ -187,9 +187,22 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      */
     private static final int MAX_STREAMING_PREVIEW = 200_000;
 
+    /**
+     * 过期清单标记的触发阈值：控制器连续这么多次工具调用没更新清单就报警。
+     *
+     * <p>与 {@code TodoStaleReminder.DEFAULT_EVERY}（提醒模型的默认阈值）取同一个数，
+     * 但<b>刻意各自持有常量</b>：那是「何时提醒模型」，这是「何时告诉用户」，两个决策可以分开调。
+     *
+     * <p><b>为什么要给用户看</b>：根因文档 v7 的层 1 是「清单对模型单向、零反馈」——
+     * 面板冻住时用户根本看不出这是旧状态，也就无从催办；而跨语料里用户催办确实让会话回到正轨
+     * （F 会话恰好全程无人催）。这是把用户接回反馈回路的最小改动。
+     */
+    public static final int TODO_STALE_MARK_AT = 8;
+
     private final Deque<Queued> queued = new ArrayDeque<>();       // 忙时排队的用户消息（回合结束后自动出队提交）
     private final StringBuilder streaming = new StringBuilder();
     private final List<String> todo = new ArrayList<>();          // 主 agent（控制器）的 todo/计划（todo 面板，不进 scrollback）
+    private int controllerCallsSinceTodo = 0;                      // 自上次更新清单以来的控制器级工具调用数（供过期标记）
     private final List<Subtask> subtasks = new ArrayList<>();     // 本回合派出的子 agent 状态（任务面板，不进 scrollback）
     private boolean preserveTodoOnNextTurn = false;                // /continue 用的一次性标记，见 preserveTodoOnNextTurn()
 
@@ -385,6 +398,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
                 int bits = UiDirty.NONE;
                 if (doomed != null) bits |= UiDirty.VIEW | UiDirty.CONTROL;
                 if (!todo.isEmpty()) { todo.clear(); bits |= UiDirty.VIEW; }
+                controllerCallsSinceTodo = 0;      // /clear：上个会话的过期计数不该带进新会话
                 if (!subtasks.isEmpty()) { subtasks.clear(); bits |= UiDirty.VIEW; }
                 if (!backgroundTasks.isEmpty()) {     // /clear：⏱ 面板一并清空（任务本身的终止由 CodeTuiView 调注册表完成）
                     backgroundTasks.clear();
@@ -779,6 +793,8 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         synchronized (this) {
             if (turnId != acceptingTurnId) return;
             flushStreaming();
+            // 控制器级工具调用才计：子 agent 干活期间控制器本来就不调工具（那不算「清单没更新」）
+            controllerCallsSinceTodo++;
             status = Status.RUNNING_TOOL;
             clearRetryState();
             activeTool = toolName;
@@ -1012,6 +1028,9 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         synchronized (this) {
             if (turnId != acceptingTurnId) return;
             if (taskId != null) return;       // 子 agent 内部 todo 不上面板
+            // 复位过期计数要放在「内容未变」早返之前：改写出一模一样的清单也是「模型刚确认过状态」，
+            // 面板不再过期，标记必须消失（与 TodoStaleReminder 收到任意 TodoWrite 即复位一致）。
+            controllerCallsSinceTodo = 0;
             if (todo.equals(todoLines)) return;   // 内容未变：no-op
             todo.clear();                     // todo 面板原地替换：不进 scrollback
             todo.addAll(todoLines);
@@ -1022,6 +1041,23 @@ public final class ConversationState implements AgentListener, UiChangeSource {
 
     /** todo 面板快照（主 agent 的 todo/计划）。 */
     public synchronized List<String> todoSnapshot() { return List.copyOf(todo); }
+
+    /**
+     * 过期清单标记：清单有未完成项、且控制器已连续 {@link #TODO_STALE_MARK_AT} 次以上工具调用没更新它时，
+     * 返回一行给用户看的提示；否则返回空串（调用方据此决定要不要占一行）。
+     *
+     * <p>与 {@code TodoStaleReminder}（提醒模型）是<b>两条独立通道</b>：那条可能被忽略，这条给人看。
+     */
+    public synchronized String todoStaleMarker() {
+        if (controllerCallsSinceTodo < TODO_STALE_MARK_AT || todo.isEmpty()) {
+            return "";
+        }
+        boolean hasUnfinished = todo.stream().anyMatch(line -> !line.startsWith("✓"));
+        if (!hasUnfinished) {
+            return "";      // 清单全完成，没有「过期」可言
+        }
+        return "⚠ 已 " + controllerCallsSinceTodo + " 次工具调用未更新，清单可能已过期";
+    }
 
     /** 任务面板快照：本回合派出的子 agent 状态。返回不可变值副本，与内部可变状态解耦。 */
     public synchronized List<SubtaskView> subtaskSnapshot() {
