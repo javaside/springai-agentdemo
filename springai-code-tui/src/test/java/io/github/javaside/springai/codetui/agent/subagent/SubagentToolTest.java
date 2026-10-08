@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -218,5 +219,48 @@ class SubagentToolTest {
         String desc = tc.getToolDefinition().description();
         assertTrue(desc.contains("asked for a specific model"), desc);
         assertTrue(desc.contains("transient"), desc);
+    }
+
+    /**
+     * 2026-10-09：用户报告——委派 subagent 常常不在当前模型上跑。工具描述的「Model override」段
+     * 把「subagent 自己配置的模型」当默认开头，还整段介绍模型对比玩法，等于给主模型递菜单；
+     * 叠加技能文档（subagent-driven-development 的 Model Selection：always specify a model）
+     * 后，守卫句彻底失守。描述必须反过来：第一句就把默认钉在「当前激活模型」上。
+     */
+    @Test
+    void descriptionLeadsWithCurrentModelAsDefault() {
+        ToolCallback tc = SubagentTool.create(Map.of(), List.of(), (spec, prompt, desc, turn) -> "unused", null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("currently active model"), desc);
+        assertFalse(desc.contains("its own configured model"),
+                "旧文案把「subagent 自己配置的模型」当默认，给静默换模型留口子：\n" + desc);
+        assertFalse(desc.contains("To compare how different models"),
+                "独立的模型对比段落是在诱导主模型主动选模型，必须删：\n" + desc);
+    }
+
+    /** 描述必须显式中和技能文档的分档建议——那是本次事故的实证根因，仅靠守卫句压不住 REQUIRED 级指令。 */
+    @Test
+    void descriptionNeutralizesSkillTierAdvice() {
+        ToolCallback tc = SubagentTool.create(Map.of(), List.of(), (spec, prompt, desc, turn) -> "unused", null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("do NOT count as the user asking"),
+                "描述需明确「技能文档让选分档不算用户要求」：\n" + desc);
+    }
+
+    @Test
+    void parallelDescriptionLeadsWithCurrentModelAsDefault() {
+        ToolCallback tc = SubagentTool.createParallel(Map.of(), List.of(), (dispatches, turn) -> List.of(), null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("currently active model"), desc);
+        assertFalse(desc.contains("To compare how different models"),
+                "独立的模型对比段落是在诱导主模型主动选模型，必须删：\n" + desc);
+    }
+
+    @Test
+    void parallelDescriptionNeutralizesSkillTierAdvice() {
+        ToolCallback tc = SubagentTool.createParallel(Map.of(), List.of(), (dispatches, turn) -> List.of(), null);
+        String desc = tc.getToolDefinition().description();
+        assertTrue(desc.contains("do NOT count as the user asking"),
+                "描述需明确「技能文档让选分档不算用户要求」：\n" + desc);
     }
 }
