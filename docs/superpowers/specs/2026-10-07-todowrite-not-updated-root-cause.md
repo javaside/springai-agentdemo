@@ -331,7 +331,7 @@ v6 的错误修法（「规划阶段起把热身变成硬要求」）已撤销�
   模型随即更新了清单。即：注入→响应在真机闭环过一次；其余 4 次模型没跳过，提醒按设计不响。
 - **真机受控实验（台账工作流，复刻 v7 触发形态）**：`TodoReminderLiveSpikeTest#ledgerWorkflow`
   跑「3 批次 / 每批两步 / 每完成一步先写 progress.md 台账」的真实会话；实验组（默认阈值）
-  与对照组（`CODETUI_TODO_REMIND_EVERY=0`）同协议各跑，会话文件刻意留在 `/tmp/codetui-live-spike/`
+  与对照组（`CODETUI_TODO_REMIND_EVERY=0`）同协议各跑，会话文件刻意归档到 `~/codetui-forensics/todo-reminder-20261008/`（不再放 /tmp：那里会被系统清理，而这里要能长期复核）
   下，交由**取证脚本**（度量原问题的同一件工具）出数：
 
   | 臂 | 批次 | 注入 | 注入后 3 次调用内更新 | 响应率 | 完成标记配对 |

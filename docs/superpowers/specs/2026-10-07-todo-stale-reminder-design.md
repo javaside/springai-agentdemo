@@ -168,7 +168,7 @@ volatile boolean eventFiredThisTurn; // 本回合事件提醒已响过（每回�
 3. **真机受控实验**（`TodoReminderLiveSpikeTest#ledgerWorkflow`，复刻 SDD 式台账工作流，
    实验组 vs 对照组同协议）：实验组两轮各 3 次注入、**3 次都在 3 个调用内被采纳（响应率 1.00）**；
    对照组（`CODETUI_TODO_REMIND_EVERY=0`）注入 0。边界：对照组同样维护清单，故本实验**证明不了**
-   「没提醒就会冻住」，只证明「一旦跳过，提醒会响且被采纳」。会话文件留在 `/tmp/codetui-live-spike/`，
+   「没提醒就会冻住」，只证明「一旦跳过，提醒会响且被采纳」。会话文件已归档到 `~/codetui-forensics/todo-reminder-20261008/`，
    可用取证脚本自行复核。
 
   该实验还直接推动了一个修法改动：**台账写入从「不算完成事件」改为「算」**——见下。
