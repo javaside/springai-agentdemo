@@ -77,6 +77,15 @@ public final class TodoStaleReminder {
     private static final Pattern COMMIT = Pattern.compile(
             "(?<![\\w-])git\\s+(?:(?:-[A-Za-z]|--[A-Za-z][A-Za-z-]*)(?:=\\S+|\\s+\\S+)?\\s+)*commit\\b");
 
+    /**
+     * 台账写入重定向：{@code cat >> progress.md}、{@code echo x > ledger}、{@code tee -a progress.md}。
+     *
+     * <p>与取证脚本的 {@code LEDGER_WRITE} 同一口径——**度量与干预必须同口径**，否则「跳过更新率」
+     * 度量的是一批事件、提醒盯的是另一批，两边数字永远对不上。
+     */
+    private static final Pattern LEDGER_WRITE = Pattern.compile(
+            "(?:>>?|tee\\s+-a)\\s*[\"']?\\S*(?:progress\\.md|ledger)", Pattern.CASE_INSENSITIVE);
+
     private final int every;                                   // 0=停用
     private volatile long turnId = -1L;                       // 计数归属回合（切换即全复位）
     private volatile List<TodoItem> todos = List.of();        // 控制器清单快照
@@ -187,11 +196,18 @@ public final class TodoStaleReminder {
     }
 
     /**
-     * 这个调用是不是「把某个工作单元记为完成」的事件。
+     * 这个调用是不是「把某个工作单元记为完成」的事件：提交、委派返回、或写台账/进度记录。
      *
-     * <p>只认两类<b>与流程无关</b>的信号：委派（子 agent 返回 = 一个任务做完）与提交。
-     * 刻意不认「写了 ledger/progress 台账」——那是某个 skill 的约定，harness 不该内建；
-     * 且 SDD 写台账后紧接着就派下一个 Task，由 Task 返回这条路径已覆盖。
+     * <p><b>为什么台账写入也算</b>（真机实验后补，2026-10-08）：早先刻意不认它，理由是
+     * 「那是某个 skill 的约定，harness 不该内建」。两个反证推翻了它：
+     * ① 取证脚本本来就把台账写入计为完成标记——不认它等于**度量与干预不同口径**；
+     * ② 我们自己的系统提示词纪律段就明说「每写完一条台账或进度记录之后先更新清单」——
+     * 既然提示词点名了这个事件，harness 就该认得出它。
+     * 真机受控实验（{@code TodoReminderLiveSpikeTest#ledgerWorkflow}）实测：SDD 式工作流里
+     * 6/6 次台账写入后面都跟着「没更新清单」，而当时的事件路径对它们一概不响应。
+     *
+     * <p>判定要求「台账路径 + 写入语义」同现：只按文件名会把 {@code cat progress.md}（读回台账）
+     * 也算成完成事件。
      */
     static boolean isCompletionEvent(String toolName, String toolInput) {
         if ("Task".equals(toolName) || "ParallelTasks".equals(toolName)) {
@@ -200,7 +216,22 @@ public final class TodoStaleReminder {
         if (!"Bash".equals(toolName) || toolInput == null) {
             return false;
         }
-        return COMMIT.matcher(toolInput).find();
+        return COMMIT.matcher(toolInput).find() || isLedgerWrite(toolInput);
+    }
+
+    /**
+     * 台账/进度记录写入：重定向式（{@code >> progress.md}）或 python 内联写回式
+     * （{@code s += ...} / {@code open(p,'w').write(...)} 且命令里出现台账路径）。
+     */
+    private static boolean isLedgerWrite(String toolInput) {
+        if (LEDGER_WRITE.matcher(toolInput).find()) {
+            return true;
+        }
+        String low = toolInput.toLowerCase();
+        if (!low.contains("progress.md") && !low.contains("ledger")) {
+            return false;
+        }
+        return toolInput.contains("s +=") || toolInput.contains("s+=") || toolInput.contains(".write(");
     }
 
     /** 渲染提醒文本。前缀/锚点被 TodoStaleReminderTest 钉死，改动须同步测试。 */

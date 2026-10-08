@@ -92,18 +92,21 @@ LEDGER_WRITE = re.compile(r"(?:>>?|tee\s+-a)\s*[\"']?\S*(?:progress\.md|ledger)"
 COMMIT = re.compile(
     r"(?<![\w-])git\s+(?:(?:-[A-Za-z]|--[A-Za-z][A-Za-z-]*)(?:=\S+|\s+\S+)?\s+)*commit\b")
 
-# 提醒器注入的标记与收尾（TodoStaleReminder.render 的两个锚点）。
-# 收尾句用来区分「真注入」与「读到了含该文本的文档」：注入是追加在工具结果<b>尾部</b>的，
-# 读文档时后面还会有别的内容。这个判据不完美（文档末尾恰好就是这句时会误计），故计数只作趋势用。
-REMINDER_MARKER = "[任务面板提醒]"
-REMINDER_TAIL = "再继续当前工作。"
+# 提醒注入的判据：标记出现在**行首**（注入块是 `out + "\n\n" + note`，note 以该标记开头）。
+#
+# 踩过的两个坑（都让指标静默归零）：
+# ① 最初用「行首或命令分隔符」锚定 commit，漏计了 30 次提交；
+# ② 这里曾用「返回文本以收尾句结尾」判定注入——那是提醒文案的 v1 形态（以「再继续当前工作。」收尾）。
+#    后来 v2 把可照抄的清单 JSON 放到文案末尾，收尾句不再是最后一字，判据就此**永不匹配**，
+#    而它只是安静地报 0，看起来像「功能没生效」。
+# 因此改用「行首标记」：注入块必然以 `\n\n[任务面板提醒]` 开头；文档里提到该标记时前面总有反引号、
+# 引号或其它字，不会落在行首。改判定后必须拿两侧语料各验一次（真注入会话 >0、普通语料 0）。
+REMINDER_LINE = re.compile(r"(?m)^\[任务面板提醒\]")
 
 
 def reminder_injected(response_data):
-    """该工具返回文本是不是被注入过任务面板提醒。"""
-    if not response_data or REMINDER_MARKER not in response_data:
-        return False
-    return response_data.rstrip().endswith(REMINDER_TAIL)
+    """该工具返回文本是不是被注入过任务面板提醒（注入块以行首标记开头）。"""
+    return bool(response_data) and bool(REMINDER_LINE.search(response_data))
 
 
 def is_bookkeeping(command):
@@ -149,6 +152,13 @@ def analyze(path):
         None,
     )
 
+    # 注入判定表：toolCallId → 该次调用结果是否被注入提醒（跨 ASSISTANT/TOOL 两个事件配对）
+    injected_by_call_id = {}
+    for _e in events:
+        for _tr in (_e.get("toolResponses") or []):
+            if _tr.get("id"):
+                injected_by_call_id[_tr["id"]] = reminder_injected(_tr.get("responseData"))
+
     items = None          # 最近一次 TodoWrite 的清单
     substantive = 0       # 实质工具调用总数
     injects = 0           # 本会话被注入提醒的次数
@@ -174,8 +184,10 @@ def analyze(path):
                 todos_before_sdd += 1
 
         is_mark = any(is_completion_mark(n, c) for n, c in zip(names, calls))
-        injected = any(reminder_injected(tr.get("responseData"))
-                       for tr in (events[ev_index].get("toolResponses") or []))
+        # 注意：工具结果存在 **TOOL 事件** 里，而 toolCalls 在它前面的 ASSISTANT 事件里——
+        # 两者不是同一个事件。早先按「同一事件取 toolResponses」判注入，于是永远取到空列表，
+        # 指标恒为 0 却看不出错（看起来像「功能没生效」）。改按 toolCallId 配对。
+        injected = any(injected_by_call_id.get(c.get("id")) for c in calls)
 
         for call in calls:
             if call.get("name") in POLLING:
@@ -264,6 +276,11 @@ def rate(rows):
     return marks, pair, (pair / marks if marks else float("nan"))
 
 
+def median_or_na(values):
+    """空集合返回 nan——调用方自行格式化（脚本要能跑任意目录，含只有一个实验会话的目录）。"""
+    return statistics.median(values) if values else float("nan")
+
+
 def main():
     roots = sys.argv[1:] or discover_roots()
     rows = collect(roots)
@@ -278,7 +295,7 @@ def main():
     for name, group in (("全部", with_todo), ("SDD", sdd), ("非 SDD", plain)):
         marks, pair, w = rate(group)
         rates = [r["pair"] / r["marks"] for r in group if r["marks"] >= 2]
-        med = statistics.median(rates) if rates else float("nan")
+        med = median_or_na(rates)
         print(f"{name:12s} {len(group):4d} {marks:6d} {pair:5d} {w:6.2f} {med:6.2f}")
 
     print("\n## 冻结跨度 Top 15（含 store，便于文档逐行核对）\n")
@@ -297,12 +314,15 @@ def main():
               f"{r['tasks_after_sdd']:9d} {r['marks']:5d} {r['pair']:5d} {r['max_stale']:5d}")
 
     print("\n## 冻结跨度分布（建过清单的会话）\n")
-    print(f"{'分组':10s} {'≥100':>5s} {'50-99':>6s} {'20-49':>6s} {'<20':>5s} {'中位':>5s}")
+    print(f"{'分组':10s} {'n':>4s} {'≥100':>5s} {'50-99':>6s} {'20-49':>6s} {'<20':>5s} {'中位':>5s}")
     for name, group in (("全部", with_todo), ("SDD", sdd), ("非 SDD", plain)):
         spans = [r["max_stale"] for r in group]
         band = lambda lo, hi: len([s for s in spans if lo <= s <= hi])
-        print(f"{name:10s} {band(100, 10**9):5d} {band(50, 99):6d} {band(20, 49):6d} "
-              f"{band(0, 19):5d} {statistics.median(spans):5.0f}")
+        # 空组要给 n/a：传入的目录可能一个 SDD 会话都没有（例如只含单次实验会话），
+        # statistics.median([]) 会直接抛 StatisticsError 把整个报告打断。
+        median = f"{statistics.median(spans):.0f}" if spans else "n/a"
+        print(f"{name:10s} {len(group):4d} {band(100, 10**9):5d} {band(50, 99):6d} "
+              f"{band(20, 49):6d} {band(0, 19):5d} {median:>5s}")
 
     print("\n## 冻结跨度 ≥50 且有完成标记的会话（冻结期间照样在提交/记账）\n")
     bad = [r for r in with_todo if r["max_stale"] >= 50 and r["marks"] > 0]
