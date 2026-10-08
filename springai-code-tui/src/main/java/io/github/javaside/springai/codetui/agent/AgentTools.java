@@ -237,6 +237,26 @@ public final class AgentTools {
     /** 搜索指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {WEB_SEARCH_GUIDE} 占位符对应。 */
     private static final String WEB_SEARCH_GUIDE_KEY = "WEB_SEARCH_GUIDE";
 
+    /** 任务清单纪律段注入的 param 键；与 SYSTEM_TEMPLATE 里的 {TODO_DISCIPLINE} 占位符对应。 */
+    private static final String TODO_DISCIPLINE_KEY = "TODO_DISCIPLINE";
+
+    /**
+     * 任务清单纪律段（注入系统提示词，见 {@link #SYSTEM_TEMPLATE}）——把「更新清单」绑定到<b>具体完成事件</b>。
+     *
+     * <p><b>为什么不写成「记得更新清单」</b>：真机取证（2026-10-07-todowrite-not-updated-root-cause）
+     * 度量了控制器做出完成标记时顺手更新清单的比例——非 SDD 会话 0.63、SDD 会话 0.37，
+     * 而失败会话里完成动作被更具体的东西占掉（skill 的台账行有格式模板、委派让「完成」发生在
+     * 子 agent 内、长流程文本比一行工具纪律更近）。笼统要求正是被挤掉的那一方，
+     * 所以要写清<b>在哪些事件之后、改哪两个 status</b>，让动作与事件一一对应、照做即对。
+     *
+     * <p><b>不得含花括号</b>：本段作为 StringTemplate 的 param 值注入，正文出现 {@code {}}
+     * 会炸掉整个系统提示渲染（同 {@code coAuthorGuide} 的约束，有测试钉守）。
+     */
+    static final String TODO_DISCIPLINE = """
+            - 任务清单纪律（TodoWrite）：任务含 3 个以上步骤、或用户要求你组织任务时，先用 TodoWrite 建清单再执行；同一时间只允许一项 in_progress，开工前先标 in_progress。
+            - 更新清单绑定在「完成事件」上，不要等到想起来了再补：每完成一个任务、每次 git 提交、每写完一条台账或进度记录之后，先调 TodoWrite 把已完成项改成 completed、把下一项改成 in_progress，再继续下一步。委派的子 agent 返回并通过审查 = 一个任务完成，同样先更新清单。
+            - 任务面板是用户看到进度的唯一渠道：长时间不更新，用户看到的就是一个冻住的假进度。""";
+
     /**
      * 提交署名指引注入的 param 键；与 SYSTEM_TEMPLATE 里的 {CO_AUTHOR_GUIDE} 占位符对应。
      * <b>默认关闭</b>：未配置 {@code CODETUI_CO_AUTHOR} 时该段渲染为空串，模型看不到指引、也不会追加尾注。
@@ -300,8 +320,7 @@ public final class AgentTools {
             - 每次动手改代码、新增或修改功能行为之前，先看 Skill 工具描述里的可用技能清单：
               若清单里有覆盖当前任务的技能（尤其规范「动手前」流程的），先调用 Skill 读取其完整指令并遵循；
               「任务简单」不构成跳过理由，清单里没有匹配项时才按常规方式工作。
-            - 当任务包含 3 个或更多明确步骤、或用户要求你组织任务时，先调用 TodoWrite 把工作拆成结构化清单再执行；
-              同一时间只允许一个任务处于 in_progress，开始前标 in_progress、完成后立刻标 completed。
+            {TODO_DISCIPLINE}
             - 修改文件后，用 Shell 运行构建 / 测试 / 检查命令来验证改动确实生效，再给出结论。
             {CO_AUTHOR_GUIDE}
             - 需要项目之外的信息（外部文档、库用法、报错含义等）时，用 webFetch 传入网址和你要抽取的问题来获取；
@@ -742,6 +761,7 @@ public final class AgentTools {
                             .param(PROJECT_INSTRUCTIONS_KEY, projectInstructions)
                             .param(WEB_SEARCH_GUIDE_KEY, webSearchGuide)
                             .param(CO_AUTHOR_GUIDE_KEY, coAuthorGuideText)
+                            .param(TODO_DISCIPLINE_KEY, TODO_DISCIPLINE)
                             // 装配期给空串占位；真实值由 CodingAgent.submit 每回合覆盖（merge 语义）。
                             // 不补默认值则模板渲染时缺 param 会抛。
                             .param(PERMISSION_MODE_KEY, ""))

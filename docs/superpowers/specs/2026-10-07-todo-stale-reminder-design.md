@@ -96,7 +96,9 @@ AtomicInteger stale;                        // 距上次 TodoWrite/触发提醒�
   - todos 空、或全部 completed → null（清单没有「过期可言」）；
   - `++stale < every` → null；到阈值 → stale=0 并返回提醒文本（之后每 every 次再提醒一轮）。
 
-### 提醒文案（前缀与关键内容钉死，测试断言锚点）
+### 提醒文案（v1 形态，已由 v2 取代；保留作退化形态）
+
+> v2 起默认注入可照抄的整份清单 JSON（见下节），只有快照 JSON 超 3000 字符时才退化为本形态。
 
 ```
 [任务面板提醒] 距上次 TodoWrite 已连续 N 次工具调用，任务清单可能已过期（X/Y 项未完成）：
@@ -106,12 +108,71 @@ AtomicInteger stale;                        // 距上次 TodoWrite/触发提醒�
 请按实际进度立即调用 TodoWrite 更新状态（任务面板是用户看到进度的唯一渠道），再继续当前工作。
 ```
 
+### v2 追加：事件对齐触发 + 可照抄入参（2026-10-08）
+
+v1 只有「连续 N 次调用未更新」这一条触发路径，问题是它与「完成」这个时刻无关：SDD 场景
+`every=8` 约等于 4 个任务之后才响，而失守恰恰发生在完成时刻（跨语料度量：控制器做完成标记时
+顺手更新清单的比例，非 SDD 0.63 / SDD 0.37）。v2 补一条精准路径。
+
+**新增状态**（与 v1 字段同样 volatile，语义都是控制器级）：
+
+```java
+volatile boolean armed;              // 刚发生过完成事件，等下一次「跳过更新」再响
+volatile String armedBy = "";        // 武装它的完成事件名（提醒里指名道姓）
+volatile boolean eventFiredThisTurn; // 本回合事件提醒已响过（每回合至多一次）
+```
+
+**触发规则**：
+
+- 完成事件 = `Task`/`ParallelTasks` 返回，或 `Bash` 入参里 `git commit` 出现在行首/命令分隔符之后
+  （与取证脚本 `todo_forensics` 的 `COMMIT` 同口径）。
+  刻意**不认**「写了 ledger/progress 台账」——那是某个 skill 的约定，harness 不该内建；
+  且 SDD 写完台账紧接着就派下一个 Task，由 `Task` 返回这条路径已覆盖。
+- **完成事件当刻不提醒**，只置 `armed=true`。此刻清单必然还没机会更新，当场响等于每次委派
+  都刷一遍，模型很快学会忽略。
+- **下一个控制器调用若不是 TodoWrite**（说明模型确实跳过了更新）→ 当场提醒，点名 `armedBy`，
+  并清 `armed`；同回合不再响。
+- TodoWrite、快照全完成、`/clear`、回合切换都会清 `armed` 与 `eventFiredThisTurn`。
+- 阈值计数路径（v1）保持不变，两条路径共用同一份快照。
+
+**提醒文本改为带可照抄的入参**：TodoWrite 是整表替换（每项都要 content/activeForm/status），
+而竞争动作（写一行台账）成本极低——只喊「请更新」等于把重建整份清单的重活丢回给模型。
+
+```
+[任务面板提醒] <触发者> 已返回，一个工作单元完成，但任务清单未更新（2/7 项未完成）。
+请立即调用 TodoWrite 更新状态（任务面板是用户看到进度的唯一渠道），再继续当前工作。
+可直接照抄下面这行入参、只改 status（已完成项改 completed、下一项改 in_progress）：
+{"todos":[{"content":"…","activeForm":"…","status":"in_progress"}, …]}
+```
+
+- **必须给整份清单**（含已完成项）：部分清单被照抄会静默丢项。
+- 条目不截断（截断会让照抄有损）；JSON 超过 3000 字符时退化为 v1 的紧凑列表形态，
+  避免每 N 次调用注入一份巨型文本。
+- 清单状态照抄当前快照，harness 不猜哪项完成了——守住「清单=模型状态」契约。
+- 正确性由机器证明：用例把提醒里的 JSON 原样喂给**生产装配路径**
+  （`TodoWriteToolAdapter` 经 `ToolCallbacks.from`），必须返回 `modified successfully`。
+  注意不能拿库工具 `TodoWriteTool` 去测——它的入参是双层 `todos` 嵌套（见适配器类注释），
+  用它做回归会永远红在「形状不对」上。
+
+### 系统提示词纪律段（`AgentTools.TODO_DISCIPLINE`）
+
+绑定到具体事件而非笼统要求：每完成一个任务、每次 git 提交、每写完一条台账/进度记录之后，
+先调 TodoWrite 把已完成项改 `completed`、下一项改 `in_progress`，再继续；并声明
+「委派的子 agent 返回并通过审查 = 一个任务完成」。该段作为 param `{TODO_DISCIPLINE}` 注入，
+不得含花括号（否则 StringTemplate 渲染抛）；由 `AgentToolsSystemPromptTest` 真正渲染一次
+系统提示词来钉守——**「构建 runtime」不等于「渲染提示词」**（删掉 `.param` 时装配类测试全绿，
+只有渲染用例会红）。
+
 ### `ToolEventCallback` 改动
 
 新增可选第三构造参 `TodoStaleReminder`（旧构造委托 null=停用；`McpRegistry` 与既有
 调用点零改动）。`call()` 成功路径在 `onToolFinished`（携带**原始** out，UI 不见提醒）
 之后、return 之前：`reminder != null && taskId == null` 时取 note，非空则
 `out + "\n\n" + note`。异常路径不提醒。
+
+v2 起传的是三参 `reminderOrNull(turnId, name, toolInput)`——提醒器要靠 `toolInput`
+识别「这次调用是不是 `git commit`」这类完成事件（两参重载保留，等价于无 toolInput，
+只剩阈值计数路径）。
 
 ### `AgentTools` 装配
 
