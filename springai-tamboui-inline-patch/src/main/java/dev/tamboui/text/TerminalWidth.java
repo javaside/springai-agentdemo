@@ -155,6 +155,15 @@ public final class TerminalWidth {
     }
 
     /**
+     * 该 BMP 码点是否「+FE0F 后终端按 2 列渲染」的文本符号
+     * （{@link #VS16_WIDEN_RANGES} 命中）。供 shadow Buffer 的布格判定共用，
+     * 保证布格与折行/光标口径同源。
+     */
+    public static boolean isVs16Widened(int codePoint) {
+        return codePoint >= 0 && codePoint < 0x10000 && VS16_WIDENS[codePoint];
+    }
+
+    /**
      * 序列感知总宽。语义同 {@link CharWidth#of(String)}，另见类注释；
      * {@code null} 返回 0。
      */
