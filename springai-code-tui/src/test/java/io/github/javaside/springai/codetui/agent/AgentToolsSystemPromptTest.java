@@ -97,4 +97,37 @@ class AgentToolsSystemPromptTest {
         assertFalse(prompt.contains("{TODO_DISCIPLINE}"),
                 "占位符必须被替换，实际=" + prompt);
     }
+
+    /**
+     * 大输出分批纪律（2026-10-09 xibaojun 事故）：模型把整篇大文档塞进<b>一个</b>巨型 Write 工具调用时，
+     * spring-ai-openai 的 ChunkMerger 会把工具调用参数 chunk 整段缓冲、聚齐前下游收不到任何 onNext——
+     * 万字文档（≈16K+ token）流式生成超过 {@code StreamIdleTimeoutChatModel} 的 300s 空闲超时，回合被
+     * 判定为流卡死、L1 零下发重试再生成同样巨型调用 → 恰好每 300s 一挂的死循环。提示词纪律让模型
+     * 分批（Write 首块 + Edit 逐块追加）是现场验证有效的解法，本用例钉住它不被误删。
+     */
+    @Test
+    @DisplayName("系统提示词含大输出分批纪律（防巨型工具调用触发流空闲超时死循环）")
+    void systemPromptCarriesChunkedOutputDiscipline() {
+        CapturingModel model = new CapturingModel();
+        AgentTools.AgentRuntime rt = AgentTools.build(
+                new ProviderRegistry(List.of(new StubProvider("stub", "stub-model", model))),
+                root, new StubListener());
+
+        RuntimeException failure = null;
+        try {
+            rt.client().prompt().user("hi")
+                    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "prompt-chunk-test"))
+                    .call().content();
+        } catch (RuntimeException ex) {
+            failure = ex;
+        }
+
+        assertFalse(model.systemTexts.isEmpty(),
+                "系统提示词必须渲染到模型请求里；请求未到达桩模型，异常=" + failure);
+        String prompt = model.systemTexts.get(0);
+        assertTrue(prompt.contains("分批输出"),
+                "系统提示词须含「分批输出」纪律（大文档拆多次工具调用）");
+        assertTrue(prompt.contains("流空闲超时"),
+                "分批纪律须写明原因（巨型工具调用参数在聚齐前对下游不可见，超流空闲超时会被误杀）");
+    }
 }
