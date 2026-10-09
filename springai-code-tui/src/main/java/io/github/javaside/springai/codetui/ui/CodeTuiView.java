@@ -1723,7 +1723,10 @@ public final class CodeTuiView extends InlineApp {
                 int base = 0;
                 for (int si = 0; si < segs.size(); si++) {
                     String seg = segs.get(si);
-                    if (vis < ih) buf.setString(ix, iy + vis, seg, Style.EMPTY);
+                    // 绘制用降级文本：宽度与原串严格相等（keycap 2 列 → 「数字+空格」2 列），
+                    // 故下面的折行/光标列计算仍可继续用原 seg（两串等宽，视觉位置一致）。
+                    String shown = keycapFallbackEnabled() ? displaySafeInput(seg) : seg;
+                    if (vis < ih) buf.setString(ix, iy + vis, shown, Style.EMPTY);
                     if (li == cr) {                         // 定位光标所在的可视行/列
                         int segStart = base, segEnd = base + seg.length();
                         boolean last = si == segs.size() - 1;
@@ -1779,6 +1782,54 @@ public final class CodeTuiView extends InlineApp {
 
     /** 测试专用：暴露 wrapSegments（{@code SegmentedWrapTest} 断言「可续折行与一次性折行一致」用）。 */
     static List<String> wrapSegmentsForTest(String line, int width) { return wrapSegments(line, width); }
+
+    /**
+     * 输入框 keycap 显示层降级：{@code [0-9#*] + FE0F? + U+20E3} → 「数字/符号 + 空格」。
+     *
+     * <p><b>为什么需要</b>：Terminal.app 配 SF Mono（用户 Grass profile 实测）没有 keycap 字形
+     * （U+20E3），把 {@code 9️⃣} 画成一个<b>宽度大于其推进量</b>的回退方块、压住后面的字——用户
+     * 实报「9场、8场重叠」。该现象在<b>不经过 code-tui 的裸 {@code cat}</b> 下同样出现（用户实测；
+     * 像素测量：{@code 足球赛事9️⃣场} 与 {@code 足球赛事X场} 同为 11 列），属终端渲染层，改不了。
+     *
+     * <p><b>宽度守恒是硬约束</b>：替换物仍是 2 列（与 {@link dev.tamboui.text.TerminalWidth}
+     * 的 keycap 口径一致），故折行与光标列<b>不受影响</b>——调用方可继续用原串做布局计算。
+     * 只影响本帧绘制；{@code inputState} 与发给模型的正文一字不改（回填、提交全部走原文）。
+     *
+     * <p>启用条件见 {@link #keycapFallbackEnabled()}：默认仅 Apple_Terminal。
+     */
+    static String displaySafeInput(String line) {
+        if (line == null || line.indexOf('\u20E3') < 0) return line;   // 快路径：无 keycap
+        StringBuilder b = new StringBuilder(line.length());
+        int i = 0;
+        while (i < line.length()) {
+            int cp = line.codePointAt(i);
+            int n = Character.charCount(cp);
+            if ((cp >= '0' && cp <= '9') || cp == '#' || cp == '*') {
+                int j = i + n;
+                if (j < line.length() && line.codePointAt(j) == 0xFE0F) j += 1;
+                if (j < line.length() && line.codePointAt(j) == 0x20E3) {
+                    b.appendCodePoint(cp).append(' ');   // 2 列，与 TerminalWidth 口径等宽
+                    i = j + 1;
+                    continue;
+                }
+            }
+            b.appendCodePoint(cp);
+            i += n;
+        }
+        return b.toString();
+    }
+
+    /**
+     * keycap 降级开关。{@code auto}（默认）只在 Apple_Terminal 打开——已实测 iTerm2 / tmux /
+     * pyte 都能正确渲染 keycap，对它们降级是白丢信息。{@code -Dcodetui.keycapDisplay=always|never}
+     * 可强制（测试与排查用），同 {@code codetui.hardwareCursor} 的写法。
+     */
+    private static boolean keycapFallbackEnabled() {
+        String mode = System.getProperty("codetui.keycapDisplay", "auto").strip();
+        if (mode.equalsIgnoreCase("always")) return true;
+        if (mode.equalsIgnoreCase("never")) return false;
+        return "Apple_Terminal".equalsIgnoreCase(System.getenv("TERM_PROGRAM"));
+    }
 
     // ── 附件行（输入框下方那一行）────────────────────────────────────────
     /**
