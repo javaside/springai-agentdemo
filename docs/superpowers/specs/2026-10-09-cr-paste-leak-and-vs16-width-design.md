@@ -87,3 +87,54 @@ C0/C1/DEL 替换同一纪律（那是渲染 Buffer 层，这是打印层，两�
 - **在 InlineDisplay.println 处兜底**（比 TextWrap 更底层）：InlineDisplay 属 patch shadow，
   改它同样扩 shadow 面；TextWrap 是 code-tui 自有且已是「所有 println 出口的必经之路」。
 - **存储层清洗存量会话**（改历史 JSON）：销毁用户数据，方向错误；靠打印层兜底覆盖回放路径。
+
+## 追加：整个终端卡死的真根因（同日二轮修复，分支 fix/keycap-diff-cursor-width）
+
+第一轮修完（CR 规范化 + VS16 回调）后用户复测：**输入框按 4 行正确渲染了**（CR 修复生效），
+但仍有「重复行」且 **Terminal.app 整个应用卡死**（所有窗口不动，关掉该窗口才恢复）。
+用户关键描述：**「把整个终端卡死……只能把开始的窗口关了，其他窗口才能动」**——这是
+Terminal.app 宿主侧卡死，jstack 抓不到（进程停在 pollEvent，JVM 侧完全正常）。
+
+### 根因（字节级实证，pipe-pane 抓 app 原始输出）
+
+差分渲染循环用 `CharWidth.of(cell.symbol())` 推进游标模型
+（`InlineDisplay.appendFramePatch` / `appendRowOverwrite`）。cell symbol 可以是
+**keycap 组合**（`"9️⃣"` = U+0039+FE0F+20E3）：
+
+| 量具 | keycap | 终端实际 |
+| --- | --- | --- |
+| `CharWidth.of("9️⃣")` | **1** | 2 |
+| `TerminalWidth.of("9️⃣")` | 2 | 2 |
+
+→ 模型以为光标还差 1 列，在下一个 cell 前补发 `ESC[1C`；终端实际共前进 3 列，
+**每个 keycap 溢出 1 列**。行宽超出终端宽度后触发 Terminal.app 的 TTBuffer 越界
+（与 08:50 SIGBUS 同族缺陷），主线程自旋 → 整个终端无响应。
+
+实测字节（修复前 → 修复后）：
+
+```
+before: 9\xef\xb8\x8f\xe2\x83\xa3 \x1b[1C \xe5\x9c\xba(场) ...   ← 补发的 ESC[1C
+after : 9\xef\xb8\x8f\xe2\x83\xa3 \xe5\x9c\xba(场) ...           ← 紧邻，无补发
+```
+
+屏幕上的可见形态就是「`9️⃣ 场` 中间多一个空格」——用户两次截图里都有，早先被误读成
+「pyte 的旁证」。
+
+### 为什么之前测不出来
+
+- pyte 与 tmux **容忍**这 1 列漂移（各自的缓冲实现不同），屏幕看不出、也不崩；
+  只有 Terminal.app 的 TTBuffer 会越界卡死。
+- 早先冒烟里的「屏上有『9 场』」旁证**恰恰是靠 bug 的 ESC[1C 让 pyte 的 1 列模型
+  蒙对**——等于在给 bug 背书。已删除该旁证，keycap 行的屏幕级断言一律改字节级。
+
+### 修法
+
+`InlineDisplay` 三处 cell 量宽改 `TerminalWidth`（与 Buffer 布格、输入框折行同源）：
+`appendFramePatch`(577) / `appendRowOverwrite`(619) / `findLastContentPosition`(835)。
+回归测试 `InlineDisplayDiffTest#keycapDoesNotEmitSpuriousCursorAdvance`（改回 CharWidth 即红）。
+
+### 教训
+
+**「Buffer 布格」与「渲染游标记账」是两处独立量宽点，必须同源。** 第一轮只修了前者，
+反而把「少 1 列」变成「多 1 列」——症状相似、根因不同。凡涉及「一个 glyph 占几列」的
+新代码，都要核对这三处（Buffer.setString 布格 / InlineDisplay 游标 / 排版折行）。

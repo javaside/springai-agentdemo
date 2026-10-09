@@ -112,15 +112,21 @@ def main():
                        screen_text(session).splitlines())
         print("粘贴完整 OK: 9️⃣/8️⃣ keycap 与全部 emoji 的完整字节都在输出流里")
 
-        # pyte 旁证（软观测）：keycap cell 在 pyte（另一套独立 wcwidth）里也占 2 列
-        # ——「9」与「场」之间恰好一个 pad 空格。两套 oracle 同判 2 列时打印一行确认，
-        # 不一致时只提示（pyte 口径与 Terminal.app 无从对齐，见脚本文档）。
-        text = screen_text(session)
-        if "9 场" in text and "8 场" in text:
-            print("宽度旁证 OK: pyte 也把 keycap 判为 2 列（9/场 间恰一个 pad）")
-        else:
-            print("宽度旁证（仅观测）: display 未见「9 场」形态——pyte 与 TerminalWidth 口径分歧，"
-                  "不判红（见脚本文档）")
+        # keycap 后不得有多余列：差分渲染游标若按 CharWidth（=1）而非 TerminalWidth（=2）
+        # 记 keycap，会补发一个 ESC[1C，屏上表现为「9️⃣ 场」中间多一个空格、每行溢 1 列/keycap
+        # ——Terminal.app 缓冲越界卡死整机的事故形态（2026-10-09）。故这里判「9️⃣ 与场紧邻」。
+        raw_text = session.raw.decode("utf-8", "replace")
+        for seq, name in [("9️⃣场", "9️⃣ 与场"), ("8️⃣场", "8️⃣ 与场")]:
+            if seq not in raw_text.replace("\u001b[0;7m", ""):
+                # 光标带修复会整行重写，可能夹一个反显空格；再放宽查「不含 ESC[1C 夹在中间」
+                bad = seq[0] + "\u001b[1C"
+                if bad in raw_text:
+                    rs.die("%s 之间出现 ESC[1C——差分游标把 keycap 记成 1 列，"
+                           "每行多溢 1 列（Terminal.app 会缓冲越界卡死）" % name,
+                           screen_text(session).splitlines())
+                print("宽度旁证（仅观测）: %s 未紧邻，但无 ESC[1C 补发（可能被光标带重画拆分）" % name)
+            else:
+                print("keycap 列宽 OK: %s 紧邻，无多余光标前进（差分游标与终端同口径 2 列）" % name)
         assert_box_intact(session, "粘贴后")
 
         # ── 2. 打字（事故触发点：粘贴后再击键） ──
@@ -129,13 +135,16 @@ def main():
         if session.proc.poll() is not None:
             rs.die("打字后进程退出（事故复现：exit=%s）" % session.proc.poll(),
                    screen_text(session).splitlines())
-        text = screen_text(session)
-        if "测试xyz" not in text.replace(" ", ""):
-            rs.die("打字内容「测试xyz」不在屏上", text.splitlines())
-        if "9" not in text or "场" not in text:
-            rs.die("打字后输入框文本丢失", text.splitlines())
+        # ⚠ pyte 无法建模 keycap 的 2 列（它按逐码点算 1），<b>含 keycap 的行</b>在 pyte
+        # 屏幕上必然左右错位——对这类行只能用 app 原始输出流断言。历史教训：本脚本早先的
+        # 「屏上有『9 场』」旁证能过，恰恰是因为 bug 的 ESC[1C 让 pyte 的 1 列模型蒙对了，
+        # 等于在给 bug 背书。屏幕级真相由 Terminal.app 实测（DSR 宽度探针）负责。
+        if "测试xyz".encode() not in session.raw:
+            rs.die("打字内容未出现在 app 输出流（进程可能卡死）", screen_text(session).splitlines())
+        if "场".encode() not in session.raw or "9️⃣".encode() not in session.raw:
+            rs.die("打字后输入框文本丢失（raw 里找不到 keycap/场）", screen_text(session).splitlines())
         assert_box_intact(session, "打字后")
-        print("打字不崩 OK: 进程存活、输入框结构完整、输入内容与粘贴文本共存")
+        print("打字不崩 OK: 进程存活、输入框边框完整、打字字节与粘贴文本同在输出流")
 
         # ── 2b. 事故真实形态：纯 CR 行尾的原文（微信 macOS 复制） ──
         # 粘贴后 CR 必须被归一成换行：输入框按 \n 分多行；随后 Enter 提交，
