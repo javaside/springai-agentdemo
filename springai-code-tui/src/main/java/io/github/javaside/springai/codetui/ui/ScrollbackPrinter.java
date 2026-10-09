@@ -5,7 +5,7 @@ import io.github.javaside.springai.codetui.ui.output.OutputCursor;
 import io.github.javaside.springai.codetui.ui.output.PhysicalOutputQueue.PhysicalLine;
 import dev.tamboui.style.Color;
 import dev.tamboui.style.Style;
-import dev.tamboui.text.CharWidth;
+import dev.tamboui.text.TerminalWidth;   // 口径：组合序列（keycap/VS16）按终端实际渲染宽度
 import dev.tamboui.text.Line;
 import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
@@ -601,7 +601,7 @@ public final class ScrollbackPrinter {
             String t = sp.content();
             int cw = displayWidth(t);
             if (used + cw > inner) {                               // 末段过长（如深路径）：按剩余宽截断 + …
-                t = CharWidth.substringByWidth(t, Math.max(0, inner - used - 1)) + "…";
+                t = TerminalWidth.substringByWidth(t, Math.max(0, inner - used - 1)) + "…";
                 cw = displayWidth(t);
                 spans.add(Span.styled(t, WELCOME_HINT));
                 used += cw;
@@ -677,6 +677,6 @@ public final class ScrollbackPrinter {
 
     /** 内容的显示宽度（中文占 2 列），用于底色补齐计算。printer 私有，非跨类共享。 */
     private static int displayWidth(String s) {
-        return CharWidth.of(s);
+        return TerminalWidth.of(s);
     }
 }

@@ -1590,7 +1590,7 @@ public final class CodeTuiView extends InlineApp {
 
     /** 内容的显示宽度（中文占 2 列），用于底色补齐计算。 */
     private static int displayWidth(String s) {
-        return dev.tamboui.text.CharWidth.of(s);
+        return dev.tamboui.text.TerminalWidth.of(s);
     }
 
     // ── 输入 ────────────────────────────────────────────────────────────
@@ -1693,7 +1693,7 @@ public final class CodeTuiView extends InlineApp {
                 // 超出终端宽度要先截断——buf.setString 越界写是静默丢弃，截断至少还能读出前半句。
                 boxRect = new Rect(rect.x(), rect.y(), rect.width(), rect.height() - 1);
                 buf.setString(rect.x(), rect.y() + rect.height() - 1,
-                        dev.tamboui.text.CharWidth.substringByWidth(attach, Math.max(1, rect.width())), HINT);
+                        dev.tamboui.text.TerminalWidth.substringByWidth(attach, Math.max(1, rect.width())), HINT);
             }
             Block block = Block.builder().borders(Borders.ALL).borderType(BorderType.ROUNDED).build();
             block.render(boxRect, buf);
@@ -1725,7 +1725,9 @@ public final class CodeTuiView extends InlineApp {
                         if (cc >= segStart && (cc < segEnd || (last && cc <= segEnd))) {
                             curRow = vis;
                             int within = Math.min(cc - segStart, seg.length());
-                            curCol = dev.tamboui.text.CharWidth.of(seg.substring(0, within));
+                            // ofPrefix 而非 of(substring)：切点可能落在组合序列中间
+                            //（光标按 char 步进），未闭合按 base 宽；半代理自动夹到码点边界
+                            curCol = dev.tamboui.text.TerminalWidth.ofPrefix(seg, within);
                         }
                     }
                     base += seg.length();
@@ -1762,7 +1764,7 @@ public final class CodeTuiView extends InlineApp {
         if (line.isEmpty()) { segs.add(""); return segs; }
         String rest = line;
         while (!rest.isEmpty()) {
-            String seg = dev.tamboui.text.CharWidth.substringByWidth(rest, w);
+            String seg = dev.tamboui.text.TerminalWidth.substringByWidth(rest, w);
             if (seg.isEmpty()) seg = rest.substring(0, 1);   // 兜底：框窄到放不下 1 个宽字符时也吃 1 个
             segs.add(seg);
             rest = rest.substring(seg.length());
@@ -3599,7 +3601,7 @@ public final class CodeTuiView extends InlineApp {
      * 含 {@code \n} 的逻辑行先按段拆——text() 会把整块多行字符串塌成一行截断（{@code resultRows} 记录过同款坑）；
      * 「顶格」只属于整条逻辑行的<b>第一个</b>物理行（前缀由调用方拼），{@code \n} 后的段首行按续行缩进——
      * 否则第二段顶格、与折行续行不在一条竖线上（实机反馈的错位）。
-     * 折行原语与 {@link #wrapSegments} 同源：{@code CharWidth.substringByWidth} 逐段截取、宽字符不切半、
+     * 折行原语与 {@link #wrapSegments} 同源：{@code TerminalWidth.substringByWidth} 逐段截取、宽字符不切半、
      * 窄到放不下 1 个宽字符硬吃 1 个防死循环；不复用它是因为每行预算不同（首行/续行），其入口只收固定宽。
      */
     private static List<String> wrapPanelLine(String logical, int width, int contIndent) {
@@ -3614,7 +3616,7 @@ public final class CodeTuiView extends InlineApp {
             String rest = seg;
             while (!rest.isEmpty()) {
                 int budget = firstPhysical ? width : Math.max(1, width - contIndent);
-                String take = dev.tamboui.text.CharWidth.substringByWidth(rest, budget);
+                String take = dev.tamboui.text.TerminalWidth.substringByWidth(rest, budget);
                 if (take.isEmpty()) take = rest.substring(0, 1);
                 out.add(firstPhysical ? take : " ".repeat(contIndent) + take);
                 rest = rest.substring(take.length());
@@ -3891,7 +3893,7 @@ public final class CodeTuiView extends InlineApp {
         String one = s.replaceAll("\\s+", " ").trim();
         int max = Math.max(20, terminalWidth() - 8);
         return displayWidth(one) <= max ? one
-                : dev.tamboui.text.CharWidth.substringByWidth(one, max - 1) + "…";
+                : dev.tamboui.text.TerminalWidth.substringByWidth(one, max - 1) + "…";
     }
 
     /** /help：把可用命令与快捷键打进 scrollback（灰色信息行）。 */
@@ -4188,7 +4190,7 @@ public final class CodeTuiView extends InlineApp {
     /** 按显示宽度截断（中文占 2 列），超出补省略号。守住「一行内容一物理行」，长行不撑爆面板。 */
     private static String clipToWidth(String s, int width) {
         if (displayWidth(s) <= width) return s;
-        return dev.tamboui.text.CharWidth.substringByWidth(s, Math.max(1, width - 1)) + "…";
+        return dev.tamboui.text.TerminalWidth.substringByWidth(s, Math.max(1, width - 1)) + "…";
     }
 
     /**
@@ -4396,7 +4398,7 @@ public final class CodeTuiView extends InlineApp {
             };
             String row = backgroundRowText(t, now);
             if (displayWidth(row) > inner) {
-                row = dev.tamboui.text.CharWidth.substringByWidth(row, inner - 1) + "…";
+                row = dev.tamboui.text.TerminalWidth.substringByWidth(row, inner - 1) + "…";
             }
             // RUNNING 行加波光，表示任务仍在活跃执行（1s 才跳一次的耗时计数器太静，看起来像卡死）。
             // 其他状态（DONE/FAILED/KILLED）是终态，静态样式即可。
@@ -4475,7 +4477,7 @@ public final class CodeTuiView extends InlineApp {
         int inner = Math.max(8, terminalWidth() - displayWidth(INDENT) - displayWidth(prefix));
         for (String q : messages) {
             String oneLine = q.replaceAll("\\s+", " ").trim();
-            if (displayWidth(oneLine) > inner) oneLine = dev.tamboui.text.CharWidth.substringByWidth(oneLine, inner - 1) + "…";
+            if (displayWidth(oneLine) > inner) oneLine = dev.tamboui.text.TerminalWidth.substringByWidth(oneLine, inner - 1) + "…";
             els.add(text(INDENT + prefix + oneLine).style(style));
         }
         return els.toArray(new Element[0]);
@@ -4623,7 +4625,7 @@ public final class CodeTuiView extends InlineApp {
         if (room < 12) {
             return "";
         }
-        return dev.tamboui.text.CharWidth.substringByWidth(summary, room - 1) + "…";
+        return dev.tamboui.text.TerminalWidth.substringByWidth(summary, room - 1) + "…";
     }
 
     /**
@@ -4741,7 +4743,7 @@ public final class CodeTuiView extends InlineApp {
     /**
      * 状态行行尾的常驻项目名后缀：{@code " · <目录名>"}。
      *
-     * <p><b>截断纪律</b>：目录名超 24 <b>显示宽</b>（东亚字符占 2 列，经 CharWidth 计）
+     * <p><b>截断纪律</b>：目录名超 24 <b>显示宽</b>（东亚字符占 2 列，经 TerminalWidth 计）
      * 截到 23 列 + {@code …}。24 是权衡值：常见 Maven 仓库目录名（springai-agentdemo、
      * gateway-service 之类）普遍 ≤20 列，不触发截断；而 80 列终端上状态行常态内容
      * （转轮 + 队列/缓存命中 + Esc 取消）已达 ~50 列，项目名再宽就该它让位——
@@ -4755,10 +4757,10 @@ public final class CodeTuiView extends InlineApp {
         Path name = root.getFileName();
         if (name == null) return "";                     // 根路径 "/"：无目录名可示
         String dir = name.toString();
-        int width = dev.tamboui.text.CharWidth.of(dir);
+        int width = dev.tamboui.text.TerminalWidth.of(dir);
         if (width == 0) return "";
         if (width > 24) {
-            dir = dev.tamboui.text.CharWidth.substringByWidth(dir, 23) + "…";
+            dir = dev.tamboui.text.TerminalWidth.substringByWidth(dir, 23) + "…";
         }
         return " · " + dir;
     }

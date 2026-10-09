@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import dev.tamboui.text.CharWidth;
+import dev.tamboui.text.TerminalWidth;   // 口径：组合序列（keycap/VS16）按终端实际渲染宽度
 import dev.tamboui.text.Line;
 import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
@@ -41,7 +41,7 @@ final class TextWrap {
         for (Span sp : line.spans()) {
             String rest = sp.content();
             while (!rest.isEmpty()) {
-                String take = CharWidth.substringByWidth(rest, w - used);
+                String take = TerminalWidth.substringByWidth(rest, w - used);
                 if (take.isEmpty()) {
                     if (used > 0) {                       // 本行剩余宽度连下个字符都放不下：换行再试
                         out.add(Text.from(Line.from(cur)));
@@ -52,7 +52,7 @@ final class TextWrap {
                     take = rest.substring(0, 1);          // 整行都放不下 1 个宽字符：硬吃 1 个保证前进
                 }
                 cur.add(Span.styled(take, sp.style()));
-                used += CharWidth.of(take);
+                used += TerminalWidth.of(take);
                 rest = rest.substring(take.length());
                 if (used >= w && !rest.isEmpty()) {       // 行满且还有内容：落行
                     out.add(Text.from(Line.from(cur)));

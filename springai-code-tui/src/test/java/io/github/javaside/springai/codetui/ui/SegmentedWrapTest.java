@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.ui;
 
 import dev.tamboui.style.Style;
 import dev.tamboui.text.CharWidth;
+import dev.tamboui.text.TerminalWidth;
 import dev.tamboui.text.Line;
 import dev.tamboui.text.Span;
 import dev.tamboui.text.Text;
@@ -12,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -158,5 +160,80 @@ class SegmentedWrapTest {
         }
         assertEquals(wrapSegmentsRef(s, 80).size(), count, "段数与一次性实现一致（80 列下 60k 行 = 750 段）");
         assertEquals(750, count);
+    }
+
+    // ── keycap / VS16 组合序列：终端按 2 列渲染，折行不许切半 ──────────────────
+    // 事故背景：2026-10-09 粘贴含 9️⃣/8️⃣ 文案，keycap 被当 1 列且折行切半，
+    // 输入框错位 + Terminal.app SIGBUS 崩溃。口径修正见 TerminalWidth（patch 模块）
+    // 与仓库 specs/2026-10-09-emoji-sequence-width-design.md。
+
+    /**
+     * 折行接缝不得落在组合序列（keycap / VS16 组合）的 char 区间内部。
+     * {@code spans} 是原串中每个组合序列的 {@code [start,end)} 区间——测试串是自造的，
+     * 序列位置在这里手工给定，判据独立于被测实现（避免循环论证）。
+     */
+    private static void assertSeamsAvoidSpans(List<String> segs, int[][] spans) {
+        int offset = 0;
+        for (int i = 0; i < segs.size(); i++) {
+            offset += segs.get(i).length();
+            if (i == segs.size() - 1) break;   // 最后一段的尾是串尾，不是接缝
+            for (int[] span : spans) {
+                assertFalse(offset > span[0] && offset < span[1],
+                        "接缝 " + offset + " 落在组合序列 [" + span[0] + "," + span[1] + ") 内部（被切半）");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("keycap 序列折行不切半：Plain/wrapSegments/TextWrap 三链路口径一致")
+    void keycapSequenceNeverSplitAcrossSegments() {
+        // 啤(0)酒(1)9(2)FE0F(3)20E3(4)场(5)比(6)赛(7)8(8)FE0F(9)20E3(10)场(11)进(12)球(13)3(14)FE0F(15)20E3(16)球(17)
+        String s = "啤酒9\uFE0F\u20E3场比赛8\uFE0F\u20E3场进球3\uFE0F\u20E3球";
+        int[][] spans = {{2, 5}, {8, 11}, {14, 17}};
+        for (int width : new int[]{4, 5, 6, 8}) {
+            List<String> plain = drainPlain(s, width);
+            assertEquals(wrapSegmentsRef(s, width), plain, "Plain 与 wrapSegments 在宽 " + width + " 逐一相等");
+            assertEquals(textWrapRef(List.of(Span.styled(s, Style.EMPTY)), width), plain,
+                    "Styled/TextWrap 与 Plain 在宽 " + width + " 逐一相等");
+            assertSeamsAvoidSpans(plain, spans);
+            for (String seg : plain) {
+                assertTrue(TerminalWidth.of(seg) <= width,
+                        "段「" + seg + "」终端实际宽 " + TerminalWidth.of(seg) + " 超折行预算 " + width);
+            }
+            assertEquals(s, String.join("", plain), "宽 " + width + " 段拼回无损");
+        }
+    }
+
+    @Test
+    @DisplayName("keycap 按 2 列计入折行预算（事故核心：逐码点口径算 1 列会让段超预算错位）")
+    void keycapCountsTwoColumnsInBudget() {
+        // 半角 a/b 让「keycap 算 1 列」的旧口径能凑出超预算段：宽 5 下旧口径折出
+        // 「啤酒9️⃣」(1+1+1+1+1=5)，终端实际 6 列——正是输入框错位的形态
+        String s = "啤酒9\uFE0F\u20E3a场8\uFE0F\u20E3b场";
+        for (int width : new int[]{5, 6}) {
+            for (String seg : wrapSegmentsRef(s, width)) {
+                assertTrue(TerminalWidth.of(seg) <= width,
+                        "段「" + seg + "」终端实际宽 " + TerminalWidth.of(seg) + " 超折行预算 " + width
+                                + "（keycap 未按 2 列计入预算）");
+            }
+            assertEquals(s, String.join("", wrapSegmentsRef(s, width)), "宽 " + width + " 段拼回无损");
+        }
+    }
+
+    @Test
+    @DisplayName("VS16 组合（⚠️）折行同样不切半")
+    void vs16SequenceNeverSplitAcrossSegments() {
+        // 警(0)告(1)⚠(2)FE0F(3)提(4)示(5)⚠(6)FE0F(7)结(8)束(9)
+        String s = "警告⚠\uFE0F提示⚠\uFE0F结束";
+        int[][] spans = {{2, 4}, {6, 8}};
+        for (int width : new int[]{4, 5, 6}) {
+            List<String> plain = drainPlain(s, width);
+            assertSeamsAvoidSpans(plain, spans);
+            for (String seg : plain) {
+                assertTrue(TerminalWidth.of(seg) <= width,
+                        "段「" + seg + "」终端实际宽 " + TerminalWidth.of(seg) + " 超折行预算 " + width);
+            }
+            assertEquals(s, String.join("", plain), "宽 " + width + " 段拼回无损");
+        }
     }
 }
