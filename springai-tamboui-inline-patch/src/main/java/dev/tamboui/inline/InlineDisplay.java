@@ -565,6 +565,13 @@ public final class InlineDisplay implements AutoCloseable {
                 // 显式追踪视觉列：AnsiCellWriter 对 continuation 直接跳过且游标不推进，
                 // 若 run 内 CJK 后跟 continuation 链，后续字符（光标反显、右竖线）会被写到
                 // 错误列。每写一个非 continuation 字符前，若其列大于当前游标视觉列，先 right()。
+                //
+                // ⚠ 宽度口径必须是 TerminalWidth（序列感知），<b>不能</b>用 CharWidth：
+                // cell symbol 可能是 keycap 组合（"9️⃣" = 9+FE0F+20E3），CharWidth 逐码点算 1、
+                // 终端画 2。用 CharWidth 时模型以为光标还差 1 列 → 补发 ESC[1C → 终端共前进 3 列，
+                // 每个 keycap 溢出 1 列；行宽超出终端后在 Terminal.app 上触发缓冲越界、整个终端
+                // 无响应（2026-10-09 事故，jstack 抓不到因为 JVM 侧正常）。与 Buffer 布格
+                // （shadow Buffer.setString 按 2 列布 keycap）严格同源，两处漂移即错位。
                 int cursor = run.startCol();
                 for (int col = run.startCol(); col < run.endColExclusive(); col++) {
                     Cell cell = currentBuffer.get(col, run.row());
@@ -574,7 +581,7 @@ public final class InlineDisplay implements AutoCloseable {
                         cursor = col;
                     }
                     cells.writeCell(cell);
-                    cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
+                    cursor += dev.tamboui.text.TerminalWidth.of(cell.symbol());
                 }
                 bandTouched |= Math.abs(run.row() - targetY) <= CURSOR_BAND_RADIUS;
                 row = run.row();
@@ -616,7 +623,7 @@ public final class InlineDisplay implements AutoCloseable {
                 cursor = col;
             }
             cells.writeCell(cell);
-            cursor += dev.tamboui.text.CharWidth.of(cell.symbol());
+            cursor += dev.tamboui.text.TerminalWidth.of(cell.symbol());   // 序列口径，同 appendFramePatch
         }
     }
 
@@ -832,7 +839,9 @@ public final class InlineDisplay implements AutoCloseable {
     private int findLastContentPosition(Buffer buffer, int line) {
         int column = findLastContentCellColumn(buffer, line);
         if (column < 0) return 0;
-        return Math.min(width, column + dev.tamboui.text.CharWidth.of(buffer.get(column, line).symbol()));
+        // 序列口径（TerminalWidth）：末格若是 keycap 组合，占 2 列，行尾位置须含其第二列，
+        // 否则整行覆写会在 keycap 处提前收尾。与差分游标、Buffer 布格同源。
+        return Math.min(width, column + dev.tamboui.text.TerminalWidth.of(buffer.get(column, line).symbol()));
     }
 
     private int findLastContentCellColumn(Buffer buffer, int line) {

@@ -518,6 +518,44 @@ class InlineDisplayDiffTest {
     }
 
     /**
+     * keycap 序列的差分游标必须与终端同口径（2 列），不得补发 {@code ESC[1C}。
+     *
+     * <p><b>2026-10-09 Terminal.app「整个终端卡死」根因</b>：差分循环用
+     * {@code CharWidth.of(cell.symbol())} 推进游标模型——对 keycap cell（symbol 是完整
+     * 三码点序列）CharWidth 算 1，而终端把 keycap 画成 2 列。模型因此以为光标还差 1 列，
+     * 在下一个 cell 前补发 {@code ESC[1C}；终端实际共前进 3 列，<b>每个 keycap 溢出 1 列</b>。
+     * 行宽超出终端宽度后在 Terminal.app 上触发其缓冲越界（TTBuffer），主线程自旋 →
+     * 整个 Terminal.app 无响应（关掉该窗口才恢复），jstack 抓不到（JVM 侧正常）。
+     * pyte/tmux 容忍这 1 列漂移，故冒烟测不出——只有字节级断言能钉住。
+     *
+     * <p>实测证据（pipe-pane 抓 app 原始输出）：修复前 keycap 后紧跟 {@code \u001b[1C}；
+     * CJK 等宽字符后没有（CharWidth 与终端一致）。
+     */
+    @Test
+    void keycapDoesNotEmitSpuriousCursorAdvance() {
+        InlineDisplay display = display(1);
+        renderKeycapRow(display, "A9️⃣场A");
+        backend.resetCounts();
+
+        renderKeycapRow(display, "B9️⃣场B");
+
+        String raw = backend.outputUtf8();
+        assertTrue(raw.contains("9️⃣"), "keycap 必须原样写出：" + raw);
+        assertFalse(raw.contains("9️⃣\u001b[1C"),
+                "keycap 后不得补发 cursor-forward——差分游标须按终端口径记 2 列，"
+                        + "否则每行溢出 1 列/keycap，Terminal.app 缓冲越界致整个终端卡死：" + raw);
+        assertFalse(raw.contains("9️⃣\u001b[2C"),
+                "keycap 后也不得再跳列（游标应恰落在下一个 cell 的列）：" + raw);
+    }
+
+    /** 单行帧：整行写 {@code text}，右侧补齐到 40 列；光标停在行首（触发光标带重画路径）。 */
+    private void renderKeycapRow(InlineDisplay display, String text) {
+        display.render((area, buffer) -> {
+            buffer.setString(0, 0, text, Style.EMPTY);
+        }, 1, 0, 0);
+    }
+
+    /**
      * 三段式 live 区收缩：稳定顶部（模拟 todo 面板，6 行，本轮没变）+ 可变中段（模拟
      * picker，8 行，整段消失）+ 稳定底部（模拟输入框/状态行，4 行，本轮没变）。
      * 顶部行数（6）大于底部行数（4），{@code shiftAlignsBetter} 因此判「顶部对齐」更优，
