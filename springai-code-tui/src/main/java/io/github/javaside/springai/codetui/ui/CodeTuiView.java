@@ -1656,6 +1656,11 @@ public final class CodeTuiView extends InlineApp {
                 // 长文本折叠：全文登记、只插 [TEXTn]。输入框高度随行数自动增高，几千行日志
                 // 会把面板全顶出屏幕；折叠后框里恒为一小段可编辑标记（同 Claude Code）。
                 event = spacedPasteEvent(registerTextPlaceholder(pasted));
+            } else {
+                // 普通路径同样必须消费规范化产物：微信 macOS 复制的多行文案行尾是纯 CR
+                // （2026-10-09 事故会话实证），原始 event 直交编辑器会让 \r 以行内不可见
+                // 字符落进输入框并随正文发出——三路（图片/折叠/普通）一律同源走 pasted。
+                event = new PasteEvent(pasted);
             }
             EventResult r = inputKeys.handlePasteEvent(event);      // 多行粘贴
             publishLocalViewChange();   // 粘贴改文本：附件行/菜单结构可能变（本地状态，无 Agent 事件）
