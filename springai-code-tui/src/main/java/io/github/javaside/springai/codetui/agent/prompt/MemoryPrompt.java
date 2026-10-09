@@ -13,7 +13,7 @@ import java.util.Objects;
  * <p><b>加载的是项目精简版</b>：本模块 resources 里放了同名覆盖文件
  * {@code prompt/AUTO_MEMORY_TOOLS_SYSTEM_PROMPT.md}（classpath 顺序排在
  * spring-ai-agent-utils jar 之前，{@link ClassPathResource} 优先取到它）。
- * 上游 0.10.0 原版 10.9KB / ~2400 token，其中大半是 8 组对话示例；
+ * 上游原版 10.9KB / ~2400 token（0.10.0–0.13.0 逐字节比对无变化），其中大半是 8 组对话示例；
  * 精简版保留格式契约（frontmatter、MEMORY.md 索引）与防错规则
  * （What NOT to save、防陈旧记忆），砍掉示例与冗余说明。文件头部注释
  * 标明了被覆盖的上游版本，升级 spring-ai-agent-utils 时需 review 是否同步。

@@ -53,7 +53,6 @@ import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
 import io.github.javaside.springai.codetui.agent.tools.RenamedToolCallback;
 import io.github.javaside.springai.codetui.agent.tools.TimeLimitedToolCallback;
 import io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder;
-import io.github.javaside.springai.codetui.agent.tools.TodoWriteToolAdapter;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.tools.TurnToolLimitWiring;
 import io.github.javaside.springai.codetui.agent.tools.ZhipuWebSearchTool;
@@ -475,13 +474,11 @@ public final class AgentTools {
         // ToolCallback 走 all 段那条路），故用 rawTools 列表而非定长参数。
         // Skill 工具本身已是 ToolCallback（非 @Tool 对象），单独追加进列表；随后统一用 ToolEventCallback 装饰，
         // 使「技能被调用」也在 TUI 显示为一行工具活动。
-        // TodoWrite 不直接注册库工具：其入参双层 todos 嵌套让模型频繁绑定失败（见 TodoWriteToolAdapter 类注释）。
-        // 改注册薄适配器（入参 List<TodoItem>、schema 单层），并把库工具那套完整的面向模型描述原样移植过来，
-        // 使模型看到的使用指引与升级前一致——唯一变化只是入参 schema 的形状。
-        ToolCallback todoCallback = new RenamedToolCallback(
-                ToolCallbacks.from(new TodoWriteToolAdapter(todo))[0],
-                null,   // 保持适配器自己的注册名 TodoWrite
-                ToolCallbacks.from(todo)[0].getToolDefinition().description());
+        // TodoWrite 直用库工具。历史：0.10.0 时代其 @Tool 入参是包装记录 Todos（唯一字段也叫 todos），
+        // Spring AI 按 schema 再包一层 → 双层 {"todos":{"todos":[...]}}，模型（尤其非 Claude 系）几乎必然
+        // 塌成单层导致 MismatchedInputException，故本项目曾用 TodoWriteToolAdapter 摊平。上游 0.13.0
+        // (#74) 已把签名改为 todoWrite(List<TodoItem>)——修的正是这个坑，适配层自此冗余删除。
+        ToolCallback todoCallback = ToolCallbacks.from(todo)[0];
 
         // 网络搜索（博查）：BOCHA_API_KEY 配了才注册。没配则工具根本不存在——模型看不到、
         // 也不会去调一个不存在的工具（系统提示的搜索指引段同步为空串，见 Task 7）。

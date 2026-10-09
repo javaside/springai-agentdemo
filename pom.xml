@@ -72,7 +72,7 @@
         <spring-ai.version>2.0.1</spring-ai.version>
         <spring-boot.version>4.0.7</spring-boot.version>
         <!-- 社区项目 spring-ai-agent-utils（提供 SkillsTool 等），针对 Spring AI 2.0 -->
-        <spring-ai-agent-utils.version>0.10.0</spring-ai-agent-utils.version>
+        <spring-ai-agent-utils.version>0.13.0</spring-ai-agent-utils.version>
         <!-- 社区项目 spring-ai-session：事件溯源会话记忆 + 回合/token 感知压缩，替代滑窗记忆 -->
         <spring-ai-session.version>0.5.0</spring-ai-session.version>
         <jline.version>3.30.13</jline.version>

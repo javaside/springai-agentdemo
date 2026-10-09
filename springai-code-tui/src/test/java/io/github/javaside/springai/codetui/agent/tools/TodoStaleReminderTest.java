@@ -132,10 +132,10 @@ class TodoStaleReminderTest {
         assertNotNull(note);
 
         String json = jsonBlockOf(note);
-        // 走生产同一条装配路径：AgentTools 注册的是 TodoWriteToolAdapter（库工具的双层 todos 嵌套绑不上），
-        // 所以这里也必须用适配器——用库工具会让用例永远红在「形状不对」上，测不到真实契约
+        // 走生产同一条装配路径：AgentTools 注册的就是库 TodoWriteTool 本尊
+        // （0.13.0 起 @Tool 签名即单层 List<TodoItem>，昔日的 TodoWriteToolAdapter 已删）。
         TodoWriteTool delegate = TodoWriteTool.builder().todoEventHandler(todos -> { }).build();
-        ToolCallback tool = ToolCallbacks.from(new Object[]{new TodoWriteToolAdapter(delegate)})[0];
+        ToolCallback tool = ToolCallbacks.from(delegate)[0];
         String out = tool.call(json, new ToolContext(Map.of()));
 
         assertTrue(out.contains("modified successfully"),

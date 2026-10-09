@@ -89,7 +89,7 @@ Spring AI **2.0 已移除 ChatModel 内部的工具执行**（1.x 时工具循�
 ## 示例 6 详解：Skill 技能（SkillsTool）
 
 > 依赖第三方社区库 `org.springaicommunity:spring-ai-agent-utils`（针对 Spring AI 2.0），
-> 官方文档：<https://spring-ai-community.github.io/spring-ai-agent-utils/v0.10.0/tools/SkillsTool>。
+> 官方文档：<https://spring-ai-community.github.io/spring-ai-agent-utils/v0.13.0/tools/SkillsTool>。
 
 **什么是 Skill？** 一个含 `SKILL.md` 的文件夹。`SKILL.md` = 「YAML frontmatter（`name` + `description`）」+「正文指令」，
 是一份**可复用的“操作说明书 / 领域知识模块”**。本示例的 `skills/git-commit-message/SKILL.md` 封装了
@@ -121,7 +121,7 @@ Spring AI **2.0 已移除 ChatModel 内部的工具执行**（1.x 时工具循�
 ```
 
 **实现要点：**
-- 依赖：`org.springaicommunity:spring-ai-agent-utils:0.10.0`。
+- 依赖：`org.springaicommunity:spring-ai-agent-utils:0.13.0`。
 - `SkillsTool.builder().addSkillsDirectory("…/skills").build()` 返回一个 `ToolCallback`（工具名固定为 `Skill`）。
   它用 `Files.walk` 在**文件系统**上递归查找 `SKILL.md`，所以技能目录要在运行时真实存在于磁盘
   （示例的 `resolveSkillsDir()` 会依次尝试仓库根目录 / 模块目录等候选路径）。
@@ -194,7 +194,7 @@ TodoWrite 任务进度
 ```
 
 **实现要点：**
-- 依赖仍是 `org.springaicommunity:spring-ai-agent-utils:0.10.0`，本仓库无需升级到 snapshot。
+- 依赖 `org.springaicommunity:spring-ai-agent-utils:0.13.0`（与仓库统一，父 pom 管理）。
 - 控制台动画使用 `org.jline:jline-terminal` 的 `Display`。它会保留上一帧和下一帧，利用光标移动、
   局部清行等终端能力增量刷新，不再手写 `clear screen` 整屏重画；非交互环境会退回普通文本输出。
 - `TodoWriteTool.builder().todoEventHandler(...).build()` 创建一个普通工具对象，像 `@Tool` 工具一样传给

@@ -13,8 +13,9 @@ import java.util.regex.Pattern;
  * SkillFrontmatterRepair —— 修复上游 {@code spring-ai-agent-utils} MarkdownParser 不认 YAML
  * 块标量导致的 description 损坏。
  *
- * <p><b>坑的实测证据（0.10.0，javap 反编译 {@code MarkdownParser.parseFrontMatter}）</b>：解析器
- * 逐行按<b>第一个冒号</b>切 key/value、去引号，没有块标量概念。于是 {@code description: >}（折叠
+ * <p><b>坑的实测证据（0.10.0 发现、0.13.0 仍未修，见上游 issue #107；javap 反编译
+ * {@code MarkdownParser.parseFrontMatter}）</b>：解析器逐行按<b>第一个冒号</b>切 key/value、
+ * 去引号，没有块标量概念。于是 {@code description: >}（折叠
  * 块标量，值在后续缩进行）被解析成：
  * <ul>
  *   <li>{@code description} 的值 = 字面量 {@code ">"}（或 {@code "|"}、{@code ">-"} 等）；</li>
