@@ -8,7 +8,7 @@ package io.github.javaside.springai.codetui.agent.skill;
  *
  * @param name        技能名（= SKILL.md frontmatter 的 name，唯一 id，模型按此名调用）
  * @param description 技能描述（= frontmatter 的 description，模型据此判断是否调用）
- * @param source      来源层标签：用户 / 项目（见 {@link SkillCatalog}）
+ * @param source      来源层标签：用户·claude / 用户·agents / 用户 / 项目·claude / 项目·agents / 项目（见 {@link SkillCatalog}）
  */
 public record SkillInfo(String name, String description, String source) {
 }

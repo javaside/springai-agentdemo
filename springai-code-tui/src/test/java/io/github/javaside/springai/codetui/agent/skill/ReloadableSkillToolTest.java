@@ -49,6 +49,22 @@ class ReloadableSkillToolTest {
         assertTrue(body.contains("测试技能正文"), "call 应执行到新技能、返回其正文");
     }
 
+    /** 兼容目录同样吃热重载：运行中往 <root>/.agents/skills 丢技能 + reload 即对模型可见。 */
+    @Test
+    void compatDirSkillThenReload_becomesVisible(@TempDir Path root, @TempDir Path homeDir) throws IOException {
+        ReloadableSkillTool tool = ReloadableSkillTool.forTest(root, homeDir);
+        assertFalse(tool.getToolDefinition().description().contains("seam-craft"), "reload 前不应含兼容目录技能");
+
+        writeSkill(root, ".agents/skills", "seam-craft", "镜像仓库技能。");
+        tool.reload();
+
+        assertTrue(tool.getToolDefinition().description().contains("seam-craft"),
+                "reload 后工具描述应含兼容目录技能名");
+        assertEquals("项目·agents",
+                tool.skills().stream().filter(s -> s.name().equals("seam-craft")).findFirst().orElseThrow().source(),
+                "来源应标注项目·agents");
+    }
+
     /** 运行期删除技能 + reload：清单回空，但工具实例仍在、名恒为 Skill（不会因清空而消失）。 */
     @Test
     void removeSkillThenReload_backToEmptyButToolRemains(@TempDir Path root, @TempDir Path userDir) throws IOException {
@@ -65,7 +81,12 @@ class ReloadableSkillToolTest {
 
     /** 在 {@code <base>/.codetui/skills/<name>/SKILL.md} 写一个技能（正文含可断言的标记文本）。 */
     private static void writeSkill(Path base, String name, String description) throws IOException {
-        Path dir = base.resolve(SkillCatalog.DIR_NAME).resolve(name);
+        writeSkill(base, SkillCatalog.DIR_NAME, name, description);
+    }
+
+    /** 在指定层目录（相对 base）写一个技能——兼容层与 codetui 层共用。 */
+    private static void writeSkill(Path base, String dirName, String name, String description) throws IOException {
+        Path dir = base.resolve(dirName).resolve(name);
         Files.createDirectories(dir);
         Files.writeString(dir.resolve("SKILL.md"), """
                 ---

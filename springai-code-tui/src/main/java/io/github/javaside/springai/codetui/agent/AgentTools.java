@@ -459,7 +459,7 @@ public final class AgentTools {
                 .maxRetries(3)
                 .build();
 
-        // 技能（Skill）：可重载代理，扫描两层技能来源（用户 ~/.codetui/skills + 项目 <root>/.codetui/skills）。
+        // 技能（Skill）：可重载代理，扫描六层技能来源（用户/项目 × .codetui/.claude/.agents，见 SkillCatalog）。
         // 与一次性 SkillCatalog 不同，这里<b>始终注册</b>该代理——即便当前零技能，也保留槽位，
         // 使运行中新增 SKILL.md 经 /reload 能被热加载（见 ReloadableSkillTool 类注释）。
         ReloadableSkillTool reloadableSkill = new ReloadableSkillTool(root);
