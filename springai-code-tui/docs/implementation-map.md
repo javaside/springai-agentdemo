@@ -794,8 +794,13 @@ reload 与启动重叠时 close 能一并 shutdownNow）。可以不等的依据
 
 `ReloadableSkillTool`（工具名 `Skill`）→ `SkillCatalog` → 库 `SkillsTool`。
 
-**发现**：两层 `~/.codetui/skills/` → `<root>/.codetui/skills/`，**后者覆盖同名**。
-每层直接调 `Skills.loadDirectory(层目录)`（已核实 `loadResource` 会对每个 Resource 调 `getFile()`
+**发现**：六层，加载顺序即优先级（同名后勝ち）：`~/.claude/skills/` → `~/.agents/skills/` →
+`~/.codetui/skills/` → `<root>/.claude/skills/` → `<root>/.agents/skills/` → `<root>/.codetui/skills/`
+（原则：**项目 > 用户，自有 > 兼容**）。`.claude`/`.agents` 四层是兼容 skills.sh 生态安装命令
+（`npx skills add` 等）的落点——它们按检测到的 agent 定向写目录、不写 `.codetui`，且版本行为漂移
+（实测本机只落 `~/.claude/skills`，`~/.agents` 仅剩锁文件），故两个约定都得读；同一技能多处安装
+由 name 去重合并（本类 LinkedHashMap + 库 `SkillsTool.toSkillsMap` 双重去重）。
+每层直接调 `Skills.loadDirectory(精确层目录)`（已核实 `loadResource` 会对每个 Resource 调 `getFile()`
 当**目录**遍历，它期望技能根目录而非单个 `SKILL.md`）。格式 `<层>/<技能名>/SKILL.md`，
 frontmatter 至少 name + description。目录不存在的层静默跳过；某层抛异常只跳过该层。
 **刻意无内置层**——技能应由使用者放文件即安装。

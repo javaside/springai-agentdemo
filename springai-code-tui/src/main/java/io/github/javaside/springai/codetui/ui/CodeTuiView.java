@@ -4262,7 +4262,7 @@ public final class CodeTuiView extends InlineApp {
     private void printSkills() {
         List<SkillInfo> list = onSubmit.skills();
         if (list.isEmpty()) {
-            state.pushInfo("当前没有可用技能。可在 .codetui/skills/<名字>/SKILL.md 添加后用 /reload 重新加载生效。");
+            state.pushInfo("当前没有可用技能。可在 .codetui/skills/、.claude/skills/ 或 .agents/skills/（用户或项目级）下 <名字>/SKILL.md 添加后用 /reload 重新加载生效。");
             return;
         }
         state.pushInfo("可用技能（模型会按需自动调用）：");

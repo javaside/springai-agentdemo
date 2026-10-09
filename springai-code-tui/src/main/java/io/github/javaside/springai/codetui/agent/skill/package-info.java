@@ -1,5 +1,5 @@
 /**
- * 技能域：{@code SkillCatalog}（发现 {@code ~/.codetui/skills/} 与项目级技能目录）、
+ * 技能域：{@code SkillCatalog}（发现六层技能目录：用户/项目 × codetui/claude/agents）、
  * {@code SkillInfo}（元数据）、{@code ReloadableSkillTool}（热重载的技能工具——每次调用
  * 重新读技能文件，改技能不用重启）。
  *

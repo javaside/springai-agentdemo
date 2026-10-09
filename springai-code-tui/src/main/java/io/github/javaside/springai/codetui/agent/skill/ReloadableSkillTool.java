@@ -38,21 +38,22 @@ public final class ReloadableSkillTool implements ToolCallback {
     private record Snapshot(List<SkillInfo> infos, ToolCallback delegate) {
     }
 
-    private final Supplier<SkillCatalog.Loaded> loader;   // 注入的装载源（生产=真实两层；测试=临时目录两层）
+    private final Supplier<SkillCatalog.Loaded> loader;   // 注入的装载源（生产=真实六层；测试=临时目录六层）
     private volatile Snapshot snapshot;
 
-    /** 生产构造：项目根 + 真实用户级目录（{@code ~/.codetui/skills}）。构造即做一次 {@link #reload()}。 */
+    /** 生产构造：项目根 + 真实 {@code ~}（用户级三层目录）。构造即做一次 {@link #reload()}。 */
     public ReloadableSkillTool(Path projectRoot) {
         this(() -> SkillCatalog.load(projectRoot));
     }
 
     /**
-     * 测试构造：显式两层临时目录，隔离真实 {@code ~}。
+     * 测试构造：注入项目根 + 假 home（{@code @TempDir}），隔离真实 {@code ~} 下三层用户级目录
+     * （{@code .codetui} / {@code .claude} / {@code .agents}）。
      *
      * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
      */
-    public static ReloadableSkillTool forTest(Path projectRoot, Path userDir) {
-        return new ReloadableSkillTool(() -> SkillCatalog.load(projectRoot, userDir));
+    public static ReloadableSkillTool forTest(Path projectRoot, Path homeDir) {
+        return new ReloadableSkillTool(() -> SkillCatalog.load(projectRoot, homeDir));
     }
 
     private ReloadableSkillTool(Supplier<SkillCatalog.Loaded> loader) {
@@ -60,7 +61,7 @@ public final class ReloadableSkillTool implements ToolCallback {
         reload();
     }
 
-    /** 重扫两层技能目录，原子替换 delegate 与清单。有技能→真 {@code SkillsTool}；零技能→空 {@code Skill} 工具。 */
+    /** 重扫六层技能目录，原子替换 delegate 与清单。有技能→真 {@code SkillsTool}；零技能→空 {@code Skill} 工具。 */
     public void reload() {
         SkillCatalog.Loaded loaded = loader.get();
         ToolCallback delegate = (loaded.tool() != null) ? loaded.tool() : emptyDelegate();
@@ -105,8 +106,9 @@ public final class ReloadableSkillTool implements ToolCallback {
     private static ToolCallback emptyDelegate() {
         return FunctionToolCallback.builder("Skill",
                         (EmptyInput in, ToolContext ctx) ->
-                                "当前没有可用技能（技能目录为空）。请在 ~/.codetui/skills/<名>/SKILL.md "
-                                        + "或 <项目>/.codetui/skills/<名>/SKILL.md 放入技能后，用 /reload 重新加载。")
+                                "当前没有可用技能（技能目录为空）。请在 ~/.codetui/skills/<名>/SKILL.md、"
+                                        + "~/.claude/skills/<名>/SKILL.md 或 ~/.agents/skills/<名>/SKILL.md"
+                                        + "（或项目根下对应目录）放入技能后，用 /reload 重新加载。")
                 .description("""
                         Execute a skill within the main conversation.
 
