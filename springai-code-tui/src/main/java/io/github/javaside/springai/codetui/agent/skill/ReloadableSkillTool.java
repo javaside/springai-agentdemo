@@ -8,6 +8,7 @@ import org.springframework.ai.tool.metadata.ToolMetadata;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 /**
@@ -34,8 +35,12 @@ import java.util.function.Supplier;
  */
 public final class ReloadableSkillTool implements ToolCallback {
 
-    /** delegate 与其对应技能清单的一致快照——volatile 整体替换，避免读到「新列表 + 旧 delegate」的错配。 */
-    private record Snapshot(List<SkillInfo> infos, ToolCallback delegate) {
+    /**
+     * delegate、清单与<b>修复后工具定义</b>的一致快照——volatile 整体替换，避免读到
+     * 「新列表 + 旧 delegate/旧定义」的错配。定义在 reload 时算好缓存：getToolDefinition()
+     * 每次请求都会被调用，正则修复不应反复执行。
+     */
+    private record Snapshot(List<SkillInfo> infos, ToolCallback delegate, ToolDefinition definition) {
     }
 
     private final Supplier<SkillCatalog.Loaded> loader;   // 注入的装载源（生产=真实六层；测试=临时目录六层）
@@ -61,11 +66,27 @@ public final class ReloadableSkillTool implements ToolCallback {
         reload();
     }
 
-    /** 重扫六层技能目录，原子替换 delegate 与清单。有技能→真 {@code SkillsTool}；零技能→空 {@code Skill} 工具。 */
+    /**
+     * 重扫六层技能目录，原子替换 delegate 与清单。有技能→真 {@code SkillsTool}；零技能→空 {@code Skill} 工具。
+     *
+     * <p>块标量修复：库把 {@code description: >} 折叠块标量解析成裸 {@code ">"} 且把带冒号续行当
+     * 幽灵 key 烘进工具描述（见 {@link SkillFrontmatterRepair}）——这里按 {@code descriptionFixes}
+     * 一次性重建损坏的 {@code <skill>} 块并缓存，模型看到的 {@code <available_skills>} 即为真实描述。
+     */
     public void reload() {
         SkillCatalog.Loaded loaded = loader.get();
         ToolCallback delegate = (loaded.tool() != null) ? loaded.tool() : emptyDelegate();
-        this.snapshot = new Snapshot(loaded.skills(), delegate);
+        this.snapshot = new Snapshot(loaded.skills(), delegate, repairedDefinition(delegate, loaded.descriptionFixes()));
+    }
+
+    /** 无修复项时原样透传 delegate 的定义；有则仅替换 description（name/inputSchema 不动）。 */
+    private static ToolDefinition repairedDefinition(ToolCallback delegate, Map<String, String> fixes) {
+        ToolDefinition raw = delegate.getToolDefinition();
+        if (fixes.isEmpty()) {
+            return raw;
+        }
+        String repaired = SkillFrontmatterRepair.repairAvailableSkills(raw.description(), fixes);
+        return repaired.equals(raw.description()) ? raw : new RepairedDefinition(raw, repaired);
     }
 
     /** 当前可用技能清单（{@code /skills} 展示 / {@code /skill} 选择器）；随最近一次 {@link #reload()} 变化。 */
@@ -75,7 +96,22 @@ public final class ReloadableSkillTool implements ToolCallback {
 
     @Override
     public ToolDefinition getToolDefinition() {
-        return snapshot.delegate().getToolDefinition();
+        return snapshot.definition();
+    }
+
+    // ── 修复后的工具定义 ─────────────────────────────────────────────────
+
+    /** 只换 description 的定义包装：name 与 inputSchema 透传 delegate（库生成的 JSON schema 不动）。 */
+    private record RepairedDefinition(ToolDefinition delegate, String description) implements ToolDefinition {
+        @Override
+        public String name() {
+            return delegate.name();
+        }
+
+        @Override
+        public String inputSchema() {
+            return delegate.inputSchema();
+        }
     }
 
     @Override

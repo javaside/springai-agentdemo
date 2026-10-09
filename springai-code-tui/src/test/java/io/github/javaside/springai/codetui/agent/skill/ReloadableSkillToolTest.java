@@ -79,9 +79,82 @@ class ReloadableSkillToolTest {
         assertEquals("Skill", tool.getToolDefinition().name(), "清空后工具仍在、名恒为 Skill");
     }
 
+    /**
+     * 块标量修复（模型侧 <available_skills>）：库把 {@code description: >} 折叠块标量解析成裸
+     * {@code ">"}，且 {@code Skill.toXml()} 会把 frontmatter 整个 map 逐条转成 {@code <k>v</k>}——
+     * 续行里带冒号的文本会以幽灵元素（如 {@code <Mandatory entry point>…}）混进工具描述。
+     * 代理的 getToolDefinition() 必须把损坏的 {@code <skill>} 块重建为 name+description，
+     * 健康技能与模板其余部分不动。
+     */
+    @Test
+    void foldedDescription_repairedInToolDescription(@TempDir Path root, @TempDir Path homeDir) throws IOException {
+        writeRawSkill(root, "hyperframes", """
+                ---
+                name: hyperframes
+                description: >
+                  Mandatory entry point: read this first for any request to make, create, edit,
+                  animate, or render a video.
+                ---
+
+                正文。
+                """);
+        // hyperframes-audio 实际形态：首续行以冒号结尾 → 库里变成 key=整句、value=空 的幽灵元素
+        writeRawSkill(root, "hyperframes-audio", """
+                ---
+                name: hyperframes-audio
+                description: >
+                  Use when audio already placed needs to be mixed:
+                ---
+
+                正文。
+                """);
+        writeSkill(root, "api-review", "审查 REST API 设计。");   // 健康技能共存，回归护栏
+
+        ReloadableSkillTool tool = ReloadableSkillTool.forTest(root, homeDir);
+        String desc = tool.getToolDefinition().description();
+
+        assertTrue(desc.contains("<description>Mandatory entry point: read this first"),
+                "折叠后的真实描述应进入 <available_skills>——模型靠它判断是否调用技能");
+        assertTrue(desc.contains("<description>Use when audio already placed needs to be mixed:</description>"),
+                "冒号结尾续行的折叠描述应完整写入");
+        assertFalse(desc.contains("<description>>"), "不应残留裸块标量指示符当描述");
+        assertFalse(desc.contains("<Mandatory entry point>"), "幽灵元素应随块重建一起消失");
+        assertFalse(desc.contains("<Use when audio"), "整句幽灵元素应随块重建一起消失");
+        assertTrue(desc.contains("api-review"), "健康技能块不受影响");
+        assertTrue(desc.contains("<available_skills>"), "库模板结构应保留");
+    }
+
+    /** /skills 面板侧：代理 skills() 的描述也应是折叠后的真实文本。 */
+    @Test
+    void foldedDescription_visibleInSkillsList(@TempDir Path root, @TempDir Path homeDir) throws IOException {
+        writeRawSkill(root, "hyperframes", """
+                ---
+                name: hyperframes
+                description: >
+                  Mandatory entry point: read this first.
+                ---
+
+                正文。
+                """);
+
+        ReloadableSkillTool tool = ReloadableSkillTool.forTest(root, homeDir);
+
+        assertEquals("Mandatory entry point: read this first.",
+                tool.skills().stream().filter(s -> s.name().equals("hyperframes")).findFirst().orElseThrow()
+                        .description(),
+                "skills() 清单应为折叠后描述（/skills、/skill 面板数据源）");
+    }
+
     /** 在 {@code <base>/.codetui/skills/<name>/SKILL.md} 写一个技能（正文含可断言的标记文本）。 */
     private static void writeSkill(Path base, String name, String description) throws IOException {
         writeSkill(base, SkillCatalog.DIR_NAME, name, description);
+    }
+
+    /** 直接写整份 SKILL.md 原文，用于构造块标量等真实生态写法。 */
+    private static void writeRawSkill(Path base, String name, String md) throws IOException {
+        Path dir = base.resolve(SkillCatalog.DIR_NAME).resolve(name);
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("SKILL.md"), md);
     }
 
     /** 在指定层目录（相对 base）写一个技能——兼容层与 codetui 层共用。 */
