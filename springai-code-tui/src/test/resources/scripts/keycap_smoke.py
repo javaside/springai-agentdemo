@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""keycap / VS16 组合序列的 PTY 实机冒烟：<b>粘贴事故文案后输入框不错位、打字不崩</b>。
+
+用户实报（2026-10-09）：在 xibaojun 项目粘贴 `🍺9月7日周一赛事🍺⚽足球赛事9️⃣场⚽…8️⃣场…`
+到输入框后「输入框就乱了，再打字终端就崩溃」，宿主 Terminal.app 主线程 SIGBUS
+（Terminal-2026-10-09-085041.ips）。根因：keycap（U+0039+FE0F+20E3）被逐码点口径
+算 1 列、终端画 2 列，输入框从序列处开始逐列错位。
+
+修复（本分支）：TerminalWidth 序列口径 + shadow Buffer 2 列布格 + code-tui 全部
+排版消费方换口径。本脚本验证<b>实机形态</b>——单测证明不了的三件事：
+
+  1. <b>粘贴的原文完整进框</b>（粘贴→TextAreaState→渲染整链路没丢字符、没切半序列：
+     屏上能找回完整的 9️⃣/8️⃣/⚠️ 字节序列）。
+  2. <b>打字不崩</b>（事故的直接症状：粘贴后再敲键，进程必须活着、屏幕结构稳定）。
+  3. <b>输入框边框闭合</b>（错位的外显形态之一是行超宽/撕裂；边框四角完整是
+     最朴素的完整性探针）。
+
+  ⚠ 不判红项：pyte 自带一套 wcwidth，与 TerminalWidth / Terminal.app 的口径
+  各自独立。屏上「视觉列位置」的 oracle 偏差只打印观测、不当断言（经验来自
+  table_render_smoke 第 3 条教训：别拿 pyte 当真相）。
+
+不需要真实 key、不需要网络（不提交回合，无模型调用）。
+
+运行前<b>必须重新 package</b>（跑的是 target/classes，patch 模块还需 install），否则
+跑的是旧字节码——本脚本恰恰验的是「新布格」，旧字节码上跑会看到事故复现：
+
+    mvn -q -pl springai-tamboui-inline-patch install -DskipTests
+    mvn -q -pl springai-code-tui package -DskipTests
+    mvn -q -pl springai-code-tui dependency:build-classpath -Dmdep.outputFile=target/cp.txt
+    /usr/bin/python3 src/test/resources/scripts/keycap_smoke.py
+"""
+import importlib.util
+import os
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+spec = importlib.util.spec_from_file_location("resize_smoke", os.path.join(HERE, "resize_smoke.py"))
+rs = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rs)
+
+ROWS, COLS = 30, 80
+
+# 2026-10-09 事故原文案（用户粘贴内容，一字未改）
+INCIDENT = ("🍺9月7日周一赛事🍺⚽足球赛事9️⃣场⚽🏀篮球赛事8️⃣场🏀"
+            "⏰晚上 22:00点⏰ ")
+# VS16 组合样本（⚠+FE0F）：另一类错位源，顺路钉住
+VS16_SAMPLE = "警告⚠\ufe0f注意"
+
+PASTE_START = b"\x1b[200~"
+PASTE_END = b"\x1b[201~"
+
+
+def screen_text(session):
+    """全屏拼成一个字符串（找子串用；忽略样式）。"""
+    lines = [row.rstrip() for row in session.screen.display]
+    return "\n".join(lines)
+
+
+def assert_box_intact(session, label):
+    """输入框圆角边框四角完整（错位/撕裂的最朴素完整性探针）。"""
+    lines = [row.rstrip() for row in session.screen.display]
+    tops = [i for i, ln in enumerate(lines) if "╭" in ln and "╮" in ln]
+    bots = [i for i, ln in enumerate(lines) if "╰" in ln and "╯" in ln]
+    if not tops or not bots:
+        rs.die("[%s] 输入框边框不完整：top=%s bottom=%s（行超宽被折/撕裂的形态）"
+               % (label, tops, bots), lines)
+    return tops[0], bots[0]
+
+
+def main():
+    classpath = rs.build_classpath()
+    tmpdir = tempfile.mkdtemp(prefix="codetui-keycap-smoke-")
+    home = os.path.join(tmpdir, "home")
+    os.makedirs(home, exist_ok=True)
+
+    env = dict(os.environ)
+    env["TERM"] = "xterm-256color"
+    env["DEEPSEEK_API_KEY"] = "sk-dummy-not-real"   # 只过启动检查；不提交回合不调用
+    env["DEEPSEEK_MODELS"] = "deepseek-chat"
+    for key in ("ZHIPU_API_KEY", "DASHSCOPE_API_KEY", "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY", "OPENCODE_GO_API_KEY"):
+        env.pop(key, None)
+
+    cmd = ["java", "-Duser.home=" + home, "-Dcodetui.hardwareCursor=always",
+           "-cp", classpath, rs.MAIN_CLASS]
+    print("Launching (%dx%d)" % (ROWS, COLS))
+    session = rs.PtySession(cmd, tmpdir, env, ROWS, COLS)
+    try:
+        session.wait_for(rs.WELCOME, timeout=40)
+        session.wait_stable(quiet=0.8)
+
+        # ── 1. 粘贴事故文案（bracketed paste，同终端 Cmd+V 的真实路径） ──
+        payload = INCIDENT.encode()
+        session.write(PASTE_START + payload + PASTE_END)
+        session.wait_stable(quiet=1.0, timeout=8)
+        # 完整性判据用 raw 字节流（app 写往终端的全部字节）：pyte 的 display 是
+        # 「每 cell 一字符」模型，组合码点（FE0F/20E3）被并入 cell 后不再出现在
+        # display 字符串里——display 找子串会漏报，raw 才是不掺假的真相。
+        for seq, name in [("9\ufe0f\u20e3".encode(), "9️⃣ keycap"),
+                          ("8\ufe0f\u20e3".encode(), "8️⃣ keycap"),
+                          ("🍺".encode(), "🍺 emoji"), ("⏰".encode(), "⏰ emoji")]:
+            if seq not in session.raw:
+                rs.die("app 输出流里没有完整的 %s 字节——cell symbol 被切半或丢失" % name,
+                       screen_text(session).splitlines())
+        print("粘贴完整 OK: 9️⃣/8️⃣ keycap 与全部 emoji 的完整字节都在输出流里")
+
+        # pyte 旁证（软观测）：keycap cell 在 pyte（另一套独立 wcwidth）里也占 2 列
+        # ——「9」与「场」之间恰好一个 pad 空格。两套 oracle 同判 2 列时打印一行确认，
+        # 不一致时只提示（pyte 口径与 Terminal.app 无从对齐，见脚本文档）。
+        text = screen_text(session)
+        if "9 场" in text and "8 场" in text:
+            print("宽度旁证 OK: pyte 也把 keycap 判为 2 列（9/场 间恰一个 pad）")
+        else:
+            print("宽度旁证（仅观测）: display 未见「9 场」形态——pyte 与 TerminalWidth 口径分歧，"
+                  "不判红（见脚本文档）")
+        assert_box_intact(session, "粘贴后")
+
+        # ── 2. 打字（事故触发点：粘贴后再击键） ──
+        session.write("测试xyz".encode())
+        session.wait_stable(quiet=1.0, timeout=8)
+        if session.proc.poll() is not None:
+            rs.die("打字后进程退出（事故复现：exit=%s）" % session.proc.poll(),
+                   screen_text(session).splitlines())
+        text = screen_text(session)
+        if "测试xyz" not in text.replace(" ", ""):
+            rs.die("打字内容「测试xyz」不在屏上", text.splitlines())
+        if "9" not in text or "场" not in text:
+            rs.die("打字后输入框文本丢失", text.splitlines())
+        assert_box_intact(session, "打字后")
+        print("打字不崩 OK: 进程存活、输入框结构完整、输入内容与粘贴文本共存")
+
+        # ── 3. VS16 组合（⚠️）同样走一遍 ──
+        session.write(PASTE_START + VS16_SAMPLE.encode() + PASTE_END)
+        session.wait_stable(quiet=1.0, timeout=8)
+        if session.proc.poll() is not None:
+            rs.die("VS16 粘贴后进程退出（exit=%s）" % session.proc.poll(),
+                   screen_text(session).splitlines())
+        if "⚠\ufe0f".encode() not in session.raw:
+            rs.die("⚠️ 组合字节不完整（被切半只剩 ⚠ 或只剩 FE0F）", screen_text(session).splitlines())
+        assert_box_intact(session, "VS16 后")
+        print("VS16 组合 OK: ⚠️ 完整字节在输出流、边框完整")
+
+        print("\nALL OK: keycap/VS16 粘贴、打字、边框完整性全部通过")
+    finally:
+        try:
+            session.proc.terminate()
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()
