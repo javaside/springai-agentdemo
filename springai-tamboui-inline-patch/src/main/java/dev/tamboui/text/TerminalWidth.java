@@ -5,25 +5,23 @@
 package dev.tamboui.text;
 
 /**
- * 序列感知的终端显示宽度：在 {@link CharWidth} 逐码点口径之上，把两类「多码点单字形」
- * 组合按终端实际渲染宽度（2 列）建模：
+ * 序列感知的终端显示宽度：在 {@link CharWidth} 逐码点口径之上，把「多码点单字形」
+ * 组合按终端实际渲染宽度建模。当前唯一加宽规则：
  *
  * <ul>
  *   <li><b>keycap</b>：{@code [0-9#*] + FE0F? + U+20E3}（如 9️⃣）——终端合成键帽字形占 2 列，
- *       逐码点口径算 1 列（数字 1 + FE0F/20E3 均零宽），每个序列错 1 列；</li>
- *   <li><b>文本符号 + VS16</b>：{@code Emoji_Presentation=No} 的符号（⚠ ❤ ☀ …）后跟
- *       {@code U+FE0F} 被提升为 emoji 呈现占 2 列，逐码点口径算 1 列。</li>
+ *       逐码点口径算 1 列（数字 1 + FE0F/20E3 均零宽），每个序列错 1 列。</li>
  * </ul>
  *
- * <p>为什么必须序列感知而不是逐码点：2026-10-09 实测事故——用户粘贴含 9️⃣/8️⃣ 的文案，
- * 输入框（live 区经 Buffer 渲染）按 1 列布格、Terminal.app 实际画 2 列，整行从序列处开始
- * 错位（「打字就乱」），并在持续重绘下触发 Terminal.app 主线程 SIGBUS 崩溃
- * （Terminal-2026-10-09-085041.ips）。证据链见仓库
- * docs/superpowers/specs/2026-10-09-emoji-sequence-width-design.md。
+ * <p><b>「文本符号 + VS16」不加宽（2026-10-09 DSR 实测回调）</b>：上一版曾按 wcwidth 15.x
+ * 把 {@code ⚠+FE0F} 等判 2 列，Terminal.app（含 Grass profile）DSR 光标位置实测 1 列
+ * ——TUI 布 2 格、终端画 1 列，行尾每个组合反向错 1 列。VS16 回归纯零宽变体
+ * （宽度取 base），cluster 原子性保留。keycap 的 2 列经同一轮实测确认不变。
+ * 证据链见 docs/superpowers/specs/2026-10-09-cr-paste-leak-and-vs16-width-design.md。
  *
  * <p>与 wcwidth 的已知分歧（按 Terminal.app/CoreText 实际行为建模，刻意如此）：
  * 数字/井号/星号仅在 keycap 组合（含 20E3）里变宽，裸 {@code 9+FE0F} 仍 1 列
- * （数字没有 emoji 呈现字形）；wcwidth 对 {@code 9+FE0F} 判 2 是保守口径。
+ * （数字没有 emoji 呈现字形）；{@code ⚠+FE0F} 同理 1 列（wcwidth 保守判 2）。
  *
  * <p>ZWJ 家族序列（👨‍👩‍👧）{@link CharWidth#of(String)} 既有口径已正确（ZWJ 及其后码点
  * 宽度全跳，单 glyph 2 列），本类保持；区域指示符对（旗帜）同理由 CharWidth 处理，
@@ -38,49 +36,10 @@ public final class TerminalWidth {
     private TerminalWidth() {
     }
 
-    /** 变体选择符 VS16（emoji 呈现）。 */
-    private static final int CP_VS16 = 0xFE0F;
     /** 组合封闭键帽（keycap 序列尾码点）。 */
     private static final int CP_KEYCAP = 0x20E3;
     /** 零宽连接符（ZWJ 序列）。 */
     private static final int CP_ZWJ = 0x200D;
-
-    /**
-     * 「+FE0F 变 2 列」的 base 字符位图（BMP）。来源：Unicode emoji-data
-     * 「Emoji=Yes & Emoji_Presentation=No」BMP 段，经 wcwidth 15.x 实测校验
-     * （w(cp)=1 且 w(cp+FE0F)=2）。刻意剔除三类：keycap base（0-9#*，仅 keycap
-     * 组合变宽，见类注释分歧说明）、{@code 0x2B05-0x2B07}（CharWidth 已判 2 宽）、
-     * Emoji_Presentation=Yes 的符号（CharWidth 已判 2 宽）。
-     */
-    private static final boolean[] VS16_WIDENS = new boolean[0x10000];
-
-    private static final int[][] VS16_WIDEN_RANGES = {
-            {0x00A9, 0x00A9}, {0x00AE, 0x00AE}, {0x203C, 0x203C}, {0x2049, 0x2049},
-            {0x2122, 0x2122}, {0x2139, 0x2139}, {0x2194, 0x2199}, {0x21A9, 0x21AA},
-            {0x2328, 0x2328}, {0x23CF, 0x23CF}, {0x23ED, 0x23EF}, {0x23F1, 0x23F2},
-            {0x23F8, 0x23FA}, {0x24C2, 0x24C2}, {0x25AA, 0x25AB}, {0x25B6, 0x25B6},
-            {0x25C0, 0x25C0}, {0x25FB, 0x25FC}, {0x2600, 0x2604}, {0x260E, 0x260E},
-            {0x2611, 0x2611}, {0x2618, 0x2618}, {0x261D, 0x261D}, {0x2620, 0x2620},
-            {0x2622, 0x2623}, {0x2626, 0x2626}, {0x262A, 0x262A}, {0x262E, 0x262F},
-            {0x2638, 0x263A}, {0x2640, 0x2640}, {0x2642, 0x2642}, {0x265F, 0x2660},
-            {0x2663, 0x2663}, {0x2665, 0x2666}, {0x2668, 0x2668}, {0x267B, 0x267B},
-            {0x267E, 0x267E}, {0x2692, 0x2692}, {0x2694, 0x2697}, {0x2699, 0x2699},
-            {0x269B, 0x269C}, {0x26A0, 0x26A0}, {0x26A7, 0x26A7}, {0x26B0, 0x26B1},
-            {0x26C8, 0x26C8}, {0x26CF, 0x26CF}, {0x26D1, 0x26D1}, {0x26D3, 0x26D3},
-            {0x26E9, 0x26E9}, {0x26F0, 0x26F1}, {0x26F4, 0x26F4}, {0x26F7, 0x26F9},
-            {0x2702, 0x2702}, {0x2708, 0x2709}, {0x270C, 0x270D}, {0x270F, 0x270F},
-            {0x2712, 0x2712}, {0x2714, 0x2714}, {0x2716, 0x2716}, {0x271D, 0x271D},
-            {0x2721, 0x2721}, {0x2733, 0x2734}, {0x2744, 0x2744}, {0x2747, 0x2747},
-            {0x2763, 0x2764}, {0x27A1, 0x27A1}, {0x2934, 0x2935},
-    };
-
-    static {
-        for (int[] range : VS16_WIDEN_RANGES) {
-            for (int cp = range[0]; cp <= range[1]; cp++) {
-                VS16_WIDENS[cp] = true;
-            }
-        }
-    }
 
     /** 一个显示 cluster：{@code [start,end)} 的 char 区间与显示宽度。 */
     private record Cluster(int end, int width) {
@@ -89,7 +48,8 @@ public final class TerminalWidth {
     /**
      * 解析 {@code s} 从 {@code start} 开始的一个显示 cluster。
      * cluster 是折行/布格的原子单元，绝不切半：
-     * keycap 序列、base+VS16 组合、区域指示符对、或「base + 零宽后缀（含 ZWJ 链延伸）」。
+     * keycap 序列、区域指示符对、或「base + 零宽后缀（VS16/ZWJ 链延伸）」。
+     * VS16 是零宽后缀不改变 cluster 宽度（DSR 实测口径，见类注释）。
      */
     private static Cluster cluster(String s, int start) {
         int len = s.length();
@@ -99,19 +59,11 @@ public final class TerminalWidth {
         // keycap：[0-9#*] FE0F? 20E3 —— 尾码点是组合键帽才成立，数字+FE0F 不算（见类注释）
         if (isKeycapBase(cp)) {
             int j = start + n;
-            if (j < len && s.codePointAt(j) == CP_VS16) {
-                j += Character.charCount(CP_VS16);
+            if (j < len && s.codePointAt(j) == 0xFE0F) {
+                j += Character.charCount(0xFE0F);
             }
             if (j < len && s.codePointAt(j) == CP_KEYCAP) {
                 return new Cluster(j + Character.charCount(CP_KEYCAP), 2);
-            }
-        }
-
-        // 文本符号 + VS16 → emoji 呈现 2 列
-        if (cp < 0x10000 && VS16_WIDENS[cp]) {
-            int j = start + n;
-            if (j < len && s.codePointAt(j) == CP_VS16) {
-                return new Cluster(j + Character.charCount(CP_VS16), 2);
             }
         }
 
@@ -152,15 +104,6 @@ public final class TerminalWidth {
     /** keycap 的 base 集合：数字与可上键帽的两个符号。 */
     private static boolean isKeycapBase(int cp) {
         return (cp >= '0' && cp <= '9') || cp == '#' || cp == '*';
-    }
-
-    /**
-     * 该 BMP 码点是否「+FE0F 后终端按 2 列渲染」的文本符号
-     * （{@link #VS16_WIDEN_RANGES} 命中）。供 shadow Buffer 的布格判定共用，
-     * 保证布格与折行/光标口径同源。
-     */
-    public static boolean isVs16Widened(int codePoint) {
-        return codePoint >= 0 && codePoint < 0x10000 && VS16_WIDENS[codePoint];
     }
 
     /**

@@ -10,11 +10,12 @@
  * （同 InlineTuiRunner shadow 机制，见本模块 pom 注释）。
  *
  * 相对 0.4.0 原版的差异（升级 tamboui 时须重新 diff 对齐）：
- * 1. setString：keycap（[0-9#*] FE0F? 20E3）与「文本符号+VS16」组合按终端
- *    实际渲染 2 列布格（base cell + CONTINUATION，照抄 Regional Indicator
- *    flag 模式）——原版把 FE0F/20E3 当零宽拼进 base cell，整序列按 1 列布格，
- *    终端画 2 列，行内后续 cell 全部错位（2026-10-09 输入框错位 + Terminal.app
- *    SIGBUS 崩溃事故，见 TerminalWidth 类注释与仓库 spec 文档）。
+ * 1. setString：keycap（[0-9#*] FE0F? 20E3）组合按终端实际渲染 2 列布格
+ *    （base cell + CONTINUATION，照抄 Regional Indicator flag 模式）——原版把
+ *    FE0F/20E3 当零宽拼进 base cell，整序列按 1 列布格，终端画 2 列，行内后续
+ *    cell 全部错位（2026-10-09 输入框错位 + Terminal.app SIGBUS 崩溃事故，见
+ *    TerminalWidth 类注释与仓库 spec 文档）。「文本符号+VS16」曾同期按 2 列布格，
+ *    2026-10-09 DSR 实测回调为 1 列（VS16 走零宽路径并入 base cell symbol）。
  * 2. setString：C1 控制字符（U+0080–U+009F）与 C0/DEL 同样替换为空格显示——
  *    原样写给终端会被解释为控制码（U+009B=CSI 吞后续字符、U+0085=NEL 挪光标），
  *    破坏差分绘制。仅影响显示 cell，调用方存储/发送的原文不变。
@@ -428,9 +429,14 @@ public final class Buffer {
 
     /**
      * SHADOW 新增：从 {@code string[i]} 起若是「终端按 2 列渲染的多码点组合」
-     * （keycap：{@code [0-9#*] FE0F? 20E3}；文本符号+VS16），返回序列 char 长度；
-     * 否则返回 0。判定口径与 {@link dev.tamboui.text.TerminalWidth#of} 的 cluster
-     * 规则严格同源——两处漂移就会出现「布格 2 列、折行按 1 列」的新错位。
+     * （当前仅 keycap：{@code [0-9#*] FE0F? 20E3}），返回序列 char 长度；否则返回 0。
+     * 判定口径与 {@link dev.tamboui.text.TerminalWidth#of} 的 cluster 规则严格
+     * 同源——两处漂移就会出现「布格 2 列、折行按 1 列」的新错位。
+     *
+     * <p>「文本符号+VS16」曾在此按 2 列布格，2026-10-09 Terminal.app DSR 实测为
+     * 1 列（wcwidth 口径与实机分歧），分支已删——VS16 由零宽路径拼进 base cell
+     * symbol（cell 含完整组合、占 1 格），见
+     * docs/superpowers/specs/2026-10-09-cr-paste-leak-and-vs16-width-design.md。
      */
     private static int combiningSequenceLength(String string, int i, int codePoint) {
         int len = string.length();
@@ -444,14 +450,6 @@ public final class Buffer {
             }
             if (k < len && string.codePointAt(k) == 0x20E3) {
                 return k + Character.charCount(0x20E3) - i;
-            }
-            return 0;   // 数字+FE0F 无 20E3：无 emoji 呈现字形，不是组合（见 TerminalWidth 注释）
-        }
-
-        // 文本符号（Emoji=Yes & Emoji_Presentation=No）+ VS16 → emoji 呈现 2 列
-        if (codePoint < 0x10000 && TerminalWidth.isVs16Widened(codePoint)) {
-            if (j < len && string.codePointAt(j) == 0xFE0F) {
-                return j + Character.charCount(0xFE0F) - i;
             }
         }
         return 0;
