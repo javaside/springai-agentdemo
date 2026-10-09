@@ -39,7 +39,7 @@ final class TextWrap {
         List<Span> cur = new ArrayList<>();
         int used = 0;
         for (Span sp : line.spans()) {
-            String rest = sp.content();
+            String rest = sanitizeControlChars(sp.content());
             while (!rest.isEmpty()) {
                 String take = TerminalWidth.substringByWidth(rest, w - used);
                 if (take.isEmpty()) {
@@ -62,5 +62,29 @@ final class TextWrap {
             }
         }
         out.add(Text.from(Line.from(cur)));               // 收尾：末段（或空行本身）
+    }
+
+    /**
+     * 行内控制字符（C0 / DEL / C1）换空格——「一个 println = 一个物理行」纪律的出口兜底。
+     * {@code \r} 会把终端光标拉回行首、后续行从行首覆盖（2026-10-09 事故「发送后内容
+     * 重复/看不见」），U+009B 是单字符 CSI 会吞后续字符。来源不止粘贴一途（存量会话
+     * 回放、历史回溯、模型输出），输入层堵不完，打印出口必须兜底。换空格而非删除：
+     * 宽度可预期（1 列）、不粘连两侧词语——与 shadow Buffer.setString 对 C0/C1/DEL 的
+     * 替换同一纪律，渲染 Buffer 与打印两条出口互为纵深。行内不会合法出现 {@code \n}
+     * （Text 按 \n 拆行在先），无需豁免。
+     */
+    private static String sanitizeControlChars(String s) {
+        int i = 0;
+        for (; i < s.length(); i++) {                       // 快路径：绝大多数行一个控制字符都没有
+            char c = s.charAt(i);
+            if (c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f)) break;
+        }
+        if (i >= s.length()) return s;
+        StringBuilder b = new StringBuilder(s.length()).append(s, 0, i);
+        for (; i < s.length(); i++) {
+            char c = s.charAt(i);
+            b.append((c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f)) ? ' ' : c);
+        }
+        return b.toString();
     }
 }
