@@ -1,4 +1,4 @@
-<!-- code-tui concise version — overrides spring-ai-agent-utils 0.10.0 prompt/AUTO_MEMORY_TOOLS_SYSTEM_PROMPT.md (10.9KB upstream). Review when upgrading the library. -->
+<!-- code-tui concise version — overrides spring-ai-agent-utils 0.13.0 prompt/AUTO_MEMORY_TOOLS_SYSTEM_PROMPT.md (10.9KB upstream; verified byte-identical between 0.10.0 and 0.13.0). Review when upgrading the library. -->
 
 # Auto Memory
 

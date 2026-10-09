@@ -76,7 +76,7 @@ class AgentToolsTodoReminderEndToEndTest {
                 "提醒器须启用（若本机显式设了 CODETUI_TODO_REMIND_EVERY=0，请清掉再跑）");
         Map<String, ToolCallback> tools = RuntimeToolSet.toolsOf(rt);
 
-        // 1) 真实 TodoWrite（生产走的是 TodoWriteToolAdapter）建清单 → 快照进提醒器
+        // 1) 真实 TodoWrite（0.13.0 起直用库工具，单层 todos schema）建清单 → 快照进提醒器
         ToolCallback todo = tools.get("TodoWrite");
         assertNotNull(todo, "装配产物里必须有 TodoWrite");
         todo.call("""
