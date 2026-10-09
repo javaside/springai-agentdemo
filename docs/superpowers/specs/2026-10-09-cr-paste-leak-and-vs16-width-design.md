@@ -138,3 +138,38 @@ after : 9\xef\xb8\x8f\xe2\x83\xa3 \xe5\x9c\xba(场) ...           ← 紧邻，�
 **「Buffer 布格」与「渲染游标记账」是两处独立量宽点，必须同源。** 第一轮只修了前者，
 反而把「少 1 列」变成「多 1 列」——症状相似、根因不同。凡涉及「一个 glyph 占几列」的
 新代码，都要核对这三处（Buffer.setString 布格 / InlineDisplay 游标 / 排版折行）。
+
+## 追加二：keycap 字形重叠 → 输入框显示层降级（merge 93bbe8e9）
+
+卡死修好后用户复测：**能打字了**，但「输入框里 9场、8场重叠」。
+
+### 定性：不是布局 bug，是终端字体缺字形
+
+三条证据：
+
+1. **裸 `cat` 同一文本同样重叠**（用户实测，完全不经过 code-tui）——决定性对照。
+2. **像素测量**（PIL 扫描用户截图）：`足球赛事9️⃣场` 与 `足球赛事X场` **同为 252 px
+   = 11 列**（基准 ≈23 px/列）。`X` 是 1 列 → Terminal.app 给 keycap 的**推进宽度只有
+   1 列**，却画了一个更宽的回退方块，压住后面的 `场`。
+3. **字体**：Grass profile 用 `SFMono-Bold`（同机其它 profile 也都是 SF Mono / Monaco /
+   Courier 等纯 ASCII 等宽字体），**都没有 U+20E3 字形** → 只能回退。故换 profile 无用。
+
+（注：早先 DSR 探针在默认窗口测得 keycap 推进 2 列，与像素测量矛盾——DSR 报的是
+**缓冲区记账列**，不是**视觉推进量**；此类字形的视觉行为只能靠像素/真机观测。）
+
+### 方案：显示层降级（用户选定）
+
+`CodeTuiView.displaySafeInput`：绘制输入框那一帧时把 keycap 序列渲染成
+「数字/符号 + 空格」。**宽度守恒是硬约束**——替换物仍是 2 列，与 `TerminalWidth` 的
+keycap 口径严格等宽，故折行与光标列不受影响（布局仍按原串算）；`inputState` 与发给
+模型的正文**一字不改**。
+
+默认仅 `Apple_Terminal` 启用（`keycapFallbackEnabled`，同 `codetui.hardwareCursor` 的
+auto/always/never 写法）：iTerm2 / tmux / pyte 实测渲染 keycap 正常，对它们降级是白丢信息。
+
+### 被淘汰的备选
+
+- **改字体**：所有内置 profile 的字体都没有 keycap 字形，换 profile 不解决问题。
+- **运行时探测推进宽度**：DSR 报的是记账列而非视觉推进量（见上），探测不可靠。
+- **改宽度模型为 1**：会让「模型 < 实际推进」的 profile 出现**过度推进** → 行溢出 →
+  正是卡死的成因；保持 2 是偏保守的安全侧（欠推进只导致视觉偏左，不会越界）。
