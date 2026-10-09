@@ -93,4 +93,37 @@ class TextWrapTest {
         assertEquals(s, joined(out), "全部段拼回去必须与原文一致");
         assertNoOverflow(out, 20);
     }
+
+    /**
+     * 行内控制字符兜底换空格——「不丢不加」契约的唯一例外。
+     *
+     * <p>为什么必须在打印层做：scrollback 的行若带着控制字符到达终端会破坏
+     * 「一个 println = 一个物理行」纪律：U+0007 响铃、U+009B 单字符 CSI 吞后续
+     * 字符、{@code \r} 把光标拉回行首（2026-10-09 事故「发送后内容重复/看不见」
+     * 的形态）。来源不止粘贴一途（存量会话回放、历史回溯、模型输出本身都可能带），
+     * 输入层规范化堵不完，出口必须兜底。换空格而非删除：宽度可预期（1 列）、
+     * 不粘连两侧词语——与 shadow Buffer.setString 对 C0/C1/DEL 的替换同一纪律，
+     * 两层互为纵深。
+     *
+     * <p>构造必须走 {@code Text.from(Line.from(Span.styled(...)))}：{@code Text.styled}
+     * 在构造层用 {@code BufferedReader.lines()} 拆行，{\@code \r} 会被当行终止符
+     * 静默吃掉、到不了本类——那条路径的 CR 兜底事实上由拆行承担；本类兜底的是
+     * <b>不走 Text 字符串构造</b>的 Span 直构路径（ScrollbackPrinter 拼装正文用的
+     * 正是它）与 BEL/CSI/DEL 等不被拆行消化的控制字符。
+     */
+    @Test
+    void inLineControlCharsBecomeSpaces() {
+        Text input = Text.from(Line.from(Span.styled("前半\r中段\u0007后段\u009b尾段\u007f", A)));
+        assertEquals("前半\r中段\u0007后段\u009b尾段\u007f", input.rawContent(),
+                "前置：Span 直构必须原样保留全部控制字符（否则测的不是 TextWrap）");
+        List<Text> out = TextWrap.wrap(input, 40);
+        // 源串含 4 个控制字符（\r BEL CSI DEL）各换 1 个空格；rawContent 保留尾空格
+        assertEquals("前半 中段 后段 尾段 ", joined(out), "CR/BEL/CSI/DEL 一律换空格");
+        for (Text t : out) {
+            for (char c : t.rawContent().toCharArray()) {
+                assertTrue(c >= 0x20 && c != 0x7f || c == '\n',
+                        "打印行不得残留控制字符，仍有 U+%04X".formatted((int) c));
+            }
+        }
+    }
 }

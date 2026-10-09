@@ -54,13 +54,19 @@ class BufferGraphemeCellTest {
         assertTrue(b.get(7, 0).isContinuation());
     }
 
+    /**
+     * ⚠+FE0F 组合 Terminal.app 实测 1 列（2026-10-09 DSR 反转，见
+     * 2026-10-09-cr-paste-leak-and-vs16-width-design.md）：VS16 回归零宽变体拼进
+     * base cell、无 continuation。上一版按 wcwidth 判 2 列布格是反向错位
+     * （TUI 记 2 格、终端画 1 列，行尾错 1 列/组合）。
+     */
     @Test
-    void vs16CombiningOccupiesTwoColumns() {
+    void vs16CombiningStaysOneColumn() {
         Buffer b = buf(10, 1);
         int end = b.setString(0, 0, "⚠️", Style.EMPTY);
-        assertEquals(2, end, "⚠+FE0F 组合按 2 列布格");
-        assertEquals("⚠️", b.get(0, 0).symbol());
-        assertTrue(b.get(1, 0).isContinuation());
+        assertEquals(1, end, "⚠+FE0F 组合按 Terminal.app 实测 1 列布格");
+        assertEquals("⚠️", b.get(0, 0).symbol(), "base cell 的 symbol 仍含完整组合（不切半）");
+        assertFalse(b.get(0, 0).isContinuation());
     }
 
     @Test

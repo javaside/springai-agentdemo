@@ -45,7 +45,13 @@ ROWS, COLS = 30, 80
 # 2026-10-09 事故原文案（用户粘贴内容，一字未改）
 INCIDENT = ("🍺9月7日周一赛事🍺⚽足球赛事9️⃣场⚽🏀篮球赛事8️⃣场🏀"
             "⏰晚上 22:00点⏰ ")
-# VS16 组合样本（⚠+FE0F）：另一类错位源，顺路钉住
+# 事故真实形态：微信 macOS 复制的多行文案行尾是<b>纯 CR</b>（会话 JSON 逐字节实证
+# 🍺…\r⚽…），粘贴普通路径曾把 \r 原样落进输入框（2026-10-09 二次事故）。此样本
+# 钉住「CR 归一成换行」的完整链路：输入框按 \n 分行、打印流不含裸 CR。
+INCIDENT_RAW_CR = ("🍺9月7日周一赛事🍺\r⚽足球赛事9️⃣场⚽\r🏀篮球赛事8️⃣场🏀\r"
+                   "⏰晚上 22:00点⏰ 都觉得大姐夫大姐夫的到付件大大李逵负荆")
+# VS16 组合样本（⚠+FE0F）：Terminal.app DSR 实测 1 列（与 wcwidth 分歧，按实机建模）。
+# 完整字节断言仍然有效——cell symbol 须含完整组合，宽度口径不在本脚本判红范围。
 VS16_SAMPLE = "警告⚠\ufe0f注意"
 
 PASTE_START = b"\x1b[200~"
@@ -130,6 +136,35 @@ def main():
             rs.die("打字后输入框文本丢失", text.splitlines())
         assert_box_intact(session, "打字后")
         print("打字不崩 OK: 进程存活、输入框结构完整、输入内容与粘贴文本共存")
+
+        # ── 2b. 事故真实形态：纯 CR 行尾的原文（微信 macOS 复制） ──
+        # 粘贴后 CR 必须被归一成换行：输入框按 \n 分多行；随后 Enter 提交，
+        # 打印流（app 写往终端的 raw 字节）里不得出现裸 CR（\r 后跟非 \n）。
+        session.write(PASTE_START + INCIDENT_RAW_CR.encode() + PASTE_END)
+        session.wait_stable(quiet=1.0, timeout=8)
+        if session.proc.poll() is not None:
+            rs.die("CR 原文粘贴后进程退出（exit=%s）" % session.proc.poll(),
+                   screen_text(session).splitlines())
+        text = screen_text(session)
+        for piece in ("都觉得大姐夫", "⏰晚上"):
+            if piece not in text.replace(" ", ""):
+                rs.die("CR 原文内容「%s」不在屏上——归一失败或文本丢失" % piece,
+                       text.splitlines())
+        assert_box_intact(session, "CR 原文粘贴后")
+        mark = len(session.raw)
+        session.write(b"\r")     # 提交：dummy key，会打出 401 错误行——打印流在此期间生成
+        session.wait_stable(quiet=1.5, timeout=15)
+        # 行为级判据而非字节扫描：差分引擎自己也合法用 \r 回列 0 重画（\r+边框/空格），
+        # 字节层区分不了「定位 CR」与「正文 CR」。而 pyte 是真终端模拟器——正文若带
+        # CR 到达终端，CR 会执行、后续行从行首覆盖，消息内容必然残缺。故断言提交后
+        # 屏上：归一后的每个段落都在（\n 分行的消息完整落进 scrollback，无覆盖丢失）。
+        text = screen_text(session).replace(" ", "")
+        for piece in ("都觉得大姐夫", "⏰晚上", "22:00"):
+            if piece not in text:
+                rs.die("提交后消息段「%s」不在屏上——正文 CR 覆盖 scrollback 或消息丢失" % piece,
+                       screen_text(session).splitlines())
+        assert_box_intact(session, "CR 原文提交后")
+        print("CR 原文 OK: 粘贴归一成换行、提交后消息段落完整落屏")
 
         # ── 3. VS16 组合（⚠️）同样走一遍 ──
         session.write(PASTE_START + VS16_SAMPLE.encode() + PASTE_END)

@@ -135,6 +135,9 @@ class TextPasteCollapseTest {
     /**
      * CRLF / 裸 CR 归一成 LF：TextAreaState 只认 {@code \n} 作换行，{@code \r} 会以
      * 不可见字面字符落进输入框——既毁显示也污染发给模型的文本（「不可见字符」的另一半来源）。
+     * <p>本条走<b>折叠路径</b>（>400 字符）；普通路径的孪生用例见
+     * {@link #bareCrShortPasteStaysEditableAndCrFree}——2026-10-09 事故实证普通路径
+     * 漏传规范化产物，两路必须各自钉住。
      */
     @Test
     void crlfAndBareCrAreNormalizedToLf(@TempDir Path root) throws Exception {
@@ -144,6 +147,23 @@ class TextPasteCollapseTest {
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
         assertEquals(1, handler.submitted.size());
         assertFalse(handler.submitted.get(0).contains("\r"), "CR 必须被归一成 LF");
+    }
+
+    /**
+     * 普通粘贴路径（不折叠、无图片）同样不得漏进裸 CR——2026-10-09 事故根因：
+     * 微信 macOS 复制的多行文案行尾是纯 CR（会话 JSON 实证
+     * {@code 🍺…赛事🍺\r⚽…}），普通路径曾把原始 event 直交编辑器，
+     * {@code \r} 行内落进输入框并随正文发出。
+     */
+    @Test
+    void bareCrShortPasteStaysEditableAndCrFree(@TempDir Path root) throws Exception {
+        CapturingHandler handler = new CapturingHandler();
+        CodeTuiView v = view(root, handler);
+        // 短于折叠阈值（<400 字符、<12 行）→ 走普通路径；行尾混合 CRLF 与裸 CR
+        paste(v, "🍺9月7日\r⚽足球\r🏀篮球\r都是普通文本");
+        assertEquals("🍺9月7日\n⚽足球\n🏀篮球\n都是普通文本", v.inputTextForTest(),
+                "普通路径的 CR 也必须归一成 LF（与折叠路径同源）");
+        assertFalse(v.inputTextForTest().contains("\r"), "输入框不得残留裸 CR");
     }
 
     @Test

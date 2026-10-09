@@ -49,14 +49,21 @@ class TerminalWidthTest {
                         + "按 Terminal.app（CoreText）实际行为建模");
     }
 
-    // ── 文本符号 + VS16：text-presentation 符号被 VS16 提升为 emoji 呈现（2 列） ──
+    // ── 文本符号 + VS16：Terminal.app 实测 1 列（2026-10-09 DSR 反转回调） ─────
 
+    /**
+     * ⚠️❤️⏱️ 在 Terminal.app（含 Grass profile）实测 1 列——DSR 光标位置法，
+     * 见 docs/superpowers/specs/2026-10-09-cr-paste-leak-and-vs16-width-design.md。
+     * 上一版按 wcwidth 15.x 判 2 列是反向错位（TUI 布格 2、终端画 1）；VS16 回归
+     * 纯零宽变体，宽度取 base（text 呈现 1 列）。cluster 原子性保留（不切半）。
+     */
     @Test
-    void vs16WidensTextPresentationSymbol() {
+    void vs16KeepsTextPresentationSymbolOneColumn() {
         assertEquals(1, TerminalWidth.of("⚠"), "U+26A0 默认 text 呈现，1 列");
-        assertEquals(2, TerminalWidth.of("⚠️"), "⚠+FE0F 提升 emoji 呈现，2 列");
+        assertEquals(1, TerminalWidth.of("⚠️"), "⚠+FE0F：Terminal.app 实测 1 列（与 wcwidth 分歧点，按实机建模）");
         assertEquals(1, TerminalWidth.of("❤"));
-        assertEquals(2, TerminalWidth.of("❤️"));
+        assertEquals(1, TerminalWidth.of("❤️"));
+        assertEquals(1, TerminalWidth.of("⏱️"));
     }
 
     // ── 回归口径：非组合字符与 CharWidth 完全一致 ──────────────────────────
@@ -118,9 +125,11 @@ class TerminalWidthTest {
 
     @Test
     void substringKeepsVs16Whole() {
+        // ⚠️=1 列（Terminal.app 实测）：前(2)+⚠️(1)=3。cluster 原子性不因宽度回调改变——
+        // 预算 2 放不下整个 ⚠️ 组合时整体留下段，绝不切出孤立 base 或 FE0F。
         String s = "前⚠️后";
-        assertEquals("前", TerminalWidth.substringByWidth(s, 3), "预算 3 放不下 前(2)+⚠️(2)");
-        assertEquals("前⚠️", TerminalWidth.substringByWidth(s, 4));
+        assertEquals("前", TerminalWidth.substringByWidth(s, 2));
+        assertEquals("前⚠️", TerminalWidth.substringByWidth(s, 3));
     }
 
     @Test
