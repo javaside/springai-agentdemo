@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import dev.tamboui.text.CharWidth;
+import dev.tamboui.text.TerminalWidth;   // 口径：组合序列（keycap/VS16）按终端实际渲染宽度
 import dev.tamboui.text.Span;
 
 import java.util.ArrayList;
@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * <b>可续折行</b>（fix round I-1）：把「一条逻辑行 → 全部物理段」的一次性物化，改成
  * 「每次只折出<b>下一段</b>」的增量推进。折行语义与 {@link TextWrap} / {@code CodeTuiView.wrapSegments}
- * 一致（同用 {@link CharWidth#substringByWidth} 逐段截取、宽字符不切半、样式跨拆分点保留），
+ * 一致（同用 {@link TerminalWidth#substringByWidth} 逐段截取、宽字符不切半、样式跨拆分点保留），
  * 区别只在物化时机：TextWrap 返回完整 List（调用方会一次建完 ~770 段），本类持有推进状态、
  * 每次 {@code nextSegment()} 只做 O(一段) 的工作。
  *
@@ -56,7 +56,7 @@ final class SegmentedWrap {
                 rest = null;
                 return "";
             }
-            String seg = CharWidth.substringByWidth(rest, width);
+            String seg = TerminalWidth.substringByWidth(rest, width);
             if (seg.isEmpty()) seg = rest.substring(0, 1);    // 窄到放不下 1 个宽字符：硬吃 1 个防死循环
             rest = rest.length() == seg.length() ? null : rest.substring(seg.length());
             return seg;
@@ -100,13 +100,13 @@ final class SegmentedWrap {
                     if (rest.isEmpty()) { restSpan = null; continue; }
                     continue;
                 }
-                String take = CharWidth.substringByWidth(rest, width - used);
+                String take = TerminalWidth.substringByWidth(rest, width - used);
                 if (take.isEmpty()) {
                     if (used > 0) break;                      // 本段放不下下一字符：落段（剩余留给下段）
                     take = rest.substring(0, 1);              // 整段连 1 个宽字符都放不下：硬吃 1 个
                 }
                 cur.add(Span.styled(take, restSpan.style()));
-                used += CharWidth.of(take);
+                used += TerminalWidth.of(take);
                 rest = rest.length() == take.length() ? "" : rest.substring(take.length());
                 if (used >= width && !rest.isEmpty()) break;  // 行满且当前 span 还有剩余：落段
                 if (rest.isEmpty() && spanAt >= spans.size()) break;   // 内容全部消费完：末段落段

@@ -6,7 +6,7 @@ import io.github.javaside.springai.codetui.agent.interjection.InterjectionText;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;
-import dev.tamboui.text.CharWidth;
+import dev.tamboui.text.TerminalWidth;   // 口径：组合序列（keycap/VS16）按终端实际渲染宽度
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -254,9 +254,9 @@ final class HistoryReplay {
         if (oneLine.length() > 200) {
             oneLine = oneLine.substring(0, 200);
         }
-        if (CharWidth.of(oneLine) <= 80) {
+        if (TerminalWidth.of(oneLine) <= 80) {
             return oneLine;
         }
-        return CharWidth.substringByWidth(oneLine, 79) + "…";
+        return TerminalWidth.substringByWidth(oneLine, 79) + "…";
     }
 }

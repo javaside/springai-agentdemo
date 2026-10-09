@@ -10,7 +10,7 @@ import io.github.javaside.springai.codetui.agent.seam.PlanRequest;
 import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
 import io.github.javaside.springai.codetui.ui.update.UiChangeSource;
 import io.github.javaside.springai.codetui.ui.update.UiDirty;
-import dev.tamboui.text.CharWidth;
+import dev.tamboui.text.TerminalWidth;   // 口径：组合序列（keycap/VS16）按终端实际渲染宽度
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.Message;
@@ -1175,7 +1175,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
             String tag = retryTag(attempt, maxAttempts);
             String prefix = "↻ 重试中 (" + tag + ")：";
             String suffix = "，" + formatBackoff(backoffMs) + " 后重发";
-            pending.add(new OutputLine(prefix + summarizeRetryReason(reason, 80 - CharWidth.of(prefix) - CharWidth.of(suffix))
+            pending.add(new OutputLine(prefix + summarizeRetryReason(reason, 80 - TerminalWidth.of(prefix) - TerminalWidth.of(suffix))
                     + suffix, OutputLine.Kind.INFO));
             status = Status.RETRYING;
             retryLabel = "↻ 重试中 " + tag;
@@ -1202,7 +1202,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
                     .format(java.time.Instant.ofEpochMilli(resetAtEpochMs));
             String prefix = "⏳ 限额等待：将于 " + at + " 自动重试（Esc 取消）：";
             pending.add(new OutputLine(prefix
-                    + summarizeRetryReason(reason, 80 - CharWidth.of(prefix)), OutputLine.Kind.INFO));
+                    + summarizeRetryReason(reason, 80 - TerminalWidth.of(prefix)), OutputLine.Kind.INFO));
             status = Status.RETRYING;
             retryLabel = "⏳ 限额等待";
             retryBackoffText = formatQuotaRemaining(
@@ -1403,8 +1403,8 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         if (toolInput == null) return "";
         String oneLine = toolInput.replaceAll("\\s+", " ").trim();
         if (oneLine.length() > 200) oneLine = oneLine.substring(0, 200);
-        if (CharWidth.of(oneLine) <= 80) return oneLine;
-        return CharWidth.substringByWidth(oneLine, 79) + "…";
+        if (TerminalWidth.of(oneLine) <= 80) return oneLine;
+        return TerminalWidth.substringByWidth(oneLine, 79) + "…";
     }
 
     /**
@@ -1445,17 +1445,17 @@ public final class ConversationState implements AgentListener, UiChangeSource {
     private static String summarizeRetryReason(String reason, int budget) {
         String oneLine = reason == null ? "" : reason.replaceAll("\\s+", " ").trim();
         int safeBudget = Math.max(0, budget);
-        if (CharWidth.of(oneLine) <= safeBudget) return oneLine;
+        if (TerminalWidth.of(oneLine) <= safeBudget) return oneLine;
         if (safeBudget == 0) return "";
-        return CharWidth.substringByWidth(oneLine, safeBudget - 1) + "…";
+        return TerminalWidth.substringByWidth(oneLine, safeBudget - 1) + "…";
     }
 
     /** 取首行 + 超长按显示宽度截断（子 agent 结论行用）。 */
     private static String firstLine(String s) {
         if (s == null || s.isEmpty()) return "";
         String one = s.lines().findFirst().orElse("").strip();
-        if (CharWidth.of(one) <= 80) return one;
-        return CharWidth.substringByWidth(one, 79) + "…";
+        if (TerminalWidth.of(one) <= 80) return one;
+        return TerminalWidth.substringByWidth(one, 79) + "…";
     }
 
     /**

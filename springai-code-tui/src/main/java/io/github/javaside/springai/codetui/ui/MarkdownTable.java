@@ -1,6 +1,6 @@
 package io.github.javaside.springai.codetui.ui;
 
-import dev.tamboui.text.CharWidth;
+import dev.tamboui.text.TerminalWidth;   // 口径：组合序列（keycap/VS16）按终端实际渲染宽度
 import dev.tamboui.text.Span;
 import dev.tamboui.style.Style;
 import java.util.ArrayList;
@@ -11,7 +11,7 @@ import java.util.List;
  * 因此可独立单测。轻量表输出规格见设计 §3.1：表头加粗 + 一条 {@code ─} 分隔线 + 空格对齐，
  * 不画竖线、行尾不补白。
  *
- * <p>宽度一律走 {@link #displayWidth}（委托 {@link CharWidth}），与后续 {@code SegmentedWrap}
+ * <p>宽度一律走 {@link #displayWidth}（委托 {@link TerminalWidth}），与后续 {@code SegmentedWrap}
  * 的折行口径必须同源，否则排好的行会被二次折行撕开。
  *
  * <p><b>对任意输入不抛异常</b>（含 {@code null}）：调用方 {@code MdLineCursor.next()} 的 catch
@@ -168,10 +168,10 @@ public final class MarkdownTable {
     }
 
     /**
-     * 显示宽度：<b>必须</b>与 {@link CharWidth} 同口径。
+     * 显示宽度：<b>必须</b>与 {@link TerminalWidth} 同口径。
      *
      * <p>排出来的每一行随后都要过 {@code SegmentedWrap.styled(line, innerWidth())}
-     * （用 {@code CharWidth} 测量）。这里若自成一套 CJK 区间表，本类算出「总宽 ≤ inner」的行
+     * （用 {@code TerminalWidth} 测量）。这里若自成一套 CJK 区间表，本类算出「总宽 ≤ inner」的行
      * 会被 SegmentedWrap 判超宽撕成两段、续段再加一层缩进——「大部分行齐、个别行裂开」
      * 是最难看的形态（设计 §3.1 硬不变量）。所以直接委托，不要重新实现。
      */
@@ -179,7 +179,7 @@ public final class MarkdownTable {
         if (s == null || s.isEmpty()) {
             return 0;
         }
-        return CharWidth.of(s);
+        return TerminalWidth.of(s);
     }
 
     /**
@@ -278,7 +278,7 @@ public final class MarkdownTable {
     /**
      * 格内折行：优先在空格处断，无空格则硬切（不切半个宽字符）。
      *
-     * <p>硬切走 {@link CharWidth#substringByWidth}——与 {@code SegmentedWrap} /
+     * <p>硬切走 {@link TerminalWidth#substringByWidth}——与 {@code SegmentedWrap} /
      * {@code TextWrap} 同一原语。这是本仓第三套折行语义，唯一的区别只能是「空格感知」，
      * 无空格可断时必须与 {@code SegmentedWrap.plain} 逐字相等（有交叉单测钉住）。
      */
@@ -299,7 +299,7 @@ public final class MarkdownTable {
             }
 
             // 本段能容纳的最长前缀（宽字符不切半）
-            String window = CharWidth.substringByWidth(remaining, width);
+            String window = TerminalWidth.substringByWidth(remaining, width);
             if (window.isEmpty()) {
                 window = remaining.substring(0, 1);   // 窄到放不下 1 个宽字符：硬吃 1 个防死循环
             }
