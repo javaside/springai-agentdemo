@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SkillCatalog —— 解析六层技能来源、去重、并构建名为 {@code Skill} 的工具。
@@ -64,8 +65,13 @@ public final class SkillCatalog {
      * @param skills 去重后的技能元数据（供 {@code /skills} 展示）；无技能时为空列表
      * @param tool   名为 {@code Skill} 的 {@link ToolCallback}；<b>无技能时为 {@code null}</b>，
      *               调用方据此决定是否注册（空技能不注册，避免污染上下文）
+     * @param descriptionFixes name → 块标量修复后的真实 description（<b>仅含被修复过的技能</b>）。
+     *                         库 MarkdownParser 不认 YAML 块标量，{@code description: >} 会被解析成
+     *                         裸 {@code ">"} 且工具描述里混入幽灵元素（见 {@link SkillFrontmatterRepair}）；
+     *                         消费方（{@link ReloadableSkillTool}）据此修复模型侧工具描述，清单侧
+     *                         已在装载时直接修正
      */
-    public record Loaded(List<SkillInfo> skills, ToolCallback tool) {
+    public record Loaded(List<SkillInfo> skills, ToolCallback tool, Map<String, String> descriptionFixes) {
     }
 
     /** 一层 = 精确的技能根目录 + {@code /skills} 清单里的来源标签。 */
@@ -92,21 +98,23 @@ public final class SkillCatalog {
     static Loaded load(Path projectRoot, Path homeDir) {
         // 顺序即优先级（LinkedHashMap.put 后勝ち去重）：用户兼容 → 用户自有 → 项目兼容 → 项目自有。
         LinkedHashMap<String, SkillInfo> byName = new LinkedHashMap<>();
+        // 块标量修复记录：与 byName 同序覆盖（镜像两侧同写法时后层覆盖前层，保持一致）。
+        LinkedHashMap<String, String> fixes = new LinkedHashMap<>();
         // 只把「确有技能」的层喂给 Builder（build() 要求至少一个技能，且避免加空目录）。
         List<Path> contributed = new ArrayList<>();
         for (Layer layer : layers(projectRoot, homeDir)) {
-            if (collect(loadDirectory(layer.dir()), layer.source(), byName)) {
+            if (collect(loadDirectory(layer.dir()), layer.source(), byName, fixes)) {
                 contributed.add(layer.dir());
             }
         }
 
         List<SkillInfo> infos = List.copyOf(byName.values());
         if (infos.isEmpty()) {
-            return new Loaded(List.of(), null);   // 无技能：不注册工具
+            return new Loaded(List.of(), null, Map.of());   // 无技能：不注册工具
         }
         SkillsTool.Builder builder = SkillsTool.builder();
         contributed.forEach(dir -> builder.addSkillsDirectory(dir.toString()));
-        return new Loaded(infos, builder.build());
+        return new Loaded(infos, builder.build(), Map.copyOf(fixes));
     }
 
     /** 按优先级排出六层；projectRoot/homeDir 为 null 的整块跳过。 */
@@ -125,13 +133,30 @@ public final class SkillCatalog {
         return layers;
     }
 
-    /** 把一层加载出的技能按 name 汇入 map（后者覆盖同名）。返回该层是否贡献了至少一个技能。 */
+    /**
+     * 把一层加载出的技能按 name 汇入 map（后者覆盖同名）。返回该层是否贡献了至少一个技能。
+     *
+     * <p>块标量修复：库把 {@code description: >} 解析成裸指示符——检测到即重读 SKILL.md 折叠出
+     * 真实描述（见 {@link SkillFrontmatterRepair}），清单用修复值、修复记录汇入 {@code fixes}
+     * 供代理修模型侧工具描述；健康技能则从 fixes 摘除（同名的后层健康版本覆盖前层损坏版本时，
+     * 工具描述里已无损坏块，残留修复记录反而不必要）。
+     */
     private static boolean collect(List<SkillsTool.Skill> layer, String source,
-                                   LinkedHashMap<String, SkillInfo> out) {
+                                   LinkedHashMap<String, SkillInfo> out, LinkedHashMap<String, String> fixes) {
         boolean any = false;
         for (SkillsTool.Skill sk : layer) {
             Object d = sk.frontMatter() == null ? null : sk.frontMatter().get("description");
-            out.put(sk.name(), new SkillInfo(sk.name(), d == null ? "" : d.toString(), source));
+            String description = d == null ? "" : d.toString();
+            if (SkillFrontmatterRepair.isBlockIndicator(description)) {
+                String folded = SkillFrontmatterRepair.foldDescription(Path.of(sk.basePath()));
+                if (folded != null) {
+                    fixes.put(sk.name(), folded);
+                    description = folded;
+                }
+            } else {
+                fixes.remove(sk.name());
+            }
+            out.put(sk.name(), new SkillInfo(sk.name(), description, source));
             any = true;
         }
         return any;
