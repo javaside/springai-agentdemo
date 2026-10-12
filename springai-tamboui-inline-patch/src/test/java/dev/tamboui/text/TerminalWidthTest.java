@@ -17,14 +17,21 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * {@link TerminalWidth} 序列感知宽度测试。
  *
  * <p>口径来源：2026-10-09 实测事故（keycap 序列按 1 列建模导致输入框错位、
- * Terminal.app SIGBUS 崩溃）+ wcwidth 事实标准（U+26A0+FE0F=2）。
- * 事件与证据见仓库 docs/superpowers/specs/2026-10-09-emoji-sequence-width-design.md。
+ * Terminal.app SIGBUS 崩溃）+ wcwidth 事实标准（U+26A0+FE0F=2）；
+ * 2026-10-11 增 Cf 格式字符/ZWJ 逐码点 1 列口径（DSR 实测）。
+ * 事件与证据见仓库 docs/superpowers/specs/2026-10-09-emoji-sequence-width-design.md、
+ * docs/superpowers/specs/2026-10-11-zwnj-format-width-design.md。
  */
 class TerminalWidthTest {
 
     /** 事故原文案：CharWidth 逐码点口径 65 列、终端实际 67 列，差值全部来自 9️⃣/8️⃣。 */
     private static final String INCIDENT_TEXT =
             "🍺9月7日周一赛事🍺⚽足球赛事9️⃣场⚽🏀篮球赛事8️⃣场🏀⏰晚上 22:00点⏰ ";
+
+    /** 2026-10-11 抖音粘贴事故原文：7 个 U+200C（ZWNJ），终端逐字符合计 105 列。 */
+    private static final String DOUYIN_TEXT =
+            "《We Never (Remix) (若如初见)》\u200C，由 \u200CHi Noise\u200C 和 \u200C秋成\u200C "
+                    + "合作，是抖音上“Vibe知识大赏”常用的氛围感BGM。\u200C\u200C";
 
     // ── keycap：[0-9#*] + FE0F? + U+20E3，终端按 keycap 呈现占 2 列 ──────────
 
@@ -75,8 +82,9 @@ class TerminalWidthTest {
         assertEquals(2, TerminalWidth.of("中"));
         assertEquals(2, TerminalWidth.of("🍺"), "补充平面 emoji 2 列");
         assertEquals(2, TerminalWidth.of("⚽"), "Emoji_Presentation=Yes 的符号 CharWidth 已 2 列");
-        assertEquals(2, TerminalWidth.of("👨‍👩‍👧"), "ZWJ 家族序列单 glyph 2 列（CharWidth 既有语义）");
-        assertEquals(0, TerminalWidth.of("\u200B"), "零宽空格 0 宽");
+        assertEquals(8, TerminalWidth.of("👨\u200D👩\u200D👧"),
+                "ZWJ 家族逐码点布格：2+1+2+1+2 = 8（Terminal.app 不合并字形记账，2026-10-11 DSR 实测）");
+        assertEquals(1, TerminalWidth.of("\u200B"), "零宽空格终端记 1 列（DSR 实测，事故同类）");
     }
 
     @Test
@@ -84,6 +92,40 @@ class TerminalWidthTest {
         // 终端口径实测 67（wcwidth 67 vs 逐码点 65）；若实现后此断言失败，
         // 逐字符核对而不是改断言——每个分歧字符都要能单独说明
         assertEquals(67, TerminalWidth.of(INCIDENT_TEXT));
+    }
+
+    // ── Cf 格式字符与 ZWJ：逐码点 1 列（2026-10-11 抖音 ZWNJ 事故口径） ───
+
+    /**
+     * 抖音复制文案散布 U+200C。DSR 实测（CSI 6n，Terminal.app Grass）：
+     * ZWNJ 单独 1 列、`》`+ZWNJ = 3、ZWNJ×2 = 2、`》`+ZWNJ+`，`+`由` = 7；
+     * 模型原判 0 列导致终端比模型多画 → 差分游标错位 → 输入框乱 +
+     * 行尾重复。证据见 2026-10-11-zwnj-format-width-design.md。
+     */
+    @Test
+    void formatCharsAreOneColumnEach() {
+        assertEquals(1, TerminalWidth.of("\u200C"), "ZWNJ 单独 1 列（DSR 实测）");
+        assertEquals(3, TerminalWidth.of("》\u200C"), "事故形态：2+1 = 3（DSR 实测）");
+        assertEquals(2, TerminalWidth.of("\u200C\u200C"), "事故行尾形态：1+1（DSR 实测）");
+        assertEquals(7, TerminalWidth.of("》\u200C，由"), "DSR 直接实测 7 = 2+1+2+2");
+        assertEquals(3, TerminalWidth.of("a\u200Cb"));
+        assertEquals(1, TerminalWidth.of("\u2060"), "词连接符 1 列");
+        assertEquals(1, TerminalWidth.of("\uFEFF"), "零宽不换行空格 1 列");
+        assertEquals(1, TerminalWidth.of("\u00AD"), "软连字符 1 列");
+    }
+
+    @Test
+    void zwjSequencesLayPerCodepoint() {
+        assertEquals(5, TerminalWidth.of("👨\u200D👩"), "两人家族：2+1+2（DSR 实测 5）");
+        assertEquals(3, TerminalWidth.of("a\u200Db"), "散置 ZWJ：1+1+1（DSR 实测 3）");
+        assertEquals(1, TerminalWidth.of("\u200D"), "孤立 ZWJ 1 列");
+    }
+
+    @Test
+    void douyinIncidentTextWidthMatchesTerminal() {
+        // 终端逐字符合计 105（原模型 98 + 7 个 ZWNJ×1）；断言失败时逐字符
+        // 核对而不是改断言——每个分歧字符都要能单独说明
+        assertEquals(105, TerminalWidth.of(DOUYIN_TEXT));
     }
 
     // ── ofPrefix：光标列计算（切点可在序列中间） ────────────────────────────
@@ -112,6 +154,16 @@ class TerminalWidthTest {
         assertEquals(4, TerminalWidth.ofPrefix(s, 3));
     }
 
+    @Test
+    void ofPrefixCountsZwnjAsOwnColumn() {
+        // ZWNJ 是独立 1 列 cluster：光标跨过它时列 +1，不再并入前一个 base
+        String s = "》\u200C，由";   // char 布局: 》=0 \u200C=1 ，=2 由=3
+        assertEquals(2, TerminalWidth.ofPrefix(s, 1), "『》』=2 列");
+        assertEquals(3, TerminalWidth.ofPrefix(s, 2), "跨过 ZWNJ：2+1 = 3");
+        assertEquals(5, TerminalWidth.ofPrefix(s, 3), "再跨过，");
+        assertEquals(7, TerminalWidth.ofPrefix(s, 4));
+    }
+
     // ── substringByWidth：折行不切半组合序列 ───────────────────────────────
 
     @Test
@@ -121,6 +173,15 @@ class TerminalWidthTest {
         assertEquals("足球", TerminalWidth.substringByWidth(s, 5),
                 "预算 5 放不下『足球』+序列(6)：序列整体留下段，不切出孤立 9");
         assertEquals("足球9️⃣场", TerminalWidth.substringByWidth(s, 100), "预算充足返回全部");
+    }
+
+    @Test
+    void substringTreatsZwnjAsOwnCluster() {
+        String s = "》\u200C，由";
+        assertEquals("》", TerminalWidth.substringByWidth(s, 2), "预算 2 只够 》");
+        assertEquals("》\u200C", TerminalWidth.substringByWidth(s, 3),
+                "预算 3 放得下 》+ZWNJ：ZWNJ 独立成 cluster，照常入段");
+        assertEquals("》\u200C，", TerminalWidth.substringByWidth(s, 5));
     }
 
     @Test

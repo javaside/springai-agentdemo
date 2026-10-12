@@ -20,6 +20,11 @@
  *    原样写给终端会被解释为控制码（U+009B=CSI 吞后续字符、U+0085=NEL 挪光标），
  *    破坏差分绘制。仅影响显示 cell，调用方存储/发送的原文不变。
  * 3. withLines：总宽换 TerminalWidth.of（与 setString 布格同口径）。
+ * 4. setString：删 ZWJ 拼格机制（原版 appendToLast：ZWJ 后一码点拼进前 cell）。
+ *    Terminal.app TTBuffer 不做 ZWJ 字形合并记账（2026-10-11 DSR 实测
+ *    `👨ZWJ👩`=5 列 = 2+1+2），拼格是虚构口径；现 ZWJ 由 shadow CharWidth
+ *    记 1 列、走常规独立布格路径。宽度表同轮修正见 CharWidth 文件头
+ *    （Cf 格式字符 ZWSP/ZWNJ/软连字符等 0→1 列，抖音 ZWNJ 粘贴事故）。
  * ═══════════════════════════════════════════════════════════════════════════
  */
 package dev.tamboui.buffer;
@@ -222,7 +227,7 @@ public final class Buffer {
      * <p>
      * Handles grapheme clusters correctly:
      * <ul>
-     *   <li>ZWJ sequences: characters after ZWJ are appended to the preceding cell</li>
+     *   <li>ZWJ: SHADOW 独立 1 列布格（2026-10-11 去粘合，见文件头差异清单）</li>
      *   <li>Regional Indicator pairs: combined into a single 2-wide cell</li>
      *   <li>Skin tone modifiers: appended to preceding cell (zero-width)</li>
      * </ul>
@@ -239,7 +244,6 @@ public final class Buffer {
         }
 
         int col = x;
-        boolean appendToLast = false; // true after ZWJ - next char should join
         for (int i = 0; i < string.length(); ) {
             if (col >= area.right()) {
                 break;
@@ -256,10 +260,8 @@ public final class Buffer {
                     String combined = baseCell.symbol() + new String(Character.toChars(codePoint));
                     set(baseCol, y, baseCell.symbol(combined));
                 }
-                // Check if this is ZWJ - next char should join
-                if (codePoint == 0x200D) {
-                    appendToLast = true;
-                }
+                // SHADOW: 原版在此对 ZWJ 置 appendToLast 拼格，去粘合后已删
+                //（ZWJ 宽 1 列走常规布格，见文件头差异清单第 4 条）。
                 i += Character.charCount(codePoint);
                 continue;
             }
@@ -293,7 +295,6 @@ public final class Buffer {
                             col += 2;
                         }
                         i = nextIdx + Character.charCount(next);
-                        appendToLast = false;
                         continue;
                     }
                 }
@@ -329,23 +330,11 @@ public final class Buffer {
                     col += 2;
                 }
                 i += seqLen;
-                appendToLast = false;
                 continue;
             }
 
-            // This character follows a ZWJ - append to preceding cell
-            if (appendToLast) {
-                int baseCol = findBaseCell(col, y);
-                if (baseCol >= area.left()) {
-                    Cell baseCell = get(baseCol, y);
-                    String combined = baseCell.symbol() + new String(Character.toChars(codePoint));
-                    set(baseCol, y, baseCell.symbol(combined));
-                    appendToLast = false;
-                    i += Character.charCount(codePoint);
-                    continue;
-                }
-            }
-            appendToLast = false;
+            // SHADOW: 原版此处有「ZWJ 后一码点拼进前 cell」的 appendToLast 消费
+            // 块，去粘合后已删（见文件头差异清单第 4 条）。
 
             // C0 control chars (U+0000–U+001F) and DEL (U+007F) are not displayable glyphs.
             // Writing them to the terminal moves the cursor unpredictably (e.g. \t jumps to

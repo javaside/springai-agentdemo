@@ -23,9 +23,18 @@ package dev.tamboui.text;
  * 数字/井号/星号仅在 keycap 组合（含 20E3）里变宽，裸 {@code 9+FE0F} 仍 1 列
  * （数字没有 emoji 呈现字形）；{@code ⚠+FE0F} 同理 1 列（wcwidth 保守判 2）。
  *
- * <p>ZWJ 家族序列（👨‍👩‍👧）{@link CharWidth#of(String)} 既有口径已正确（ZWJ 及其后码点
- * 宽度全跳，单 glyph 2 列），本类保持；区域指示符对（旗帜）同理由 CharWidth 处理，
- * 本类在 cluster 层面把它当作原子单元（折行不切半）。
+ * <p>ZWJ 家族序列（👨‍👩）<b>不粘合</b>（2026-10-11 DSR 实测回调）：Terminal.app
+ * TTBuffer 不做字形合并记账，`👨ZWJ👩` 实测 5 列（2+1+2），上一版「ZWJ 及其后
+ * 码点宽度全跳、单 glyph 2 列」是虚构口径（布格与终端差 3 列/序列）。ZWJ 现
+ * 为独立 1 列 cluster，依赖 shadow CharWidth 的宽度表。区域指示符对（旗帜）
+ * 2 列口径维持。
+ *
+ * <p><b>Cf 格式字符 1 列</b>（2026-10-11 抖音 ZWNJ 粘贴事故）：U+200B/200C/
+ * 200E/200F、U+2060-2064、U+FEFF、U+00AD 原版判 0 列，DSR 实测每个 1 列
+ * ——事故原文 7 个 ZWNJ：模型 98 列 vs 终端 105 列，差分游标逐列落后 →
+ * 输入框乱 + 行尾重复。宽度表在 shadow CharWidth（本包）统一修正，本类
+ * cluster 迭代自动跟随；组合附标（Mn）与 VS16 实测 0 列，仍走零宽后缀路径。
+ * 证据链见 docs/superpowers/specs/2026-10-11-zwnj-format-width-design.md。
  *
  * <p>三个 API（{@link #of}/{@link #ofPrefix}/{@link #substringByWidth}）共用同一
  * cluster 迭代器，保证「总宽 / 前缀宽 / 截取」永远同口径——这正是 Buffer 布格、
@@ -38,8 +47,6 @@ public final class TerminalWidth {
 
     /** 组合封闭键帽（keycap 序列尾码点）。 */
     private static final int CP_KEYCAP = 0x20E3;
-    /** 零宽连接符（ZWJ 序列）。 */
-    private static final int CP_ZWJ = 0x200D;
 
     /** 一个显示 cluster：{@code [start,end)} 的 char 区间与显示宽度。 */
     private record Cluster(int end, int width) {
@@ -48,8 +55,9 @@ public final class TerminalWidth {
     /**
      * 解析 {@code s} 从 {@code start} 开始的一个显示 cluster。
      * cluster 是折行/布格的原子单元，绝不切半：
-     * keycap 序列、区域指示符对、或「base + 零宽后缀（VS16/ZWJ 链延伸）」。
+     * keycap 序列、区域指示符对、或「base + 零宽后缀」。
      * VS16 是零宽后缀不改变 cluster 宽度（DSR 实测口径，见类注释）。
+     * ZWJ 不再粘合（2026-10-11 去粘合，见类注释）：宽度 1、独立成 cluster。
      */
     private static Cluster cluster(String s, int start) {
         int len = s.length();
@@ -78,20 +86,14 @@ public final class TerminalWidth {
             }
         }
 
-        // 普通 base + 零宽后缀；后缀含 ZWJ 时把下一个非零宽部件并入（链式），
-        // 宽度只记 base（ZWJ 部件零贡献，CharWidth.of(String) 既有语义）
+        // 普通 base + 零宽后缀（组合附标/VS16 等 shadow CharWidth 判 0 的码点）。
+        // SHADOW: 原版另有「后缀含 ZWJ 时把下一个部件并入」的链式粘合分支，
+        // 2026-10-11 去粘合已删（Terminal.app 不合并记账，见类注释与文件头）。
         int width = CharWidth.of(cp);
         int i = start + n;
         while (i < len) {
             int mark = s.codePointAt(i);
             int markN = Character.charCount(mark);
-            if (mark == CP_ZWJ) {
-                i += markN;
-                if (i < len) {
-                    i += Character.charCount(s.codePointAt(i));
-                }
-                continue;
-            }
             if (CharWidth.of(mark) == 0) {
                 i += markN;
                 continue;
@@ -161,7 +163,7 @@ public final class TerminalWidth {
     }
 
     /**
-     * 按显示宽度截取前缀，宽度不超过 {@code maxWidth}。组合序列（keycap/VS16/ZWJ 链/
+     * 按显示宽度截取前缀，宽度不超过 {@code maxWidth}。组合序列（keycap/VS16/
      * 旗帜）是原子单元：预算放不下整个序列时整个序列留给下一段，绝不切出孤立的
      * base 或变体码点。{@code maxWidth <= 0} 返回空串（调用方按需兜底）。
      */
