@@ -114,14 +114,45 @@ class BufferGraphemeCellTest {
         assertEquals("a", b.get(2, 0).symbol());
     }
 
+    /**
+     * ZWJ 家族序列逐部件独立布格（2026-10-11 DSR 实测回调）：Terminal.app
+     * TTBuffer 不做字形合并记账，👨‍👩 = 5 列（2+1+2）。上一版「家族单 glyph
+     * 2 列 + appendToLast 拼格」是虚构口径，布格与终端差 3 列/序列。
+     * 证据见 docs/superpowers/specs/2026-10-11-zwnj-format-width-design.md。
+     */
     @Test
-    void zwjSequenceJoinsIntoBaseCell() {
+    void zwjSequenceLaysPerCodepoint() {
         Buffer b = buf(10, 1);
-        int end = b.setString(0, 0, "👨‍👩‍👧x", Style.EMPTY);
-        assertEquals(3, end, "ZWJ 家族单 glyph 2 列 + x 1 列（原版行为）");
-        assertEquals("👨‍👩‍👧", b.get(0, 0).symbol());
+        int end = b.setString(0, 0, "👨\u200D👩x", Style.EMPTY);
+        assertEquals(6, end, "👨(0,1) ZWJ(2) 👩(3,4) x(5)：逐部件布格共 6 列");
+        assertEquals("👨", b.get(0, 0).symbol());
         assertTrue(b.get(1, 0).isContinuation());
-        assertEquals("x", b.get(2, 0).symbol());
+        assertEquals("\u200D", b.get(2, 0).symbol(), "ZWJ 独立 1 列 cell，不再拼进 base");
+        assertEquals("👩", b.get(3, 0).symbol());
+        assertTrue(b.get(4, 0).isContinuation());
+        assertEquals("x", b.get(5, 0).symbol());
+    }
+
+    // ── Cf 格式字符：独立 1 列 cell（2026-10-11 抖音 ZWNJ 事故口径） ──────
+
+    @Test
+    void zwnjOccupiesOwnColumnAfterBase() {
+        Buffer b = buf(10, 1);
+        int end = b.setString(0, 0, "》\u200C，由", Style.EMPTY);
+        assertEquals(7, end, "》(0,1) ZWNJ(2) ，(3,4) 由(5,6)：DSR 实测 7 列");
+        assertEquals("》", b.get(0, 0).symbol());
+        assertEquals("\u200C", b.get(2, 0).symbol(), "ZWNJ 不再拼进前格 symbol，独立成 cell");
+        assertEquals("，", b.get(3, 0).symbol());
+        assertEquals("由", b.get(5, 0).symbol());
+    }
+
+    @Test
+    void leadingZwnjOccupiesOwnColumn() {
+        Buffer b = buf(10, 1);
+        int end = b.setString(0, 0, "\u200Ca", Style.EMPTY);
+        assertEquals(2, end, "行首无 base 可拼：ZWNJ 自成 1 列 cell");
+        assertEquals("\u200C", b.get(0, 0).symbol());
+        assertEquals("a", b.get(1, 0).symbol());
     }
 
     @Test

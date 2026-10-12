@@ -12,7 +12,7 @@
 
     <artifactId>springai-tamboui-inline-patch</artifactId>
     <name>springai-tamboui-inline-patch</name>
-    <description>TamboUI 0.4.0 行内显示差分渲染兼容层；另 shadow EventParser（括号粘贴静默预算，防大粘贴拆分/自动发送）</description>
+    <description>TamboUI 0.4.0 行内显示差分渲染兼容层；另 shadow EventParser（括号粘贴静默预算，防大粘贴拆分/自动发送）与 CharWidth（Cf 格式字符/ZWJ 宽度口径，2026-10-11 抖音 ZWNJ 粘贴事故）</description>
 
     <dependencies>
         <dependency>
