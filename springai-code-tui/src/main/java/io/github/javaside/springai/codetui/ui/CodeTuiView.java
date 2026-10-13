@@ -1637,18 +1637,20 @@ public final class CodeTuiView extends InlineApp {
             // 终端拖图即粘贴，且不保证与已有文字之间有空白。整段粘贴全是可识别图片路径时
             // 占位符化：文本只插 [IMAGE1]（路径太长，贴几张就糊成一片），真实路径进映射，
             // 识别与提交时展开（见 attachments() / expandImagePlaceholders）。
-            // 多 token（Finder 多选拖多张）各占一个编号；超长普通文本折叠成 [TEXT1]（见
-            // shouldCollapsePaste）；其余粘贴原样交给编辑器。
+            // 判定按「重组单元」而非裸词：终端一批拖多图时空格可能不转义，带空格的文件名
+            // 被切成碎片（assemblePaths 拼回，两处必须同口径）；登记的是拼回后的完整路径。
+            // 超长普通文本折叠成 [TEXT1]（见 shouldCollapsePaste）；其余粘贴原样交给编辑器。
             String pasted = normalizePasteText(event.text());
-            List<String> tokens = ImageAttachmentDetector.tokenize(pasted);
+            List<String> units = imageDetector.assemblePaths(
+                    ImageAttachmentDetector.tokenize(pasted), root);
             ImageAttachmentDetector.Result detected = imageDetector.detectWithOverflow(pasted, root);
             int imageCount = detected.images().size() + detected.overflow();
-            if (imageCount > 0 && imageCount == tokens.size()) {
+            if (imageCount > 0 && imageCount == units.size()) {
                 StringBuilder ph = new StringBuilder();
-                for (String token : tokens) {
+                for (String unit : units) {
                     if (ph.length() > 0) ph.append(' ');
                     int no = nextPlaceholderNo++;
-                    imagePlaceholders.put(no, token);   // tokenize 产物已去转义，登记后可直接复用
+                    imagePlaceholders.put(no, unit);      // tokenize 产物已去转义，登记后可直接复用
                     ph.append("[IMAGE").append(no).append(']');
                 }
                 event = spacedPasteEvent(ph.toString());

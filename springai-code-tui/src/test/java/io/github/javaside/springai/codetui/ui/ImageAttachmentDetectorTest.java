@@ -103,6 +103,55 @@ class ImageAttachmentDetectorTest {
         assertEquals(2, detect("对比 a.png 和 b.png").size());
     }
 
+    // ── 未转义空格的重组（一批拖多图只显示两张的事故）──────────
+
+    /**
+     * 终端一批拖多图时空格可能<b>不转义</b>原样贴入：带空格的文件名被空白切成碎片，
+     * 每个碎片都不是文件 → 整张图静默丢失（用户实报「拖一批只显示两张」——没带空格
+     * 的那两张恰好整词成立）。识别器必须把未解析的路径样碎片向后按空格拼回真实文件。
+     */
+    @Test
+    void rejoinsUnescapedSpacePathsFromBatchDrag() throws Exception {
+        Path plain = png(outside, "shot-a.png");
+        Path spaced = png(outside, "截屏 2026-10-13 09.41.22.png");
+        List<DetectedImage> got = detect(plain + " " + spaced);   // 空格原样，未转义
+        assertEquals(2, got.size(), "带空格的文件名没拼回来，这张图被静默丢弃：" + got);
+        assertTrue(got.stream().anyMatch(d -> d.name().equals("shot-a.png")), "无空格的反而丢了：" + got);
+        assertTrue(got.stream().anyMatch(d -> d.name().startsWith("截屏")),
+                "带空格文件名的图没被识别：" + got);
+    }
+
+    /**
+     * 歧义取<b>最短匹配</b>：a.png 与 b.png 各自存在时，即使「a.png b.png」这个带空格的
+     * 文件也真实存在，仍按两张独立图认——一批拖多图（N 张无空格 + 1 张带空格）贴出来
+     * 与它同形，按长拼会把 N+1 张吞成 1 张。
+     */
+    @Test
+    void rejoinPrefersShortestMatchWhenBothResolve() throws Exception {
+        png(root, "a.png");
+        png(root, "b.png");
+        png(root, "a.png b.png");
+        List<DetectedImage> got = detect("a.png b.png");
+        assertEquals(2, got.size(), "应该按两张独立图认，不该吞成长文件名：" + got);
+    }
+
+    /** 拼接到下一个路径样词（以 / 开头）必须停手——那是下一张图，不是文件名续段。 */
+    @Test
+    void rejoinStopsAtNextAbsolutePath() throws Exception {
+        Path first = png(outside, "截屏 一.png");
+        Path second = png(outside, "截屏 二.png");
+        List<DetectedImage> got = detect(first + " " + second);
+        assertEquals(2, got.size(), "两张带空格的图只认出部分：" + got);
+    }
+
+    /** 普通文字词永不参与拼接：拼不出文件的词保持原样（现状行为），不误附也不崩。 */
+    @Test
+    void plainWordsAreNeverJoinedIntoPaths() throws Exception {
+        png(root, "docs/bug.png");
+        List<DetectedImage> got = detect("看看 这 几 个 词");
+        assertTrue(got.isEmpty(), "普通文字词被拼成了不存在的文件还附上了：" + got);
+    }
+
     // ── 反例：这些都不该附 ───────────────────────────────────
 
     /** 魔数不是图片就不附——扩展名不可信。 */

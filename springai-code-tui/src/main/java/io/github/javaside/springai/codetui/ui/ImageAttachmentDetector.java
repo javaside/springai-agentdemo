@@ -53,6 +53,12 @@ public final class ImageAttachmentDetector {
     /** 缓存：绝对路径 → 上次嗅探结果。mtime 变了就重算，故文件被改写/替换不会用陈旧结果。 */
     private final Map<String, Cached> cache = new ConcurrentHashMap<>();
 
+    /**
+     * 单条路径最多向后拼接的词数上限。真实文件名里的空格极少超过三五个（「截屏 2026-10-13
+     * 09.41.22.png」两个），16 已是病态余量；无上限的话一段全是文字的粘贴会做 O(n²) 次拼接探测。
+     */
+    private static final int MAX_JOIN_TOKENS = 16;
+
     /** 识别（截断到上限）。 */
     public List<DetectedImage> detect(String text, Path root) {
         return detectWithOverflow(text, root).images();
@@ -62,14 +68,82 @@ public final class ImageAttachmentDetector {
     public Result detectWithOverflow(String text, Path root) {
         if (text == null || text.isBlank() || root == null) return Result.EMPTY;
         List<DetectedImage> all = new ArrayList<>();
-        for (String token : tokenize(text)) {
-            resolve(token, root).ifPresent(all::add);
+        for (String unit : assemblePaths(tokenize(text), root)) {
+            resolve(unit, root).ifPresent(all::add);
         }
         if (all.size() <= VisionBudget.MAX_USER_IMAGES) {
             return new Result(List.copyOf(all), 0);
         }
         return new Result(List.copyOf(all.subList(0, VisionBudget.MAX_USER_IMAGES)),
                 all.size() - VisionBudget.MAX_USER_IMAGES);
+    }
+
+    /**
+     * 把空白切出的词按「未转义空格的拖拽」重组回完整路径。终端一批拖多图时，空格可能
+     * <b>不转义</b>原样贴入（2026-10-13 用户实报：拖一批只显示两张——恰好没带空格的那两张
+     * 整词成立，带空格的被切成碎片整张丢失）。规则：
+     *
+     * <ul>
+     *   <li>词本身能解析成图片 → 独立成单元（<b>最短优先</b>：{@code a.png} 与 {@code b.png}
+     *       各自存在时就不与后续词拼，即使「a.png b.png」这个文件也存在——一批 N 张无空格
+     *       + 1 张带空格与它同形，按长拼会把 N+1 张吞成 1 张）；</li>
+     *   <li>路径样词（以 {@code /}、{@code ~/} 开头或含 {@code /}）自身解析失败 → 向后按单空格
+     *       拼接相邻的<b>非路径样</b>词，拼出真实图片文件即成单元；遇到下一个路径样词（那是
+     *       下一张图，不是文件名续段）、达 {@link #MAX_JOIN_TOKENS} 或拼不出 → 放弃，原词保留
+     *       （不产生不存在的假路径）；</li>
+     *   <li>纯文字词永不参与拼接——拼不出文件的词不会变成路径，误附只可能来自真实文件。</li>
+     * </ul>
+     *
+     * <p>包级可见：粘贴占位符化（{@code CodeTuiView.InputBox}）需要同一套重组单元来决定
+     * 「整段粘贴是否全是图片路径」，两处必须同口径，否则输入框显示与附件行计数脱节。
+     */
+    List<String> assemblePaths(List<String> tokens, Path root) {
+        List<String> units = new ArrayList<>(tokens.size());
+        int i = 0;
+        while (i < tokens.size()) {
+            String token = tokens.get(i);
+            if (!pathLike(token) || resolve(token, root).isPresent()) {
+                units.add(token);                          // 整词成立或纯文字：不拼
+                i++;
+                continue;
+            }
+            String joined = joinNextTokens(tokens, i, root);
+            if (joined != null) {
+                units.add(joined);
+                i += countSpaces(joined) + 1;              // 跳过被吸收的碎片
+            } else {
+                units.add(token);                          // 拼不出：原词保留（现状行为）
+                i++;
+            }
+        }
+        return units;
+    }
+
+    /** 从 {@code start} 起向后按单空格拼接，返回第一条能解析成图片的完整路径；拼不出返回 null。 */
+    private String joinNextTokens(List<String> tokens, int start, Path root) {
+        StringBuilder joined = new StringBuilder(tokens.get(start));
+        for (int j = start + 1; j < tokens.size() && j - start <= MAX_JOIN_TOKENS; j++) {
+            String next = tokens.get(j);
+            if (pathLike(next)) return null;               // 下一个已是新路径：不是文件名续段
+            joined.append(' ').append(next);
+            if (resolve(joined.toString(), root).isPresent()) return joined.toString();
+        }
+        return null;
+    }
+
+    /**
+     * 重组单元吸收的词数 = 单元内的空格数 + 1。只有拼接成功才会走到这里，而拼接成功的
+     * 单元必由「起始词 + 若干后续词以单空格相连」构成，按空格计数即可，不另记下标。
+     */
+    private static int countSpaces(String s) {
+        int spaces = 0;
+        for (int k = s.indexOf(' '); k >= 0; k = s.indexOf(' ', k + 1)) spaces++;
+        return spaces;
+    }
+
+    /** 词是否「路径样」：以 {@code /}、{@code ~/} 开头（绝对路径），或含 {@code /}（相对路径）。 */
+    private static boolean pathLike(String token) {
+        return token.startsWith("/") || token.startsWith("~/") || token.indexOf('/') >= 0;
     }
 
     /**
