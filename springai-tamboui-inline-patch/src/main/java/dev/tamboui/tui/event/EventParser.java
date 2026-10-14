@@ -18,13 +18,17 @@ import dev.tamboui.tui.bindings.Bindings;
  * and mouse events (SGR extended mode).
  *
  * <p><b>springai-tamboui-inline-patch shadow 类</b>（与 {@code InlineTuiRunner} 同机制：
- * code-tui 的 Class-Path 顺序保证本 jar 先于 tamboui-tui 加载）。与上游 0.4.0 的唯一
- * 差异在 {@link #readPasteContent}：上游对粘贴内容逐字符 {@code read(50ms)}，超时立刻
- * 放弃——大粘贴（几百 KB 日志）时终端分块灌 pty、块间间隙一旦超过 50ms，粘贴事件被
- * 提前掐断，剩余字节回到普通按键解析：日志里的 {@code \n} 变 Enter、在 code-tui 里
- * 触发「贴入即分批自动发送」。shadow 把块间等待放宽为<b>累计静默 500ms</b> 才放弃
- * （人手敲不出 ESC[200~ 起始标记，无副作用）；EOF 仍立即放弃。行为契约见
- * {@code EventParserPasteTest}。库升级 0.4.x 以上时须重对本类做 diff。
+ * code-tui 的 Class-Path 顺序保证本 jar 先于 tamboui-tui 加载）。与上游 0.4.0 的差异
+ * 都在粘贴链路：① {@link #readPasteContent} 把上游「单次 50ms 超时即放弃」改为
+ * <b>累计静默 500ms</b> 才放弃——大粘贴（几百 KB 日志）时终端分块灌 pty、块间间隙一旦
+ * 超过 50ms，粘贴事件被提前掐断，剩余字节回到普通按键解析：日志里的 {@code \n} 变
+ * Enter、在 code-tui 里触发「贴入即分批自动发送」（人手敲不出 ESC[200~ 起始标记，
+ * 无副作用；EOF 仍立即放弃）；② 批量快路径扫到终止符后，同一读取块里<b>溢出</b>的
+ * 字节回灌给下一次解析（{@code OVERSHOOT_*} / {@code BacklogBackend}）——Terminal.app
+ * 多文件拖拽每文件发一条独立括号粘贴、背靠背连发（2026-10-14 od 取证），不回灌的话
+ * 后续整条粘贴被静默丢弃，实报症状「一次拖 5 张图只显示 1-2 张」。行为契约见
+ * {@code EventParserPasteTest} / {@code EventParserBulkPasteTest}。库升级 0.4.x 以上时
+ * 须重对本类做 diff。
  */
 public final class EventParser {
 
@@ -43,6 +47,101 @@ public final class EventParser {
      * 1ms → ~1MB/s，远超任何终端的粘贴投递速率，且放弃语义仍由累计静默预算保证。
      */
     private static final long RAW_POLL_MS = 1;
+
+    /**
+     * 批量粘贴读<b>溢出</b>的已解码字符：批量块按 8KB 整读、扫到 {@code ESC[201~} 就收手，
+     * 同块里排在终止符之后的字节（Terminal.app 多文件拖拽实测：每文件一条独立括号粘贴
+     * 背靠背 {@code ESC[200~p ESC[201~ESC[200~p...}，2026-10-14 od 取证）此前被整段静默
+     * 丢弃——实报症状「拖 5 张图只显示 2 张」，幸存哪几张取决于终端写入与轮询的块边界。
+     * 这里存已解码的字符；配 {@link #OVERSHOOT_CARRY} 存未解码完的多字节残尾。
+     * 输入单线程，无需加锁。
+     */
+    private static final java.util.ArrayDeque<Integer> OVERSHOOT_CHARS = new java.util.ArrayDeque<>();
+
+    /** 溢出字节里未解码完的 UTF-8 残尾（可能属于下一条粘贴的首字符），按原始字节保留。 */
+    private static final java.io.ByteArrayOutputStream OVERSHOOT_CARRY =
+            new java.io.ByteArrayOutputStream();
+
+    /** 把批量读取扫到终止符后剩下的字符与残尾字节入库，留给下一次 {@link #readEvent}。 */
+    private static void stashOvershoot(java.nio.CharBuffer out, java.nio.ByteBuffer carry) {
+        while (out.hasRemaining()) {
+            OVERSHOOT_CHARS.add((int) out.get());
+        }
+        byte[] rest = new byte[carry.remaining()];
+        carry.get(rest);
+        OVERSHOOT_CARRY.write(rest, 0, rest.length);
+    }
+
+    /**
+     * 「先暂存、后真实流」的委托 Backend：readEvent 检测到有溢出存量时用它包住真实
+     * backend，解析器照常经 read/peek 取字符，感知不到来源切换。反射链 {@code
+     * rawBulkStream} 对本类必然失配（没有 {@code reader} 字段），溢出粘贴的正文因此
+     * 走逐字符慢路径——体量只是几条文件路径，慢路径的吞吐绰绰有余。
+     */
+    private static final class BacklogBackend implements Backend {
+        private final Backend delegate;
+        private final java.nio.charset.CharsetDecoder decoder =
+                java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE);
+
+        BacklogBackend(Backend delegate) {
+            this.delegate = delegate;
+        }
+
+        /** 溢出字符 → 溢出残尾字节（残尾解不动就替换消费，绝不卡死后续读取）。 */
+        private int nextStashed() {
+            Integer c = OVERSHOOT_CHARS.poll();
+            if (c != null) return c;
+            if (OVERSHOOT_CARRY.size() == 0) return -2;
+            byte[] bytes = OVERSHOOT_CARRY.toByteArray();
+            OVERSHOOT_CARRY.reset();
+            java.nio.ByteBuffer in = java.nio.ByteBuffer.wrap(bytes);
+            java.nio.CharBuffer out = java.nio.CharBuffer.allocate(bytes.length + 2);
+            decoder.decode(in, out, true);          // REPLACE：切在多字节中间的残尾不阻塞
+            out.flip();
+            if (!out.hasRemaining()) return -2;
+            int first = out.get();
+            while (out.hasRemaining()) OVERSHOOT_CHARS.add((int) out.get());
+            return first;
+        }
+
+        @Override public int read(int timeoutMs) throws IOException {
+            if (!OVERSHOOT_CHARS.isEmpty() || OVERSHOOT_CARRY.size() > 0) {
+                int c = nextStashed();
+                if (c != -2) return c;
+            }
+            return delegate.read(timeoutMs);
+        }
+
+        @Override public int peek(int timeoutMs) throws IOException {
+            if (!OVERSHOOT_CHARS.isEmpty()) return OVERSHOOT_CHARS.peekFirst();
+            if (OVERSHOOT_CARRY.size() > 0) {
+                int c = nextStashed();
+                if (c != -2) {
+                    OVERSHOOT_CHARS.addFirst(c);
+                    return c;
+                }
+            }
+            return delegate.peek(timeoutMs);
+        }
+
+        @Override public void draw(dev.tamboui.buffer.DiffResult diff) throws IOException { delegate.draw(diff); }
+        @Override public void flush() throws IOException { delegate.flush(); }
+        @Override public void clear() throws IOException { delegate.clear(); }
+        @Override public dev.tamboui.layout.Size size() throws IOException { return delegate.size(); }
+        @Override public void showCursor() throws IOException { delegate.showCursor(); }
+        @Override public void hideCursor() throws IOException { delegate.hideCursor(); }
+        @Override public dev.tamboui.layout.Position getCursorPosition() throws IOException { return delegate.getCursorPosition(); }
+        @Override public void setCursorPosition(dev.tamboui.layout.Position position) throws IOException { delegate.setCursorPosition(position); }
+        @Override public void enterAlternateScreen() throws IOException { delegate.enterAlternateScreen(); }
+        @Override public void leaveAlternateScreen() throws IOException { delegate.leaveAlternateScreen(); }
+        @Override public void enableRawMode() throws IOException { delegate.enableRawMode(); }
+        @Override public void disableRawMode() throws IOException { delegate.disableRawMode(); }
+        @Override public void writeRaw(byte[] data) throws IOException { delegate.writeRaw(data); }
+        @Override public void onResize(Runnable handler) { delegate.onResize(handler); }
+        @Override public void close() throws IOException { delegate.close(); }
+    }
 
     private EventParser() {
     }
@@ -69,6 +168,13 @@ public final class EventParser {
      * @throws IOException if an I/O error occurs
      */
     public static Event readEvent(Backend backend, int timeout, Bindings bindings) throws IOException {
+        // 上一次批量粘贴读溢出的字节（见 OVERSHOOT_*）先于真实流消费——批量块不认事件
+        // 边界，终止符之后同块里的字节（Terminal.app 多文件拖拽的下一条粘贴）只能先
+        // 存起来，在这里以「先暂存、后流」的顺序回灌给解析器。
+        if (!OVERSHOOT_CHARS.isEmpty() || OVERSHOOT_CARRY.size() > 0) {
+            backend = new BacklogBackend(backend);
+        }
+
         int c = backend.read(timeout);
 
         if (c == -2) {
@@ -308,7 +414,13 @@ public final class EventParser {
                     break;
                 }
             }
-            if (ended) break;
+            if (ended) {
+                // 终止符之后同块里的字节不属于本条粘贴——那是下一条粘贴的开头
+                // （多文件拖拽背靠背），入库回灌，绝不丢弃。carry 已 flip，恰好是
+                // 本块未解码完的残尾字节。
+                stashOvershoot(out, carry);
+                break;
+            }
         }
         return new PasteEvent(sb.toString());
     }
