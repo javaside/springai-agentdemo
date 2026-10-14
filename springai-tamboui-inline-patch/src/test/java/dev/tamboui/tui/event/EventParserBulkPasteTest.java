@@ -328,4 +328,66 @@ class EventParserBulkPasteTest {
         assertEquals("", ((PasteEvent) event).text());
     }
 
+    // ── 背靠背括号粘贴（多文件拖拽）─────────────────────────
+
+    /**
+     * Terminal.app 多文件拖拽实测（2026-10-14 od 取证）：每文件一条<b>独立</b>括号粘贴
+     * 背靠背 —— {@code ESC[200~p1 ESC[201~ESC[200~p2 ESC[201~...}。批量快路径按块整读、
+     * 扫到第一条终止符就收手：同一块里排在后面的整条粘贴曾被静默丢弃（实报症状：拖 5 张
+     * 只显示 2 张，幸存哪几张看块边界运气）。背靠背的每一条都必须产出独立 PasteEvent。
+     */
+    @Test
+    void adjacentBracketedPastesInOneChunkYieldSequentialEvents() throws Exception {
+        String stream = PASTE_START + "p1 " + PASTE_END
+                + PASTE_START + "p2 " + PASTE_END
+                + PASTE_START + "p3" + PASTE_END;
+        String header = PASTE_START + "p";                  // 非阻塞层：起始标记 + 正文首字符
+        String raw = stream.substring(header.length());     // 原始流一次全给（含后两条完整粘贴）
+        FakeNBInputStream nb = new FakeNBInputStream(new DelayedRawStream(raw, "", 0L));
+        BulkBackend backend = new BulkBackend(new FakeNBReader(header, nb));
+
+        Event first = readPaste(backend);
+        assertInstanceOf(PasteEvent.class, first);
+        assertEquals("p1 ", ((PasteEvent) first).text(), "第一条粘贴正文不全");
+
+        Event second = readPaste(backend);
+        assertInstanceOf(PasteEvent.class, second);
+        assertEquals("p2 ", ((PasteEvent) second).text(),
+                "同块里的第二条粘贴被终止符后的批量丢弃吞掉了");
+
+        Event third = readPaste(backend);
+        assertInstanceOf(PasteEvent.class, third);
+        assertEquals("p3", ((PasteEvent) third).text(), "第三条粘贴丢失");
+    }
+
+    /** 粘贴边界落在 UTF-8 多字节字符中间：残尾字节必须原样留给下一条粘贴，不得变 �。 */
+    @Test
+    void overshootPreservesMultibyteBytesAcrossPasteBoundary() throws Exception {
+        // 第二条粘贴正文以中文开头：把「日」的首字节切进本块末尾（overshoot 区），
+        // 残尾两个字节必须以原始字节留给下一次解析，拼回「日志」。
+        java.io.ByteArrayOutputStream raw = new java.io.ByteArrayOutputStream();
+        raw.writeBytes("1 ".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        raw.writeBytes(PASTE_END.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        raw.writeBytes(PASTE_START.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] ri = "日".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        raw.write(ri[0]);                                 // 「日」的首字节切进本块末尾
+        raw.write(ri, 1, ri.length - 1);                  // 残尾
+        raw.writeBytes("志".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        raw.writeBytes(PASTE_END.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        String header = PASTE_START + "p";
+        FakeNBInputStream nb = new FakeNBInputStream(new DelayedRawStream(
+                raw.toByteArray(), new byte[0], 0L));
+        BulkBackend backend = new BulkBackend(new FakeNBReader(header, nb));
+
+        Event first = readPaste(backend);
+        assertInstanceOf(PasteEvent.class, first);
+        assertEquals("p1 ", ((PasteEvent) first).text());
+
+        Event second = readPaste(backend);
+        assertInstanceOf(PasteEvent.class, second);
+        assertEquals("日志", ((PasteEvent) second).text(),
+                "跨粘贴边界的多字节字符被截断/替换：" + ((PasteEvent) second).text());
+    }
+
 }

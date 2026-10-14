@@ -189,6 +189,23 @@ class AttachmentLineTest {
         assertTrue(ViewScreen.of(v).contains("已附带 3 张图片"));
     }
 
+    /**
+     * 一批拖多图、终端空格<b>不转义</b>的形态：带空格文件名的图曾被静默丢成
+     * 「已附带 2 张」（用户实报）。粘贴必须按重组后的完整路径占位符化，拖几张占几张。
+     */
+    @Test
+    void unescapedBatchDragStillAttachesEveryImage(@TempDir Path root) throws Exception {
+        Path plain1 = png(root, "shot-a.png");
+        Path plain2 = png(root, "shot-b.png");
+        Path spaced = png(root, "截屏 2026-10-13 09.41.22.png");
+        CodeTuiView v = view(root);
+        paste(v, plain1 + " " + plain2 + " " + spaced);   // 空格原样未转义
+        assertEquals("[IMAGE1] [IMAGE2] [IMAGE3]", v.inputTextForTest(),
+                "没按重组后的整路径占位符化，输入框成了一坨原始路径");
+        assertTrue(ViewScreen.of(v).contains("已附带 3 张图片"),
+                "附件行没把带空格文件名的图数进来");
+    }
+
     /** 提交后取消态复位……（下方提交链路用例复用 submit） */
     @Test
     void placeholderSurvivesEditingAndStillAttaches(@TempDir Path root) throws Exception {
