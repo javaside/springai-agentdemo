@@ -86,8 +86,6 @@ public final class InlineDisplay implements AutoCloseable {
      * 设 CODETUI_INSERT_LINES=1（或启动参数 --insert-lines）可回退旧插行行为作对照/逃生。
      */
     private final boolean SCROLL_APPEND = !envFlag("CODETUI_INSERT_LINES");
-    /** 首帧是否已把 live 区钉到屏幕底部（纯滚动模式的前提，见 render 的钉底注释）。 */
-    private boolean bottomPinned;
 
     // ── 异步 pty 写（根治「输出时打字卡死」，见 AsyncPtyWriter 类注释） ──
     /**
@@ -193,16 +191,13 @@ public final class InlineDisplay implements AutoCloseable {
     public void render(BiConsumer<Rect, Buffer> renderer, int contentHeight, int cursorX, int cursorY) {
         ensureInitialized();
         syncWidth();
-        StringBuilder pinBatch = null;
-        if (SCROLL_APPEND && !bottomPinned) {
-            // 钉底（一次性）：纯滚动模式靠「底行 CRLF 滚屏」腾行，live 区必须在屏幕最底。
-            // 启动时光标可能在屏幕任意处（banner 后的新窗口），CUD 999 被终端钳制到末行即可归位；
-            // 随后的 resizeDisplay 增高路径从底行发 CRLF 会把上方内容滚上去——与 Claude Code 一致。
-            pinBatch = new StringBuilder("\r\u001b[999B");
-            bottomPinned = true;
-        }
+        // 刻意不钉底（不发 ESC[999B 跳屏幕末行）：live 区锚在启动光标处。纯滚动的腾行原语
+        // 是「底行 CRLF 滚屏」，而 CRLF 未到屏幕底行前只是光标下移、到顶后自然转为滚屏——
+        // 同一套字节序列位置无关（Claude Code 同语义）。钉底会让空的高窗口启动时 scrollback
+        // 从屏幕底部往上长、上半屏永久留空，而 resize 重放（ScreenCleaner + ESC[H）是顶对齐的，
+        // 两条锚定策略互相矛盾（用户实报：启动上半屏空白，拖动一次窗口大小就消失）。
+        StringBuilder batch = new StringBuilder();
         int desiredHeight = Math.max(0, contentHeight);
-        StringBuilder batch = pinBatch != null ? pinBatch : new StringBuilder();
         if (desiredHeight <= 0) {
             resizeDisplay(0, batch, null);
             currentBuffer = Buffer.empty(Rect.of(width, 0));

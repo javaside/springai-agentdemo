@@ -221,6 +221,21 @@ class InlineDisplayDiffTest {
     }
 
     @Test
+    void firstRenderAnchorsAtCurrentCursorInsteadOfJumpingToScreenBottom() {
+        // 首帧契约：不得发 ESC[999B 把光标钉到屏幕最底行。钉底会让空的高窗口启动时
+        // scrollback 从屏幕底部往上长、上半屏永久留空（用户实报「启动时上半段很多都是空的，
+        // 拖动窗口大小后就不见了」——resize 重放是顶对齐的，两条锚定策略不一致）。
+        // 不钉底后 live 区锚在启动光标处：CRLF 未到屏幕底行前只是下移、到顶后自然转为滚屏，
+        // 同一套字节序列位置无关，滚动契约（printBatchScrollAppendClearsBeforeContent）不变。
+        InlineDisplay display = display(4);
+        renderRows(display, new String[]{"+---+", "| > |", "+---+", "status"}, 0, 0);
+
+        String raw = backend.outputUtf8();
+        assertFalse(raw.contains("\u001b[999B"), "首帧不得把光标钉到屏幕底：" + raw);
+        assertTrue(raw.contains("+---+") && raw.contains("status"), "首帧仍须画出 live 区：" + raw);
+    }
+
+    @Test
     void printBatchScrollAppendClearsBeforeContent() {
         // 默认（纯滚动）模式的等价契约：全程零 ESC[1L；每条正文前有 EL 清残影；
         // 正文带 CRLF 结尾（msg 行不落在 live 区内）。
