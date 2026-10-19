@@ -13,6 +13,10 @@
 
 ---
 
+![code-tui 启动画面](docs/images/code-tui-startup.png)
+
+*学习路线的终点：`springai-code-tui` 启动后的样子——一个真正能干活的命令行编码智能体。*
+
 这是一个 Java 后端开发者**从零学会 Agent 开发**的实战项目。
 
 路线只有一条：先从 **Spring AI 2.0** 学起，把 Agent 开发的基本概念一个个跑通——对话、提示词模板、
