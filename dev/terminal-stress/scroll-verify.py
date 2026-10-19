@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""SCROLL_APPEND 模式的无头屏幕验证（v2，重写规避嵌套转义）：
-驱动程序先 println×26 预填满屏（live 区贴底前提），渲染 6 行帧，println 8 条消息；
+"""SCROLL_APPEND 模式的无头屏幕验证（v3，重写规避嵌套转义）：
+驱动程序先 println×26 <空白行> 预填滚到屏底（live 区贴底前提；用空白行是因为
+上方内容行会被 ghost 断言判为残影），渲染 6 行帧，println 8 条消息；
 pty 字节喂进极简 VT100 仿真器，断言：底 6 行==帧、上方 8 条消息、无残影、无 ESC[1L。
+2026-10-19 起首帧不再钉底（ESC[999B 已移除，见 InlineDisplay.render 注释），
+本脚本验证的「贴底滚动」前提必须由预填自己保证，不能再依赖首帧钉底。
 """
 import fcntl, os, pty, re, select, signal, struct, subprocess, sys, termios, time
 
 CP = open("/tmp/stress-cp.txt").read().strip()
+# patch 模块自身 classes 必须前置在依赖 jar 之前——shadow 机制全靠 classpath 顺序。
+# 否则 InlineDisplay 会解析到上游 tamboui-core-0.4.0.jar 里的旧实现（println 走
+# ESC[1L 插行），「零插行」断言必挂，且挂因极其隐蔽（2026-10-19 实测踩中）。
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CLASSES = os.path.join(REPO, "springai-tamboui-inline-patch", "target", "classes")
+FULL_CP = CLASSES + os.pathsep + "/tmp" + os.pathsep + CP
 
 DRIVER_LINES = [
     "import dev.tamboui.buffer.Buffer;",
@@ -16,6 +25,7 @@ DRIVER_LINES = [
     "",
     "public class ScrollDriver {",
     "    public static void main(String[] a) throws Exception {",
+    "        for (int i = 0; i < 26; i++) System.out.println();   // 预填空白滚到屏底（无钉底后 live 贴底的前提）",
     "        try (Backend b = BackendFactory.create()) {",
     "            b.enableRawMode();",
     "            InlineDisplay d = InlineDisplay.withBackend(6, b);",
@@ -45,12 +55,12 @@ DRIVER_LINES = [
     "}",
 ]
 open("/tmp/ScrollDriver.java", "w").write("\n".join(DRIVER_LINES))
-subprocess.run(["javac", "-cp", CP, "-d", "/tmp", "/tmp/ScrollDriver.java"], check=True)
+subprocess.run(["javac", "-cp", FULL_CP, "-d", "/tmp", "/tmp/ScrollDriver.java"], check=True)
 
 W, H = 100, 30
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", H, W, 0, 0))
-p = subprocess.Popen(["java", "-cp", "/tmp:" + CP, "ScrollDriver"],
+p = subprocess.Popen(["java", "-cp", FULL_CP, "ScrollDriver"],
                      stdin=slave, stdout=slave, stderr=slave,
                      env=dict(os.environ))
 os.close(slave)
