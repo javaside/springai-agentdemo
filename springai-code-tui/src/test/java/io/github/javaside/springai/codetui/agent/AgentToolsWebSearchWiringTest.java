@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
+import io.github.javaside.springai.codetui.agent.tools.DeepSeekWebSearchTool;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import io.github.javaside.springai.codetui.agent.tools.ZhipuWebSearchTool;
 
@@ -21,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 两个搜索工具的门控接线：各自的 API key 配了才注册对应工具。 */
+/** 四家搜索工具（博查/Brave/智谱/DeepSeek）的门控接线：各自的 API key 配了才注册对应工具。 */
 class AgentToolsWebSearchWiringTest {
 
     @Test
@@ -70,16 +71,17 @@ class AgentToolsWebSearchWiringTest {
 
     @Test
     void guideIsEmptyWhenNoToolRegistered() {
-        assertEquals("", AgentTools.webSearchGuide(false, false, false),
-                "三家都没注册时，系统提示不应出现任何搜索相关指引");
+        assertEquals("", AgentTools.webSearchGuide(false, false, false, false),
+                "四家都没注册时，系统提示不应出现任何搜索相关指引");
     }
 
     @Test
     void guideCoversBochaOnly() {
-        String guide = AgentTools.webSearchGuide(true, false, false);
+        String guide = AgentTools.webSearchGuide(true, false, false, false);
 
         assertTrue(guide.contains("BochaWebSearch"), "应点名博查工具，实际=" + guide);
         assertFalse(guide.contains("ZhipuWebSearch"), "智谱没注册就不该提它，实际=" + guide);
+        assertFalse(guide.contains("DeepSeekWebSearch"), "DeepSeek 没注册就不该提它，实际=" + guide);
         assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
         assertTrue(guide.contains("webFetch"), "应说明与 webFetch 的分工，实际=" + guide);
         assertTrue(guide.contains("Sources"), "应要求列出来源，实际=" + guide);
@@ -87,10 +89,11 @@ class AgentToolsWebSearchWiringTest {
 
     @Test
     void guideCoversZhipuOnly() {
-        String guide = AgentTools.webSearchGuide(false, true, false);
+        String guide = AgentTools.webSearchGuide(false, true, false, false);
 
         assertTrue(guide.contains("ZhipuWebSearch"), "应点名智谱工具，实际=" + guide);
         assertFalse(guide.contains("BochaWebSearch"), "博查没注册就不该提它，实际=" + guide);
+        assertFalse(guide.contains("DeepSeekWebSearch"), "DeepSeek 没注册就不该提它，实际=" + guide);
         assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
         assertTrue(guide.contains("webFetch"), "实际=" + guide);
         assertTrue(guide.contains("include 与 freshness 不要同时传"),
@@ -98,30 +101,48 @@ class AgentToolsWebSearchWiringTest {
     }
 
     @Test
+    void guideCoversDeepSeekOnly() {
+        String guide = AgentTools.webSearchGuide(false, false, true, false);
+
+        assertTrue(guide.contains("DeepSeekWebSearch"), "应点名 DeepSeek 工具，实际=" + guide);
+        assertFalse(guide.contains("BochaWebSearch"), "博查没注册就不该提它，实际=" + guide);
+        assertFalse(guide.contains("ZhipuWebSearch"), "智谱没注册就不该提它，实际=" + guide);
+        assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
+        assertTrue(guide.contains("webFetch"), "实际=" + guide);
+        assertTrue(guide.contains("site:"),
+                "DeepSeek 的过滤靠搜索语法，专属坑条目应教 site:/after: 写法，实际=" + guide);
+        assertFalse(guide.contains("freshness"),
+                "DeepSeek 无 freshness 参数，freshness 提示条目只该在博查/智谱注册时出现，实际=" + guide);
+    }
+
+    @Test
     void guideCoversBraveOnly() {
-        String guide = AgentTools.webSearchGuide(false, false, true);
+        String guide = AgentTools.webSearchGuide(false, false, false, true);
 
         assertTrue(guide.contains("BraveWebSearch"), "应点名 Brave 工具，实际=" + guide);
         assertFalse(guide.contains("BochaWebSearch"), "博查没注册就不该提它，实际=" + guide);
         assertFalse(guide.contains("ZhipuWebSearch"), "智谱没注册就不该提它，实际=" + guide);
+        assertFalse(guide.contains("DeepSeekWebSearch"), "DeepSeek 没注册就不该提它，实际=" + guide);
         assertTrue(guide.contains("webFetch"), "实际=" + guide);
     }
 
     @Test
     void guideExplainsBochaZhipuRedundancy() {
-        String guide = AgentTools.webSearchGuide(true, true, false);
+        String guide = AgentTools.webSearchGuide(true, true, false, false);
 
         assertTrue(guide.contains("BochaWebSearch") && guide.contains("ZhipuWebSearch"), "实际=" + guide);
         assertTrue(guide.contains("互为冗余"), "两个国内源应说明互为冗余，实际=" + guide);
         assertFalse(guide.contains("BraveWebSearch"), "Brave 没注册就不该提它，实际=" + guide);
+        assertFalse(guide.contains("DeepSeekWebSearch"), "DeepSeek 没注册就不该提它，实际=" + guide);
     }
 
     @Test
-    void guideExplainsDivisionWhenAllRegistered() {
-        String guide = AgentTools.webSearchGuide(true, true, true);
+    void guideExplainsDivisionWhenAllFourRegistered() {
+        String guide = AgentTools.webSearchGuide(true, true, true, true);
 
         assertTrue(guide.contains("BochaWebSearch"), "实际=" + guide);
         assertTrue(guide.contains("ZhipuWebSearch"), "实际=" + guide);
+        assertTrue(guide.contains("DeepSeekWebSearch"), "实际=" + guide);
         assertTrue(guide.contains("BraveWebSearch"), "实际=" + guide);
         assertTrue(guide.contains("中文"), "应讲清中文走哪家，实际=" + guide);
         assertTrue(guide.contains("英文"), "应讲清英文走哪家，实际=" + guide);
@@ -133,11 +154,13 @@ class AgentToolsWebSearchWiringTest {
     void noGuideVariantContainsTemplateBraces() {
         for (boolean bocha : new boolean[]{false, true}) {
             for (boolean zhipu : new boolean[]{false, true}) {
-                for (boolean brave : new boolean[]{false, true}) {
-                    String guide = AgentTools.webSearchGuide(bocha, zhipu, brave);
-                    assertTrue(!guide.contains("{") && !guide.contains("}"),
-                            "指引正文不得含花括号（bocha=" + bocha + ", zhipu=" + zhipu
-                                    + ", brave=" + brave + "），实际=" + guide);
+                for (boolean deepseek : new boolean[]{false, true}) {
+                    for (boolean brave : new boolean[]{false, true}) {
+                        String guide = AgentTools.webSearchGuide(bocha, zhipu, deepseek, brave);
+                        assertTrue(!guide.contains("{") && !guide.contains("}"),
+                                "指引正文不得含花括号（bocha=" + bocha + ", zhipu=" + zhipu
+                                        + ", deepseek=" + deepseek + ", brave=" + brave + "），实际=" + guide);
+                    }
                 }
             }
         }
@@ -242,6 +265,59 @@ class AgentToolsWebSearchWiringTest {
         assertFalse(AgentTools.zhipuSearchWanted("key", " 0 "), "0 允许两侧空白");
         assertTrue(AgentTools.zhipuSearchWanted("key", "1"), "只认 0：其他值不关（回退语义，与 resolve* 一致）");
         assertTrue(AgentTools.zhipuSearchWanted("key", "false"),
+                "false 字面量不关——开关只认 0，config.env.example 已写明");
+    }
+
+    @Test
+    void noDeepSeekKey_noDeepSeekTool() {
+        assertNull(AgentTools.createDeepSeekWebSearchTool(null, null), "未配 DEEPSEEK_API_KEY 时不应创建");
+        assertNull(AgentTools.createDeepSeekWebSearchTool("   ", null), "空白 key 时不应创建");
+    }
+
+    /** 注册名取 @Tool 注解而非方法名；子 agent 的 allow/deny 按注册名精确匹配，写错会静默失效。 */
+    @Test
+    void deepSeekToolRegisteredNameIsDeepSeekWebSearch() {
+        DeepSeekWebSearchTool tool = AgentTools.createDeepSeekWebSearchTool("fake-key", null);
+
+        assertNotNull(tool, "配了 key 就应创建");
+        List<String> names = Arrays.stream(ToolCallbacks.from(tool))
+                .map(c -> c.getToolDefinition().name()).toList();
+        assertEquals(List.of("DeepSeekWebSearch"), names, "实际=" + names);
+    }
+
+    @Test
+    void deepSeekCountFromEnvReachesConstruction() {
+        // 工厂把 env 解析结果交给 builder 的路径：非默认值能建出来不抛即可，解析语义已由工具单测钉住。
+        assertNotNull(AgentTools.createDeepSeekWebSearchTool("fake-key", "20"));
+    }
+
+    /** 完整装饰链之后注册名仍须保持——中间任何一层丢了名字，工具分发就会撞上别家。 */
+    @Test
+    void deepSeekKeepsNameThroughFullDecorationChain() {
+        DeepSeekWebSearchTool tool = AgentTools.createDeepSeekWebSearchTool("fake-key", null);
+
+        ToolCallback decorated = new ToolEventCallback(
+                ToolCallbacks.from(tool)[0], new ConversationState());
+
+        assertEquals("DeepSeekWebSearch", decorated.getToolDefinition().name(),
+                "装饰链末端的注册名，实际=" + decorated.getToolDefinition().name());
+    }
+
+    /**
+     * DEEPSEEK_SEARCH_ENABLED=0 显式关：DeepSeek key 与 LLM provider 共用（同一把 DEEPSEEK_API_KEY），
+     * key 的存在性表达不了「只要模型、不要按次计费的搜索」（5 元/千次成功请求）——
+     * 与智谱 zhipuSearchWanted 同构的开关语义。
+     */
+    @Test
+    void deepSeekSearchWantedRequiresKeyAndNotDisabled() {
+        assertFalse(AgentTools.deepSeekSearchWanted(null, null), "key 未配就不该要搜索");
+        assertFalse(AgentTools.deepSeekSearchWanted("   ", "0"), "key 空白优先于开关判断");
+        assertTrue(AgentTools.deepSeekSearchWanted("key", null), "配了 key 且未配开关 = 现行为（开）");
+        assertTrue(AgentTools.deepSeekSearchWanted("key", " "), "开关空白视为未配 = 开");
+        assertFalse(AgentTools.deepSeekSearchWanted("key", "0"), "0 = 显式关");
+        assertFalse(AgentTools.deepSeekSearchWanted("key", " 0 "), "0 允许两侧空白");
+        assertTrue(AgentTools.deepSeekSearchWanted("key", "1"), "只认 0：其他值不关（回退语义，与 resolve* 一致）");
+        assertTrue(AgentTools.deepSeekSearchWanted("key", "false"),
                 "false 字面量不关——开关只认 0，config.env.example 已写明");
     }
 }

@@ -49,6 +49,7 @@ import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentTool;
 import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
+import io.github.javaside.springai.codetui.agent.tools.DeepSeekWebSearchTool;
 import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
 import io.github.javaside.springai.codetui.agent.tools.RenamedToolCallback;
 import io.github.javaside.springai.codetui.agent.tools.TimeLimitedToolCallback;
@@ -501,12 +502,24 @@ public final class AgentTools {
                         System.getenv("ZHIPU_SEARCH_ENGINE"))
                 : null;
 
+        // DeepSeek 搜索（第四家，国内向）：DEEPSEEK_API_KEY 配了且未显式关（DEEPSEEK_SEARCH_ENABLED=0）
+        // 才注册——key 同样与 LLM provider 共用，且按次计费（5 元/千次成功请求），理由同 zhipuSearchWanted。
+        DeepSeekWebSearchTool deepSeekWebSearch = deepSeekSearchWanted(
+                System.getenv("DEEPSEEK_API_KEY"), System.getenv("DEEPSEEK_SEARCH_ENABLED"))
+                ? createDeepSeekWebSearchTool(
+                        System.getenv("DEEPSEEK_API_KEY"),
+                        System.getenv("DEEPSEEK_SEARCH_COUNT"))
+                : null;
+
         List<Object> rawTools = new ArrayList<>(List.of(fs, sh, grep, glob, webFetch, askTool));
         if (webSearch != null) {
             rawTools.add(webSearch);
         }
         if (zhipuWebSearch != null) {
             rawTools.add(zhipuWebSearch);   // @Tool 对象，与博查同路（统一走装饰链）
+        }
+        if (deepSeekWebSearch != null) {
+            rawTools.add(deepSeekWebSearch);   // @Tool 对象，与博查/智谱同路（统一走装饰链）
         }
         List<ToolCallback> all = new ArrayList<>(Arrays.asList(
                 ToolCallbacks.from(rawTools.toArray())));
@@ -693,7 +706,8 @@ public final class AgentTools {
 
         // 搜索指引：与工具注册状态严格同步——工具没注册就不给模型任何搜索提示，
         // 否则模型会去调一个不存在的工具。
-        String webSearchGuide = webSearchGuide(webSearch != null, zhipuWebSearch != null, braveWebSearch != null);
+        String webSearchGuide = webSearchGuide(webSearch != null, zhipuWebSearch != null,
+                deepSeekWebSearch != null, braveWebSearch != null);
 
         // 署名指引：抽出来供 defaultSystem 与下面的系统提示词估算共用，避免重复解析环境变量。
         String coAuthorGuideText = coAuthorGuide(System.getenv("CODETUI_CO_AUTHOR"));
@@ -905,8 +919,8 @@ public final class AgentTools {
      */
     /**
      * 搜索指引段：按实际注册了哪些搜索工具动态拼装——都没注册就返回空串，模型看不到指引，
-     * 也就不会去调不存在的工具。三家已是 2^3 = 8 态，if 分支硬编码不可维护，改为
-     * 「总起 + 分工句 + 公共尾 + 各家专属坑」条目拼装，第四家只需在 {@link #divisionLine} 与
+     * 也就不会去调不存在的工具。四家已是 2^4 = 16 态，if 分支硬编码不可维护，故走
+     * 「总起 + 分工句 + 公共尾 + 各家专属坑」条目拼装，第五家只需在 {@link #divisionLine} 与
      * 专属坑段各加一个条目。
      *
      * <p><b>跨工具分工只写在这里</b>（按注册状态渲染，绝不提不存在的工具）；工具自身的
@@ -915,20 +929,25 @@ public final class AgentTools {
      * <p>正文<b>不得含花括号</b>：它作为 param 值注入（与 AUTO_MEMORY / PROJECT_INSTRUCTIONS 同法），
      * 花括号会被 StringTemplate 当占位符解析而炸掉整个系统提示渲染。
      */
-    static String webSearchGuide(boolean bocha, boolean zhipu, boolean brave) {
-        if (!bocha && !zhipu && !brave) {
+    static String webSearchGuide(boolean bocha, boolean zhipu, boolean deepseek, boolean brave) {
+        if (!bocha && !zhipu && !deepseek && !brave) {
             return "";
         }
         StringBuilder sb = new StringBuilder();
         sb.append("- 需要项目之外的最新信息（库的用法、报错含义、版本变更、新闻等）时先搜索，别凭记忆臆断外部事实。\n");
-        sb.append("  ").append(divisionLine(bocha, zhipu, brave)).append('\n');
+        sb.append("  ").append(divisionLine(bocha, zhipu, deepseek, brave)).append('\n');
         sb.append("- 拿到网址后，需要网页原文细节就把该网址交给 webFetch 抓取。\n");
         if (bocha || zhipu) {
-            sb.append("  国内源（").append(domesticNames(bocha, zhipu))
+            // 这句只列博查/智谱（deepseek 恒 false）：DeepSeek 没有 freshness 参数，
+            // 把它列进「freshness 一般不要传」反而会误导模型去传不存在的参数。
+            sb.append("  国内源（").append(domesticNames(bocha, zhipu, false))
               .append("）的 freshness 一般不要传：默认不限时间效果最好，硬指时间范围反而容易搜空。\n");
         }
         if (zhipu) {
             sb.append("  ZhipuWebSearch 的 include 与 freshness 不要同时传：两者同时生效时结果条数限制会失效。\n");
+        }
+        if (deepseek) {
+            sb.append("  DeepSeekWebSearch 的时间/域名过滤没有独立参数，用搜索语法（site:、after: 等）直接写进搜索词。\n");
         }
         if (brave) {
             sb.append("  BraveWebSearch 不要用 allowedDomains 限定域名（客户端过滤，白烧配额），改把 site:xxx 写进搜索词。\n");
@@ -937,12 +956,13 @@ public final class AgentTools {
         return sb.toString();
     }
 
-    /** 分工句：国内源（博查/智谱）与 Brave 的组合各有措辞；只描述已注册的工具。 */
-    private static String divisionLine(boolean bocha, boolean zhipu, boolean brave) {
-        String domestic = domesticNames(bocha, zhipu);
+    /** 分工句：国内源（博查/智谱/DeepSeek）与 Brave 的组合各有措辞；只描述已注册的工具。 */
+    private static String divisionLine(boolean bocha, boolean zhipu, boolean deepseek, boolean brave) {
+        String domestic = domesticNames(bocha, zhipu, deepseek);
+        int domesticCount = (bocha ? 1 : 0) + (zhipu ? 1 : 0) + (deepseek ? 1 : 0);
         if (!brave) {
-            if (bocha && zhipu) {
-                return "搜索工具：" + domestic + "，两家互为冗余：一家搜不到或额度耗尽时换另一家再试。";
+            if (domesticCount >= 2) {
+                return "搜索工具：" + domestic + "，多家互为冗余：一家搜不到或额度耗尽时换另一家再试。";
             }
             return "搜索工具：" + domestic + "。";
         }
@@ -953,18 +973,20 @@ public final class AgentTools {
                 + "（国内向，返回摘要）；英文技术文档、GitHub issue、英文新闻用 BraveWebSearch。";
     }
 
-    /** 已注册的国内源工具名，两家时用斜杠连接；无国内源返回空串。 */
-    private static String domesticNames(boolean bocha, boolean zhipu) {
-        if (bocha && zhipu) {
-            return "BochaWebSearch / ZhipuWebSearch";
-        }
+    /** 已注册的国内源工具名（博查/智谱/DeepSeek），多家时用斜杠连接；无国内源返回空串。 */
+    private static String domesticNames(boolean bocha, boolean zhipu, boolean deepseek) {
+        // 拼装而非 if 枚举组合：四家以下组合已有 7 种，if 硬编码在加第五家时必然失控。
+        StringBuilder sb = new StringBuilder();
         if (bocha) {
-            return "BochaWebSearch";
+            sb.append("BochaWebSearch");
         }
         if (zhipu) {
-            return "ZhipuWebSearch";
+            sb.append(sb.isEmpty() ? "" : " / ").append("ZhipuWebSearch");
         }
-        return "";
+        if (deepseek) {
+            sb.append(sb.isEmpty() ? "" : " / ").append("DeepSeekWebSearch");
+        }
+        return sb.toString();
     }
 
     /**
@@ -1013,15 +1035,44 @@ public final class AgentTools {
     }
 
     /**
+     * 按 env 决定是否创建 DeepSeek 搜索工具：{@code apiKey} 空即返回 null（不注册）。
+     * env 的<b>读取</b>在这里，<b>解析语义</b>（回退/钳制）在 {@link DeepSeekWebSearchTool#resolveResultCount}。
+     *
+     * <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。
+     */
+    public static DeepSeekWebSearchTool createDeepSeekWebSearchTool(String apiKey, String countEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return null;
+        }
+        return DeepSeekWebSearchTool.builder(apiKey)
+                .resultCount(DeepSeekWebSearchTool.resolveResultCount(countEnv))
+                .build();
+    }
+
+    /**
      * 智谱搜索是否要注册：{@code apiKey} 非空，且 {@code ZHIPU_SEARCH_ENABLED}（trim 后）不是 {@code "0"}。
      *
-     * <p><b>为何只有智谱有这个开关</b>：它的 key 与 LLM provider 共用（同一把 {@code ZHIPU_API_KEY}），
-     * key 的存在性表达不了「只要模型、不要按次计费的搜索」——没充标准余额、搜索走 Coding Plan
-     * 套餐 MCP 的用户需要显式关掉内置工具。博查/Brave 的 key 本就是为搜索单独配的，不存在此冲突，
-     * 不加开关。开关只认 {@code 0}：其他值一律视为开（回退语义，与 {@code resolve*} 系列一致），
+     * <p><b>为何智谱与 DeepSeek 有这个开关、博查/Brave 没有</b>：前两家的 key 与 LLM provider 共用
+     * （同一把 {@code ZHIPU_API_KEY} / {@code DEEPSEEK_API_KEY}），key 的存在性表达不了
+     * 「只要模型、不要按次计费的搜索」——没充标准余额、搜索走套餐 MCP 或根本不想为搜索付费的用户
+     * 需要显式关掉内置工具。博查/Brave 的 key 本就是为搜索单独配的，不存在此冲突，不加开关。
+     * 开关只认 {@code 0}：其他值一律视为开（回退语义，与 {@code resolve*} 系列一致），
      * 避免用户随手填个 {@code false}/{@code no} 以为关了实际还开着。
      */
     static boolean zhipuSearchWanted(String apiKey, String enabledEnv) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return false;
+        }
+        return !"0".equals(enabledEnv == null ? "" : enabledEnv.trim());
+    }
+
+    /**
+     * DeepSeek 搜索是否要注册：{@code apiKey} 非空，且 {@code DEEPSEEK_SEARCH_ENABLED}（trim 后）
+     * 不是 {@code "0"}。开关语义与 {@link #zhipuSearchWanted} 完全同构（理由见其 javadoc）：
+     * key 复用 {@code DEEPSEEK_API_KEY}，搜索按次计费（5 元/千次成功请求），存在性表达不了
+     * 「只要模型、不要搜索」。
+     */
+    static boolean deepSeekSearchWanted(String apiKey, String enabledEnv) {
         if (apiKey == null || apiKey.isBlank()) {
             return false;
         }
