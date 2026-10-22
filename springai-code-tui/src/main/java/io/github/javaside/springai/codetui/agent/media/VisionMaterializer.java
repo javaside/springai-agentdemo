@@ -75,6 +75,24 @@ public final class VisionMaterializer {
     private volatile String highWaterTurn = "";
     private volatile int highWaterIndex;
 
+    /**
+     * 被<b>服务端拒收</b>（400 图片类错误）的图，跨回合不再兑现。
+     *
+     * <p><b>为什么必须记</b>：同一张图被服务端拒一次，重发还会被拒（2026-10-22 智谱
+     * 「图片输入格式/解析错误」实录：同一截图两个回合内被拒两次，回合两度死亡）。
+     * 没有这层记忆，模型重新 Read 同一张图就会再次兑现——死循环。
+     *
+     * <p>不清理：量级是「被服务端拒过的图」，实践中每次事故 ≤2 张；而被拒图的
+     * {@code send_failed} 标注恰恰依赖它长期存在。
+     */
+    private final Set<String> rejectedShas = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    /** 上次兑现真发出的 sha 集（{@link #rejectLastDelivered} 的操作对象）。没兑现时为空集。 */
+    private volatile Set<String> lastDeliveredShas = Set.of();
+
+    /** 上次物化开始时的高水位线。{@link #rejectLastDelivered} 据此回退，让被拒引用重新可被收集、改写。 */
+    private volatile int highWaterBeforeMaterialize;
+
     public VisionMaterializer(Path root, ImagePreparer preparer, VisionBudget budget) {
         this.root = root;
         this.preparer = preparer;
@@ -84,6 +102,21 @@ public final class VisionMaterializer {
     /** <b>本回合</b>累计兑现的统计（供 {@code /context}）。 */
     public VisionSnapshot lastSnapshot() {
         return lastSnapshot;
+    }
+
+    /**
+     * 把上次兑现的图标记为「服务端拒收」：并入拒绝集 + 回退高水位线。
+     *
+     * <p><b>为什么必须回退高水位线</b>：那次物化已把 {@code highWaterIndex} 推进到消息表末尾，
+     * 直接重跑 {@code materialize} 时收集范围为空，被拒引用<b>得不到改写</b>——引用文本会
+     * 留在 {@code not_in_view}，对一张注定发不出去的图这是假话（模型会再 Read 再撞 400）。
+     * 回退后重跑，被拒引用重新进 {@code admitAll}、被 {@link #rejectedShas} 挡下并如实标注。
+     *
+     * <p>仅在出站方确认 400 后调用；额度按两次发送计，不退还（罕见路径，可接受）。
+     */
+    public void rejectLastDelivered() {
+        rejectedShas.addAll(lastDeliveredShas);
+        highWaterIndex = highWaterBeforeMaterialize;
     }
 
     /**
@@ -151,6 +184,8 @@ public final class VisionMaterializer {
         // 「已推过」的那些仍要进 outcomes——但状态写 delivered，否则模型看到的是「这张你看不见」
         // 与「其实上一轮刚给过你」互相矛盾的信号。
         final int mark = highWaterIndex;
+        // 记录本次物化起点：出站方确认 400 后 rejectLastDelivered() 据此回退（见方法注释）。
+        highWaterBeforeMaterialize = mark;
 
         // sha 去重表：user 先加，从而用户图天然优先——同一张图用户贴过、模型又 Read 了一次，
         // 只发一份，且留在用户那条消息上（那才是他的意图所在）。
@@ -179,6 +214,7 @@ public final class VisionMaterializer {
         // 短路条件是「什么都没改」而<b>不是</b>「什么都没兑现」：一张都没兑现但有引用被判超预算时，
         // 那些 delivery 行仍必须改写，否则模型拿到的是「Read 一次就能看」这句假话。
         if (userOutcomes.isEmpty() && toolMedia.isEmpty()) {
+            lastDeliveredShas = Set.of();       // 本次没发出任何图：清空，防 rejectLastDelivered 误伤上一次的账
             accumulate(turnKey, 0, 0L);   // 本次兑现 0 张：同回合保持原账，换回合才归零
             return prompt;              // 原样返回同一对象，调用方可用 == 判断
         }
@@ -193,7 +229,21 @@ public final class VisionMaterializer {
 
         int delivered = deliveredMedia(userOutcomes).size() + toolMedia.size();
         accumulate(turnKey, delivered, deliveredTokens(userOutcomes) + deliveredTokens(toolOutcomes));
+        lastDeliveredShas = collectDeliveredShas(userOutcomes, toolOutcomes);
         return prompt.mutate().messages(out).build();
+    }
+
+    /** 本次真兑现（media != null）的引用 sha 集，供 {@link #rejectLastDelivered} 整批拒收。 */
+    private static Set<String> collectDeliveredShas(Map<ParsedReference, Outcome> userOutcomes,
+                                                    Map<ParsedReference, Outcome> toolOutcomes) {
+        Set<String> out = new HashSet<>();
+        for (Map.Entry<ParsedReference, Outcome> e : userOutcomes.entrySet()) {
+            if (e.getValue().media() != null) out.add(e.getKey().sha());
+        }
+        for (Map.Entry<ParsedReference, Outcome> e : toolOutcomes.entrySet()) {
+            if (e.getValue().media() != null) out.add(e.getKey().sha());
+        }
+        return Set.copyOf(out);
     }
 
     /**
@@ -322,6 +372,12 @@ public final class VisionMaterializer {
         Map<ParsedReference, Outcome> out = new LinkedHashMap<>();
         int delivered = 0;
         for (ParsedReference r : refs) {
+            // 被服务端拒收过的图（400）：不 prepare、不占名额，标注为最终态 send_failed。
+            // 这条必须排在所有闸门之前——重发必再拒，连解码都是白花钱。
+            if (rejectedShas.contains(r.sha())) {
+                out.put(r, new Outcome(null, FileReference.DELIVERY_SEND_FAILED, 0L));
+                continue;
+            }
             // 张数已满：直接标注，<b>不</b>再 prepare。这是出站热路径，为几张注定发不出去的图
             // 解码缩放是白花钱。代价是超配额的那张若本身还是 HEIC，标注会略失准——两害取其轻。
             if (delivered >= maxDeliveries) {

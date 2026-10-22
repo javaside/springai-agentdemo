@@ -18,6 +18,8 @@ public final class FileReference {
     public static final String DELIVERY_BUDGET_EXCEEDED = "budget_exceeded";
     /** 本回合累计视觉额度已用尽——结束本回合后重新发起。 */
     public static final String DELIVERY_TURN_EXHAUSTED = "turn_budget_exhausted";
+    /** 服务端拒收（400 图片类错误）——这张图重发也会失败，本回合别再试图看它。 */
+    public static final String DELIVERY_SEND_FAILED = "send_failed";
 
     private static final String DELIVERY_PREFIX = "delivery: ";
 

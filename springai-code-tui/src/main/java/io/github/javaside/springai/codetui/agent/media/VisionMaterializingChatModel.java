@@ -86,12 +86,53 @@ public final class VisionMaterializingChatModel implements ChatModel {
 
     @Override
     public ChatResponse call(Prompt prompt) {
-        return delegate.call(materialize(prompt));
+        Prompt first = materialize(prompt);
+        if (first == prompt) {
+            return delegate.call(first);        // 没兑现过图：无从降级
+        }
+        try {
+            return delegate.call(first);
+        } catch (RuntimeException e) {
+            Prompt degraded = degradeAfterImageRejection(prompt, e);
+            if (degraded == null) throw e;
+            return delegate.call(degraded);
+        }
     }
 
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
-        return delegate.stream(materialize(prompt));
+        Prompt first = materialize(prompt);
+        if (first == prompt) {
+            return delegate.stream(first);      // 没兑现过图：无从降级
+        }
+        // onErrorResume 只挂在这条流上：降级重发的 Flux 不再有降级钩子 → 结构上「最多降级一次」，
+        // 第二次 400 直接传播，无需计数器。
+        return delegate.stream(first).onErrorResume(e -> {
+            Prompt degraded = degradeAfterImageRejection(prompt, e);
+            return degraded == null ? Flux.error(e) : delegate.stream(degraded);
+        });
+    }
+
+    /**
+     * 图片类 400 的唯一降级口：确认「服务端拒图」后记拒绝集、重跑物化、剥掉被拒图重发。
+     * 非图片错误返回 null 放行——重试与图片无关的 400 只会白烧一次上传，还会把 delivery
+     * 写成假话。判据刻意收窄（400 + 文案含「图片/image」），漏判只是回到现状（回合死），
+     * 误判却是真伤害。
+     */
+    private Prompt degradeAfterImageRejection(Prompt original, Throwable e) {
+        if (!isImageRejected400(e)) {
+            return null;
+        }
+        materializer.rejectLastDelivered();
+        return materialize(original);
+    }
+
+    private static boolean isImageRejected400(Throwable e) {
+        if (!(e instanceof com.openai.errors.BadRequestException)) return false;
+        String msg = e.getMessage();
+        if (msg == null) return false;
+        String lower = msg.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("图片") || lower.contains("image");
     }
 
     /** 兑现一次。能力谓词由对应 provider 注入，避免兼容网关的同名模型串用全局能力。 */

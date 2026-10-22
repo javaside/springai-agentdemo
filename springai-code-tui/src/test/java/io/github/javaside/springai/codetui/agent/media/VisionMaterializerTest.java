@@ -483,4 +483,75 @@ class VisionMaterializerTest {
                 "额度用尽后 token 还在涨——把「过闸尝试」当成了「真发出去」");
     }
 
+    // ── 服务端拒收后的拒绝记忆（send_failed）─────────────────────
+
+    /**
+     * ★ 图片被服务端 400 拒收（实测：智谱「图片输入格式/解析错误」）后，同一张图
+     * <b>重发也会再次被拒</b>。{@code rejectLastDelivered()} 必须把它记进拒绝集：
+     * 再次物化时不再出图，引用块如实标注 {@code send_failed}——否则模型重新 Read
+     * 同一张图就再次兑现、再次 400，回合死循环（2026-10-22 会话 b524ef 实录）。
+     */
+    @Test
+    void rejectedUserImageIsSkippedWithSendFailedDelivery() throws Exception {
+        png("docs/bug.png");
+        VisionMaterializer m = materializer();
+        String r = ref("bug.png", "docs/bug.png");
+        Prompt p = new Prompt(List.of(new UserMessage("看\n" + r), toolCall(), toolResult(r)));
+
+        Prompt first = m.materialize(p, true);
+        assertEquals(1, countOccurrences(first.getInstructions().get(0).getText(),
+                "delivery: " + FileReference.DELIVERY_DELIVERED), "前置条件：首次应兑现");
+
+        m.rejectLastDelivered();
+        List<Message> out = m.materialize(p, true).getInstructions();
+
+        assertEquals(3, out.size(), "被拒的图不该再追加合成消息");
+        assertTrue(mediaOf(out.get(0)).isEmpty(), "被拒的图不该再挂 media");
+        assertTrue(out.get(0).getText().contains("delivery: " + FileReference.DELIVERY_SEND_FAILED),
+                "被拒的图必须如实标注 send_failed，否则模型会再 Read 再撞 400：\n"
+                        + out.get(0).getText());
+        assertFalse(out.get(0).getText().contains("delivery: " + FileReference.DELIVERY_DELIVERED),
+                "被拒后不应残留 delivered");
+    }
+
+    /** 拒绝只作用于被拒的那张：同回合后续新出现的工具图照常兑现。 */
+    @Test
+    void rejectionDoesNotBlockOtherToolImages() throws Exception {
+        png("a.png");
+        png("b.png");
+        VisionMaterializer m = materializer();
+
+        m.materialize(new Prompt(List.of(new UserMessage(ANCHOR), toolCall(),
+                toolResult(ref("a.png", "a.png")))), true);
+        m.rejectLastDelivered();
+
+        // 同回合（锚点不变）追加一张<b>新</b>图：b 与 a 无关，必须照常出图
+        List<Message> out = m.materialize(new Prompt(List.of(new UserMessage(ANCHOR), toolCall(),
+                toolResult(ref("a.png", "a.png")), toolCall(), toolResult(ref("b.png", "b.png")))),
+                true).getInstructions();
+
+        Message synth = out.get(out.size() - 1);
+        assertEquals(1, mediaOf(synth).size(), "未被拒的 b 被一起拒了");
+        assertTrue(synth.getText().contains("b.png"), "合成消息该列的是 b");
+        assertFalse(synth.getText().contains("a.png"), "被拒的 a 不该混进合成消息");
+    }
+
+    /** 拒绝集跨回合有效：用户下个回合把同一张图重新贴进来，照样 send_failed。 */
+    @Test
+    void rejectionSurvivesAcrossTurns() throws Exception {
+        png("a.png");
+        VisionMaterializer m = materializer();
+        m.materialize(new Prompt(List.of(new UserMessage("回合一"), toolCall(),
+                toolResult(ref("a.png", "a.png")))), true);
+        m.rejectLastDelivered();
+
+        String out = m.materialize(new Prompt(List.of(
+                new UserMessage("回合二重新贴\n" + ref("a.png", "a.png")))), true)
+                .getInstructions().get(0).getText();
+
+        assertTrue(out.contains("delivery: " + FileReference.DELIVERY_SEND_FAILED),
+                "跨回合后同一张图仍该标注 send_failed：\n" + out);
+        assertFalse(out.contains("delivery: " + FileReference.DELIVERY_DELIVERED));
+    }
+
 }
