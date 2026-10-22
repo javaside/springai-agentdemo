@@ -49,6 +49,13 @@ public final class DeepSeekWebSearchTool {
     static final int DEFAULT_COUNT = 8;
     static final int MAX_COUNT = 50;
 
+    /**
+     * 单条摘要渲染上限。文档宣称 summary 600-800 字符，但 2026-10-22 真机实测单条可达 2500+
+     * （内嵌 markdown 标题）——默认 8 条若全文渲染，一次搜索可吃掉上万 token 上下文。
+     * 摘要的职责是让模型挑 URL，不是搬运正文（正文走 webFetch），超线截断。
+     */
+    private static final int MAX_SUMMARY_CHARS = 800;
+
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
             new ParameterizedTypeReference<>() { };
 
@@ -196,10 +203,15 @@ public final class DeepSeekWebSearchTool {
             }
             sb.append('\n').append("   ").append(url).append('\n');
             if (!text.isEmpty()) {
-                sb.append("   ").append(text).append('\n');
+                sb.append("   ").append(clip(text, MAX_SUMMARY_CHARS)).append('\n');
             }
         }
         return sb.toString();
+    }
+
+    /** 摘要渲染截断（理由见 {@link #MAX_SUMMARY_CHARS}）；与错误预览 {@link #preview} 上限不同，不共用。 */
+    private static String clip(String raw, int limit) {
+        return raw.length() <= limit ? raw : raw.substring(0, limit) + "…";
     }
 
     /** RFC 3339（如 2026-06-01T00:00:00+00:00）截到天；短于 10 位则原样返回。 */

@@ -126,6 +126,31 @@ class DeepSeekWebSearchToolTest {
         }
     }
 
+    /**
+     * 实测（2026-10-22 真机）summary 远超文档宣称的 600-800 字符（单条可达 2500+，
+     * 且内嵌 markdown 标题）：默认 8 条若不截断，一次搜索可吃掉上万 token 上下文。
+     * 摘要的用途是让模型挑 URL，不是搬运正文——正文走 webFetch。
+     */
+    @Test
+    void truncatesOverlongSummaryInRender() throws Exception {
+        String longSummary = "字".repeat(1200);
+        String response = """
+                {"results":[{"title":"长摘要条目","url":"https://a.com/long",
+                 "summary":"%s","snippet":"短","site_name":"来源","date":null}]}
+                """.formatted(longSummary);
+        try (StubServer stub = new StubServer(200, response)) {
+            DeepSeekWebSearchTool tool = DeepSeekWebSearchTool.builder("fake-key")
+                    .baseUrl(stub.baseUrl()).build();
+
+            String out = tool.webSearch("q");
+
+            assertTrue(out.contains("…"), "超长 summary 应截断加省略号，实际长度=" + out.length());
+            assertFalse(out.contains(longSummary), "1200 字符的 summary 不该全文渲染");
+            assertTrue(out.length() < 1500,
+                    "单条截断后整段输出应远小于原文，实际=" + out.length());
+        }
+    }
+
     @Test
     void sendsOnlyQueryAndCount() throws Exception {
         try (StubServer stub = new StubServer(200, TWO_RESULTS)) {
