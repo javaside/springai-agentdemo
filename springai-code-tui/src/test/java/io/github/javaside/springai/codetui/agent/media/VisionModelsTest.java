@@ -28,6 +28,17 @@ class VisionModelsTest {
         assertTrue(VisionModels.supportsImage("gpt-6-astra-fast"), "astra fast 模式 id（若存在）");
     }
 
+    /** gpt-6.1-sol / gpt-6-luna（官方模型页 2026-10-22 核实：文本+图像输入）；dated 快照同模型放行。 */
+    @Test
+    void gpt61SolAndGpt6LunaSupportImage() {
+        assertTrue(VisionModels.supportsImage("gpt-6.1-sol"), "gpt-6.1-sol（2026-10-19 上线）");
+        assertTrue(VisionModels.supportsImage("gpt-6-luna"), "gpt-6-luna（2026-09-22 上线）");
+        assertTrue(VisionModels.supportsImage("gpt-6.1-sol-2026-10-19"), "6.1-sol dated 快照 id");
+        assertTrue(VisionModels.supportsImage("gpt-6-luna-fast"), "luna fast 模式 id（若存在）");
+        // 已核实三成员之外仍是未知：被取代的 gpt-6-sol 没接入、没核实视觉，不进名单
+        assertFalse(VisionModels.supportsImage("gpt-6-sol"), "gpt-6-sol（被 6.1 取代，未接入未核实）");
+    }
+
     @Test
     void textOnlyModelsAreNotSupported() {
         assertFalse(VisionModels.supportsImage("deepseek-chat"), "deepseek-chat");

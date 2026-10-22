@@ -51,4 +51,11 @@ class ModelContextWindowsTest {
         assertEquals(1_050_000L, windows.resolve("zhipu", "gpt-6-astra"),
                 "同名模型回退：兼容层转发同 id 时应取原厂窗口而非保守兜底");
     }
+
+    /** gpt-6.1-sol / gpt-6-luna（官方模型页，2026-10-22 核实）：均为 1,050,000，漏登记会落 128K 保守兜底。 */
+    @Test
+    void gpt61SolAndGpt6LunaWindowsAreBuiltIn() {
+        assertEquals(1_050_000L, windows.resolve("openai", "gpt-6.1-sol"));
+        assertEquals(1_050_000L, windows.resolve("openai", "gpt-6-luna"));
+    }
 }

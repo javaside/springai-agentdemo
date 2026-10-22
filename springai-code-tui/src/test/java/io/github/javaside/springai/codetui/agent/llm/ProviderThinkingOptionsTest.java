@@ -53,6 +53,34 @@ class ProviderThinkingOptionsTest {
                 provider.thinkingCapabilities("gpt-5.6-sol").effortValues());
     }
 
+    /**
+     * gpt-6.1-sol（2026-10-19 上线）：官方模型页原文明说 none 与 minimal 均不支持，
+     * effort 五档 low..max——与 astra 同形状（那页只差价：6.1-sol 是 $2/$10）。
+     */
+    @Test
+    void openAiGpt61SolFiveEffortLevelsAndCannotDisable() {
+        OpenAiProvider provider = new OpenAiProvider("k");
+        assertFalse(provider.thinkingCapabilities("gpt-6.1-sol").supportsDisable());
+        assertEquals(List.of("low", "medium", "high", "xhigh", "max"),
+                provider.thinkingCapabilities("gpt-6.1-sol").effortValues());
+        assertThrows(IllegalArgumentException.class, () -> provider
+                .options("gpt-6.1-sol", ThinkingConfig.disabled()));
+    }
+
+    /** gpt-6-luna（2026-09-22 上线）：官方模型页 effort 六档含 none，可关闭；强度五档 low..max。 */
+    @Test
+    void openAiGpt6LunaSixEffortLevelsAndCanDisable() {
+        OpenAiProvider provider = new OpenAiProvider("k");
+        assertTrue(provider.thinkingCapabilities("gpt-6-luna").supportsDisable(),
+                "luna 官方档位含 none → 可关闭");
+        assertEquals(List.of("low", "medium", "high", "xhigh", "max"),
+                provider.thinkingCapabilities("gpt-6-luna").effortValues());
+        assertEquals("max", ((OpenAiChatOptions) provider.options("gpt-6-luna",
+                ThinkingConfig.enabledEffort("max"))).getReasoningEffort());
+        assertEquals("none", ((OpenAiChatOptions) provider.options("gpt-6-luna",
+                ThinkingConfig.disabled())).getReasoningEffort());
+    }
+
     @Test
     void qwenMapsToggleAndBudgetIntoExtraBody() {
         OpenAiChatOptions enabled = (OpenAiChatOptions) new QwenProvider("k")
