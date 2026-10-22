@@ -1086,6 +1086,12 @@ id 口径 `contentHashIfInStore`：父目录是 `.codetui/artifacts` 且文件�
   且失效时不报错、只是账单慢慢长。装饰器在 advisor 链下游，「出站即兑现」字面成立。
 - **aux client 刻意不包它**，有守卫测试断言 `auxChatModel` 返回**恰好** `DynamicAuxChatModel`
   ——否则每次自动压缩都会把历史图兑现成真字节发给摘要模型。
+- **图片被服务端 400 拒收的降级重试**（2026-10-22 事故：智谱「图片输入格式/解析错误」，
+  同一张截图两个回合被拒两次、回合两度死亡）：捕获 `BadRequestException` 且文案含
+  「图片/image」→ `VisionMaterializer.rejectLastDelivered()`（sha 入拒绝集 + 回退高水位线）
+  → 重跑物化（被拒图不再出图、用户图引用如实改写 `send_failed`）→ 重发一次。
+  降级钩子只挂第一次的流上——重发再 400 直接传播，结构上「最多降级一次」。
+  非图片 400 一律放行：漏判只是回到现状（回合死），误判会白烧一次上传并把 delivery 写成假话。
 
 `VisionMaterializer` 的核心规则：**当轮 = 最后一条非合成 `UserMessage` 的下标（anchor）及其之后**，
 纯位置规则无状态，于是历史图片的上下文占用恒为零（模型想重看就 Read 一次，那条路本来就通）。
