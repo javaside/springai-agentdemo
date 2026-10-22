@@ -20,14 +20,19 @@ import java.util.List;
  */
 public final class OpenAiProvider implements LlmProvider {
 
+    // 2026-10-19 上线 GPT-6.1 Sol（官方现 Default 标签）：近 Astra 性能、$2/$10 一代五分之一价；
+    // 2026-09-22 上线 GPT-6 Luna：$0.1/$0.5 便宜快档，视觉 + effort 六档含 none。
+    // 被取代的 gpt-6-sol 不接（与 6.1 同价且更旧，其模型页自指 6.1 为更新版）。
     // 2026-09-03 发布 GPT-6 Astra（官方模型页：1.05M 上下文 / 128K 输出 / 文本+图像输入 / effort 五档
     // low..max 无 none）。分阶段开放中：key 无 early access 会直接报模型不可用，届时 /model 切回 5.6 家族。
     // 2026-07-09 发布 GPT-5.6 家族（新命名：数字=代，Sol/Terra/Luna=能力档）。
     // 裸 gpt-5.6 别名路由到 Sol；要确定性路由用带后缀的显式 id。旧 gpt-5.5/5.4 保留作回退。
     private static final List<ModelOption> MODELS = List.of(
             new ModelOption("gpt-6-astra",  "gpt-6-astra",  "旗舰 · GPT-6 · 编码/研究/计算机操作"),
+            new ModelOption("gpt-6.1-sol",  "gpt-6.1-sol",  "旗舰 · GPT-6.1 · 近 Astra 性能，1/5 价"),
             new ModelOption("gpt-5.6-sol",   "gpt-5.6-sol",   "旗舰 · 复杂推理/编码/安全"),
             new ModelOption("gpt-5.6-terra", "gpt-5.6-terra", "均衡 · 中档"),
+            new ModelOption("gpt-6-luna",   "gpt-6-luna",   "快 · 便宜 · GPT-6"),
             new ModelOption("gpt-5.6-luna",  "gpt-5.6-luna",  "快 · 便宜"),
             new ModelOption("gpt-5.5", "gpt-5.5", "上一代旗舰"),
             new ModelOption("gpt-5.4", "gpt-5.4", "上一代 · 快"));
@@ -92,9 +97,14 @@ public final class OpenAiProvider implements LlmProvider {
 
     @Override
     public ThinkingCapabilities thinkingCapabilities(String modelId) {
-        // gpt-6-astra（官方模型页）：reasoning.effort 五档 low..max，档位表无 none → 不支持关闭。
-        if ("gpt-6-astra".equals(modelId)) {
+        // gpt-6-astra / gpt-6.1-sol（官方模型页）：reasoning.effort 五档 low..max，档位表无 none
+        // → 不支持关闭（6.1-sol 页原文明说 none 与 minimal 均不支持）。
+        if ("gpt-6-astra".equals(modelId) || "gpt-6.1-sol".equals(modelId)) {
             return ThinkingCapabilities.effort(false, List.of("low", "medium", "high", "xhigh", "max"));
+        }
+        // gpt-6-luna（官方模型页）：六档含 none → 可关闭，强度五档 low..max。
+        if ("gpt-6-luna".equals(modelId)) {
+            return ThinkingCapabilities.effort(true, List.of("low", "medium", "high", "xhigh", "max"));
         }
         return ThinkingCapabilities.effort(true, List.of("low", "medium", "high"));
     }

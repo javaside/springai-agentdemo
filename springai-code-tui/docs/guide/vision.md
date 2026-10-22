@@ -52,7 +52,7 @@
 
 | provider | 前缀 |
 |---|---|
-| OpenAI | `gpt-5.`、`gpt-4o`、`o4-`、`gpt-6-astra` |
+| OpenAI | `gpt-5.`、`gpt-4o`、`o4-`、`gpt-6-astra`、`gpt-6.1-sol`、`gpt-6-luna` |
 | Anthropic | `claude-` |
 | 通义千问 | `qwen-vl`、`qwen2-vl`、`qwen2.5-vl`、`qwen3-vl` |
 | 智谱 | `glm-4v`、`glm-4.1v`、`glm-4.5v`、`glm-4.6v`、`glm-5.3-flash`、`glm-5v` |
@@ -61,7 +61,9 @@
 **不在名单里的一律判「不支持」**——误判「不支持」只是拦住你、提示可见可改；误判「支持」是把图真发出去吃一个看不懂的 400。
 
 > **内置清单里能直接用上视觉的：OpenAI、Anthropic、DeepSeek 与智谱四家**（`gpt-6-astra`（2026-09-03
-> 发布，1.05M 上下文，前缀只精确到 astra——gpt-6 家族其他成员未经核实不进名单）、`gpt-5.6-*` / `gpt-5.5` /
+> 发布，1.05M 上下文）、`gpt-6.1-sol`（2026-10-19 上线，近 Astra 性能 1/5 价）、`gpt-6-luna`
+> （2026-09-22 上线，$0.1/$0.5 便宜快档）——GPT-6 家族三个已核实成员均文本+图像输入，前缀各自精确到
+> 具体 id，未核实成员不进名单；`gpt-5.6-*` / `gpt-5.5` /
 > `gpt-5.4`、`claude-*`、`deepseek-flash`、`glm-5.3-flash`——最后这个是 2026-08-26 上线的
 > GLM-5 系首个原生多模态模型，1M 上下文，价格为 glm-5.3 的 1/10）。
 > 千问的内置清单（`qwen3.7-max`/`qwen3.7-plus`/`qwen3.6-flash`/`qwen3-coder-next`）仍无视觉模型——

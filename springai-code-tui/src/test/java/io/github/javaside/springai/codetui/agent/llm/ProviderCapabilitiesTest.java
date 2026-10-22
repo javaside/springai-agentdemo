@@ -12,6 +12,9 @@ class ProviderCapabilitiesTest {
         LlmProvider p = new OpenAiProvider("sk-fake");
         assertTrue(p.capabilities("gpt-5.6-sol").supportsImageInput(), "gpt-5.6-sol 应支持视觉");
         assertTrue(p.capabilities("gpt-6-astra").supportsImageInput(), "gpt-6-astra 应支持视觉（2026-09-03 发布）");
+        // GPT-6 家族三个已核实成员均文本+图像输入（官方模型页，2026-10-22 核实）
+        assertTrue(p.capabilities("gpt-6.1-sol").supportsImageInput(), "gpt-6.1-sol 应支持视觉（2026-10-19 上线）");
+        assertTrue(p.capabilities("gpt-6-luna").supportsImageInput(), "gpt-6-luna 应支持视觉（2026-09-22 上线）");
     }
 
     @Test
