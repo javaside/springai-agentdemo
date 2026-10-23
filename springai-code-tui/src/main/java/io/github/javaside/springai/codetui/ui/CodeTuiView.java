@@ -27,6 +27,7 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoad
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.permission.RuleScope;
+import io.github.javaside.springai.codetui.agent.session.SessionCatalog;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
 import io.github.javaside.springai.codetui.agent.background.BackgroundNotifier;
 import io.github.javaside.springai.codetui.agent.media.ArtifactSource;
@@ -89,6 +90,10 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -321,6 +326,10 @@ public final class CodeTuiView extends InlineApp {
     private int taskIndex;                                           // 任务面板高亮项下标
     private boolean taskExpanded;                                    // Enter 展开选中任务的结果正文
     private String taskPendingKill;                                  // 非 null = 终止确认态（待确认的 taskId）
+    private boolean pickingSessions;                   // /resume 会话面板是否激活
+    private int sessionIndex;                          // 会话面板高亮项
+    /** 会话列表快照：打开时 scan 灌入，后台摘要线程逐条补 digest 后 volatile 整体替换（面板关则丢弃迟到结果）。 */
+    private volatile List<SessionCatalog.SessionSummary> sessionList = List.of();
     private volatile String mcpConnecting;                           // 非 null = 正在后台连接的 server 名（渲染线程读）
     private volatile boolean mcpReloading;                           // MCP 配置 reload 在飞（/reload 或面板 r 键；渲染线程读）
     private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
@@ -382,6 +391,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/reload",  "重扫技能目录与 MCP 配置（SKILL.md / mcp.json 改动生效）"),
             new SlashCommand("/mcp",     "管理 MCP 服务器（启停 / r 重载配置）"),
             new SlashCommand("/permissions", "查看权限模式与生效规则"),
+            new SlashCommand("/resume",  "恢复 / 分叉 / 删除历史会话"),
             new SlashCommand("/tasks",   "查看后台任务（可展开结果 / 终止）"),
             new SlashCommand("/goal",    "设定/查看目标循环（/goal stop 清除）"),
             new SlashCommand("/continue", "继续执行上一批未完成的计划"),
@@ -646,6 +656,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
                 scope(pickingPerms, permsPanelChildren()),          // /permissions 规则面板（可删）
                 scope(pickingTasks, tasksPanelChildren()),          // /tasks 后台任务面板（可展开结果 / 终止）
+                scope(pickingSessions, sessionsPanelChildren()),   // /resume 会话面板
                 scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
                 scope(activePermission != null, permissionChildren()),   // 权限审批面板
                 scope(activePlan != null, planChildren()),          // 计划审批面板（正文在 scrollback，面板只放选项）
@@ -2107,6 +2118,7 @@ public final class CodeTuiView extends InlineApp {
         if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
         if (pickingPerms) return onPermsPanelKey(k);    // 权限规则面板同理
         if (pickingTasks) return onTasksPanelKey(k);    // 后台任务面板同理
+        if (pickingSessions) return onSessionsPanelKey(k); // 会话面板同理
         // 取消图片附件。⚠️ 不要改回 Ctrl+G：Chrome 的 Gemini 扩展把它注册成 OS 级全局热键，
         // 键在任何终端应用看到它之前就被抢走（用户实机撞车，按下去弹的是 Chrome 对话框）。
         // 这类冲突在代码里修不了。Ctrl+X 在 readline 里是前缀键、单按无动作，不撞肌肉记忆，
@@ -2505,6 +2517,15 @@ public final class CodeTuiView extends InlineApp {
             } else {
                 pushClearDegradedNotice();
             }
+            return;
+        }
+        if (cmd.equals("/resume")) {                 // 会话管理面板：恢复/分叉/删除
+            clearInput();
+            if (state.isBusy()) {                    // 闸门同 /clear：动 sessionId 不能与回合/压缩/模态并发
+                state.setNotice("忙碌中，无法切换会话");
+                return;
+            }
+            openSessionsPanel();
             return;
         }
         if (cmd.equals("/context")) {          // 只读快照：任何时刻都可查（含回合进行中），不打断
@@ -4218,6 +4239,101 @@ public final class CodeTuiView extends InlineApp {
     boolean pickingTasksForTest() { return pickingTasks; }
     String tasksStatusTextForTest() { return tasksStatusText(); }
 
+    // ── /resume 会话面板 ────────────────────────────────────────────────
+
+    /** 打开面板：scan（瞬时）立即显示，摘要后台补齐（192 个文件的流式解析不占按键线程，模式同 MCP 后台连接）。 */
+    private void openSessionsPanel() {
+        Path sessionsDir = root.resolve(".codetui").resolve("sessions");
+        List<SessionCatalog.SessionSummary> scanned = SessionCatalog.scan(sessionsDir);
+        sessionList = scanned;
+        sessionIndex = 0;
+        pickingSessions = true;
+        if (scanned.isEmpty()) {
+            return;   // 空列表照常打开（同 /tasks：说明从哪来比什么都不弹有用）
+        }
+        Thread t = new Thread(() -> fillSessionDigests(sessionsDir, scanned), "session-digests");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * 逐文件补摘要。每解析一条就整体替换快照并请求重绘（摘要渐进出现，渲染由既有合并机制兜住）；
+     * {@code !pickingSessions} 即停——面板已关，迟到结果回写只会复活一个看不见的列表。
+     */
+    private void fillSessionDigests(Path sessionsDir, List<SessionCatalog.SessionSummary> scanned) {
+        List<SessionCatalog.SessionSummary> filled = new ArrayList<>(scanned.size());
+        for (SessionCatalog.SessionSummary s : scanned) {
+            if (!pickingSessions) {
+                return;
+            }
+            String digest = SessionCatalog.firstUserDigest(sessionsDir.resolve(s.id() + ".json"));
+            filled.add(new SessionCatalog.SessionSummary(s.id(), s.mtimeMillis(), s.sizeBytes(), digest));
+            sessionList = List.copyOf(filled);
+            publishLocalViewChange();
+        }
+    }
+
+    /**
+     * 面板按键：本任务只处理 ↑↓/Esc；Enter（恢复）/f（分叉）/d（删除）在下一任务补。
+     * 始终 HANDLED（屏蔽文本编辑），空列表防除零——同 /tasks 纪律。
+     */
+    private EventResult onSessionsPanelKey(KeyEvent k) {
+        if (k.isCancel()) { pickingSessions = false; return EventResult.HANDLED; }
+        int n = sessionList.size();
+        if (n == 0) return EventResult.HANDLED;
+        sessionIndex = clampIndex(sessionIndex, n);
+        if (k.code() == KeyCode.UP)   { sessionIndex = (sessionIndex - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN) { sessionIndex = (sessionIndex + 1) % n; return EventResult.HANDLED; }
+        return EventResult.HANDLED;               // 其余键一律吞掉（Enter/f/d 到来前也不落进输入框）
+    }
+
+    /** 面板渲染：标题 + 每会话一行（★ 当前 · 本地时间 · 摘要）。模态前置时收起（同 /tasks）。 */
+    private Element[] sessionsPanelChildren() {
+        if (!pickingSessions) return new Element[0];
+        if (activePermission != null || activePlan != null || activeAsk != null) return new Element[0];
+        List<SessionCatalog.SessionSummary> sessions = sessionList;
+        List<Element> els = new ArrayList<>();
+        els.add(text("  ↺ 会话（↑↓ 选择 · Esc 关闭）").style(PICK_TITLE));
+        if (sessions.isEmpty()) {
+            els.add(text("    （暂无历史会话）开始对话后会保存在 .codetui/sessions/。").style(PICK_DESC));
+            return els.toArray(new Element[0]);
+        }
+        String current = onSubmit.currentSessionId();
+        int sel = clampIndex(sessionIndex, sessions.size());
+        for (int i = 0; i < sessions.size(); i++) {
+            SessionCatalog.SessionSummary s = sessions.get(i);
+            String digest = (s.digest() == null) ? "（无对话）" : s.digest();
+            String line = (s.id().equals(current) ? "★ " : "  ") + sessionTime(s.id()) + " · " + digest;
+            els.add(text(line).style(i == sel ? PICK_SEL : PICK_DESC));
+        }
+        return els.toArray(new Element[0]);
+    }
+
+    /** id 前 15 字符是 UTC `uuuuMMdd'T'HHmmss`（SessionIds 约定）；显示转本地时区。解析失败回退原样（外部改名过的 id）。 */
+    private static String sessionTime(String id) {
+        if (id.length() < 15) return id;
+        try {
+            return LocalDateTime.parse(id.substring(0, 15),
+                            DateTimeFormatter.ofPattern("uuuuMMdd'T'HHmmss"))
+                    .atZone(ZoneOffset.UTC).withZoneSameInstant(ZoneId.systemDefault())
+                    .format(DateTimeFormatter.ofPattern("MM-dd HH:mm"));
+        } catch (RuntimeException e) {
+            return id;
+        }
+    }
+
+    /** 面板态状态行（自己回显 notice——statusLine 的面板分支早于通用 notice 分支 return，同 /permissions 的老账）。 */
+    String sessionsStatusText() {
+        String notice = state.notice();
+        if (notice != null && !notice.isEmpty()) return notice + " · Esc 关闭";
+        return "↺ 会话 · ↑↓ 选择 · Esc 关闭";
+    }
+
+    // 测试钩子
+    boolean pickingSessionsForTest() { return pickingSessions; }
+    List<SessionCatalog.SessionSummary> sessionsForTest() { return sessionList; }
+    int sessionIndexForTest() { return sessionIndex; }
+
     /** /reload：重扫两层技能目录 + （空闲时）重载 MCP 配置，各打一行结果
      * （运行中增删 SKILL.md、改 mcp.json 即时生效，无需重启）。 */
     private void reloadSkills() {
@@ -4496,6 +4612,7 @@ public final class CodeTuiView extends InlineApp {
         if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingPerms) return text(permsStatusText()).style(THINK);
         if (pickingTasks) return text(tasksStatusText()).style(THINK);
+        if (pickingSessions) return text(sessionsStatusText()).style(THINK);
         if (configuringThinking) return text("↑↓/kj 选择 · ←→/hl 调整 · Enter 保存 · Esc 放弃").style(THINK);
         if (pickingModel) {
             String notice = state.notice();
