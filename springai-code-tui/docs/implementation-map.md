@@ -22,6 +22,7 @@
 | `/context` | `ui.ContextUsage` | `SessionTokenEstimator`、`TokenUsageAccumulator` | [6.1](#61-context-的数据来源) |
 | 自动压缩 / `/compact` | `PreflightCompactionAdvisor` | `BoundedSummarizationCompactionStrategy` | [6.2](#62-自动压缩与-compact) |
 | 会话持久化 / `-c` | `FileSessionRepository` | `SessionEvents`、`ui.HistoryReplay` | [7](#7-会话持久化与恢复) |
+| 会话管理 /resume /fork | `CodeTuiView.openSessionsPanel` | `SessionCatalog`、`CodingAgent.switchContext`、`FileSessionRepository.fork` | [7](#7-会话持久化与恢复) |
 | 工具体系 | `AgentTools.build` 装饰循环 | `PermissionCallback` → `ToolEventCallback` → `MediaExternalizingCallback` | [8](#8-工具体系) |
 | 权限层 | `PermissionCallback.call` | `permission.PermissionEngine` | [9](#9-权限层) |
 | MCP | `McpRegistry.init` | `McpConfigLoader`、`McpClientManager` | [10](#10-mcp) |
@@ -490,11 +491,33 @@ tool_call 渲 `⏺ name 摘要` 且 `raw=null`（**不重绘 diff**，历史里�
 只护 `todo`，不护 `subtasks`（任务面板）：谁在跑天然回合级，不管是不是 `/continue` 都该清。
 
 `/clear` → `CodingAgent.clearContext()` 只换 volatile `sessionId`（下一回合自动建空会话），
-**旧文件原样保留可 `-c` 恢复**；顺带 `usageAccumulator.reset()`、`clearSessionRules()`、
-`interjections.drainForRefill()`。
+**旧文件原样保留可 `-c` 恢复**；会话级清理与 `/resume` 的切换共用同一实现（6 个动作，见 7.1）。
 
 所有跑在 reactive/后台线程的会话写入方法都**先把 `sessionId` 快照到局部变量**——防 UI 线程的
 `/clear` 在两次读之间换掉 volatile，把旧会话的净化结果写进新会话 id。
+
+### 7.1 会话管理（/resume 面板、/fork、--resume）
+
+`SessionCatalog`（agent.session）是面板与 `--resume` 共用的轻量索引：`scan` 只读文件名 + mtime
+（mtime 降序，瞬时）；首条用户消息摘要走 `firstUserDigest`——Jackson 流式逐 token 读 `events[]`、
+读到首条 USER 即停（Jackson 3 坑：`JsonFactory` 在 `tools.jackson.core.json` 子包、字段名 token
+是 `PROPERTY_NAME`、异常全 unchecked）。`/resume` 面板即本地选择器四件套（[5](#5-斜杠命令)）：
+打开秒显列表（★ 当前会话 · id 前 15 位 UTC 解析成本地时间 · 无 digest 显「（无对话）」——
+未补齐与确实无对话刻意同显示），
+daemon 线程逐条**原位补**摘要——volatile 整体替换快照、`!pickingSessions` 即停；Enter 恢复、
+`f` 分叉选中项、`d` 两段式删除，**当前会话不可删**（删了下一回合 SessionMemoryAdvisor 会按 id
+重建空文件），删除后重新 scan 复核、如实回报。恢复/分叉共用 `switchToSession`，对齐 `/clear`
+完整模板：busy 复检（goal 自动轮与排队出队都能**无按键**自发启动回合，正是上一段 volatile 竞态）
+→ 先验证存在再 `killAllBackgroundTasks` → `switchContext` → 复位 → 清屏（`scrollTail.clear` 防
+resize 重放复活上个会话，`lastShownModel`/`pendingSkill` 一并复位）→ `replayHistory`（头行参数化
+区分「已恢复 / 已分叉（源自 …，原会话保留）」）。`switchContext(String)` 与 `clearContext()`
+同体——6 个切换动作（换 id、清用量/会话权限规则/插话/goal/todo 提醒）唯一实现，`/clear` 是 newId
+特例；UI 接线走 `SubmitHandler` 6 个 default 会话门面（currentSessionId / switchContext /
+sessionExists / forkSession / deleteSession / sessionMessages）。`FileSessionRepository.fork`
+复制源会话**已净化**事件并逐条重写事件 `sessionId`（直拷文件会让事件自报的 id 与所在文件对不上），
+源会话不动、空会话拒绝。`--resume <id前缀>` 精确命中优先、其次唯一前缀，零/多命中列候选退出 1，
+与 `-c` 互斥。三步剥离的单一出处是 `agent.session.UserTextStripper`（自 HistoryReplay 搬移，
+后者委托）。
 
 ---
 
