@@ -56,6 +56,7 @@ import io.github.javaside.springai.codetui.agent.seam.SubmitHandler;
 import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
 import io.github.javaside.springai.codetui.agent.session.ContextStats;
+import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.session.SessionEvents;
 import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
@@ -1144,27 +1145,62 @@ public final class CodingAgent implements SubmitHandler {
      */
     @Override
     public void clearContext() {
-        this.sessionId = SessionIds.newId();
+        switchContext(SessionIds.newId());
+    }
+
+    /**
+     * 切到指定会话（{@code /resume}）：与 {@code /clear} 共用同一实现体——会话级清理共 6 个动作，
+     * 两处各写一份迟早漂移。目标 null/空白回退新 id（防误传）；调用方保证空闲时调用、目标已验证存在。
+     */
+    @Override
+    public void switchContext(String targetSessionId) {
+        this.sessionId = (targetSessionId == null || targetSessionId.isBlank())
+                ? SessionIds.newId() : targetSessionId;
         if (usageAccumulator != null) {
-            usageAccumulator.reset();   // /clear 换新会话，缓存命中率从 0 重新累计
+            usageAccumulator.reset();   // 换会话，缓存命中率从 0 重新累计
         }
         if (permissionEngine != null) {
-            permissionEngine.clearSessionRules();
+            permissionEngine.clearSessionRules();   // 「允许，本会话不再问」的作用域是授权那一刻的会话
         }
         if (interjections != null) {
-            // /clear 换了新会话：delivered/anchor 指向的旧会话已经不存在，留着会让下个回合
-            // 的补历史插到一个对不上的位置。整体丢弃（未送达的也一并丢——用户主动清空了上下文）。
-            interjections.drainForRefill();
+            interjections.drainForRefill();   // 那些话是冲着旧会话说的
         }
         if (goalManager != null) {
-            // 同理：活动 goal 是冲着旧会话定的，会话没了还让它驱动自动轮等于对着空气干活。
-            goalManager.clear("clear-context");
+            goalManager.clear("clear-context");   // reason 沿用 /clear 同串：不引入无谓 diff，也不绑定测试
         }
         if (todoReminder != null) {
-            // 旧会话的清单快照留着，新会话第一次工具调用后就会被提醒「你的清单过期了」——
-            // 可新会话里的模型从没写过它，只会凭空重建一份清单。与 goalManager.clear 同理：整份丢弃。
-            todoReminder.reset();
+            todoReminder.reset();   // 旧清单不该吓唬新会话
         }
+    }
+
+    // ── SubmitHandler 会话门面落地（/resume 面板与 /fork 的 UI 接线；桩路径 null 依赖全降级） ──
+
+    @Override
+    public String currentSessionId() { return sessionId; }
+
+    @Override
+    public boolean sessionExists(String sessionId) {
+        return sessionRepository != null && sessionId != null
+                && sessionRepository.findById(sessionId).isPresent();
+    }
+
+    @Override
+    public java.util.Optional<String> forkSession(String sourceId) {
+        // DefaultSessionService 不暴露 fork（同 replaceEvents 的先例），仓库实现才有；测试可直接注入 FileSessionRepository
+        return (sessionRepository instanceof FileSessionRepository fsr)
+                ? fsr.fork(sourceId) : java.util.Optional.empty();
+    }
+
+    @Override
+    public void deleteSession(String sessionId) {
+        if (sessionRepository != null && sessionId != null) {
+            sessionRepository.delete(sessionId);
+        }
+    }
+
+    @Override
+    public List<Message> sessionMessages(String sessionId) {
+        return (sessionService == null || sessionId == null) ? List.of() : sessionService.getMessages(sessionId);
     }
 
     // ── 插话门面（队列是唯一事实来源，这里只转发；interjections==null 的桩路径全退化为无操作） ──
