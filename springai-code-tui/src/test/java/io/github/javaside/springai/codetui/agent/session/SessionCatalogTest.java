@@ -43,6 +43,14 @@ class SessionCatalogTest {
         assertEquals(List.of(), SessionCatalog.scan(dir));
     }
 
+    @Test
+    void scan_skipsDirectoryNamedLikeJson(@TempDir Path dir) throws IOException {
+        // 名字以 .json 结尾的子目录不是会话文件：混进列表会让后续摘要任务对一个目录做 JSON 解析
+        Files.createDirectory(dir.resolve("20260303T000000-cc.json"));
+
+        assertEquals(List.of(), SessionCatalog.scan(dir));
+    }
+
     // ── firstUserDigest（Jackson 流式，读到首条 USER 即停）────────────────────
 
     /** 会话文件的最小合法 JSON 形状（与 FileSessionRepository.PersistedSession 对齐的字段子集）。 */

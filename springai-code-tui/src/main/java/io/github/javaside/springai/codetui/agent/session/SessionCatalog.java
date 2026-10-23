@@ -38,6 +38,7 @@ public final class SessionCatalog {
         }
         try (Stream<Path> files = Files.list(baseDir)) {
             return files.filter(p -> p.getFileName().toString().endsWith(".json"))
+                    .filter(Files::isRegularFile)   // 名为 x.json 的子目录不是会话文件，别让它混进摘要任务
                     .map(SessionCatalog::toSummary)
                     .sorted(Comparator.comparingLong(SessionSummary::mtimeMillis).reversed())
                     .toList();
