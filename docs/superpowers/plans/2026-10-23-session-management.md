@@ -67,7 +67,8 @@ class UserTextStripperTest {
         String raw = "等一下，先看测试";
         String stored = InterjectionText.wrap("<skill_instruction>\nx\n</skill_instruction>\n\n"
                 + FileReference.OPEN + "\nname: a.png\n" + FileReference.CLOSE + "\n" + raw);
-        assertEquals(raw, UserTextStripper.stripAll(stored), "包裹+技能前缀+引用块三层同时剥");
+        // 引用块是【折叠】为一行 📎 而非删除（与 HistoryReplay 回放同语义）——期望必须含折叠行
+        assertEquals("📎 a.png\n" + raw, UserTextStripper.stripAll(stored), "包裹+技能前缀剥除、引用块折叠");
     }
 
     @Test
@@ -264,9 +265,9 @@ git commit -m "feat: SessionCatalog 扫描会话目录（文件名+mtime，瞬�
 - Test: `SessionCatalogTest.java`（补用例）
 
 **Interfaces:**
-- Consumes: Task 1 的 `UserTextStripper.stripAll`；Jackson 3 `tools.jackson.core.JsonFactory/JsonParser/JsonToken`。
+- Consumes: Task 1 的 `UserTextStripper.stripAll`；Jackson 3（`tools.jackson.core.json.JsonFactory`、`tools.jackson.core.JsonParser/JsonToken`——注意包名，见 Step 3 的坑记录）。
 - Produces: `SessionCatalog.firstUserDigest(Path file) -> String`（null = 无首条 user/损坏/空）。Task 7 的后台摘要线程依赖。
-- **对 spec 的实现级微调（在此记录）**：spec 列表行的「（无法解析）」与「（无对话）」合并显示为「（无对话）」——区分两态需给返回值加哨兵语义，对面板价值低。
+- **对 spec 的实现级微调（在此记录）**：spec 列表行的「（无法解析）」与「（无对话）」合并显示为「（无对话）」，且「（加载中…）」中间态一并取消（digest 为 null 一律显示「（无对话）」——区分三态需给返回值加哨兵语义，且后台线程通常毫秒级补齐，中间态价值低）。
 
 - [ ] **Step 1: 补失败测试（追加到 `SessionCatalogTest`）**
 
@@ -318,14 +319,17 @@ Expected: 编译失败 `cannot find symbol: firstUserDigest`。
 - [ ] **Step 3: 最小实现（加进 `SessionCatalog`）**
 
 ```java
-    private static final JsonFactory JSON = new JsonFactory();
+    // Jackson 3 两个坑（javap 实测 jackson-core 3.1.4）：JsonFactory 在 tools.jackson.core.json 子包
+    // （不在 tools.jackson.core）；字段名 token 是 PROPERTY_NAME（Jackson 2 的 FIELD_NAME 已改名）。
+    // 且 Jackson 3 异常全为 unchecked（JacksonException extends RuntimeException），catch
+    // RuntimeException 即覆盖损坏 JSON——不要 catch IOException（无来源，编译期 unreachable）。
+    private static final tools.jackson.core.json.JsonFactory JSON = new tools.jackson.core.json.JsonFactory();
     private static final int DIGEST_MAX = 80;
 
     /**
      * 流式解析：逐 token 走 events[]，读到首条 USER 的 content 即返回（本机最大会话 773KB，
      * 全文解析在后台线程 × 192 个文件也是白烧 IO——首条 user 几乎总在文件头部）。
      * 返回 null = 无首条 user / 损坏 / 文件不存在（面板统一显示「（无对话）」，见 spec 微调记录）。
-     * Jackson 3 异常全为 unchecked RuntimeException，catch 它即覆盖损坏 JSON。
      */
     public static String firstUserDigest(Path file) {
         if (!Files.isRegularFile(file)) {
@@ -335,16 +339,16 @@ Expected: 编译失败 `cannot find symbol: firstUserDigest`。
             if (p.nextToken() != JsonToken.START_OBJECT) {
                 return null;
             }
-            while (p.nextToken() == JsonToken.FIELD_NAME) {
+            while (p.nextToken() == JsonToken.PROPERTY_NAME) {
                 String field = p.currentName();
                 JsonToken valueToken = p.nextToken();
                 if ("events".equals(field) && valueToken == JsonToken.START_ARRAY) {
-                    String digest = firstUserInEvents(p);
-                    return digest;   // 无论找到与否，events 走完/首条命中都到此为止——后面的字段（version 等）不读
+                    // 无论找到与否，events 走完/首条命中都到此为止——后面的字段（version 等）不读
+                    return firstUserInEvents(p);
                 }
                 p.skipChildren();   // 其它顶层字段整体跳过
             }
-        } catch (RuntimeException | IOException e) {
+        } catch (RuntimeException e) {
             log.debug("会话摘要解析失败 {}：{}", file, e.toString());
             return null;
         }
@@ -352,11 +356,11 @@ Expected: 编译失败 `cannot find symbol: firstUserDigest`。
     }
 
     /** events 数组内：逐事件对象找 messageType=USER；命中返回折叠截断后的摘要，遍历完无则 null。 */
-    private static String firstUserInEvents(JsonParser p) throws IOException {
+    private static String firstUserInEvents(JsonParser p) {
         while (p.nextToken() == JsonToken.START_OBJECT) {
             String type = null;
             String content = null;
-            while (p.nextToken() == JsonToken.FIELD_NAME) {
+            while (p.nextToken() == JsonToken.PROPERTY_NAME) {
                 String f = p.currentName();
                 JsonToken t = p.nextToken();
                 if ("messageType".equals(f)) {
@@ -384,7 +388,7 @@ Expected: 编译失败 `cannot find symbol: firstUserDigest`。
     }
 ```
 
-imports 追加：`tools.jackson.core.JsonFactory`、`tools.jackson.core.JsonParser`、`tools.jackson.core.JsonToken`、`java.nio.file.Files`。
+imports 追加：`tools.jackson.core.json.JsonFactory`、`tools.jackson.core.JsonParser`、`tools.jackson.core.JsonToken`。
 
 - [ ] **Step 4: 跑测试确认绿**
 
@@ -543,7 +547,7 @@ git commit -m "feat: FileSessionRepository.fork 分叉会话（事件 sessionId 
   - `default Optional<String> forkSession(String sourceId)` → `instanceof FileSessionRepository` 转型调 `fork`，否则 empty
   - `default void deleteSession(String sessionId)` → `sessionRepository.delete(id)`
   - `default List<org.springframework.ai.chat.messages.Message> sessionMessages(String sessionId)` → `sessionService.getMessages(id)`
-- **测试取舍（在此记录）**：6 个切换动作中，sessionId / TodoStaleReminder / TokenUsageAccumulator 三项用真对象可观察断言；PermissionEngine / Interjections / GoalManager 三项由「`clearContext()` 与 `switchContext(String)` 共享同一实现体」的结构保证（`clearContext` 一行委托），不为它们造重装配——与 `CodingAgentClearContextTest` 只装配一个依赖的既有分寸一致。
+- **测试取舍（在此记录）**：6 个切换动作中，sessionId / TodoStaleReminder / TokenUsageAccumulator 三项用真对象可观察断言（accumulator 经 23 参全参构造器注入——它无 bind 方法、是 final 字段）；PermissionEngine / Interjections / GoalManager 三项由「`clearContext()` 与 `switchContext(String)` 共享同一实现体」的结构保证（`clearContext` 一行委托），不为它们造重装配——与 `CodingAgentClearContextTest` 只装配一个依赖的既有分寸一致。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -553,13 +557,14 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder;
 import org.junit.jupiter.api.Test;
-import org.springaicommunity.agent.tools.TodoWriteTool.Todos.TodoItem;
 import org.springaicommunity.agent.tools.TodoWriteTool.Todos.Status;
+import org.springaicommunity.agent.tools.TodoWriteTool.Todos.TodoItem;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -569,11 +574,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CodingAgentSwitchContextTest {
 
-    private CodingAgent agentWith(TokenUsageAccumulator acc, TodoStaleReminder reminder) {
-        CodingAgent agent = new CodingAgent(null, null, "old-session", new AtomicLong(), null, null, null);
-        if (acc != null) agent.bindUsageAccumulator(acc);       // 若无此绑定方法，见 Step 3 的装配说明
-        if (reminder != null) agent.bindTodoReminder(reminder);
-        return agent;
+    private static CodingAgent agentWithAccumulator(TokenUsageAccumulator acc) {
+        // 23 参全参构造器（accumulator 是 final 字段、无 bind 方法，7 参桩路径硬编码 null）。
+        // skills 必须传 List.of()——null 会在构造器 List.copyOf 处 NPE；其余依赖测试不触及，传 null。
+        // 参数序以 CodingAgent 全参构造器签名为准（执行时对齐，断言语义不变）。
+        return new CodingAgent(null, null, null, "old-session", new AtomicLong(), null, null, null,
+                List.of(), null, null, null, null, null, null, null, null, null, null, null,
+                acc, 0L, null);
     }
 
     @Test
@@ -584,17 +591,29 @@ class CodingAgentSwitchContextTest {
     }
 
     @Test
-    void switchContext_resetsTodoReminder_andUsageAccumulator() {
+    void switchContext_resetsTodoReminder() {
+        CodingAgent agent = new CodingAgent(null, null, "old-session", new AtomicLong(), null, null, null);
         TodoStaleReminder reminder = new TodoStaleReminder(1);
         reminder.onControllerTodoWritten(List.of(new TodoItem("旧任务", Status.in_progress, "旧任务")));
-        TokenUsageAccumulator acc = new TokenUsageAccumulator();
-        acc.record(org.springframework.ai.chat.metadata.Usage.empty());   // 若 empty() 不存在，改用任一非空 Usage 构造
-        CodingAgent agent = new CodingAgent(null, null, "s", new AtomicLong(), null, null, null);
         agent.bindTodoReminder(reminder);
 
         agent.switchContext("t2");
 
         assertNull(reminder.reminderOrNull(9L, "Bash"), "旧会话清单不吓唬新会话");
+    }
+
+    @Test
+    void switchContext_resetsUsageAccumulator() {
+        TokenUsageAccumulator acc = new TokenUsageAccumulator();
+        // Usage 接口无静态工厂；先例见 TokenUsageAccumulatorTest（new DefaultUsage(...)）
+        acc.record(new org.springframework.ai.chat.metadata.DefaultUsage(100, 20, 120, null, 0L, 0L));
+        CodingAgent agent = agentWithAccumulator(acc);
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                TokenUsageAccumulator.Snapshot.empty(), acc.snapshot(), "前置：已记一笔用量");
+
+        agent.switchContext("t3");
+
+        assertEquals(TokenUsageAccumulator.Snapshot.empty(), acc.snapshot(), "换会话后用量从 0 重新累计");
     }
 
     @Test
@@ -607,7 +626,7 @@ class CodingAgentSwitchContextTest {
 }
 ```
 
-（注：`bindUsageAccumulator` 的实际名称以 `CodingAgent` 现有绑定为——`bindTodoReminder` 已由 `CodingAgentClearContextTest` 证实存在；accumulator 若构造器注入则用构造重载。执行时按真实 API 微调，**断言语义不变**。）
+（注：23 参构造器的参数序与 `DefaultUsage` 的构造签名以源码为准——`DefaultUsage` 先例见 `TokenUsageAccumulatorTest`；执行时对齐参数序，**断言语义不变**。若全参构造器装配过重，允许降级为只保留前三用例并在测试类 javadoc 注明 accumulator 覆盖缺口，但不得保留「看似断言实际没绑」的假覆盖。）
 
 - [ ] **Step 2: 跑测试确认红**
 
@@ -641,7 +660,7 @@ Expected: 编译失败 `cannot find symbol: switchContext`。
             interjections.drainForRefill();   // 那些话是冲着旧会话说的
         }
         if (goalManager != null) {
-            goalManager.clear("switch-context");
+            goalManager.clear("clear-context");   // reason 沿用 /clear 同串：不引入无谓 diff，也不绑定测试
         }
         if (todoReminder != null) {
             todoReminder.reset();   // 旧清单不该吓唬新会话
@@ -703,7 +722,7 @@ Expected: 编译失败 `cannot find symbol: switchContext`。
     default List<org.springframework.ai.chat.messages.Message> sessionMessages(String sessionId) { return List.of(); }
 ```
 
-（若 `SubmitHandler` 已 import `java.util.Optional` 与 `Message` 则去掉全限定名；`CodingAgent` 的 `switchContext` 加 `@Override`。）
+（若 `SubmitHandler` 已 import `java.util.Optional` 与 `Message` 则去掉全限定名；`CodingAgent` 的 `switchContext` 加 `@Override`；`CodingAgent` 需补 import `agent.session.FileSessionRepository`——`instanceof` 模式匹配用到。）
 
 - [ ] **Step 4: 跑新旧测试确认绿**
 
@@ -861,8 +880,8 @@ imports：`SessionCatalog`、`java.util.List`（若未有）。
 
 - [ ] **Step 4: 跑测试确认绿 + 全类回归**
 
-Run: `mvn -pl springai-code-tui -am test -Dtest='ResumeStartupTest,PermissionStartupTest' -Dsurefire.failIfNoSpecifiedTests=false`
-Expected: 全 PASS（`PermissionStartupTest` 不动 = 解析区未被碰坏）。
+Run: `mvn -pl springai-code-tui -am test -Dtest='ResumeStartupTest,PermissionStartupTest,StartupHelpTest' -Dsurefire.failIfNoSpecifiedTests=false`
+Expected: 全 PASS（`PermissionStartupTest` 解析区未被碰坏；`StartupHelpTest.usageCoversAllFlags` 是「帮助不撒谎」的守门测试，新增 `--resume` 行必须过它）。
 
 - [ ] **Step 5: 提交**
 
@@ -912,21 +931,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CodeTuiViewSessionsPanelTest {
 
-    /** 记录型桩：currentSessionId 可编程（★ 行判定用）。 */
+    /** 记录型桩：currentSessionId 可编程（★ 行判定用）；root 在 Task 8 扩展 deleteSession 真删时用。 */
     private static final class SessionsStub implements SubmitHandler {
+        final Path root;
         String currentId = "20260102T000000-cur999";
         final java.util.List<String> switchedTo = new ArrayList<>();
+
+        SessionsStub(Path root) { this.root = root; }
 
         @Override public reactor.core.Disposable submit(String text) { return null; }
         @Override public String currentSessionId() { return currentId; }
         @Override public void switchContext(String targetSessionId) { switchedTo.add(targetSessionId); }
     }
 
-    private static void writeSession(Path root, String id, String firstUserJson) throws IOException {
+    private static Path writeSession(Path root, String id, String firstUserJson) throws IOException {
         Path dir = root.resolve(".codetui").resolve("sessions");
         Files.createDirectories(dir);
-        Files.writeString(dir.resolve(id + ".json"),
+        Path f = dir.resolve(id + ".json");
+        Files.writeString(f,
                 "{\"events\":[{\"messageType\":\"USER\",\"content\":\"" + firstUserJson + "\"}]}");
+        return f;   // 返回文件路径：删除用例（Task 8）要拿它断言真删
     }
 
     private static CodeTuiView openPanel(ConversationState state, SessionsStub stub, Path root) {
@@ -942,17 +966,23 @@ class CodeTuiViewSessionsPanelTest {
         writeSession(root, "20260101T000000-aaaaaa", "修 NPE");
         writeSession(root, "20260102T000000-cur999", "当前这个");
         ConversationState state = new ConversationState();
-        CodeTuiView v = openPanel(state, new SessionsStub(), root);
+        CodeTuiView v = openPanel(state, new SessionsStub(root), root);
 
         assertTrue(v.pickingSessionsForTest(), "面板应已打开");
         String screen = ViewScreen.of(v);
-        assertTrue(screen.contains("20260101T000000-aaaaaa".substring(0, 15)), "时间来自 id 前缀");
+        // 时间行渲染的是本地时区的 MM-dd HH:mm（sessionTime 换算），不是 id 原文——
+        // 期望串用与实现同口径的 UTC→本地换算生成，勿硬编码（时区在西半球会差一天）
+        String expectedTime = java.time.LocalDateTime.parse("20260101T000000",
+                        java.time.format.DateTimeFormatter.ofPattern("uuuuMMdd'T'HHmmss"))
+                .atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));
+        assertTrue(screen.contains(expectedTime), "时间来自 id 前缀换算，实际：\n" + screen);
         assertTrue(screen.contains("★"), "当前会话有 ★ 标记");
 
         // 忙碌闸门：回合中 /resume 拒绝（同 /clear——动 sessionId 不能与回合并发）
         ConversationState busy = new ConversationState();
         busy.onTurnStarted(1L);
-        CodeTuiView v2 = new CodeTuiView(busy, new SessionsStub(), root);
+        CodeTuiView v2 = new CodeTuiView(busy, new SessionsStub(root), root);
         v2.setInputForTest("/resume");
         v2.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
         assertFalse(v2.pickingSessionsForTest(), "忙碌不开面板");
@@ -963,11 +993,15 @@ class CodeTuiViewSessionsPanelTest {
     @DisplayName("摘要由后台线程补齐（digest null → 非 null），面板已关则丢弃")
     void digestsFilledInBackground(@TempDir Path root) throws IOException {
         writeSession(root, "20260103T000000-dddddd", "后台补摘要测试");
-        CodeTuiView v = openPanel(new ConversationState(), new SessionsStub(), root);
-        assertEquals(null, v.sessionsForTest().get(0).digest(), "打开瞬间 digest 未解析");
+        CodeTuiView v = openPanel(new ConversationState(), new SessionsStub(root), root);
+        // 不对「打开瞬间 digest==null」断言：单文件解析毫秒级，daemon 线程可能在断言前就完成（设计自带竞态，两态都合法）。
+        // 决定性断言在轮询后的最终值。
 
         long deadline = System.currentTimeMillis() + 2000;
-        while (v.sessionsForTest().get(0).digest() == null && System.currentTimeMillis() < deadline) {
+        while (v.sessionsForTest().isEmpty() || v.sessionsForTest().get(0).digest() == null) {
+            if (System.currentTimeMillis() > deadline) {
+                break;
+            }
             Thread.onSpinWait();
         }
         assertEquals("后台补摘要测试", v.sessionsForTest().get(0).digest(), "2s 内后台补齐");
@@ -978,22 +1012,22 @@ class CodeTuiViewSessionsPanelTest {
     void navigatesAndCloses_emptyDirStillOpens(@TempDir Path root) throws IOException {
         writeSession(root, "20260101T000000-aaaaaa", "one");
         writeSession(root, "20260102T000000-bbbbbb", "two");
-        CodeTuiView v = openPanel(new ConversationState(), new SessionsStub(), root);
+        CodeTuiView v = openPanel(new ConversationState(), new SessionsStub(root), root);
         int n = v.sessionsForTest().size();
         assertTrue(n >= 2);
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));
         int afterUp = v.sessionIndexForTest();
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
         assertEquals((afterUp + 1) % n, v.sessionIndexForTest(), "DOWN 在 UP 之后循环回来");
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESC));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));
         assertFalse(v.pickingSessionsForTest(), "Esc 关闭");
 
-        CodeTuiView empty = openPanel(new ConversationState(), new SessionsStub(), root.getParent());
+        CodeTuiView empty = openPanel(new ConversationState(), new SessionsStub(root), root.getParent());
         assertTrue(empty.pickingSessionsForTest(), "空目录照常打开");
         assertTrue(ViewScreen.of(empty).contains("暂无历史会话"));
         // 空列表下按 ↑↓ 不崩（防除零），Esc 可关
         empty.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));
-        empty.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESC));
+        empty.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));
         assertFalse(empty.pickingSessionsForTest());
     }
 }
@@ -1104,7 +1138,7 @@ scope 区（`/tasks` 面板行后）：
         if (activePermission != null || activePlan != null || activeAsk != null) return new Element[0];
         List<SessionCatalog.SessionSummary> sessions = sessionList;
         List<Element> els = new ArrayList<>();
-        els.add(text("  ↺ 会话（↑↓ 选择 · Enter 恢复 · f 分叉 · d 删除 · Esc 关闭）").style(PICK_TITLE));
+        els.add(text("  ↺ 会话（↑↓ 选择 · Esc 关闭）").style(PICK_TITLE));
         if (sessions.isEmpty()) {
             els.add(text("    （暂无历史会话）开始对话后会保存在 .codetui/sessions/。").style(PICK_DESC));
             return els.toArray(new Element[0]);
@@ -1137,7 +1171,7 @@ scope 区（`/tasks` 面板行后）：
     String sessionsStatusText() {
         String notice = state.notice();
         if (notice != null && !notice.isEmpty()) return notice + " · Esc 关闭";
-        return "↺ 会话 · ↑↓ 选择 · Enter 恢复 · f 分叉 · d 删除 · Esc 关闭";
+        return "↺ 会话 · ↑↓ 选择 · Esc 关闭";
     }
 
     // 测试钩子
@@ -1182,30 +1216,43 @@ git commit -m "feat: /resume 会话面板骨架（秒开列表 + 后台摘要 + 
 
 - [ ] **Step 1: 补失败测试（桩扩展 + 三个用例追加到 `CodeTuiViewSessionsPanelTest`）**
 
-桩扩展（替换 Task 7 的 `SessionsStub`）：
+桩扩展（替换 Task 7 的 `SessionsStub`；**deleteSession 真删文件**——`confirmDeleteSession` 以真实目录重扫复核，桩只记录不删会让「删除失败（文件仍在）」路径永远走到、列表断言反着写）：
 
 ```java
     private static final class SessionsStub implements SubmitHandler {
         String currentId = "20260102T000000-cur999";
         boolean exists = true;
         java.util.Optional<String> forkResult = java.util.Optional.of("20260999T000000-forked1");
+        final Path root;   // 持有 root：deleteSession 真删文件
         final java.util.List<String> switchedTo = new ArrayList<>();
         final java.util.List<String> deleted = new ArrayList<>();
-        final AtomicInteger killAlls = new AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger killAlls = new java.util.concurrent.atomic.AtomicInteger();
         final java.util.List<org.springframework.ai.chat.messages.Message> messages =
                 List.of(new org.springframework.ai.chat.messages.UserMessage("历史第一句"));
+
+        SessionsStub(Path root) { this.root = root; }
 
         @Override public reactor.core.Disposable submit(String text) { return null; }
         @Override public String currentSessionId() { return currentId; }
         @Override public void switchContext(String t) { switchedTo.add(t); }
         @Override public boolean sessionExists(String id) { return exists; }
         @Override public java.util.Optional<String> forkSession(String sourceId) { return forkResult; }
-        @Override public void deleteSession(String id) { deleted.add(id); }
+        @Override public void deleteSession(String id) {
+            deleted.add(id);
+            try {
+                java.nio.file.Files.deleteIfExists(
+                        root.resolve(".codetui/sessions/" + id + ".json"));
+            } catch (java.io.IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
         @Override public java.util.List<org.springframework.ai.chat.messages.Message> sessionMessages(String id) { return messages; }
         @Override public void killAllBackgroundTasks() { killAlls.incrementAndGet(); }
         @Override public String currentModel() { return "test-model"; }
     }
 ```
+
+（桩构造签名从无参变为 `(Path root)`：Task 7 既有用例里的 `new SessionsStub(root)` **同步改为** `new SessionsStub(root)`——各用例的 `@TempDir Path root` 就在手边；`openPanel` 辅助方法已经透传 root，不受影响。）
 
 用例：
 
@@ -1214,17 +1261,20 @@ git commit -m "feat: /resume 会话面板骨架（秒开列表 + 后台摘要 + 
     @DisplayName("Enter 恢复：验证存在→杀后台任务→切换→回放；目标不存在则不切；执行时变忙则拒绝且面板保持")
     void enterRestores_withRecheckAndValidation(@TempDir Path root) throws IOException {
         writeSession(root, "20260101T000000-aaaaaa", "修 NPE");
-        SessionsStub stub = new SessionsStub();
+        SessionsStub stub = new SessionsStub(root);
         CodeTuiView v = openPanel(new ConversationState(), stub, root);
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
 
         assertTrue(stub.switchedTo.contains("20260101T000000-aaaaaa"), "切到选中会话");
         assertTrue(stub.killAlls.get() >= 1, "切换前杀后台任务（同 /clear）");
         assertFalse(v.pickingSessionsForTest(), "恢复后面板关闭");
-        assertTrue(ViewScreen.of(v).contains("历史第一句") || stub.switchedTo.size() == 1, "回放走 sessionMessages");
+        // 回放断言：replayHistory 把消息下沉输出队列——从 state 排水回读（不依赖渲染线程）。
+        // 恒真写法（`|| switchedTo.size()==1`）杀不死「删掉 replayHistory 调用」的变异，禁用。
+        assertTrue(ViewScreen.of(v).contains("历史第一句"),
+                "回放把 sessionMessages 的历史渲出来，实际：\n" + ViewScreen.of(v));
 
         // 目标不存在：不切换、有提示（先验证后动手——防半切状态）
-        SessionsStub missing = new SessionsStub();
+        SessionsStub missing = new SessionsStub(root);
         missing.exists = false;
         CodeTuiView v2 = openPanel(new ConversationState(), missing, root);
         v2.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
@@ -1233,7 +1283,7 @@ git commit -m "feat: /resume 会话面板骨架（秒开列表 + 后台摘要 + 
 
         // 面板开着、按 Enter 时变忙（goal 自动轮/排队出队可自发启动回合）：拒绝且面板保持
         ConversationState busyLater = new ConversationState();
-        CodeTuiView v3 = openPanel(busyLater, new SessionsStub(), root);
+        CodeTuiView v3 = openPanel(busyLater, new SessionsStub(root), root);
         busyLater.onTurnStarted(1L);   // 打开面板【之后】起回合
         v3.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
         assertTrue(v3.pickingSessionsForTest(), "拒绝时面板保持");
@@ -1243,14 +1293,14 @@ git commit -m "feat: /resume 会话面板骨架（秒开列表 + 后台摘要 + 
     @DisplayName("f 分叉选中项 / /fork 分叉当前：切到新 id，提示源自原会话")
     void forkFromPanelAndCommand(@TempDir Path root) throws IOException {
         writeSession(root, "20260101T000000-aaaaaa", "修 NPE");
-        SessionsStub stub = new SessionsStub();
+        SessionsStub stub = new SessionsStub(root);
         CodeTuiView v = openPanel(new ConversationState(), stub, root);
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.F));   // 若 KeyEvent.ofKey(char) 不存在，用 KeyEvent.ofChar('f')——以 /tasks 的 k 键测试写法为准
+        v.feedKeyForTest(KeyEvent.ofChar('f'));   // 字符键用 ofChar（KeyCode 无单字母常量；先例 CodeTuiViewTasksPanelTest 的 'k' 键）
         assertTrue(stub.switchedTo.contains("20260999T000000-forked1"), "切到 fork 出的新会话");
         assertFalse(v.pickingSessionsForTest());
 
         // /fork：源是当前会话；空会话 fork 被拒（提示而非静默）
-        SessionsStub emptyFork = new SessionsStub();
+        SessionsStub emptyFork = new SessionsStub(root);
         emptyFork.forkResult = java.util.Optional.empty();
         CodeTuiView v2 = new CodeTuiView(new ConversationState(), emptyFork, root);
         v2.setInputForTest("/fork");
@@ -1259,35 +1309,43 @@ git commit -m "feat: /resume 会话面板骨架（秒开列表 + 后台摘要 + 
     }
 
     @Test
-    @DisplayName("d 删除两段式：当前会话不可删；确认后删除并以重新 scan 复核")
+    @DisplayName("d 删除两段式：当前会话不可删；确认后真删文件并以重新 scan 复核")
     void deleteTwoPhase_currentRejected(@TempDir Path root) throws IOException {
-        writeSession(root, "20260101T000000-aaaaaa", "修 NPE");
+        Path a = writeSession(root, "20260101T000000-aaaaaa", "修 NPE");
         writeSession(root, "20260102T000000-cur999", "当前");
-        SessionsStub stub = new SessionsStub();
-        CodeTuiView v = openPanel(new ConversationState(), stub, root);
+        // mtime 定序：细粒度文件系统上两文件可能同毫秒，scan 的降序结果不稳定——显式钉死
+        Files.setLastModifiedTime(a, java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-01T00:00:00Z")));
+        Files.setLastModifiedTime(root.resolve(".codetui/sessions/20260102T000000-cur999.json"),
+                java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-02T00:00:00Z")));
+        SessionsStub stub = new SessionsStub(root);   // 桩持有 root：deleteSession 真删文件（复核走真实目录）
+        ConversationState state = new ConversationState();
+        CodeTuiView v = openPanel(state, stub, root);
 
-        // 选中当前会话（★ 行在列表第 2 个，index=1）按 d：拒绝
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.D));
+        // index=0 是较新的 cur999（★ 当前会话）——按 d：拒绝且说出来
+        v.feedKeyForTest(KeyEvent.ofChar('d'));
         assertTrue(stub.deleted.isEmpty(), "当前会话不可删");
+        assertTrue(state.notice().contains("不能删除当前会话"), "拒绝要有 notice：" + state.notice());
 
-        // 回到第 1 项按 d：进确认态；Esc 取消
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.UP));
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.D));
+        // 下移到 aaaaaa 按 d：进确认态；Esc 取消
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        v.feedKeyForTest(KeyEvent.ofChar('d'));
         assertTrue(ViewScreen.of(v).contains("确认删除"), "确认态替换列表");
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESC));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ESCAPE));
         assertTrue(stub.deleted.isEmpty(), "Esc 取消不删");
 
-        // 再 d + Enter：真删（文件被删 → 重新 scan 后列表少一项）
-        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.D));
+        // 再 d + Enter：真删——文件被删，重新 scan 后列表不含该项
+        v.feedKeyForTest(KeyEvent.ofChar('d'));
         v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
         assertEquals(java.util.List.of("20260101T000000-aaaaaa"), stub.deleted);
+        assertFalse(Files.exists(a), "桩已真删文件");
         assertFalse(v.sessionsForTest().stream().anyMatch(s -> s.id().equals("20260101T000000-aaaaaa")),
                 "删除后以重新 scan 的真实结果刷新列表");
     }
+}
 ```
 
-（`KeyEvent.ofKey(KeyCode.F)` / `ofChar` 以 `/tasks` 面板测试对 `k` 键的真实写法为准，执行时对齐——断言语义不变。）
+（`writeSession` 的返回值改为 `Path`：Task 7 定义时返回文件路径，本用例要用。）
+（注：桩扩展为 `new SessionsStub(root)`——见 Step 1 桩定义中 `deleteSession` 的真删实现；字符键一律 `KeyEvent.ofChar('d'/'f')`，先例 `CodeTuiViewTasksPanelTest` 的 `k` 键。）
 
 - [ ] **Step 2: 跑测试确认红**
 
@@ -1420,9 +1478,10 @@ Expected: 新用例 FAIL（Enter/f/d 被吞、无切换调用）。
         } else {
             pushClearDegradedNotice();
         }
-        // 步骤 7：回放（空历史 no-op）；头行区分恢复/分叉
+        // 步骤 7：回放（空历史 no-op）；头行区分恢复/分叉（分叉只报原 id 前 8 位，spec 定案——整串太长刷屏）
         String header = (sourceIdForNotice == null) ? "已恢复会话"
-                : "已分叉会话（源自 " + sourceIdForNotice + "，原会话保留）";
+                : "已分叉会话（源自 " + sourceIdForNotice.substring(0, Math.min(8, sourceIdForNotice.length()))
+                        + "…，原会话保留）";
         state.replayHistory(onSubmit.sessionMessages(targetId), header);
     }
 ```
@@ -1520,8 +1579,9 @@ git commit -m "docs: 会话管理（/resume /fork --resume）补 implementation-
 
 ---
 
-## Plan Self-Review（已执行）
+## Plan Self-Review（已执行；2026-10-23 评审修订后更新）
 
-1. **Spec 覆盖**：面板（Task 7+8）、`/fork`（8）、`--resume`（6）、`SessionCatalog`（2+3）、`switchContext` 与 seam（5）、`fork`（4）、`UserTextStripper`（1）、文档（9）——spec 六组件与恢复/分叉/删除序列全部有任务承接；两处实现级微调（digest 占位符合并、`switchContext` 的 null 防御）已在对应任务注明。
-2. **占位符扫描**：无 TBD/TODO；两处「以真实 API 为准」的注记（`bindUsageAccumulator` 绑定名、`KeyEvent` 字符键构造）均给了替代路径与不变式（断言语义不变），属执行期对齐而非缺失设计。
+1. **Spec 覆盖**：面板（Task 7+8）、`/fork`（8）、`--resume`（6）、`SessionCatalog`（2+3）、`switchContext` 与 seam（5）、`fork`（4）、`UserTextStripper`（1）、文档（9）——spec 六组件与恢复/分叉/删除序列全部有任务承接；三处实现级微调（digest 占位符合并且加载中态取消、`switchContext` 的 null 防御、分叉提示取前 8 位已按 spec 定案落实）均在对应任务注明。
+2. **占位符扫描**：无 TBD/TODO；「以真实 API 为准」的注记（23 参构造器参数序、`DefaultUsage` 构造签名）均给出先例出处与降级路径，断言语义不变。
 3. **类型一致性**：`SessionSummary(id, mtimeMillis, sizeBytes, digest)` 四参在 Task 2/7/8 一致；`forkSession -> Optional<String>` 在 Task 5/8 一致；`replayHistory(List, String)` 双参只在 Task 8 定义一次；seam 六方法签名在 Task 5 定义、Task 7/8 消费处逐一对应。
+4. **评审修订记录（subagent 评审，2026-10-23）**：已修复 6 处硬伤——Jackson 3 包名（`tools.jackson.core.json.JsonFactory`）与 `PROPERTY_NAME` 枚举（javap 实测 jackson-core 3.1.4）、`KeyCode.ESCAPE` 与 `KeyEvent.ofChar`（KeyCode 无单字母常量）、`stripAll` 组合期望含 📎 折叠行、时间断言改同口径 UTC→本地换算（防时区 flaky）、删除用例桩真删文件 + mtime 显式定序 + notice 断言、accumulator 经 23 参构造器真断言（`DefaultUsage` 先例）替换假覆盖；另修恒真回放断言、Task 7 标题不宣传未实现键位、`goalManager.clear` 沿用 "clear-context" 串、回归清单纳入 `StartupHelpTest`、import 补齐提示若干。
