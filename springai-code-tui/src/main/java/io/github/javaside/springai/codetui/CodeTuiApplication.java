@@ -27,6 +27,7 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoad
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
+import io.github.javaside.springai.codetui.agent.session.SessionCatalog;
 import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.ui.CodeTuiView;
@@ -37,6 +38,7 @@ import org.slf4j.bridge.SLF4JBridgeHandler;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
@@ -86,12 +88,37 @@ public class CodeTuiApplication {
         AtomicLong activeTurnId = new AtomicLong();
 
         // 会话选择（多槽）：默认每次启动 = 新 session（干净上下文、新文件，不读旧历史）；
-        // 仅 -c / --continue 才恢复「最近一次」会话（按文件最后修改时间选）。仓库惰性加载，默认启动不碰盘。
+        // -c / --continue 恢复「最近一次」会话（按文件最后修改时间选），--resume <前缀> 恢复指定会话。
+        // 仓库惰性加载，默认启动不碰盘（--resume 才扫目录，SessionCatalog 只读文件名+mtime，瞬时）。
         Path sessionsDir = root.resolve(".codetui").resolve("sessions");
         boolean wantContinue = hasContinueFlag(args);
+        String resumeValue = resumeFlagValue(args);
+        if (resumeValue != null && wantContinue) {
+            System.err.println("错误：--resume 与 -c/--continue 不能同时使用（两个都是恢复，请只给一个）。");
+            System.exit(1);
+        }
+        List<SessionCatalog.SessionSummary> catalog = SessionCatalog.scan(sessionsDir);
+        String resumeTarget = null;
+        if (resumeValue != null) {
+            resumeTarget = resolveResumeTarget(
+                    catalog.stream().map(SessionCatalog.SessionSummary::id).toList(), resumeValue);
+            if (resumeTarget == null) {
+                List<String> hits = catalog.stream().map(SessionCatalog.SessionSummary::id)
+                        .filter(id -> id.startsWith(resumeValue)).toList();
+                if (hits.isEmpty()) {
+                    System.err.println("错误：没有匹配 \"" + resumeValue + "\" 的会话。最近 10 个：");
+                    catalog.stream().limit(10).forEach(s -> System.err.println("  " + s.id()));
+                } else {
+                    System.err.println("错误：\"" + resumeValue + "\" 匹配多个会话，请补长前缀：");
+                    hits.forEach(id -> System.err.println("  " + id));
+                }
+                System.exit(1);
+            }
+        }
         Optional<String> latest = FileSessionRepository.latestSessionId(sessionsDir);
-        boolean resumed = wantContinue && latest.isPresent();
-        String sessionId = resumed ? latest.get() : SessionIds.newId();
+        boolean resumed = resumeTarget != null || (wantContinue && latest.isPresent());
+        String sessionId = resumeTarget != null ? resumeTarget
+                : (resumed ? latest.get() : SessionIds.newId());
 
         // 权限引擎：整个进程<b>只有这一个</b>，三处装配点（AgentTools 装饰循环 / buildMemoryTools /
         // McpRegistry.decorate）共用它。必须建在 McpRegistry.init <b>之前</b>——MCP 工具在 init 里
@@ -368,6 +395,7 @@ public class CodeTuiApplication {
 
                 选项：
                   -c, --continue                  恢复最近一次会话（按会话文件最后修改时间选取）
+                  --resume <会话id前缀>            恢复指定会话（id 前缀唯一即可；与 -c 互斥）
                   --permission-mode <模式>        起始权限档位：default / acceptEdits / plan
                                                   （也接受 --permission-mode=plan 写法；优先级低于
                                                   --dangerously-skip-permissions，高于配置文件 defaultMode）
@@ -385,6 +413,42 @@ public class CodeTuiApplication {
             }
         }
         return false;
+    }
+
+    /** 提取 {@code --resume <id>} / {@code --resume=<id>} 的值；未给或下一个参数以 - 开头（视为选项、缺值）返回 null。 */
+    static String resumeFlagValue(String[] args) {
+        for (int i = 0; i < args.length; i++) {
+            String a = args[i];
+            if (a.equals("--resume")) {
+                if (i + 1 >= args.length) {
+                    log.warn("--resume 缺少会话 id 参数。");
+                    return null;
+                }
+                if (args[i + 1].startsWith("-")) {
+                    // 比 --permission-mode 的 -- 前缀更宽：单横线 -c 也是选项，否则「--resume -c」会把 -c 当 id、
+                    // 再被冲突分支兜住，报错误导（用户以为 -c 是个会话名）。
+                    log.warn("--resume 后面跟的是另一个选项（{}），当作没给值处理。", args[i + 1]);
+                    return null;
+                }
+                return args[i + 1];
+            }
+            if (a.startsWith("--resume=")) {
+                return a.substring("--resume=".length());
+            }
+        }
+        return null;
+    }
+
+    /** 在合法 stem 集合内解析目标：精确命中优先，其次唯一前缀；零/多命中返回 null（调用方报错，不猜）。 */
+    static String resolveResumeTarget(List<String> candidateIds, String input) {
+        if (input == null || input.isBlank() || candidateIds.isEmpty()) {
+            return null;
+        }
+        if (candidateIds.contains(input)) {
+            return input;
+        }
+        List<String> matches = candidateIds.stream().filter(id -> id.startsWith(input)).toList();
+        return matches.size() == 1 ? matches.get(0) : null;
     }
 
     /**
