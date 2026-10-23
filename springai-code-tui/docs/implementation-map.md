@@ -348,6 +348,8 @@ Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改
 | `/reload` | `reloadSkills()`（技能 + MCP 配置，后者仅空闲） | MCP 部分忙碌时跳过并提示 |
 | `/mcp` | `openMcpPicker()`（面板内 `r` 键 = `reloadMcpConfig()`） | 仅空闲 |
 | `/permissions` | `printPermissions()` + `openPermsPanel()` | 无 |
+| `/resume` | `openSessionsPanel()`（面板内 Enter 恢复 / `f` 分叉 / `d` 两段式删除，见 [7.1](#71-会话管理resume-面板fork--resume)） | `!isBusy()`（同 `/clear`：动 sessionId 不能与回合/压缩/模态并发） |
+| `/fork` | `forkSession(currentSessionId)` + `switchToSession` 切换序列 | `!isBusy()`；空会话提示不分叉 |
 | `/tasks` | `openTasksPanel()` | **刻意无闸门**（后台任务与回合两套线程，忙时恰是最想看的时刻） |
 | `/continue` | 固定提示词 + `backgroundDigestForContinue()` | 忙则 enqueue |
 | `/queue <msg>` | 取 body 后 enqueue/dispatch | 刻意用斜杠命令而非 Alt+Enter（终端区分不了修饰键会静默错路由成插话） |

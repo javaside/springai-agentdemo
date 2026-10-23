@@ -89,7 +89,7 @@ public class CodeTuiApplication {
 
         // 会话选择（多槽）：默认每次启动 = 新 session（干净上下文、新文件，不读旧历史）；
         // -c / --continue 恢复「最近一次」会话（按文件最后修改时间选），--resume <前缀> 恢复指定会话。
-        // 仓库惰性加载，默认启动不碰盘（--resume 才扫目录，SessionCatalog 只读文件名+mtime，瞬时）。
+        // 目录扫描无条件执行但只读文件名+mtime（瞬时）；会话内容仍惰性加载——默认启动不解析任何会话文件。
         Path sessionsDir = root.resolve(".codetui").resolve("sessions");
         boolean wantContinue = hasContinueFlag(args);
         String resumeValue = resumeFlagValue(args);
