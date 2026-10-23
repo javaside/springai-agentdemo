@@ -186,6 +186,49 @@ public final class FileSessionRepository implements SessionRepository {
         }
     }
 
+    // ── fork（/resume 面板 f 键与 /fork 命令；与 latestSessionId 一样属启动/面板侧扩展） ──
+
+    /**
+     * 分叉：把 sourceId 的已净化事件复制到一个新会话 id 下，返回新 id；源不存在或事件为空返回 empty。
+     *
+     * <p>刻意走本仓库 API 而非 {@code Files.copy}：直接复制文件会绕过 store，且每条事件的
+     * {@code sessionId} 字段还指向源——必须逐条重写为新 id，否则 fork 出的会话加载后事件自报的
+     * id 与所在文件对不上。userId/metadata 复制源会话（那是「谁在哪个项目」的事实，不随分叉变），
+     * 仅换 id 与 createdAt。
+     */
+    public Optional<String> fork(String sourceId) {
+        List<SessionEvent> events = findEvents(sourceId, EventFilter.all());
+        if (events.isEmpty()) {
+            return Optional.empty();
+        }
+        Session source = findById(sourceId).orElse(null);
+        if (source == null) {
+            return Optional.empty();
+        }
+        String newId = SessionIds.newId();
+        Session forked = Session.builder()
+                .id(newId)
+                .userId(source.userId())
+                .createdAt(Instant.now())
+                .expiresAt(null)
+                .metadata(source.metadata() == null ? Map.of() : source.metadata())
+                .build();
+        save(forked);
+        replaceEvents(newId, events.stream().map(e -> retarget(e, newId)).toList());
+        return Optional.of(newId);
+    }
+
+    /** 事件不可变，重写 sessionId 只能整体重建（其余字段原样保留）。 */
+    private static SessionEvent retarget(SessionEvent e, String sessionId) {
+        SessionEvent.Builder b = SessionEvent.builder()
+                .id(e.getId()).sessionId(sessionId).timestamp(e.getTimestamp())
+                .message(e.getMessage());
+        if (e.getMetadata() != null) {
+            b.metadata(e.getMetadata());
+        }
+        return b.branch(e.getBranch()).build();
+    }
+
     // ── 静态：给启动方选「最近一次」会话（-c）──────────────────────────────
 
     /** 目录下最后修改时间最新的会话文件对应的 sessionId（文件名去掉 .json）；无则空。仅扫文件名/时间，不解析全文。 */

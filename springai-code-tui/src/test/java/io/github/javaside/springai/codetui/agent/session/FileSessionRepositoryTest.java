@@ -12,6 +12,7 @@ import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
@@ -22,6 +23,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -211,5 +213,48 @@ class FileSessionRepositoryTest {
         Files.setLastModifiedTime(dir.resolve("s-old.json"), FileTime.fromMillis(1_000_000L));
         Files.setLastModifiedTime(dir.resolve("s-new.json"), FileTime.fromMillis(2_000_000L));
         assertEquals(Optional.of("s-new"), FileSessionRepository.latestSessionId(dir), "选最后修改最新的会话");
+    }
+
+    // ── fork（/resume 面板 f 键与 /fork 命令的仓库侧实现）────────────────────
+
+    @Test
+    void forkCopiesEventsToNewId_andSourceUntouched(@TempDir Path dir) {
+        FileSessionRepository repo = new FileSessionRepository(dir);
+        repo.save(session(SID));
+        repo.appendEvent(ev(SID, new UserMessage("原会话问题")));
+        repo.appendEvent(ev(SID, new AssistantMessage("原会话回答")));
+        Path sourceFile = dir.resolve(SID + ".json");
+        String sourceBytesBefore;
+        try {
+            sourceBytesBefore = Files.readString(sourceFile);
+        } catch (IOException e) { throw new RuntimeException(e); }
+
+        Optional<String> forked = repo.fork(SID);
+
+        assertTrue(forked.isPresent(), "有事件的会话可 fork");
+        String newId = forked.get();
+        assertNotEquals(SID, newId);
+        List<SessionEvent> events = repo.findEvents(newId, EventFilter.all());
+        assertEquals(2, events.size(), "事件逐条复制");
+        assertEquals("原会话问题", events.get(0).getMessage().getText());
+        assertEquals("原会话回答", events.get(1).getMessage().getText());
+        assertEquals(newId, events.get(0).getSessionId(), "事件的 sessionId 字段必须重写——"
+                + "不重写则下次加载 fork 会话时，事件仍自报源会话 id，排障时两条线对不上");
+        try {
+            assertEquals(sourceBytesBefore, Files.readString(sourceFile), "源文件字节不动");
+        } catch (IOException e) { throw new RuntimeException(e); }
+        assertEquals(2, repo.findEvents(SID, EventFilter.all()).size(), "源会话事件不动");
+    }
+
+    @Test
+    void forkTwiceYieldsDistinctIds_emptyOrMissingSourceRejected(@TempDir Path dir) {
+        FileSessionRepository repo = new FileSessionRepository(dir);
+        repo.save(session(SID));
+        assertEquals(Optional.empty(), repo.fork(SID), "空会话 fork 无意义，拒绝");
+        assertEquals(Optional.empty(), repo.fork("no-such-session"), "源不存在拒绝");
+        repo.appendEvent(ev(SID, new UserMessage("x")));
+        String a = repo.fork(SID).orElseThrow();
+        String b = repo.fork(SID).orElseThrow();
+        assertNotEquals(a, b, "两次 fork 得两个独立新会话");
     }
 }

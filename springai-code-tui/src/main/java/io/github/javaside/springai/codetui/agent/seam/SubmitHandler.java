@@ -285,4 +285,24 @@ public interface SubmitHandler {
      * 面板接错到取走那个上，每次 render 都把队列清空一次。
      */
     default List<String> pendingInterjectionTexts() { return List.of(); }
+
+    // ── 会话管理（/resume 面板与 /fork 用；默认空实现，便于回显桩/测试桩省略） ──
+
+    /** 当前会话 id（★ 行标记与 /fork 源）。 */
+    default String currentSessionId() { return ""; }
+
+    /** 切到指定会话（与 {@link #clearContext()} 同一套会话级清理）。调用方保证空闲时调用。 */
+    default void switchContext(String targetSessionId) { }
+
+    /** 目标会话是否存在（含损坏文件视为不存在）。恢复前验证用。 */
+    default boolean sessionExists(String sessionId) { return false; }
+
+    /** 分叉：复制源会话事件到新 id 并返回之；源空/不存在返回 empty。 */
+    default java.util.Optional<String> forkSession(String sourceId) { return java.util.Optional.empty(); }
+
+    /** 删除一个会话（文件尽力删除；调用方以重新 scan 复核真实结果）。 */
+    default void deleteSession(String sessionId) { }
+
+    /** 指定会话的消息列表（恢复回放用；等价启动期 getMessages）。 */
+    default List<org.springframework.ai.chat.messages.Message> sessionMessages(String sessionId) { return List.of(); }
 }

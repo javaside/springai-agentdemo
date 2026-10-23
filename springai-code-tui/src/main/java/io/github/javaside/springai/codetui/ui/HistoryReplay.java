@@ -3,7 +3,7 @@ package io.github.javaside.springai.codetui.ui;
 import io.github.javaside.springai.codetui.agent.AgentTools;
 import io.github.javaside.springai.codetui.agent.goal.GoalText;
 import io.github.javaside.springai.codetui.agent.interjection.InterjectionText;
-import io.github.javaside.springai.codetui.agent.media.FileReference;
+import io.github.javaside.springai.codetui.agent.session.UserTextStripper;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine;
 import io.github.javaside.springai.codetui.ui.ConversationState.OutputLine.Kind;
 import dev.tamboui.text.TerminalWidth;   // 口径：组合序列（keycap/VS16）按终端实际渲染宽度
@@ -166,80 +166,11 @@ final class HistoryReplay {
         return s == null ? "" : s;
     }
 
-    /**
-     * 剥掉手动 {@code /skill} 注入到用户文本前的 {@code <skill_instruction>…</skill_instruction>} 块，只留用户原文，
-     * 使 {@code -c} 回放的用户块与实时一致（实时 {@code onUserMessage} 收到的是原文，注入只作用于发给模型的文本）。
-     *
-     * <p>注入格式见 {@code CodingAgent.injectSkill}：{@code "<skill_instruction>\n" + body + "\n</skill_instruction>\n\n" + text}。
-     * 对新旧会话都适用——即便 body 内含转义残留，闭合标记与其后的换行分隔仍是真实字符。非注入文本原样返回。
-     */
-    static String stripSkillInstruction(String userText) {
-        if (userText == null || !userText.startsWith("<skill_instruction>")) {
-            return userText;
-        }
-        int close = userText.indexOf("</skill_instruction>");
-        if (close < 0) {
-            return userText;                                    // 不完整：保底原样，不误删
-        }
-        int after = close + "</skill_instruction>".length();
-        while (after < userText.length()
-                && (userText.charAt(after) == '\n' || userText.charAt(after) == '\r')) {
-            after++;                                            // 跳过 injectSkill 附加的 "\n\n" 分隔（容忍 \r\n）
-        }
-        return userText.substring(after);
-    }
+    // 实现已搬至 agent.session.UserTextStripper（单一出处）：agent 侧的会话摘要也要做同样的剥离，
+    // 而依赖方向是 ui → agent，搬过去后两边共用。此处保留包级签名委托，toReplayLines 与既有测试零改动。
+    static String stripSkillInstruction(String userText) { return UserTextStripper.stripSkillInstruction(userText); }
 
-    /**
-     * 把引用块换成一行 {@code 📎 name (w×h)}。
-     *
-     * <p>与 {@link #stripSkillInstruction} 同一个理由：会话持久化的是「注入后」的有效文本，
-     * 而实时 UI 只显示用户原文（{@code onUserMessage} 收到的是注入前的），回放须一致。
-     * 不处理的话 {@code -c} 之后每张图都甩八行机器格式给用户看。
-     *
-     * <p>残缺块（有开标记无闭标记）<b>保底原样</b>，不误删后面的正文——与
-     * {@link #stripSkillInstruction} 同纪律。
-     */
-    static String stripFileReferences(String text) {
-        if (text == null || !text.contains(FileReference.OPEN)) {
-            return text;
-        }
-        StringBuilder out = new StringBuilder();
-        int from = 0;
-        while (true) {
-            int open = text.indexOf(FileReference.OPEN, from);
-            if (open < 0) {
-                break;
-            }
-            int close = text.indexOf(FileReference.CLOSE, open);
-            if (close < 0) {
-                break;                                          // 残缺：剩余部分原样收尾
-            }
-            int end = close + FileReference.CLOSE.length();
-            out.append(text, from, open).append(summarise(text.substring(open, end)));
-            from = end;
-        }
-        out.append(text.substring(from));
-        return out.toString();
-    }
-
-    /** 一个块 → 一行。缺字段就少显示，不报错（历史块的字段集会随版本变）。 */
-    private static String summarise(String block) {
-        String name = field(block, "name");
-        String dim = field(block, "dimensions");
-        if (name == null) {
-            name = "图片";
-        }
-        return "📎 " + name + (dim == null ? "" : " (" + dim.replace("x", "×") + ")");
-    }
-
-    private static String field(String block, String key) {
-        for (String line : block.split("\n")) {
-            if (line.startsWith(key + ": ")) {
-                return line.substring(key.length() + 2).trim();
-            }
-        }
-        return null;
-    }
+    static String stripFileReferences(String text) { return UserTextStripper.stripFileReferences(text); }
 
     private static String stripCr(String s) {
         return s.endsWith("\r") ? s.substring(0, s.length() - 1) : s;

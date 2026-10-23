@@ -65,6 +65,14 @@ C:\path\to\springai-code-tui-<version>\bin\code-tui.cmd
 /path/to/springai-code-tui-<version>/bin/code-tui -c
 ```
 
+要恢复指定的历史会话，加 `--resume <会话 id 前缀>`：前缀只需能唯一匹配（会话 id 形如
+`20260412T093015-1a2b3c`，可在程序内 `/resume` 面板查看）；匹配不到或有歧义时列出候选后退出，
+与 `-c` / `--continue` 互斥：
+
+```bash
+/path/to/springai-code-tui-<version>/bin/code-tui --resume 20260412T0930
+```
+
 ### 临时使用环境变量
 
 如果只是临时试用，也可以不创建 `bin/config.env`，直接在启动前设置环境变量：
@@ -125,6 +133,8 @@ DeepSeek 现役内置模型为 `deepseek-flash`（快 · 便宜 · 支持图片�
 - `/tasks`：查看后台任务。
 - `/goal <条件>`：设定目标循环——agent 跨轮自主推进（每轮结束由独立小模型评估是否达成，未达成则带着结论继续），配轮数 / 无进展 / token 预算三重熔断与两级 Esc（暂停 → 终止，发消息即恢复）；`/goal` 查看状态面板与最近评估轨迹，`/goal stop` 清除。
 - `/continue`：继续执行恢复会话中未完成的计划。
+- `/resume`：会话面板——列出历史会话（本地时间 + 首条用户消息摘要，★ 标记当前会话，摘要后台补齐）；`↑↓` 选择，Enter 恢复、`f` 分叉选中会话、`d` 删除（两段式确认，当前会话不可删）、Esc 关闭。
+- `/fork`：分叉当前会话——历史复制到新会话并切换过去，原会话原样保留。
 - `Shift+Tab`：循环切换权限模式。
 - `Esc`：取消当前回合。
 - `Ctrl+C`：退出。

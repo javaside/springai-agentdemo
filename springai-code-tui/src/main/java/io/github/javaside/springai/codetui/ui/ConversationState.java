@@ -307,13 +307,18 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      * {@link HistoryReplay#hasGoalTraces}）时追加一行「已失效」提示。空历史则什么都不做。
      */
     public void replayHistory(List<Message> messages) {
+        replayHistory(messages, "已恢复上次会话");
+    }
+
+    /** header 参数化：/resume 面板恢复任意会话时「上次会话」措辞不准（启动 -c 与运行期 /resume /fork 分歧）。 */
+    public void replayHistory(List<Message> messages, String header) {
         List<OutputLine> body = HistoryReplay.toReplayLines(messages);
         if (body.isEmpty()) return;
         List<String> lastTodo = HistoryReplay.lastTodoSnapshot(messages);
         boolean goalTraces = HistoryReplay.hasGoalTraces(messages);
         Change change;
         synchronized (this) {
-            pending.add(new OutputLine("↺ 已恢复上次会话（" + HistoryReplay.userTurns(messages) + " 轮对话）",
+            pending.add(new OutputLine("↺ " + header + "（" + HistoryReplay.userTurns(messages) + " 轮对话）",
                     OutputLine.Kind.INFO));
             if (goalTraces) {
                 // goal 只活在进程内存态（spec §1「退出即失」）：历史里有痕迹就说明上次有个没跑完的
