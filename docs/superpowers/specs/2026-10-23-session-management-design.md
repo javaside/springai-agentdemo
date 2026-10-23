@@ -24,11 +24,11 @@
 | # | 事实 | 证据 |
 |---|---|---|
 | 1 | 会话目录文件量大：本机 `.codetui/sessions/` 有 **192 个**文件，大小 0.4KB～773KB | `ls -lah` 实测（2026-10-23） |
-| 2 | 同步解析全部文件做摘要不可行：800KB 文件 × 192 个，按键线程必卡 | 由 #1 推论； Jackson 流式读到首条 USER 即停可把单文件读取量压到前几 KB（首条 user 通常在文件头部，events 按 append 序排列） |
+| 2 | 同步解析全部文件做摘要不可行：最大 773KB 文件 × 192 个，按键线程必卡 | 由 #1 推论； Jackson 流式读到首条 USER 即停可把单文件读取量压到前几 KB（首条 user 通常在文件头部，events 按 append 序排列） |
 | 3 | `FileSessionRepository.latestSessionId(baseDir)` 已只扫文件名 + mtime，不解析全文 | `FileSessionRepository.java:192-204` |
 | 4 | 会话 id 自带 UTC 时间戳：`SessionIds.newId()` = `uuuuMMdd'T'HHmmss` + `-` + UUID 前 6 位，**可按名近似排序** | `SessionIds.java:14-18` |
 | 5 | `ConversationState.replayHistory(messages)` 一步完成 scrollback 回放 + todo 面板重建（`HistoryReplay.lastTodoSnapshot`）+ goal 失效提示，运行期恢复可直接复用 | `ConversationState.java:309-331` |
-| 6 | `/clear` 的切换序列是运行期切会话的模板：`killAllBackgroundTasks` → `clearContext()` → `resetForNewSession()` → `outputQueue.clear()` → `printer.resetMarkdown()` → 清屏；闸门 `!state.isBusy()` | `CodeTuiView.java:2472-2508` |
+| 6 | `/clear` 的完整切换序列是运行期切会话的模板：`clearInput()` → 闸门 `!state.isBusy()` → `killAllBackgroundTasks` → `clearContext()` → `resetForNewSession()` → `outputQueue.clear()` → `printer.resetMarkdown()` → `lastShownModel=""`（新会话首回合重打 ⚙ 行）→ `pendingSkill=null`（新会话不继承技能挂载）→ 清屏（成功分支内还有 `scrollTail.clear()` + `resetTailDedup()` + `printer.welcome(...)`，防 resize 重放复活旧会话画面） | `CodeTuiView.java:2472-2508` |
 | 7 | `clearContext()` 的会话切换共 6 个动作：换 sessionId + 5 项会话级清理（accumulator reset、clearSessionRules、interjections drainForRefill、goalManager.clear、todoReminder.reset） | `CodingAgent.java:1146-1168` |
 | 8 | `findEvents` 返回的事件已经过 `SessionEvents.sanitize`（加载即净化）——fork 复制出来的是合法序列 | `FileSessionRepository.java:243` |
 | 9 | 会话持久化的是**注入后**文本：首条 user 可能带 `InterjectionText` 包裹、`<skill_instruction>` 前置、`<file_reference>` 块，摘要须剥离才可读 | `implementation-map.md` §7；剥离逻辑在 `ui.HistoryReplay`（包级）与 `agent.interjection.InterjectionText.unwrap`（public） |
@@ -54,6 +54,7 @@
 | `UserTextStripper` | `agent.session`（新类） | 从 `HistoryReplay` 提取剥离函数，HistoryReplay 委托保持单一出处 |
 | `switchContext(String)` | `CodingAgent` | `clearContext` 重构为其特例 |
 | `fork(String)` | `FileSessionRepository` | 复制事件到新 id |
+| **SubmitHandler 会话门面** | `agent.seam.SubmitHandler`（现有接口） | 新增 default 方法：`currentSessionId()` / `switchContext(String)` / `sessionExists(String)` / `forkSession(String)` / `deleteSession(String)` / `sessionMessages(String)`。**必需**：`CodeTuiView` 只持有 state/onSubmit/root，恢复/分叉/删除序列引用的仓库与 agent 能力没有其它接线通道（同 `clearContext`/`killAllBackgroundTasks` 走 seam 的既有模式）；default 空实现保证测试桩不破 |
 | `/resume` 面板 + `/fork` 命令 | `CodeTuiView` | 四件套 + 切换序列 |
 | `--resume` 解析 | `CodeTuiApplication` | 启动参数 + 前缀匹配 |
 
@@ -104,8 +105,8 @@ public Optional<String> fork(String sourceId)
 
 实现：`findEvents(sourceId, 全量 filter)` → 空则 empty → `SessionIds.newId()` →
 `save(Session.builder().id(newId)...)` + `replaceEvents(newId, events)` → 返回新 id。
-源会话的 `SessionData` 与磁盘文件**不动**。`createdAt` 用当前时刻（新会话的诞生时间，
-列表排序按 mtime 本就与它无关）。
+新会话元数据：**复制源会话的 `userId` 与 `metadata`，仅换 id 与 `createdAt`（当前时刻，
+列表排序按 mtime 本就与它无关）**。源会话的 `SessionData` 与磁盘文件**不动**。
 
 **淘汰的备选**：直接文件级复制（`Files.copy`）——绕过 store，若源已在内存中被 fork
 过的进程继续 append，两边文件会静默分叉；走 repository API 天然与惰性加载、原子写、
@@ -118,29 +119,39 @@ public Optional<String> fork(String sourceId)
 | 方面 | 定案 |
 |---|---|
 | 状态字段 | `pickingSessions` / `sessionIndex` / `sessionPendingDelete`（d 确认态）/ `sessionSummaries`（volatile 快照，后台线程**整体替换**） |
-| 闸门 | `/resume` 提交时 `!state.isBusy()` 才开面板（同 `/clear`：动 sessionId 不能与回合/压缩/模态并发） |
+| 闸门 | `/resume` 提交时 `!state.isBusy()` 才开面板；**Enter/f 执行时再复检一次**（见恢复序列步骤 0） |
 | 打开 | `SessionCatalog.scan`（同步瞬时）→ 立即显示；同时起 **daemon 线程**逐文件 `firstUserDigest` → 完成后 volatile 整体替换 + VIEW dirty（模式同 MCP `connectInBackground`：不 join、秒开、迟到结果作废检查——面板已关则丢弃刷新） |
 | 列表行 | `MM-dd HH:mm · <摘要或「（加载中…）/（无法解析）/（无对话）」>`，时间从 id 前 15 字符解析 UTC → 本地时区；当前会话行首 `★` 且高亮 |
 | 键位 | `↑↓` 移动 · `Enter` 恢复 · `f` 分叉选中项 · `d` 删除（两段式）· `Esc` 关闭；面板态键处理器**始终 HANDLED**；空列表防除零（同 `/tasks`） |
-| 排序纪律 | `COMMANDS` 表新增条目按字典序插入，注意 `/resume` 与其它 `/re*` 前缀的排序约束（`/skill`/`/skills` 先例） |
+| 排序纪律 | `COMMANDS` 表现状非字典序；新增条目只受**前缀包含**约束（`/skill`⊂`/skills` 先例），`/resume` 与 `/reload` 互非前缀、无排序约束 |
 
-**恢复序列**（Enter，严格对齐 `/clear` + 启动 resumed 两条既有路径，顺序不可调换）：
+**恢复序列**（Enter，严格对齐 `/clear` 完整模板，顺序不可调换）：
 
 ```
-1. killAllBackgroundTasks()      同 /clear：新(恢复的)会话不该有旧会话任务在跑
-2. 验证目标存在                  repository.findById(id) 为 empty（文件不存在/损坏）→
+0. 复检 !state.isBusy()           高危竞态防护：面板「打开」到「按 Enter」之间，goal 自动轮与
+                                 排队消息出队都能【无用户按键地】自发启动回合（GoalConcurrency
+                                 ScenariosTest 实证）；此时切 sessionId 正是 implementation-map §7
+                                 警告的 volatile 竞态。忙则 notice 拒绝、面板保持
+1. 验证目标存在                   onSubmit.sessionExists(id) 为 false（文件不存在/损坏）→
                                  提示「会话不存在或已损坏」，到此为止，什么都不切（防半切状态）
+2. killAllBackgroundTasks()      排在验证【之后】：验证都没过、会话都没换，凭什么杀任务
+                                 （对齐 /clear 注释 CodeTuiView.java:2480 的原则）
 3. switchContext(id)             换 sessionId + 5 项会话级清理
-4. state.resetForNewSession()    复位面板/排队/提示（同 /clear 第 3 步）
-5. outputQueue.clear() + printer.resetMarkdown()   同 /clear 第 4-5 步
-6. 清屏（runner 非空时）          同 /clear (B)；失败降级提示同 pushClearDegradedNotice
-7. replayHistory(getMessages(id))  回放 + todo 重建 + goal 失效提示（replayHistory 空历史自然 no-op）
+4. state.resetForNewSession()    复位面板/排队/提示（同 /clear）
+5. outputQueue.clear() + printer.resetMarkdown() + lastShownModel="" + pendingSkill=null
+                                 后两项同 /clear：恢复的会话首回合重打 ⚙ 行；
+                                 未发送的技能挂载不得注入【别的】会话
+6. 清屏（runner 非空时）          同 /clear (B)：ScreenCleaner.clear 成功 → scrollTail.clear() +
+                                 resetTailDedup()（防 resize 重放复活旧会话画面）+ printer.welcome(...)
+7. replayHistory(sessionMessages(id))  回放 + todo 重建 + goal 失效提示（空历史自然 no-op）。
+                                 注：其 INFO 行文案「已恢复上次会话」对任意目标语义不准，
+                                 实现期给 replayHistory 加可选 title 参数（默认值不变，调用方零改动）
 ```
 
-**分叉序列**（面板 `f` 与 `/fork` 共用 `forkSession(id)`）：`repository.fork(id)` →
-empty 则提示拒绝；成功则走恢复序列 1、3-7（目标 id 是 fork 返回的新 id，天然存在，
-跳过第 2 步），`/fork` 命令的源是**当前 sessionId**。提示行说明「已分叉自 <原 id 前 8 位>，
-原会话保留」。
+**分叉序列**（面板 `f` 与 `/fork` 共用 `forkSession(id)`）：`onSubmit.forkSession(id)` →
+empty 则提示拒绝；成功则走恢复序列 0、2-7（目标 id 是 fork 返回的新 id，天然存在，
+跳过第 1 步），`/fork` 命令的源是 `onSubmit.currentSessionId()`。提示行说明
+「已分叉自 <原 id 前 8 位>，原会话保留」。
 
 **删除**（`d`，两段式确认同 `/permissions`）：
 
@@ -157,7 +168,7 @@ empty 则提示拒绝；成功则走恢复序列 1、3-7（目标 id 是 fork �
 
 | 方面 | 定案 |
 |---|---|
-| 写法 | `--resume abc123` 与 `--resume=abc123` 两种；缺值/下一个参数是选项 → 当没给值（对齐 `--permission-mode` 先例，WARN） |
+| 写法 | `--resume abc123` 与 `--resume=abc123` 两种；缺值判定口径：下一个参数**以 `-` 开头**即视为选项、当缺值处理（WARN）——比 `--permission-mode` 先例的 `--` 前缀更宽，否则 `--resume -c` 会把 `-c` 当 id 值、随后才被冲突分支兜住，路径反直觉 |
 | 匹配 | 在 `scan(sessionsDir)` 得到的**合法 stem 集合**内做前缀匹配；精确命中优先；用户输入不参与拼路径（安全） |
 | 零命中 | `System.err` 报错 + 列出最近 10 个会话（时间 + id）→ 退出码 1。此时**不进 TUI**（意图明确失败，进去也是新会话，更具误导性） |
 | 多命中 | 报错 + 列出全部命中项 → 退出码 1（让用户补长前缀，不猜） |
@@ -170,15 +181,16 @@ empty 则提示拒绝；成功则走恢复序列 1、3-7（目标 id 是 fork �
 |---|---|
 | `SessionCatalogTest` | scan：mtime 降序 / 空·不存在目录返回空 / 忽略非 `.json`；firstUserDigest：首条 USER 即停（构造大文件验证不读全量——用超长后续 events + 读取位置断言或时间上限）、无 USER → null、损坏 JSON → null、`<skill_instruction>`/`<file_reference>`/interjection 剥离、80 字符截断、多行折叠 |
 | `UserTextStripperTest` | 搬移后三个剥离函数行为与 `HistoryReplay` 原测试一致（纯搬家零行为变化的守护） |
-| `CodingAgentTest` | `switchContext(id)`：sessionId 换成目标 + 6 个切换动作全部发生（镜像 clearContext 断言）；`clearContext()` 重构后行为不变 |
+| `CodingAgentSwitchContextTest`（新建类） | `switchContext(id)`：sessionId 换成目标 + 6 个切换动作**全部**发生。注意：现有 `CodingAgentClearContextTest` 只覆盖 6 个动作中的 2 个（sessionId、todoReminder），**不能只镜像它**——须为其余 4 个依赖（accumulator/PermissionEngine/Interjections/GoalManager/TodoStaleReminder）装配可观察实例逐一断言；`clearContext()` 重构后原测试不动即验证 |
 | `FileSessionRepositoryTest` | fork：事件逐条相等、源文件字节不动、空会话 → empty、fork 两次得两个不同新 id |
 | 启动解析单测 | 精确 / 唯一前缀 / 多命中 / 零命中 / `--resume=x` / 缺值 / 与 `-c` 冲突（解析逻辑提为可单测的纯函数） |
-| 面板按键 | 对齐 `pickingTasksForTest` 先例：恢复/分叉/删除确认流、当前会话不可删、空列表、闸门拒绝 |
+| 面板按键 | 对齐 `pickingTasksForTest`/`feedKeyForTest` 先例：恢复/分叉/删除确认流、当前会话不可删、空列表、闸门拒绝**两档**（提交时忙不开面板；面板开着、按 Enter 时变忙——步骤 0 复检——拒绝且面板保持） |
 
 ## 影响面
 
-- 改动文件：`FileSessionRepository`（+fork）、`CodingAgent`（switchContext 重构）、
-  `CodeTuiView`（面板 + `/fork` + `/resume` 命令）、`CodeTuiApplication`（参数解析 + 帮助）、
+- 改动文件：`FileSessionRepository`（+fork）、`CodingAgent`（switchContext 重构 + seam 方法落地）、
+  `SubmitHandler`（+6 个 default 会话门面方法）、`CodeTuiView`（面板 + `/fork` + `/resume` 命令 +
+  `ConversationState.replayHistory` 可选 title 参数）、`CodeTuiApplication`（参数解析 + 帮助）、
   `HistoryReplay`（剥离函数搬移委托）；新增 `SessionCatalog`、`UserTextStripper`。
 - 文档：`implementation-map.md` §7 补「会话管理」小节；README 命令表补 `/resume` `/fork` 与 `--resume`。
 - 不动：会话文件格式、`SessionRepository` 接口、advisor 链、权限层。
