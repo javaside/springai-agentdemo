@@ -42,4 +42,42 @@ class SessionCatalogTest {
         assertEquals(List.of(), SessionCatalog.scan(dir.resolve("nope")));
         assertEquals(List.of(), SessionCatalog.scan(dir));
     }
+
+    // ── firstUserDigest（Jackson 流式，读到首条 USER 即停）────────────────────
+
+    /** 会话文件的最小合法 JSON 形状（与 FileSessionRepository.PersistedSession 对齐的字段子集）。 */
+    private static Path sessionFile(Path dir, String name, String json) throws IOException {
+        Path f = dir.resolve(name + ".json");
+        Files.writeString(f, json);
+        return f;
+    }
+
+    @Test
+    void digest_readsFirstUser_andStopsBeforeLaterCorruption(@TempDir Path dir) throws IOException {
+        // 首条 USER 之后的内容是损坏 JSON：若实现全文解析必抛/必吞，读到首条即停则成功返回——「即停」的决定性证据。
+        Path f = sessionFile(dir, "s1", "{\"events\":[{\"messageType\":\"USER\",\"content\":\"帮我修 NPE\"},<<<CORRUPT");
+        assertEquals("帮我修 NPE", SessionCatalog.firstUserDigest(f));
+    }
+
+    @Test
+    void digest_stripsInjections_foldsAndTruncates(@TempDir Path dir) throws IOException {
+        String longText = "非".repeat(100);   // 100 个 CJK 字符，超 80 截断
+        String stored = "<skill_instruction>\nx\n</skill_instruction>\n\n" + longText + "\n第二行";
+        Path f = sessionFile(dir, "s2",
+                "{\"events\":[{\"messageType\":\"ASSISTANT\",\"content\":\"跳过\"},{\"messageType\":\"USER\",\"content\":\""
+                        + stored.replace("\n", "\\n").replace("\"", "\\\"") + "\"}]}");
+        String out = SessionCatalog.firstUserDigest(f);
+        org.junit.jupiter.api.Assertions.assertNotNull(out);
+        org.junit.jupiter.api.Assertions.assertFalse(out.contains("skill_instruction"), "剥离技能前缀");
+        org.junit.jupiter.api.Assertions.assertFalse(out.contains("\n"), "多行折叠为单行");
+        org.junit.jupiter.api.Assertions.assertTrue(out.codePoints().count() <= 80, "截断到 80 字符: " + out);
+    }
+
+    @Test
+    void digest_noUser_orCorrupt_orMissingFile_returnsNull(@TempDir Path dir) throws IOException {
+        assertEquals(null, SessionCatalog.firstUserDigest(
+                sessionFile(dir, "s3", "{\"events\":[{\"messageType\":\"ASSISTANT\",\"content\":\"x\"}]}")));
+        assertEquals(null, SessionCatalog.firstUserDigest(sessionFile(dir, "s4", "{ 不是 JSON")));
+        assertEquals(null, SessionCatalog.firstUserDigest(dir.resolve("nope.json")));
+    }
 }
