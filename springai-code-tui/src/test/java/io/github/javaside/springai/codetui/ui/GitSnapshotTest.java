@@ -4,14 +4,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** GitSnapshot：git 执行接缝（ProcessBuilder 是全仓生产首例——接缝即测试通道，spec 事实#6）。 */
@@ -111,5 +115,33 @@ class GitSnapshotTest {
 
         GitSnapshot.GitCommand timing = (root, args) -> { throw new IOException("git 超时：diff HEAD"); };
         assertTrue(GitSnapshot.capture(dir, timing).error().contains("超时"));
+    }
+
+    /** 系统 tmpdir 下既有的 codetui-git-* 临时文件集合（区别「启动失败就地清理」与并行测试互踩的基线）。 */
+    private static Set<Path> codetuiGitTmps(Path dir) throws IOException {
+        Set<Path> found = new HashSet<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir, "codetui-git-*.tmp")) {
+            for (Path p : ds) {
+                found.add(p);
+            }
+        }
+        return found;
+    }
+
+    @Test
+    void execStartFailureCleansUpTempFiles() throws IOException {
+        // 机器无 git 是设计预期分支（类 javadoc）：start() 抛错时两个刚建的 tmp 必须就地删掉——
+        // exec 的 finally 只挂在「启动成功后」那段 try 上，够不到创建-启动段，不清理每次 /diff、
+        // /review 预检就漏两个 0 字节 codetui-git-*.tmp（评审 Important#1）。
+        Path sysTmp = Path.of(System.getProperty("java.io.tmpdir"));
+        Set<Path> before = codetuiGitTmps(sysTmp);
+
+        IOException e = assertThrows(IOException.class,
+                () -> GitSnapshot.exec(List.of("definitely-not-a-program-codetui-test")));
+        assertTrue(e.getMessage().contains("git 不可用"), "消息须指明 git 不可用，实际: " + e.getMessage());
+
+        Set<Path> leaked = new HashSet<>(codetuiGitTmps(sysTmp));
+        leaked.removeAll(before);
+        assertTrue(leaked.isEmpty(), "启动失败不得残留临时文件，实际新增: " + leaked);
     }
 }

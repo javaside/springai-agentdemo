@@ -31,32 +31,45 @@ public record GitSnapshot(String statLine, List<String> body, List<String> untra
     }
 
     /**
-     * ProcessBuilder 默认实现：stdout/stderr 重定向到临时文件——**刻意不走管道**。
-     * 「先 waitFor 后读管道」在输出超过 OS 管道缓冲（约 64KB）时互锁：git 阻塞在写、
-     * waitFor 永不返回、10s 超时假失败——而大 diff 恰是 /diff 的主场景（计划评审实证）。
-     * 10s 超时 destroyForcibly；非零退出码抛 IOException（stderr 首行入消息）。
+     * ProcessBuilder 默认实现：拼 `git -C root <args>` 后委托 {@link #exec}（重定向/超时/清理细节见其 javadoc）。
      */
     public static final GitCommand PROCESS = (root, args) -> {
         List<String> cmd = new ArrayList<>(args.length + 3);
         cmd.add("git"); cmd.add("-C"); cmd.add(root.toString()); cmd.addAll(List.of(args));
-        Path outTmp;
-        Path errTmp;
+        return exec(cmd);
+    };
+
+    /**
+     * 完整命令的执行体（原 PROCESS 主体，抽成包级静态以便同包测试直接钉「启动失败」分支）：
+     * stdout/stderr 重定向到临时文件——**刻意不走管道**。「先 waitFor 后读管道」在输出超过
+     * OS 管道缓冲（约 64KB）时互锁：git 阻塞在写、waitFor 永不返回、10s 超时假失败——
+     * 而大 diff 恰是 /diff 的主场景（计划评审实证）。10s 超时 destroyForcibly；
+     * 非零退出码抛 IOException（stderr 首行入消息）。
+     */
+    static List<String> exec(List<String> fullCmd) throws IOException {
+        Path outTmp = null;
+        Path errTmp = null;
         Process p;
         try {
             outTmp = Files.createTempFile("codetui-git-out", ".tmp");
             errTmp = Files.createTempFile("codetui-git-err", ".tmp");
-            p = new ProcessBuilder(cmd)
+            p = new ProcessBuilder(fullCmd)
                     .redirectOutput(outTmp.toFile())
                     .redirectError(errTmp.toFile())
                     .start();
         } catch (IOException e) {
+            // 创建/启动失败（机器无 git 属设计预期分支，见类 javadoc）：此刻可能已有 tmp 建好，
+            // 而下方 finally 挂在「启动成功后」那段 try 上够不到这里——不就地删每次 /diff、
+            // /review 预检就漏两个 0 字节文件。
+            if (outTmp != null) { try { Files.deleteIfExists(outTmp); } catch (IOException ignore) { } }
+            if (errTmp != null) { try { Files.deleteIfExists(errTmp); } catch (IOException ignore) { } }
             throw new IOException("git 不可用：" + e.getMessage());
         }
         try {
             try {
                 if (!p.waitFor(10, TimeUnit.SECONDS)) {
                     p.destroyForcibly();
-                    throw new IOException("git 超时：" + String.join(" ", args));
+                    throw new IOException("git 超时：" + String.join(" ", fullCmd));
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
