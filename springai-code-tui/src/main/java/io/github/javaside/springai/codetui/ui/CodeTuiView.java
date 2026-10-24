@@ -400,6 +400,8 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/reload",  "重扫技能目录与 MCP 配置（SKILL.md / mcp.json 改动生效）"),
             new SlashCommand("/mcp",     "管理 MCP 服务器（启停 / r 重载配置）"),
             new SlashCommand("/permissions", "查看权限模式与生效规则"),
+            new SlashCommand("/init",   "分析项目并生成/改进 AGENTS.md（重启后生效）"),
+            new SlashCommand("/review", "只读审查工作树改动（正确性/安全/测试/可维护性）"),
             new SlashCommand("/resume",  "恢复 / 分叉 / 删除历史会话"),
             new SlashCommand("/fork",    "分叉当前会话（历史复制到新会话，原会话保留）"),
             new SlashCommand("/tasks",   "查看后台任务（可展开结果 / 终止）"),
@@ -2527,6 +2529,30 @@ public final class CodeTuiView extends InlineApp {
             } else {
                 pushClearDegradedNotice();
             }
+            return;
+        }
+        if (cmd.equals("/init")) {                   // 提示词命令：agent 用既有工具自己干（/continue 同构）
+            clearInput();
+            String prompt = "请分析当前项目并生成项目级 AGENTS.md（目标固定为工作目录下的 AGENTS.md，"
+                    + "不要碰用户级 ~/.codetui/AGENTS.md）。步骤：先读构建文件（pom.xml 等）、模块布局与测试约定，"
+                    + "若已存在 AGENTS.md 则先通读并在保留其既有事实的基础上改进，不要整篇重写；"
+                    + "内容只写「从代码推不出来的事实」（构建/测试命令、关键约定、注意事项），保持简洁。"
+                    + "写完后简述你写了什么，并明确告诉用户：AGENTS.md 在启动时一次性加载，重启 code-tui 后生效。";
+            if (busy()) state.enqueue(prompt, null); else dispatch(prompt, null);
+            return;
+        }
+        if (cmd.equals("/review")) {                 // 只读审查；非 git 目录 UI 预检拒绝（白烧一回合不如一行 notice）
+            clearInput();
+            if (!GitSnapshot.isGitRepo(root, GitSnapshot.PROCESS)) {
+                state.setNotice("当前目录不是 git 仓库，没有可审查的工作树改动");
+                return;
+            }
+            String prompt = "请只读审查当前工作树的改动（不要动手修改，除非我明确要求）。"
+                    + "先跑 git diff HEAD 与 git status（含未跟踪文件）了解全貌，再逐文件审阅改动内容，"
+                    + "从正确性、安全、测试、可维护性四个维度找问题，按严重程度从高到低输出："
+                    + "每条给出文件:行号、问题描述、为什么要紧、建议修法；没有问题的维度不用硬凑。"
+                    + "未跟踪的新文件也要看（用 Read 读内容），但同样不要修改。";
+            if (busy()) state.enqueue(prompt, null); else dispatch(prompt, null);
             return;
         }
         if (cmd.equals("/resume")) {                 // 会话管理面板：恢复/分叉/删除
