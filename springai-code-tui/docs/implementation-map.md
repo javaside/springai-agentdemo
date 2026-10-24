@@ -19,6 +19,7 @@
 | 一个回合 | `CodingAgent.submit` | 4 个 advisor + 2 个 ChatModel 装饰器 | [3](#3-对话回合) |
 | 输入框编辑 | `CodeTuiView.InputBox` | `TextAreaState` *(lib)*、`CharWidth` *(lib)* | [4](#4-输入框与按键) |
 | 斜杠命令 | `CodeTuiView.submitInput` | `COMMANDS` 表 | [5](#5-斜杠命令) |
+| `/diff` 工作树快照 | `CodeTuiView.runDiff` | `ui.GitSnapshot`、`ConversationState.pushRawLines`（`Kind.DIFF` 通道） | [5](#5-斜杠命令) |
 | `/context` | `ui.ContextUsage` | `SessionTokenEstimator`、`TokenUsageAccumulator` | [6.1](#61-context-的数据来源) |
 | 自动压缩 / `/compact` | `PreflightCompactionAdvisor` | `BoundedSummarizationCompactionStrategy` | [6.2](#62-自动压缩与-compact) |
 | 会话持久化 / `-c` | `FileSessionRepository` | `SessionEvents`、`ui.HistoryReplay` | [7](#7-会话持久化与恢复) |
@@ -348,7 +349,10 @@ Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改
 | `/reload` | `reloadSkills()`（技能 + MCP 配置，后者仅空闲） | MCP 部分忙碌时跳过并提示 |
 | `/mcp` | `openMcpPicker()`（面板内 `r` 键 = `reloadMcpConfig()`） | 仅空闲 |
 | `/permissions` | `printPermissions()` + `openPermsPanel()` | 无 |
+| `/init` | 固定提示词 dispatch/enqueue（生成/改进项目级 AGENTS.md：已存在则通读后改进不整篇重写、明说重启后生效） | 忙时排队（`busy()` 闸门，同 `/continue`） |
+| `/review` | 非 git 预检（`GitSnapshot.isGitRepo`，一行 notice 拒绝）+ 固定提示词（四维度按严重程度只读审查，未跟踪文件也看不改） | 忙时排队（另有非 git 预检） |
 | `/resume` | `openSessionsPanel()`（面板内 Enter 恢复 / `f` 分叉 / `d` 两段式删除，见 [7.1](#71-会话管理resume-面板fork--resume)） | `!isBusy()`（同 `/clear`：动 sessionId 不能与回合/压缩/模态并发） |
+| `/diff` | daemon 线程 `runDiff`：`GitSnapshot.capture`（`diff HEAD` + 未跟踪列名/字节数）→ `pushRawLines` 按 `Kind.DIFF` ≤200 行/批逐字下沉（`diffEpoch` 代际守卫：/clear 与会话切换换代、在飞批次弃写；`diffRunning` 单飞） | 无（只读，daemon 下沉；**Esc 不取消**——git 亚秒级） |
 | `/fork` | `forkSession(currentSessionId)` + `switchToSession` 切换序列 | `!isBusy()`；空会话提示不分叉 |
 | `/tasks` | `openTasksPanel()` | **刻意无闸门**（后台任务与回合两套线程，忙时恰是最想看的时刻） |
 | `/continue` | 固定提示词 + `backgroundDigestForContinue()` | 忙则 enqueue |
