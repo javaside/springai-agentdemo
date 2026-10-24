@@ -115,9 +115,40 @@ class GitSnapshotTest {
 
     @Test
     void isGitRepoDetectsInsideWorkTree(@TempDir Path dir) throws Exception {
+        // ⚠ 假设声明：@TempDir 须不在任何 git 工作树内（rev-parse 会向上搜索父目录；JUnit 默认系统 tmpdir 满足）
         assertFalse(GitSnapshot.isGitRepo(dir, GitSnapshot.PROCESS));
         initRepo(dir);
         assertTrue(GitSnapshot.isGitRepo(dir, GitSnapshot.PROCESS));
+    }
+
+    @Test
+    void largeDiffOverPipeBuffer_survives(@TempDir Path dir) throws Exception {
+        // 主场景钉子：>64KB 的 diff（OS 管道缓冲量级）必须完整捕获——若实现退回「先 waitFor 后读管道」，
+        // 此用例必以「git 超时」假失败（计划评审实证的互锁）。
+        initRepo(dir);
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 2000; i++) {
+            big.append("line-").append(i).append("-").append("x".repeat(60)).append('\n');
+        }
+        Files.writeString(dir.resolve("big.txt"), "seed\n");
+        runOk(dir, "git", "add", "big.txt");
+        runOk(dir, "git", "commit", "-q", "-m", "init");
+        Files.writeString(dir.resolve("big.txt"), big.toString());
+
+        GitSnapshot s = GitSnapshot.capture(dir, GitSnapshot.PROCESS);
+
+        assertNull(s.error(), "大 diff 不许超时: " + s.error());
+        assertTrue(s.body().size() > 2000, "全部行捕获，实际: " + s.body().size());
+    }
+
+    @Test
+    void stubCoversTimeoutAndNonZeroExit_channels(@TempDir Path dir) {
+        // 桩测 error 通道两分支（spec 测试策略明文）：非零退出/超时由 IOException 消息承载进 error
+        GitSnapshot.GitCommand failing = (root, args) -> { throw new IOException("fatal: not a git repository"); };
+        assertEquals("fatal: not a git repository", GitSnapshot.capture(dir, failing).error());
+
+        GitSnapshot.GitCommand timing = (root, args) -> { throw new IOException("git 超时：diff HEAD"); };
+        assertTrue(GitSnapshot.capture(dir, timing).error().contains("超时"));
     }
 }
 ```
@@ -162,31 +193,48 @@ public record GitSnapshot(String statLine, List<String> body, List<String> untra
         List<String> run(Path root, String... args) throws IOException;
     }
 
-    /** ProcessBuilder 默认实现：10s 超时；非零退出码抛 IOException（stderr 首行入消息）。 */
+    /**
+     * ProcessBuilder 默认实现：stdout/stderr 重定向到临时文件——**刻意不走管道**。
+     * 「先 waitFor 后读管道」在输出超过 OS 管道缓冲（约 64KB）时互锁：git 阻塞在写、
+     * waitFor 永不返回、10s 超时假失败——而大 diff 恰是 /diff 的主场景（计划评审实证）。
+     * 10s 超时 destroyForcibly；非零退出码抛 IOException（stderr 首行入消息）。
+     */
     public static final GitCommand PROCESS = (root, args) -> {
         List<String> cmd = new ArrayList<>(args.length + 3);
         cmd.add("git"); cmd.add("-C"); cmd.add(root.toString()); cmd.addAll(List.of(args));
+        Path outTmp;
+        Path errTmp;
         Process p;
         try {
-            p = new ProcessBuilder(cmd).start();
+            outTmp = Files.createTempFile("codetui-git-out", ".tmp");
+            errTmp = Files.createTempFile("codetui-git-err", ".tmp");
+            p = new ProcessBuilder(cmd)
+                    .redirectOutput(outTmp.toFile())
+                    .redirectError(errTmp.toFile())
+                    .start();
         } catch (IOException e) {
             throw new IOException("git 不可用：" + e.getMessage());
         }
         try {
-            if (!p.waitFor(10, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
-                throw new IOException("git 超时：" + String.join(" ", args));
+            try {
+                if (!p.waitFor(10, TimeUnit.SECONDS)) {
+                    p.destroyForcibly();
+                    throw new IOException("git 超时：" + String.join(" ", args));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("git 被中断");
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("git 被中断");
+            String stderr = Files.readString(errTmp, StandardCharsets.UTF_8).strip();
+            if (p.exitValue() != 0) {
+                throw new IOException(stderr.isEmpty() ? ("git 退出码 " + p.exitValue())
+                        : stderr.lines().findFirst().orElse("git 失败"));
+            }
+            return Files.readAllLines(outTmp, StandardCharsets.UTF_8);
+        } finally {
+            try { Files.deleteIfExists(outTmp); } catch (IOException ignore) { }
+            try { Files.deleteIfExists(errTmp); } catch (IOException ignore) { }
         }
-        String stderr = new String(p.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).strip();
-        if (p.exitValue() != 0) {
-            throw new IOException(stderr.isEmpty() ? ("git 退出码 " + p.exitValue()) : stderr.lines().findFirst().orElse("git 失败"));
-        }
-        return new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
-                .lines().toList();
     };
 
     /** 是否在 git 工作树内（/review 预检用）。 */
@@ -242,11 +290,12 @@ git commit -m "feat: GitSnapshot——git 执行接缝与工作树快照（/diff
 
 **Files:**
 - Modify: `ui/ConversationState.java`（Kind 枚举 +1、`pushRawLines`）
-- Modify: `ui/ScrollbackPrinter.java`（`styleFor` 给 DIFF 配增删着色；`lineCursor` default 分支天然接住新 Kind，无需新游标）
+- Modify: `ui/Theme.java`（**必改**：`styleFor` 在这里（94-108 行附近）且是穷举 switch 无 default——不加 `case DIFF` 整模块编译不过；加 `case DIFF -> null` 走基色）
+- Modify: `ui/ScrollbackPrinter.java`（`lineCursor` 对 DIFF 行做 +绿/-红 前缀双样式选择——每条 OutputLine 单样式足够，不必多 span）
 - Test: `springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/RawDiffChannelTest.java`（新建）
 
 **Interfaces:**
-- Consumes: 既有 `OutputLine(text, kind)` 双参构造、`lineCursor`/`styleFor`（`ScrollbackPrinter.java:236-239`）、`pushInfo` 的锁模式（`ConversationState.java:282-289`）。
+- Consumes: 既有 `OutputLine(text, kind)` 双参构造、`Theme.styleFor`（Theme.java:94-108，包级静态穷举 switch）、`lineCursor`（ScrollbackPrinter，default 分支天然接住新 Kind——CodeTuiView 渲染路由 614 行 `default -> lineCursor` 已核实）、`pushInfo` 的锁模式（`ConversationState.java:282-289`）、`drainPending()`（返回 `List<OutputLine>`，ConversationState.java:533-538——**`pollPending()` 返回单条，别用错**）。
 - Produces: `ConversationState.pushRawLines(List<String> lines, OutputLine.Kind kind)`——锁内逐行入 pending、锁外一次 publish；**不受 `acceptingTurnId` 门控**（UI 主动输出，非模型流）。Task 4 消费。
 
 - [ ] **Step 1: 写失败测试**
@@ -256,21 +305,31 @@ package io.github.javaside.springai.codetui.ui;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** pushRawLines + Kind.DIFF：UI 主动输出通道（不受 turnId 门控、不走 markdown）。 */
 class RawDiffChannelTest {
 
+    /** 照抄 ScrollbackPrinterTest 的记录型 Sink（两方法接口——不是函数式接口，不能 lambda）。 */
+    private static final class RecordingSink implements ScrollbackPrinter.Sink {
+        final List<String> lines = new ArrayList<>();
+        @Override public void println(dev.tamboui.buffer.Text text) { lines.add(text.toString()); }
+        @Override public void println(String s) { lines.add(s); }
+    }
+
     @Test
     void pushRawLines_appendsAllLinesInOrder_regardlessOfAcceptingTurnId() {
         ConversationState s = new ConversationState();
-        s.onTurnStarted(7L);   // 有活跃回合——门控对 pushInfo 类通道本就不生效，此处钉住该契约
+        s.onTurnStarted(7L);   // 有活跃回合——门控管的是模型流，UI 主动输出不受控，此处钉住该契约
 
         s.pushRawLines(List.of("+新增", "-删除", " context"), OutputLine.Kind.DIFF);
 
-        var lines = s.pollPending();
+        List<ConversationState.OutputLine> lines = s.drainPending();
         assertEquals(3, lines.size(), "三行全进 pending");
         assertEquals("+新增", lines.get(0).text());
         assertEquals(OutputLine.Kind.DIFF, lines.get(1).kind());
@@ -281,24 +340,29 @@ class RawDiffChannelTest {
     void emptyListIsNoop_publishStillSafe() {
         ConversationState s = new ConversationState();
         s.pushRawLines(List.of(), OutputLine.Kind.DIFF);
-        assertEquals(0, s.pollPending().size());
+        assertEquals(0, s.drainPending().size());
     }
 
     @Test
-    void diffKindRendersPlainNotMarkdown(@TempDir java.nio.file.Path unused) {
-        // 关键回归钉子：DIFF 行不进 MarkdownRenderer——`#` 保留、`- xxx` 不变列表项、`|` 不触发表格攒块。
-        // 断言走 ScrollbackPrinter 的测试 Sink（同 ScrollbackPrinterTest 的接缝；执行时对齐其 Sink 构造）。
-        ScrollbackPrinter p = new ScrollbackPrinter(new java.util.ArrayList<>()::add);   // 对齐真实 Sink 形状
+    void diffKindRendersVerbatim_notMarkdown() {
+        // 正向断言（禁恒真写法）：DIFF 行经 printer.line() 落到 Sink 的文本逐字保留——
+        // `#` 不被吃、`- xxx` 不变列表项、`|` 不触发表格攒块。若 DIFF 被误路由到 markdown
+        // 游标，这三类行必被改写，断言红。
+        RecordingSink sink = new RecordingSink();
+        ScrollbackPrinter p = new ScrollbackPrinter(sink, Path.of("/work"), () -> 80);   // 三参构造（同 ScrollbackPrinterTest）
         p.line(new ConversationState.OutputLine("- 删掉的行 #不是标题", OutputLine.Kind.DIFF));
         p.line(new ConversationState.OutputLine("| a | b |", OutputLine.Kind.DIFF));
-        List<String> out = /* Sink 内容，执行时对齐 */ java.util.Collections.emptyList();
-        org.junit.jupiter.api.Assertions.assertTrue(out.isEmpty() || out.toString().contains("- 删掉的行"),
-                "DIFF 行原样输出，`-` 标记不被吃掉");
+        p.line(new ConversationState.OutputLine("+新增行", OutputLine.Kind.DIFF));
+
+        String all = String.join("\n", sink.lines);
+        assertTrue(all.contains("- 删掉的行 #不是标题"), "`-` 与 `#` 原样存活，实际: " + all);
+        assertTrue(all.contains("| a | b |"), "`|` 不触发表格，实际: " + all);
+        assertTrue(all.contains("+新增行"), "`+` 原样存活，实际: " + all);
     }
 }
 ```
 
-（注：第三个用例的 Sink 构造与取回方式以 `ScrollbackPrinterTest` 既有写法为准——执行时打开该文件对齐，断言目标不变：`-`/`#`/`|` 原样存活。）
+（Sink/构造器形状以 `ScrollbackPrinterTest.java:22-35` 为准——执行时打开核对；断言目标不变：三类 markdown 敏感字符逐字存活。）
 
 - [ ] **Step 2: 跑测试确认红**
 
@@ -329,13 +393,25 @@ Expected: 编译失败（`Kind.DIFF`/`pushRawLines` 不存在）。
     }
 ```
 
-`ScrollbackPrinter.styleFor`（找到该私有方法，对齐既有分支风格）加：
+`Theme.styleFor`（Theme.java:94-108，包级静态穷举 switch **无 default**——不加 case 编译不过，这正是 TDD 的第一个红）加：
 
 ```java
-            case DIFF -> diffLineSpans(text);   // +绿 -红 其余默认色；纯前缀判断，不改写内容
+            case DIFF -> null;   // DIFF 基色由 lineCursor 按行前缀覆盖（Theme 是纯调色板，不放行为）
 ```
 
-`diffLineSpans`（新私有方法）：行首 `+` → 前缀着增色、行首 `-` → 删色（色值对齐 `DiffRenderer` 既有增删色 Span 常量；找不到就用 `Theme` 的成对颜色，执行时对齐）。若既有 DiffRenderer 已有可复用的行着色函数则直接委托。
+`ScrollbackPrinter` 的 `lineCursor`（或其调用的样式选择处，对齐实际结构）给 DIFF 行加**前缀单样式**：
+
+```java
+    // DIFF 行 +绿/-红/其余基色：每行单样式足够（前缀判断不改写内容）；色对用 Theme 既有增删色
+    // （Theme.java:85-89 附近 Color.indexed(114)/(210)，与 DiffRenderer 的增删底色同源）。
+    static Style diffStyleFor(String text) {
+        if (text.startsWith("+")) return Style.color(114);   // 对齐 Theme 真实增色常量名
+        if (text.startsWith("-")) return Style.color(210);   // 对齐 Theme 真实删色常量名
+        return null;
+    }
+```
+
+（常量名/色值以 Theme.java 85-89 的既有 ADD/DEL 定义为准——执行时打开对齐，别新造色值；`Style` 的真实类型名同样对齐。）
 
 - [ ] **Step 4: 跑测试确认绿 + 打印器回归**
 
@@ -346,6 +422,7 @@ Expected: 全 PASS。
 
 ```bash
 git add springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ConversationState.java \
+        springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/Theme.java \
         springai-code-tui/src/main/java/io/github/javaside/springai/codetui/ui/ScrollbackPrinter.java \
         springai-code-tui/src/test/java/io/github/javaside/springai/codetui/ui/RawDiffChannelTest.java
 git commit -m "feat: Kind.DIFF 单色通道与 pushRawLines（/diff 的逐字输出管道）"
@@ -370,9 +447,9 @@ git commit -m "feat: Kind.DIFF 单色通道与 pushRawLines（/diff 的逐字输
 2. `/init` 忙碌（`state.onTurnStarted(1L)`）：入队而非 dispatch，队列快照含同样关键句；
 3. `/review` 空闲：dispatch 提示词含「只读」「正确性」「安全」「测试」「可维护性」「严重度」；
 4. `/review` 非 git 目录（`@TempDir` 空目录即非仓库）：不 dispatch 不入队，`state.notice()` 含「git」；
-5. 两命令进 `↑` 历史（`historySnapshotForTest` 或等价钩子——对齐既有测试钩子名）。
+5. 两命令进 `↑` 历史：`historySnapshotForTest` **不存在**——等价路径：跑完命令后 `feedKeyForTest(KeyEvent.ofKey(KeyCode.UP))` + `inputTextForTest()`（CodeTuiView.java:1495 附近）断言输入框回填 `/init`（`addHistory` 对斜杠命令统一生效，CodeTuiView.java:2465-2475）。
 
-（执行时打开 `CodeTuiViewContinueDigestTest.java:43-103` 抄桩与断言形状，断言目标如上五条。）
+（执行时打开 `CodeTuiViewContinueDigestTest.java:43-103` 抄桩与断言形状——桩是记录型 SubmitHandler 记 `submitted`，闲路断 `submitted.get()`、忙路断 `state.queuedSnapshot()`；断言目标如上五条。闸门一律用 `busy()`（= state.isBusy() ‖ hasInFlightSubagents()，CodeTuiView.java:2718-2720）——Esc 取消后子 agent 收尾期也得入队，照抄 /continue。）
 
 - [ ] **Step 2: 跑测试确认红**
 
@@ -398,7 +475,7 @@ COMMANDS 表（`/permissions` 行后）两行：
                     + "若已存在 AGENTS.md 则先通读并在保留其既有事实的基础上改进，不要整篇重写；"
                     + "内容只写「从代码推不出来的事实」（构建/测试命令、关键约定、注意事项），保持简洁。"
                     + "写完后简述你写了什么，并明确告诉用户：AGENTS.md 在启动时一次性加载，重启 code-tui 后生效。";
-            if (state.isBusy()) state.enqueue(prompt, null); else dispatch(prompt, null);
+            if (busy()) state.enqueue(prompt, null); else dispatch(prompt, null);
             return;
         }
         if (cmd.equals("/review")) {                 // 只读审查；非 git 目录 UI 预检拒绝（白烧一回合不如一行 notice）
@@ -412,7 +489,7 @@ COMMANDS 表（`/permissions` 行后）两行：
                     + "从正确性、安全、测试、可维护性四个维度找问题，按严重程度从高到低输出："
                     + "每条给出文件:行号、问题描述、为什么要紧、建议修法；没有问题的维度不用硬凑。"
                     + "未跟踪的新文件也要看（用 Read 读内容），但同样不要修改。";
-            if (state.isBusy()) state.enqueue(prompt, null); else dispatch(prompt, null);
+            if (busy()) state.enqueue(prompt, null); else dispatch(prompt, null);
             return;
         }
 ```
@@ -444,16 +521,17 @@ git commit -m "feat: /init 与 /review 提示词命令（/review 非 git 预检�
 - Consumes: Task 1 `GitSnapshot.capture/PROCESS`、Task 2 `pushRawLines`/`Kind.DIFF`；既有 `sessionEpoch` 形状（main d5ebee34：volatile int、捕获-回写前校验）、`publishLocalViewChange`。
 - Produces: `/diff` 命令（无外部接口）。**测试注入点**：`GitCommand` 经包级可覆写成员或构造默认 + 包级 setter（对齐测试桩最小侵入；推荐 `private volatile GitSnapshot.GitCommand diffGit = GitSnapshot.PROCESS;` 包级可写）。
 
-- [ ] **Step 1: 写失败测试**（桩注入 `diffGit`；驱动同 Task 3；断言走 `state.pollPending()` 的 Kind/文本与顺序）
+- [ ] **Step 1: 写失败测试**（桩注入 `diffGit`；驱动同 Task 3；断言走 `state.drainPending()` 的 Kind/文本与顺序）
 
 用例：
-1. **正常输出**：桩返回 `GitSnapshot.ok("3 files changed", List.of("+a", "-b", "@@ -1 +1 @@"), List.of("new.txt (10 bytes)"))` → pending 序列：INFO（含 statLine 与「工作树改动」）→ 三行 `Kind.DIFF` 逐字 → INFO（含 `new.txt`）；等待用 deadline 轮询 + `Thread.onSpinWait()`（SessionsPanelTest:118-125 先例）；
-2. **空改动**：`GitSnapshot.ok("", List.of(), List.of())` → 仅一行 INFO 含「干净」；
-3. **error 通道**：`GitSnapshot.failed("git 不可用")` → 一行 ERROR 含「git 不可用」；
-4. **代际守卫**：正常桩（回写分两批：body 设 300 行使分批生效，或桩第一次调用后触发 `/clear`）——简化实现：先 `/diff`（桩慢返回，用 CountDownLatch 控制桩挂起）→ 执行 `/clear` → 放行桩 → 轮询确认**没有任何 DIFF 行**出现在 pending（迟到批次被 epoch 弃写）；
-5. **单飞**：`diffRunning` 时再按 `/diff` → notice「正在生成」且不起新线程（桩挂起期间第二次输入 `/diff`，断言 notice）。
+1. **正常输出**：桩返回 `GitSnapshot.ok("3 files changed", List.of("+a", "-b", "@@ -1 +1 @@"), List.of("new.txt (10 bytes)"))` → pending 序列：INFO（含 statLine 与「工作树改动」）→ 三行 `Kind.DIFF` 逐字 → INFO（含 `new.txt`）；等待轮询 `diffRunningForTest()` 变 false（daemon 完成信号——见下）再断言，不用裸 sleep；
+2. **端到端渲染路由钉子**：用 CodeTuiView 的**四参测试构造器**（`CodeTuiView.java:422`，注入记录型 `ScrollbackPrinter.Sink`）驱动 `/diff`（桩 body 含 `- 删 #x`、`| a |`）→ 等 daemon 完成 → 断言 sink 收到的文本里 `-`/`#`/`|` 逐字存活——守护渲染路由（CodeTuiView.java:614 的 `default -> lineCursor`）不被改成送 markdown 游标；
+3. **空改动**：`GitSnapshot.ok("", List.of(), List.of())` → 仅一行 INFO 含「干净」；
+4. **error 通道**：`GitSnapshot.failed("git 不可用")` → 一行 ERROR 含「git 不可用」；
+5. **代际守卫**（负断言必须有完成信号才具备杀死力）：CountDownLatch 桩挂起 → `/diff` → 执行 `/clear`（diffEpoch++）→ `finally` 放行 latch → 轮询 `diffRunningForTest()==false`（daemon 确已跑完）→ 断言 `drainPending()` **无任何 DIFF 行**（对照用例 1 的正向出现，「删掉 epoch 校验」变异可被杀死）；
+6. **单飞**：latch 桩挂起期间第二次输入 `/diff` → notice 含「正在生成」（测试线程串行按键，无竞态）。
 
-（CountDownLatch 控制桩：`GitCommand` 桩内 `latch.await()`——把挂起点做进注入桩，UI 代码不感知。）
+（实现侧须提供包级 `boolean diffRunningForTest()` 钩子——否则负断言在 daemon 未跑到写点时假绿；latch 释放务必放 finally。）
 
 - [ ] **Step 2: 跑测试确认红**
 
@@ -473,7 +551,7 @@ Expected: FAIL（命令未注册）。
     volatile GitSnapshot.GitCommand diffGit = GitSnapshot.PROCESS;
 ```
 
-`/clear` 分支（`outputQueue.clear()` 行旁）与 `switchToSession`（`outputQueue.clear()` 行旁）各加一行：
+`/clear` 分支（`outputQueue.clear()` 行旁，实际 2506 行附近）与 `switchToSession`（其 `sessionEpoch++` 在 4401 行附近——`diffEpoch++` 紧挨它放，等价且更一致）各加一行：
 
 ```java
             diffEpoch++;   // 在飞 /diff 的迟到批次从此弃写——它的输出属于刚被清掉的会话画面
@@ -519,7 +597,7 @@ daemon 方法（/resume 面板方法组附近）：
                 state.pushInfo("工作树干净（相对 HEAD 无改动、无未跟踪文件）");
                 return;
             }
-            state.pushInfo("工作树改动（相对 HEAD）· " + (s.statLine().isEmpty() ? "" : s.statLine()));
+            state.pushInfo("↺ 工作树改动（相对 HEAD）· " + (s.statLine().isEmpty() ? "" : s.statLine()));
             for (int from = 0; from < s.body().size(); from += 200) {
                 if (epoch != diffEpoch) {
                     return;   // 中途被 /clear 或会话切换：剩余批次不打了
@@ -540,6 +618,12 @@ daemon 方法（/resume 面板方法组附近）：
 ```
 
 COMMANDS 表一行（`/resume` 行后）：`new SlashCommand("/diff", "查看工作树改动（git diff + 未跟踪清单，不经模型）"),`
+
+测试钩子（其它 ForTest 钩子旁）：
+
+```java
+    boolean diffRunningForTest() { return diffRunning; }   // 代际守卫负断言的完成信号（无它必假绿）
+```
 
 - [ ] **Step 4: 跑测试确认绿 + 面板回归**
 
@@ -578,8 +662,9 @@ git commit -m "docs: /init /review /diff 补 reference 与 implementation-map、
 
 ---
 
-## Plan Self-Review（已执行）
+## Plan Self-Review（已执行；2026-10-24 评审修订后更新）
 
-1. **Spec 覆盖**：GitSnapshot（T1）、DIFF 通道+pushRawLines（T2）、/init /review 含预检（T3）、/diff 含 epoch/单飞/分批/Esc 取舍（T4）、文档三处（T5）——spec 全部定案有任务承接；spec 的「未跟踪只列名」「无忙碌闸门」「/review 预检」「重启后生效」均在代码块内落地。
-2. **占位符扫描**：两处「执行时对齐」（ScrollbackPrinter 测试 Sink 构造、dispatch 真实签名）均给出先例文件与不变式；Task 3/4 测试用「用例目标清单 + 先例文件」形式（提示词全文在实现块里逐字给出，断言目标五条明确）——比照会话管理 plan 的同类写法，属执行期对齐而非缺失设计。
-3. **类型一致性**：`GitSnapshot.capture(Path, GitCommand)` 在 T1 定义、T3/T4 消费一致；`pushRawLines(List<String>, Kind)` 在 T2 定义、T4 消费一致；`diffGit` 注入点只在 T4 定义使用；`Kind.DIFF` 全文一处定义。
+1. **Spec 覆盖**：GitSnapshot（T1）、DIFF 通道+pushRawLines（T2）、/init /review 含预检（T3）、/diff 含 epoch/单飞/分批/Esc 取舍（T4）、文档三处（T5）——spec 全部定案有任务承接；「未跟踪只列名」「无忙碌闸门」「/review 预检」「重启后生效」均在代码块内落地。
+2. **占位符扫描**：执行期对齐注记（ScrollbackPrinterTest 的 Sink 形状、Theme 色值常量名、/continue 分支签名）均给出先例文件与不变式；无 TBD/TODO。
+3. **类型一致性**：`GitSnapshot.capture(Path, GitCommand)` 在 T1 定义、T3/T4 消费一致；`pushRawLines(List<String>, Kind)` 在 T2 定义、T4 消费一致；`diffGit` 注入点与 `diffRunningForTest()` 钩子只在 T4；`Kind.DIFF` 全文一处定义。
+4. **评审修订记录（subagent 评审，2026-10-24）**：已修 3 高 + 4 中——①T1 PROCESS 管道死锁（waitFor 先于读流，>64KB 大 diff 必假超时）改**临时文件重定向**并补 >64KB/超时/非零退出三用例；②T2 补 `Theme.java`（styleFor 在 Theme 非 ScrollbackPrinter，穷举 switch 无 default，漏加则模块编译不过；Files 与 git add 均补）；③T2 测试三处（Sink 是两方法接口非函数式 + 三参构造、`pollPending()` 返回单条改 `drainPending()`、恒真断言改正向）；④T3 闸门 `state.isBusy()`→`busy()`（对齐 /continue，覆盖子 agent 收尾期）；⑤T4 补 `diffRunningForTest()` 完成信号（负断言防假绿）+ 端到端渲染路由钉子（四参构造器 + sink 逐字断言）+ 锚点行号写实；⑥`↑` 历史等价路径（钩子不存在）写明；⑦输出头行补 ↺、TempDir 假设声明。spec 侧行号漂移（/continue 实际 2595-2613 等）已按实值修正到计划。
