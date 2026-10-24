@@ -4381,7 +4381,7 @@ public final class CodeTuiView extends InlineApp {
                 state.pushInfo("工作树干净（相对 HEAD 无改动、无未跟踪文件）");
                 return;
             }
-            state.pushInfo("↺ 工作树改动（相对 HEAD）· " + (s.statLine().isEmpty() ? "" : s.statLine()));
+            state.pushInfo("↺ 工作树改动（相对 HEAD）" + (s.statLine().isEmpty() ? "" : "· " + s.statLine()));
             for (int from = 0; from < s.body().size(); from += 200) {
                 if (epoch != diffEpoch) {
                     return;   // 中途被 /clear 或会话切换：剩余批次不打了

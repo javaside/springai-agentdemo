@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -64,7 +65,8 @@ class CodeTuiViewDiffTest {
                     Thread.currentThread().interrupt();
                 }
             }
-            // capture 只会发 "diff HEAD --stat" / "diff HEAD" / "ls-files …" 三种；按首词+长度区分
+            // capture 只会发 "diff HEAD --stat" / "diff HEAD" / "-c core.quotepath=false ls-files …"
+            // 三种；按首词区分（diff→stat/body 按长度二分，其余（-c 开头的 ls-files）→untracked）
             return args[0].equals("diff") ? (args.length > 2 ? stat : body) : untracked;
         }
     }
@@ -237,6 +239,135 @@ class CodeTuiViewDiffTest {
                 "换代后不得再出现任何 DIFF 行，实际: " + lines);
         assertTrue(lines.stream().noneMatch(l -> l.text().contains("工作树改动")),
                 "头行同属旧画面，也不得出现，实际: " + lines);
+    }
+
+    /**
+     * 分批边界 + 批间代际校验（终审核心建议）：201 行正文恰分 200+1 两批。挂闸点不在桩里
+     * （桩只能拦 capture 中途，拦不住两批之间）——挂在 {@code state} 的 UiChangeListener 上：
+     * {@code pushInfo}/{@code pushRawLines} 的契约是<b>锁内入 pending、锁外同步 publish</b>，
+     * 第 1 次通知必是头行 INFO、第 2 次必是首批 200 行——listener 在第 2 次调用上挂起，就把
+     * daemon 精确冻结在「首批已落盘、第二批未写」之间（此刻 state 监视器已释放，测试线程可
+     * drain、可 /clear）。/clear 会清 pending，故 clear 前先 drain 存快照：
+     * <ul>
+     *   <li>快照 = 头 + 恰 200 行（line-0…line-199）——钉死 {@code from+200} 边界：
+     *       批变大则 line-200 混进快照、批变小则 line-199 缺席，都会红；</li>
+     *   <li>放行后 daemon 在批间发现换代（diffEpoch++）弃写第二批——/clear 之后的新 pending
+     *       不得再出现任何 DIFF 行；把批间 epoch 校验删掉，line-200 必在此露头。</li>
+     * </ul>
+     */
+    @Test
+    @DisplayName("分批边界：首批恰 200 行落盘；批间 /clear 换代则第二批弃写")
+    void clearBetweenBatches_firstBatchLands_secondBatchDiscarded(@TempDir Path root) throws InterruptedException {
+        StubGit git = new StubGit(null);                 // 不挂桩 latch：挂闸点在 UiChangeListener
+        git.stat = List.of("42 files changed");
+        List<String> body = new ArrayList<>();
+        for (int i = 0; i <= 200; i++) {
+            body.add("line-" + i);                       // 201 行：200 一批 + 尾批 1 行
+        }
+        git.body = List.copyOf(body);
+        git.untracked = List.of();
+        ConversationState state = new ConversationState();
+        CodeTuiView v = newView(state, root, git);
+
+        CountDownLatch firstBatchLanded = new CountDownLatch(1);
+        CountDownLatch releaseDaemon = new CountDownLatch(1);
+        AtomicInteger fires = new AtomicInteger();
+        state.setUiChangeListener(bits -> {
+            if (fires.incrementAndGet() == 2) {          // 1=头行 INFO，2=首批 200 行（挂起 daemon）
+                firstBatchLanded.countDown();
+                try {
+                    releaseDaemon.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+
+        runDiff(v);
+        try {
+            assertTrue(firstBatchLanded.await(2, TimeUnit.SECONDS),
+                    "2s 内必须等到首批落盘信号（第 2 次 publish）——daemon 未启动或首批未写");
+            List<OutputLine> snapshot = state.drainPending();   // /clear 前快照（clear 会清 pending）
+            assertEquals(201, snapshot.size(),
+                    "头 1 + 首批恰 200 行（钉 from+200 边界），实际: " + snapshot.size());
+            assertEquals(OutputLine.Kind.INFO, snapshot.get(0).kind());
+            assertEquals("line-0", snapshot.get(1).text(), "首批首行");
+            assertEquals(OutputLine.Kind.DIFF, snapshot.get(1).kind());
+            assertEquals("line-199", snapshot.get(200).text(), "首批末行是 line-199，line-200 属第二批");
+            assertTrue(snapshot.stream().noneMatch(l -> l.text().contains("line-200")),
+                    "边界若错位（如一批 201/整批下沉）line-200 会混进首批，实际快照尾: "
+                            + snapshot.get(snapshot.size() - 1).text());
+
+            runClear(v);        // diffEpoch++：挂着的 daemon 醒来后在批间校验处弃写第二批
+        } finally {
+            releaseDaemon.countDown();   // 断言在放行前炸也不许留挂死的 daemon（幂等）
+        }
+        awaitDiffDone(v);
+
+        List<OutputLine> after = state.drainPending();   // /clear 之后的新 pending：只该有清屏降级提示
+        assertTrue(after.stream().noneMatch(l -> l.kind() == OutputLine.Kind.DIFF),
+                "批间校验若被删，line-200 会作为第二批 DIFF 行写进新 pending，实际: " + after);
+        assertTrue(after.stream().noneMatch(l -> l.text().contains("line-200")),
+                "第二批 line-200 必须被代际守卫弃写，实际: " + after);
+    }
+
+    /**
+     * 边界补刀（与上一用例互补）：不受打断的 201 行必须整批走完。分批的「增量」与「切片上限」
+     * 若错位（如增 201、切 200），尾行会在无任何报错下<b>静默丢失</b>——上一用例的 /clear 视角
+     * 看不见这种丢（被弃写与被弄丢长得一样），只有不打断的全量断言能杀。
+     */
+    @Test
+    @DisplayName("不打断的 201 行全部落盘：分批增量与切片上限不得错位丢尾行")
+    void bodyOf201Lines_deliversAllWithoutInterruption(@TempDir Path root) {
+        StubGit git = new StubGit(null);
+        git.stat = List.of("42 files changed");
+        List<String> body = new ArrayList<>();
+        for (int i = 0; i <= 200; i++) {
+            body.add("line-" + i);                       // 201 行：200 一批 + 尾批 1 行
+        }
+        git.body = List.copyOf(body);
+        git.untracked = List.of();
+        ConversationState state = new ConversationState();
+        CodeTuiView v = newView(state, root, git);
+
+        runDiff(v);
+        awaitDiffDone(v);
+
+        List<OutputLine> lines = state.drainPending();
+        assertEquals(202, lines.size(), "头 1 + 正文 201 行一行不丢，实际: " + lines.size());
+        assertEquals("line-0", lines.get(1).text(), "首行");
+        assertEquals("line-200", lines.get(201).text(), "尾行 line-200 必须到达（增量/上限错位会静默丢尾）");
+        assertEquals(OutputLine.Kind.DIFF, lines.get(201).kind());
+    }
+
+    /** 头行格式钉子：statLine 空时一句说完、不悬尾「· 」；非空维持「· stat」原状。 */
+    @Test
+    @DisplayName("头行：statLine 空则无尾悬「· 」，非空维持「· stat」")
+    void headerDropsDanglingSeparatorWhenStatLineEmpty(@TempDir Path root) {
+        StubGit empty = new StubGit(null);       // stat 空列表 → capture 给 statLine ""
+        empty.body = List.of("+x");
+        ConversationState state = new ConversationState();
+        CodeTuiView v = newView(state, root, empty);
+
+        runDiff(v);
+        awaitDiffDone(v);
+
+        List<OutputLine> lines = state.drainPending();
+        assertEquals(2, lines.size(), "头 + 1 行正文，实际: " + lines);
+        assertEquals("↺ 工作树改动（相对 HEAD）", lines.get(0).text(),
+                "statLine 为空不许悬尾「· 」，实际: " + lines.get(0).text());
+
+        StubGit filled = new StubGit(null);
+        filled.stat = List.of("3 files changed");
+        filled.body = List.of("+x");
+        ConversationState state2 = new ConversationState();
+        CodeTuiView v2 = newView(state2, root, filled);
+
+        runDiff(v2);
+        awaitDiffDone(v2);
+
+        assertEquals("↺ 工作树改动（相对 HEAD）· 3 files changed",
+                state2.drainPending().get(0).text(), "statLine 非空维持「· stat」原状");
     }
 
     /**

@@ -101,7 +101,10 @@ public record GitSnapshot(String statLine, List<String> body, List<String> untra
         try {
             List<String> stat = git.run(root, "diff", "HEAD", "--stat");
             List<String> body = git.run(root, "diff", "HEAD");
-            List<String> rawUntracked = git.run(root, "ls-files", "--others", "--exclude-standard");
+            // -c core.quotepath=false：git 默认把非 ASCII 路径打成 "\344\370.." 八进制转义串
+            // （带引号），后续 root.resolve(name) 对不上真实文件、字节数也拼不上——列名必须逐字还原。
+            List<String> rawUntracked = git.run(root,
+                    "-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard");
             List<String> untracked = new ArrayList<>(rawUntracked.size());
             for (String name : rawUntracked) {
                 long size;

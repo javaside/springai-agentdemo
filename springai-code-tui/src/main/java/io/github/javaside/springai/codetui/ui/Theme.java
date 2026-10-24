@@ -95,7 +95,7 @@ final class Theme {
     static final Style DIFF_RAW_ADD = Style.create().fg(Color.indexed(114));   // + 行=浅绿（同 DIFF_NO_ADD 前景）
     static final Style DIFF_RAW_DEL = Style.create().fg(Color.indexed(210));   // - 行=浅红（同 DIFF_NO_DEL 前景）
 
-    /** 把一条已下沉行的类型映射到样式；{@code ASSISTANT} 返回 null（用默认色，正文最易读）。 */
+    /** 把一条已下沉行的类型映射到样式；{@code ASSISTANT} 与 {@code DIFF} 返回 null——前者用默认色（正文最易读），后者的 +绿/-红 由 {@code ScrollbackPrinter} 按行前缀覆盖（Theme 是纯调色板，不放行为）。 */
     static Style styleFor(OutputLine.Kind kind) {
         return switch (kind) {
             case USER -> USER;

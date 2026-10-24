@@ -68,6 +68,28 @@ class GitSnapshotTest {
         assertTrue(s.untracked().isEmpty());
     }
 
+    /**
+     * 非 ASCII 未跟踪文件名不许被 git 的默认 core.quotepath 转义：默认值 true 会把
+     * {@code 中文文件.txt} 打成 {@code "\344\270\255...txt"}（带引号的八进制串），后续
+     * {@code root.resolve(name)} 对不上真实路径、字节数也拼不上。带 -c core.quotepath=false
+     * 后列名逐字还原（Apple Git 2.50 实测：默认转义、-c 关闭后原样）。
+     */
+    @Test
+    void untrackedNonAsciiName_staysUnescaped(@TempDir Path dir) throws Exception {
+        initRepo(dir);
+        Files.writeString(dir.resolve("a.txt"), "x\n");
+        runOk(dir, "git", "add", "a.txt");
+        runOk(dir, "git", "commit", "-q", "-m", "init");
+        Files.writeString(dir.resolve("中文文件.txt"), "内容\n");
+
+        GitSnapshot s = GitSnapshot.capture(dir, GitSnapshot.PROCESS);
+
+        assertNull(s.error(), "正常路径无错: " + s.error());
+        assertEquals(1, s.untracked().size(), "未跟踪只列一个，实际: " + s.untracked());
+        assertTrue(s.untracked().get(0).startsWith("中文文件.txt"),
+                "列名不得带引号/八进制转义（core.quotepath 未关闭时的形态），实际: " + s.untracked());
+    }
+
     @Test
     void nonGitDirOrBrokenGitGoesToErrorChannel(@TempDir Path dir) {
         GitSnapshot no = GitSnapshot.capture(dir, GitSnapshot.PROCESS);

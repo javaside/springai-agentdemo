@@ -233,7 +233,7 @@ public final class ScrollbackPrinter {
         run(toolStartCursor(ol));
     }
 
-    /** 输出段的 default 分支：工具/Todo/错误等单色贴左；{@code styleFor} 返回 null（ASSISTANT）则原样。 */
+    /** 输出段的 default 分支：工具/Todo/错误等单色贴左；样式选择走 {@link #styleForLine}，返回 null（ASSISTANT，及无 {@code +/-} 前缀的 DIFF 行）则原样。 */
     void line(OutputLine ol) {
         run(lineCursor(ol));
     }
@@ -470,7 +470,7 @@ public final class ScrollbackPrinter {
 
     // DIFF 行 +绿/-红/其余基色：每行单样式足够（前缀判断只读不写，内容逐字保留）；色对取
     // Theme 的 DIFF_RAW_ADD/DIFF_RAW_DEL（与 DiffRenderer 增删行号列前景同源，indexed 114/210）。
-    static Style diffStyleFor(String text) {
+    private static Style diffStyleFor(String text) {
         if (text.startsWith("+")) return DIFF_RAW_ADD;
         if (text.startsWith("-")) return DIFF_RAW_DEL;
         return null;
