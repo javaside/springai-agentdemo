@@ -332,6 +332,10 @@ public final class CodeTuiView extends InlineApp {
     private String sessionPendingDelete;               // 非 null = 删除确认态（待确认的会话 id）
     /** 会话列表快照：打开时 scan 灌入，后台摘要线程逐条补 digest 后 volatile 整体替换（面板关则丢弃迟到结果）。 */
     private volatile List<SessionCatalog.SessionSummary> sessionList = List.of();
+    // volatile：同 pickingSessions，按键线程写、daemon 线程逐条回写前读
+    /** 会话面板代际：打开/Esc/切换/删除各 ++。daemon 捕获启动时的值、每条回写前复核，过期即弃写——
+     *  旧代快照含已删行、且不带新扫结果的 digest，迟到的整体回写会复活已删行/把摘要抹成 null。 */
+    private volatile int sessionEpoch;
     private volatile String mcpConnecting;                           // 非 null = 正在后台连接的 server 名（渲染线程读）
     private volatile boolean mcpReloading;                           // MCP 配置 reload 在飞（/reload 或面板 r 键；渲染线程读）
     private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
@@ -4263,32 +4267,43 @@ public final class CodeTuiView extends InlineApp {
     private void openSessionsPanel() {
         Path sessionsDir = root.resolve(".codetui").resolve("sessions");
         List<SessionCatalog.SessionSummary> scanned = SessionCatalog.scan(sessionsDir);
+        sessionEpoch++;                       // 立代先行：上一代 daemon（面板关后立即重开的场景）从此弃写
         sessionList = scanned;
         sessionIndex = 0;
         pickingSessions = true;
         if (scanned.isEmpty()) {
             return;   // 空列表照常打开（同 /tasks：说明从哪来比什么都不弹有用）
         }
-        Thread t = new Thread(() -> fillSessionDigests(sessionsDir, scanned), "session-digests");
+        startDigestDaemon(sessionsDir, scanned);
+    }
+
+    /** 启动本代摘要 daemon（打开与删除后共用，各捕获当时代际）。 */
+    private void startDigestDaemon(Path sessionsDir, List<SessionCatalog.SessionSummary> scanned) {
+        int epoch = sessionEpoch;
+        Thread t = new Thread(() -> fillSessionDigests(sessionsDir, epoch, scanned), "session-digests");
         t.setDaemon(true);
         t.start();
     }
 
     /**
      * 逐文件补摘要。每解析一条就整体替换快照并请求重绘（摘要渐进出现，渲染由既有合并机制兜住）；
-     * {@code !pickingSessions} 即停——面板已关，迟到结果回写只会复活一个看不见的列表。
+     * 面板已关或代际过期（{@code epoch != sessionEpoch}，删除/重开都会换代）即停——迟到回写只会
+     * 复活一个看不见的列表，或把删除后重扫的行抹回旧快照。
      *
      * <p><b>原位填充</b>（{@code filled} 初始为全量拷贝、逐位 {@code set}）：逐条 {@code add} 的写法会让
      * 列表在「打开瞬间 N 行 → 首条摘要 1 行」之间先缩后长，高亮行跟着跳——每次替换都保持行数恒定。
      */
-    private void fillSessionDigests(Path sessionsDir, List<SessionCatalog.SessionSummary> scanned) {
+    private void fillSessionDigests(Path sessionsDir, int epoch, List<SessionCatalog.SessionSummary> scanned) {
         List<SessionCatalog.SessionSummary> filled = new ArrayList<>(scanned);
         for (int i = 0; i < filled.size(); i++) {
-            if (!pickingSessions) {
+            if (!pickingSessions || epoch != sessionEpoch) {
                 return;
             }
             SessionCatalog.SessionSummary s = filled.get(i);
             String digest = SessionCatalog.firstUserDigest(sessionsDir.resolve(s.id() + ".json"));
+            if (epoch != sessionEpoch) {
+                return;   // 解析耗时窗口内换代（如删除）：这条属于旧快照，回写会复活已删行
+            }
             filled.set(i, new SessionCatalog.SessionSummary(s.id(), s.mtimeMillis(), s.sizeBytes(), digest));
             sessionList = List.copyOf(filled);
             publishLocalViewChange();
@@ -4308,7 +4323,7 @@ public final class CodeTuiView extends InlineApp {
             }
             return EventResult.HANDLED;
         }
-        if (k.isCancel()) { pickingSessions = false; return EventResult.HANDLED; }
+        if (k.isCancel()) { pickingSessions = false; sessionEpoch++; return EventResult.HANDLED; }
         int n = sessionList.size();
         if (n == 0) return EventResult.HANDLED;
         sessionIndex = clampIndex(sessionIndex, n);
@@ -4356,11 +4371,15 @@ public final class CodeTuiView extends InlineApp {
         sessionPendingDelete = null;
         if (id == null) return;
         onSubmit.deleteSession(id);
-        List<SessionCatalog.SessionSummary> re =
-                SessionCatalog.scan(root.resolve(".codetui").resolve("sessions"));
+        sessionEpoch++;   // 先换代再重扫：旧代 daemon 持有的快照含已删行，此后一律弃写
+        Path sessionsDir = root.resolve(".codetui").resolve("sessions");
+        List<SessionCatalog.SessionSummary> re = SessionCatalog.scan(sessionsDir);
         boolean gone = re.stream().noneMatch(s -> s.id().equals(id));
         sessionList = re;
         sessionIndex = clampIndex(sessionIndex, re.size());
+        if (!re.isEmpty()) {
+            startDigestDaemon(sessionsDir, re);   // scan 不带 digest：存活行摘要由新代重算，而非停在「（无对话）」
+        }
         state.setNotice(gone ? "已删除会话 " + id : "删除失败（文件仍在）：" + id);
     }
 
@@ -4376,6 +4395,7 @@ public final class CodeTuiView extends InlineApp {
             return;
         }
         pickingSessions = false;
+        sessionEpoch++;                        // 关面板即换代：daemon 只看 pickingSessions 会漏掉「关→立即重开」的交错
         onSubmit.killAllBackgroundTasks();      // 步骤 2：切走前杀旧会话的后台任务
         onSubmit.switchContext(targetId);       // 步骤 3：换 id + 会话级清理（与 /clear 同体）
         state.resetForNewSession();             // 步骤 4

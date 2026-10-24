@@ -204,6 +204,47 @@ class CodeTuiViewSessionsPanelTest {
     }
 
     @Test
+    @DisplayName("删除换代：已删行不复活、存活行 digest 由新代 daemon 重算补回")
+    void deleteRotatesEpoch_digestsRefilled(@TempDir Path root) throws IOException {
+        writeSession(root, "20260101T000000-aaaaaa", "存活较早的会话");
+        Path b = writeSession(root, "20260102T000000-bbbbbbbbb", "待删除的会话");
+        writeSession(root, "20260103T000000-cccccc", "存活较新的会话");
+        // mtime 定序（新→旧 c,b,a）：index=1 恰是待删的 b，Down 一步到位
+        Files.setLastModifiedTime(root.resolve(".codetui/sessions/20260101T000000-aaaaaa.json"),
+                java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-01T00:00:00Z")));
+        Files.setLastModifiedTime(b,
+                java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-02T00:00:00Z")));
+        Files.setLastModifiedTime(root.resolve(".codetui/sessions/20260103T000000-cccccc.json"),
+                java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-03T00:00:00Z")));
+        CodeTuiView v = openPanel(new ConversationState(), new SessionsStub(root), root);
+        // 等 daemon 全部跑完再删：模拟「看完摘要才删」的真实路径——重扫不带 digest，
+        // 没人再补的话列表从此全是「（无对话）」（用户实测报告的症状，确定性红）
+        long settleDeadline = System.currentTimeMillis() + 2000;
+        while (System.currentTimeMillis() < settleDeadline) {
+            java.util.List<SessionCatalog.SessionSummary> ss = v.sessionsForTest();
+            if (ss.size() == 3 && ss.stream().allMatch(s -> s.digest() != null)) break;
+            Thread.onSpinWait();
+        }
+
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        v.feedKeyForTest(KeyEvent.ofChar('d'));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
+        assertFalse(Files.exists(b), "桩已真删文件");
+
+        // 最终态双断言：恒 2 行（旧代 daemon 迟到回写不得复活 b）+ digest 全部由新代补回
+        long deadline = System.currentTimeMillis() + 2000;
+        java.util.List<SessionCatalog.SessionSummary> ss = v.sessionsForTest();
+        while (System.currentTimeMillis() < deadline
+                && (ss.size() != 2 || ss.stream().anyMatch(s -> s.digest() == null))) {
+            Thread.onSpinWait();
+            ss = v.sessionsForTest();
+        }
+        assertEquals(2, ss.size(), "已删行不复活，实际：" + ss);
+        assertTrue(ss.stream().allMatch(s -> s.digest() != null && s.digest().startsWith("存活")),
+                "存活行 digest 由新代 daemon 重算补回（scan 不带 digest），实际：" + ss);
+    }
+
+    @Test
     @DisplayName("d 删除两段式：当前会话不可删；确认后真删文件并以重新 scan 复核")
     void deleteTwoPhase_currentRejected(@TempDir Path root) throws IOException {
         Path a = writeSession(root, "20260101T000000-aaaaaa", "修 NPE");
