@@ -204,6 +204,84 @@ class CodeTuiViewSessionsPanelTest {
     }
 
     @Test
+    @DisplayName("删除换代：已删行不复活、存活行 digest 由新代 daemon 重算补回")
+    void deleteRotatesEpoch_digestsRefilled(@TempDir Path root) throws IOException {
+        writeSession(root, "20260101T000000-aaaaaa", "存活较早的会话");
+        Path b = writeSession(root, "20260102T000000-bbbbbbbbb", "待删除的会话");
+        writeSession(root, "20260103T000000-cccccc", "存活较新的会话");
+        // mtime 定序（新→旧 c,b,a）：index=1 恰是待删的 b，Down 一步到位
+        Files.setLastModifiedTime(root.resolve(".codetui/sessions/20260101T000000-aaaaaa.json"),
+                java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-01T00:00:00Z")));
+        Files.setLastModifiedTime(b,
+                java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-02T00:00:00Z")));
+        Files.setLastModifiedTime(root.resolve(".codetui/sessions/20260103T000000-cccccc.json"),
+                java.nio.file.attribute.FileTime.from(java.time.Instant.parse("2026-01-03T00:00:00Z")));
+        CodeTuiView v = openPanel(new ConversationState(), new SessionsStub(root), root);
+        // 等 daemon 全部跑完再删：模拟「看完摘要才删」的真实路径——重扫不带 digest，
+        // 没人再补的话列表从此全是「（无对话）」（用户实测报告的症状，确定性红）
+        long settleDeadline = System.currentTimeMillis() + 2000;
+        while (System.currentTimeMillis() < settleDeadline) {
+            java.util.List<SessionCatalog.SessionSummary> ss = v.sessionsForTest();
+            if (ss.size() == 3 && ss.stream().allMatch(s -> s.digest() != null)) break;
+            Thread.onSpinWait();
+        }
+
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        v.feedKeyForTest(KeyEvent.ofChar('d'));
+        v.feedKeyForTest(KeyEvent.ofKey(KeyCode.ENTER));
+        assertFalse(Files.exists(b), "桩已真删文件");
+
+        // 最终态双断言：恒 2 行（旧代 daemon 迟到回写不得复活 b）+ digest 全部由新代补回
+        long deadline = System.currentTimeMillis() + 2000;
+        java.util.List<SessionCatalog.SessionSummary> ss = v.sessionsForTest();
+        while (System.currentTimeMillis() < deadline
+                && (ss.size() != 2 || ss.stream().anyMatch(s -> s.digest() == null))) {
+            Thread.onSpinWait();
+            ss = v.sessionsForTest();
+        }
+        assertEquals(2, ss.size(), "已删行不复活，实际：" + ss);
+        assertTrue(ss.stream().allMatch(s -> s.digest() != null && s.digest().startsWith("存活")),
+                "存活行 digest 由新代 daemon 重算补回（scan 不带 digest），实际：" + ss);
+    }
+
+    @Test
+    @DisplayName("会话数超过可见上限时固定窗口：行数有界不顶飞输入框，高亮移出窗口才平移")
+    void capsPanelRows_scrollsWindowWithSelection(@TempDir Path root) throws IOException {
+        for (int i = 1; i <= 15; i++) {
+            // id 每分钟递增 + mtime 钉同序：列表序（mtime 降序）= s15..s01 确定可控
+            writeSession(root, String.format("20260101T%02d%02d00-s%02d10", i, i, i), "s" + String.format("%02d", i));
+            Files.setLastModifiedTime(root.resolve(".codetui/sessions/"
+                            + String.format("20260101T%02d%02d00-s%02d10", i, i, i) + ".json"),
+                    java.nio.file.attribute.FileTime.from(
+                            java.time.Instant.parse(String.format("2026-01-01T%02d:%02d:00Z", i, i))));
+        }
+        CodeTuiView v = openPanel(new ConversationState(), new SessionsStub(root), root);
+        // 断言用时间行（id 前缀换算，打开即渲染）：digest 由 daemon 异步补，瞬时回读不可依赖
+        String latest = localTime("20260101T151500");   // index 0（mtime 最新的 s15）
+        String oldest = localTime("20260101T010100");   // 末项 s01
+        String screen = ViewScreen.of(v);
+        assertTrue(screen.contains(latest), "最新会话在初始窗口内");
+        assertFalse(screen.contains(oldest), "最老会话在窗口外——15 行全量渲染会把输入框顶出屏幕");
+        assertTrue(screen.contains("显示 1-10 / 共 15 个会话"), "窗口提示如实报数，实际：\n" + screen);
+
+        // 高亮移到末尾（s01）：窗口平移跟随，s01 进入视野
+        for (int i = 0; i < 14; i++) {
+            v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));
+        }
+        String scrolled = ViewScreen.of(v);
+        assertTrue(scrolled.contains(oldest), "高亮到末项后窗口平移，最老会话可见");
+        assertTrue(scrolled.contains("显示 6-15 / 共 15 个会话"), "窗口提示随平移更新，实际：\n" + scrolled);
+    }
+
+    /** id 前 15 位（UTC）→ 本地 MM-dd HH:mm，与实现 sessionTime 同口径（时区差由换算吸收，勿硬编码）。 */
+    private static String localTime(String utcIdPrefix) {
+        return java.time.LocalDateTime.parse(utcIdPrefix,
+                        java.time.format.DateTimeFormatter.ofPattern("uuuuMMdd'T'HHmmss"))
+                .atZone(java.time.ZoneOffset.UTC).withZoneSameInstant(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));
+    }
+
+    @Test
     @DisplayName("d 删除两段式：当前会话不可删；确认后真删文件并以重新 scan 复核")
     void deleteTwoPhase_currentRejected(@TempDir Path root) throws IOException {
         Path a = writeSession(root, "20260101T000000-aaaaaa", "修 NPE");
