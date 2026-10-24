@@ -433,7 +433,8 @@ public final class ScrollbackPrinter {
     }
 
     /**
-     * 单色行 cursor（TOOL_OK/TODO/ERROR/INFO/SUBAGENT_* 及 styleFor==null 的 ASSISTANT）。
+     * 单色行 cursor（TOOL_OK/TODO/ERROR/INFO/SUBAGENT_* 及 styleFor==null 的 ASSISTANT；
+     * DIFF 走 {@link #diffStyleFor} 的 +绿/-红 前缀单样式）。
      * 超宽行按终端宽<b>逐段</b>折行（旧实现在视图出口兜底折；折行移进游标后这里接手，每段沿用
      * 同一样式），守住「一个 println = 一个物理行」——定宽截断会把右边文字直接吃掉。
      * 留底原文 = 带样式的整条逻辑行（Text；60k 无换行长 INFO 折出的 ~751 段只占一条留底配额，
@@ -441,16 +442,16 @@ public final class ScrollbackPrinter {
      */
     OutputCursor lineCursor(OutputLine ol) {
         return new PlainLineCursor(new String[]{ol.text()}) {
-            private Style st;   // newSegments 时取一次（styleFor 是纯 switch，取两次也无害）
+            private Style st;   // newSegments 时取一次（styleForLine 是纯函数，取两次也无害）
 
             @Override SegmentedWrap.Plain newSegments(String logical) {
-                st = styleFor(ol.kind());
+                st = styleForLine(ol);
                 return SegmentedWrap.plain(logical, terminalWidth.getAsInt());
             }
 
             @Override Object rawOf(String logical) {
-                // 留底原文：带样式的整条逻辑行；styleFor==null（ASSISTANT）与打出去的形态一致，纯文本
-                Style s = styleFor(ol.kind());
+                // 留底原文：带样式的整条逻辑行；样式为 null（ASSISTANT / 无前缀 DIFF）与打出去的形态一致，纯文本
+                Style s = styleForLine(ol);
                 return s == null ? (Object) logical : (Object) Text.styled(logical, s);
             }
 
@@ -460,6 +461,19 @@ public final class ScrollbackPrinter {
                         : PhysicalLine.of(null, Text.styled(seg, st), raw);
             }
         };
+    }
+
+    /** 单色行样式选择：Kind 基色为主；DIFF 特例按行前缀选增删色（styleFor 对 DIFF 恒 null——前缀判定是行级行为，不进纯调色板）。 */
+    private static Style styleForLine(OutputLine ol) {
+        return ol.kind() == OutputLine.Kind.DIFF ? diffStyleFor(ol.text()) : styleFor(ol.kind());
+    }
+
+    // DIFF 行 +绿/-红/其余基色：每行单样式足够（前缀判断只读不写，内容逐字保留）；色对取
+    // Theme 的 DIFF_RAW_ADD/DIFF_RAW_DEL（与 DiffRenderer 增删行号列前景同源，indexed 114/210）。
+    static Style diffStyleFor(String text) {
+        if (text.startsWith("+")) return DIFF_RAW_ADD;
+        if (text.startsWith("-")) return DIFF_RAW_DEL;
+        return null;
     }
 
     /**
