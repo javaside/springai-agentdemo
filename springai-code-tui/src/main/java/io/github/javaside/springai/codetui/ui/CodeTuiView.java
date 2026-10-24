@@ -339,8 +339,14 @@ public final class CodeTuiView extends InlineApp {
     /** 会话面板代际：打开/Esc/切换/删除各 ++。daemon 捕获启动时的值、每条回写前复核，过期即弃写——
      *  旧代快照含已删行、且不带新扫结果的 digest，迟到的整体回写会复活已删行/把摘要抹成 null。 */
     private volatile int sessionEpoch;
+    /** /diff 代际：/clear 与会话切换时自增——在飞 diff daemon 的迟到批次据此弃写（sessionEpoch 同构）。 */
+    private volatile int diffEpoch;
     private volatile String mcpConnecting;                           // 非 null = 正在后台连接的 server 名（渲染线程读）
     private volatile boolean mcpReloading;                           // MCP 配置 reload 在飞（/reload 或面板 r 键；渲染线程读）
+    /** /diff 单飞：git 快照通常亚秒级，但连按两次也不该两条交错输出（mcpConnecting 同构）。 */
+    private volatile boolean diffRunning;
+    /** git 执行接缝：生产 PROCESS；测试注入桩（GitSnapshot 的设计目的）。 */
+    volatile GitSnapshot.GitCommand diffGit = GitSnapshot.PROCESS;
     private String pendingSkill;                                     // 已选技能名（可空）：显示为输入框上方标签，发送时随本条消息加载并清除
     private AskRequest activeAsk;                                     // 当前正在作答的问询（null=非作答态）
     private int askQ;                                                 // 当前问题下标
@@ -403,6 +409,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/init",   "分析项目并生成/改进 AGENTS.md（重启后生效）"),
             new SlashCommand("/review", "只读审查工作树改动（正确性/安全/测试/可维护性）"),
             new SlashCommand("/resume",  "恢复 / 分叉 / 删除历史会话"),
+            new SlashCommand("/diff", "查看工作树改动（git diff + 未跟踪清单，不经模型）"),
             new SlashCommand("/fork",    "分叉当前会话（历史复制到新会话，原会话保留）"),
             new SlashCommand("/tasks",   "查看后台任务（可展开结果 / 终止）"),
             new SlashCommand("/goal",    "设定/查看目标循环（/goal stop 清除）"),
@@ -1411,6 +1418,8 @@ public final class CodeTuiView extends InlineApp {
 
     /** 测试观测：本批是否消费掉全部 pending（控制顺序断言用）。 */
     boolean pendingOutputConsumedForTest() { return !state.hasPendingOutput(); }
+
+    boolean diffRunningForTest() { return diffRunning; }   // 代际守卫负断言的完成信号（无它必假绿）
 
     /** 测试观测：累计执行的批数（接线表断言「变化驱动了至少一批」）。 */
     private final java.util.concurrent.atomic.AtomicInteger processedBatches =
@@ -2506,6 +2515,7 @@ public final class CodeTuiView extends InlineApp {
             onSubmit.clearContext();                 // (A) 换 sessionId
             state.resetForNewSession();              // 复位面板/排队/提示
             outputQueue.clear();                     // 严格分批后大输出可能还压在队列里没打完：与 pending 同语义一并丢弃
+            diffEpoch++;   // 在飞 /diff 的迟到批次从此弃写——它的输出属于刚被清掉的会话画面
             // ── 第 6 条 flush 触发点（设计 §3.4）：/clear 丢表格缓冲 ──
             // 必须<b>同步</b>做在这里，不能塞进下面的 runOnRenderThread lambda——那段只在 runner
             // 非空时跑，测试态走不到。resetMarkdown 连状态机一起复位：只丢缓冲不复位，降级态会活过
@@ -2553,6 +2563,19 @@ public final class CodeTuiView extends InlineApp {
                     + "每条给出文件:行号、问题描述、为什么要紧、建议修法；没有问题的维度不用硬凑。"
                     + "未跟踪的新文件也要看（用 Read 读内容），但同样不要修改。";
             if (busy()) state.enqueue(prompt, null); else dispatch(prompt, null);
+            return;
+        }
+        if (cmd.equals("/diff")) {                   // 不经模型：git 快照逐字打进 scrollback（忙时可看，只读无闸门）
+            clearInput();
+            if (diffRunning) {
+                state.setNotice("正在生成 diff…");
+                return;
+            }
+            int epoch = diffEpoch;
+            diffRunning = true;
+            Thread t = new Thread(() -> runDiff(epoch), "git-diff");
+            t.setDaemon(true);
+            t.start();
             return;
         }
         if (cmd.equals("/resume")) {                 // 会话管理面板：恢复/分叉/删除
@@ -4340,6 +4363,44 @@ public final class CodeTuiView extends InlineApp {
     }
 
     /**
+     * git 快照 → 分批下沉。每批 ≤200 行（输出批 ≤300 行的预算内留余量给同批其它输出），批间校验
+     * {@code epoch != diffEpoch} 即弃（/clear、会话切换都换代）——迟到的 diff 属于旧画面。
+     * Esc 不取消：git 亚秒级 + 回写毫秒级，进程取消的复杂度不值得（spec 定案取舍，reference.md 有述）。
+     */
+    private void runDiff(int epoch) {
+        try {
+            GitSnapshot s = GitSnapshot.capture(root, diffGit);
+            if (epoch != diffEpoch) {
+                return;
+            }
+            if (s.error() != null) {
+                state.pushRawLines(java.util.List.of("git 执行失败：" + s.error()), OutputLine.Kind.ERROR);
+                return;
+            }
+            if (s.body().isEmpty() && s.untracked().isEmpty()) {
+                state.pushInfo("工作树干净（相对 HEAD 无改动、无未跟踪文件）");
+                return;
+            }
+            state.pushInfo("↺ 工作树改动（相对 HEAD）· " + (s.statLine().isEmpty() ? "" : s.statLine()));
+            for (int from = 0; from < s.body().size(); from += 200) {
+                if (epoch != diffEpoch) {
+                    return;   // 中途被 /clear 或会话切换：剩余批次不打了
+                }
+                state.pushRawLines(s.body().subList(from, Math.min(from + 200, s.body().size())),
+                        OutputLine.Kind.DIFF);
+            }
+            if (!s.untracked().isEmpty()) {
+                var lines = new java.util.ArrayList<String>();
+                lines.add("未跟踪文件（不在上方 diff 中）：");
+                lines.addAll(s.untracked());
+                state.pushRawLines(lines, OutputLine.Kind.INFO);
+            }
+        } finally {
+            diffRunning = false;
+        }
+    }
+
+    /**
      * 面板按键：↑↓ 移动、Enter 恢复、f 分叉、d 删除（两段式）、Esc 关闭/取消确认。
      * 始终 HANDLED；空列表防除零。删除确认态只认 Enter/Esc（同 /permissions 的 d 键两段式）。
      */
@@ -4425,6 +4486,7 @@ public final class CodeTuiView extends InlineApp {
         }
         pickingSessions = false;
         sessionEpoch++;                        // 关面板即换代：daemon 只看 pickingSessions 会漏掉「关→立即重开」的交错
+        diffEpoch++;                           // 在飞 /diff 的迟到批次从此弃写——它的输出属于刚被切走的会话画面（/clear 同由）
         onSubmit.killAllBackgroundTasks();      // 步骤 2：切走前杀旧会话的后台任务
         onSubmit.switchContext(targetId);       // 步骤 3：换 id + 会话级清理（与 /clear 同体）
         state.resetForNewSession();             // 步骤 4
