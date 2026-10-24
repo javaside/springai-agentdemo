@@ -22,7 +22,7 @@
 | 1 | `/continue` 是提示词命令先例：`clearInput` → 组装提示词 → 忙时 `enqueue(prompt, null)` / 闲时 dispatch | `CodeTuiView.java:2588-2606` |
 | 2 | `pushInfo` 只发 INFO 行（锁内改 pending、锁外 publish，线程安全；mcp-reload daemon 已在跨线程调用） | `ConversationState.java:282-289`、`CodeTuiView.java:4483-4500` |
 | 3 | **ASSISTANT 行走 MarkdownRenderer 且渲染状态跨行/跨批次/跨游标保持**——`#` 渲成标题吞井号、`-/+` 行变列表项吃掉标记、``` 围栏翻转状态机、`|` 触发表格攒块 | `ScrollbackPrinter.java:280-288`、`MarkdownRenderer.java:287/303-310/241-251` |
-| 4 | 既有 daemon 回推 UI 的防护先例：session-digests 回写前查 `!pickingSessions` 即弃（volatile）；mcp 系有单飞标志 | `CodeTuiView.java:4286-4289`、`3395` |
+| 4 | daemon 回推 UI 的防护先例：`/resume` 面板的 `sessionEpoch` 代际计数（打开/Esc/切换/删除各 ++，daemon 捕获 epoch、回写前校验即弃）——main 上 d5ebee34 刚落地，`/diff` 的代际守卫完全模仿该形状 | `CodeTuiView.java`（sessionEpoch/fillSessionDigests/confirmDeleteSession，2026-10-24 合入） |
 | 5 | `/clear` 与会话切换（switchToSession）都会清 pending + outputQueue——在飞 daemon 的迟到输出会落进新会话画面 | `ConversationState.java:398`、`CodeTuiView.java:2499/4381-4382` |
 | 6 | 全仓生产代码 ProcessBuilder 为零——`/diff` 的 GitSnapshot 是首例（须申报并给测试接缝） | 全仓 grep |
 | 7 | `quietGitStatus` 不可复用：它给库方法套 `System.setOut` 黑洞（全局交换，**不能上并发线程**）、只产 status 文本、private static | `AgentTools.java:1358-1366` |
