@@ -505,8 +505,12 @@ tool_call 渲 `⏺ name 摘要` 且 `raw=null`（**不重绘 diff**，历史里�
 读到首条 USER 即停（Jackson 3 坑：`JsonFactory` 在 `tools.jackson.core.json` 子包、字段名 token
 是 `PROPERTY_NAME`、异常全 unchecked）。`/resume` 面板即本地选择器四件套（[5](#5-斜杠命令)）：
 打开秒显列表（★ 当前会话 · id 前 15 位 UTC 解析成本地时间 · 无 digest 显「（无对话）」——
-未补齐与确实无对话刻意同显示），
-daemon 线程逐条**原位补**摘要——volatile 整体替换快照、`!pickingSessions` 即停；Enter 恢复、
+未补齐与确实无对话刻意同显示；可见行封顶 `SESSIONS_PICKER_CAP` 固定窗口、高亮移出才平移——
+会话只增不减，全量渲染高度必超终端，Esc 收缩时 InlineDisplay 记账错位会吃掉输入框，同
+`MODEL_PICKER_CAP` 的历史事故），
+daemon 线程逐条**原位补**摘要——volatile 整体替换快照，`sessionEpoch` 代际计数守门：打开/
+Esc/切换/删除各 `++`，daemon 每条回写前复核、过期即弃写（删除后旧快照回写会复活已删行/抹掉
+digest，删除重启新代 daemon 重算）；Enter 恢复、
 `f` 分叉选中项、`d` 两段式删除，**当前会话不可删**（删了下一回合 SessionMemoryAdvisor 会按 id
 重建空文件），删除后重新 scan 复核、如实回报。恢复/分叉共用 `switchToSession`，对齐 `/clear`
 完整模板：busy 复检（goal 自动轮与排队出队都能**无按键**自发启动回合，正是上一段 volatile 竞态）

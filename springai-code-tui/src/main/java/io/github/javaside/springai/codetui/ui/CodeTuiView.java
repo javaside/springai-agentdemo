@@ -160,6 +160,9 @@ public final class CodeTuiView extends InlineApp {
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     private static final int SKILL_PICKER_CAP = 10; // 技能选择器可见行上限；避免大量技能撑高 InlineDisplay、触发终端反复重排
+    private static final int SESSIONS_PICKER_CAP = 10; // /resume 会话面板可见行上限，理由同 SKILL_PICKER_CAP：
+    // 会话目录只增不减（本机常态 190+），不封顶时面板高度必超终端——Esc 关闭后输入框整段消失的
+    // 事故在 /model 面板（MODEL_PICKER_CAP）原样发生过，会话面板实现时漏了同款防御
     private static final int MODEL_PICKER_CAP = 10; // /model 选择器可见行上限，理由同 SKILL_PICKER_CAP：
     // 模型目录已有 17+ 个且只会增多，不封顶时 live 区（todo 面板 + 选择器 + 输入框/状态行）很容易
     // 超过终端实际高度——这一档 InlineDisplay 的光标相对移动会被终端边界夹断，超出部分的位置计算
@@ -4444,11 +4447,19 @@ public final class CodeTuiView extends InlineApp {
         }
         String current = onSubmit.currentSessionId();
         int sel = clampIndex(sessionIndex, sessions.size());
-        for (int i = 0; i < sessions.size(); i++) {
+        // 固定可见窗口（同 skillPicker）：会话只增不减，全量渲染的高度必超终端，Esc 收缩时输入框会被
+        // InlineDisplay 记账错位吃掉（见 SESSIONS_PICKER_CAP）。高亮移出窗口才平移，仍可遍历全部会话。
+        int visible = Math.min(SESSIONS_PICKER_CAP, sessions.size());
+        int from = Math.max(0, Math.min(sel - visible / 2, sessions.size() - visible));
+        int to = from + visible;
+        for (int i = from; i < to; i++) {
             SessionCatalog.SessionSummary s = sessions.get(i);
             String digest = (s.digest() == null) ? "（无对话）" : s.digest();
             String line = (s.id().equals(current) ? "★ " : "  ") + sessionTime(s.id()) + " · " + digest;
             els.add(text(line).style(i == sel ? PICK_SEL : PICK_DESC));
+        }
+        if (sessions.size() > visible) {
+            els.add(text("  显示 " + (from + 1) + "-" + to + " / 共 " + sessions.size() + " 个会话").style(DIM));
         }
         return els.toArray(new Element[0]);
     }
