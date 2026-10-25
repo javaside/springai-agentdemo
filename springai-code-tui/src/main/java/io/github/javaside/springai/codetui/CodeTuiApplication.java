@@ -143,7 +143,7 @@ public class CodeTuiApplication {
             t.printStackTrace();
             exitCode = 1;
         } finally {
-            // 保证任何路径（含装配期抛异常）都关闭 MCP 子进程（有界 2s），避免孤儿进程
+            // 保证任何路径（含 view 段抛异常）都关闭 MCP 子进程（有界 2s），避免孤儿进程
             a.mcpRegistry().close();
             // goal 评估线程池同一纪律：任何退出路径都关池。close 幂等；池是 daemon、在飞评估照跑完
             // 不拖 JVM（见 GoalEvaluationRunner 类注释），关闭后再 submit 抛 RejectedExecutionException
@@ -494,8 +494,8 @@ public class CodeTuiApplication {
 
                 选项：
                   -c, --continue                  恢复最近一次会话（按会话文件最后修改时间选取）
-                   -p <提示词>                     非交互模式：跑一个回合，stdout 只输出最终回复（-p - 从 stdin 读）
-                   --output-last-message <文件>    （-p 模式）最终回复同时写入该文件
+                  -p <提示词>                     非交互模式：跑一个回合，stdout 只输出最终回复（-p - 从 stdin 读）
+                  --output-last-message <文件>    （-p 模式）最终回复同时写入该文件
                   --resume <会话id前缀>            恢复指定会话（id 前缀唯一即可；与 -c 互斥）
                   --permission-mode <模式>        起始权限档位：default / acceptEdits / plan
                                                   （也接受 --permission-mode=plan 写法；优先级低于
