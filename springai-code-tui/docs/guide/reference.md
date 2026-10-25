@@ -78,6 +78,8 @@
 | --- | --- |
 | `-c` / `--continue` | 恢复**最近一次**会话（按会话文件最后修改时间选取） |
 | `--resume <会话id前缀>` | 恢复指定历史会话：前缀唯一匹配即可（会话 id 形如 `20260412T093015-1a2b3c`，可在 `/resume` 面板查看；精确命中优先于前缀匹配）；与 `-c` / `--continue` **互斥**（同给直接报错退出）；匹配不到或有歧义（多个会话同前缀）时列出候选后退出 |
+| `-p <提示词>` | 非交互模式：跑一个回合后退出，**stdout 只输出最终回复**（进度与工具调用走 stderr）；`-p -` 表示提示词从 stdin 整段读入。权限请求一律 fail-closed 拒绝（可用 `--permission-mode` 或 allow 规则放宽），模型发起问询则取消回合并以退出码 2 结束；退出码 0=正常（含提交计划）/ 1=失败。会话照常落盘，可配 `--resume` 链式多步 |
+| `--output-last-message <文件>` | 配合 `-p`：最终回复在打印到 stdout 的同时写入该文件（写入失败仅 stderr 告警，不改退出码）；缺路径参数时忽略并告警 |
 
 权限相关的启动参数（`--permission-mode`、`--dangerously-skip-permissions`）见 [permissions.md](permissions.md#启动参数)。
 

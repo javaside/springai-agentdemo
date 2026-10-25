@@ -12,6 +12,7 @@
 | 功能 | 入口 | 核心实现类 | 详见 |
 | --- | --- | --- | --- |
 | 启动装配 | `CodeTuiApplication.main` | `AgentTools.build` → `AgentRuntime` | [1](#1-启动与装配) |
+| headless -p | `CodeTuiApplication` 分叉 → `HeadlessRunner` | `HeadlessAgentListener`、`assemble` | [1](#1-启动与装配) |
 | 多模型接入 | `createProviderRegistry` | `ProviderRegistry` + 6 个 `LlmProvider` | [2.1](#21-多-provider-接入) |
 | `/model` 切换与记忆 | `CodeTuiView.openModelPicker` | `ModelPreference`、`RequestSelection` | [2.2](#22-模型切换与记忆) |
 | 思考/推理档位 | `/model` 二级面板 | `thinking.ThinkingConfigStore` | [2.3](#23-思考推理模式) |
@@ -60,10 +61,23 @@
 10. `System.exit(exitCode)` —— 必须强制退，OkHttp Dispatcher 线程 keep-alive 60s。
 
 启动参数：`-c` / `--continue`、`--permission-mode <default|acceptEdits|plan>`、
-`--dangerously-skip-permissions`、`-h` / `--help`（打印用法说明后直接退出，
-判定在 `main` 第一件事——早于 key 检测，没配任何 key 也能看帮助）。
+`--dangerously-skip-permissions`、`-p <提示词>`（非交互，见下节）、`-h` / `--help`
+（打印用法说明后直接退出，判定在 `main` 第一件事——早于 key 检测，没配任何 key 也能看帮助）。
 `--permission-mode` **刻意不认 `bypass`**（启动即裸奔只该有
 一个显眼开关）。
+
+### headless 模式（`-p`）
+
+`-p <提示词>`（或 `-p -` 从 stdin 读全）在 `main` 的**会话选择之后**分叉进
+`HeadlessRunner.run`（`System.exit` 留在 main，run 只返回退出码——真机冒烟可同 JVM 直调）。
+装配复用 `CodeTuiApplication.assemble`（`tuiMode=false`：不接 goal/todo 提醒线，key 缺失走
+stderr），事件经 `HeadlessAgentListener` 处置：进度/工具调用一行行打 **stderr**，assistant
+文本分段累积，模态 **fail-closed**（权限请求一律 DENY、问询取消回合退 2、计划不批准但正文
+进 stdout 退 0）。stdout **只有最终回复**（空回复不打空行）。退出码：0=正常（含提交计划）、
+1=失败/非法参数/key 缺失/超时。MCP 等待先查 `connectingCount()`，非零才等
+`CODETUI_HEADLESS_MCP_WAIT_SECONDS`（零 enabled server 时 `onMcpReady` 不发，死等是 bug）；
+整个回合受 `CODETUI_HEADLESS_MAX_SECONDS` 总硬顶，超时 dispose + 退 1。会话照常落盘，
+`--resume` 可链式续跑。
 
 ---
 
@@ -197,7 +211,7 @@ DeepSeek 内部（DeepSeekProvider.chatModel）
 | i | 组 prompt | MCP 工具**仅非空才** `.tools(...)`（空数组会覆盖 `defaultTools`，内置工具全不可见）；`.system(AGENT_MODEL + PERMISSION_MODE)` 每回合重算 |
 | j | `.stream().chatClientResponse()` + 四钩子 | `doOnNext→handleChunk`、`doOnError`、`doOnComplete→handleComplete`、`doOnCancel→trimDanglingToolCalls` |
 | k | `Disposables.composite(reactive, () -> subagentRunner.cancelTurn(turnId))` | Reactor 取消不 interrupt 阻塞在网络 IO 的子 agent 线程 |
-| l | 同步段 `catch RuntimeException` → `onError` + `Disposables.disposed()` | 否则 UI 永卡 THINKING |
+| l | 组装/订阅异常在 defer 体内转 **error 信号**，由 `doOnError` 统一处理（不设外层 catch——保留会双发 `listener.onError`）；registry 快照段等仍**同步抛**给 submit 调用方兜：TUI 由 main 视图段的 `catch (Throwable)`、headless 由 Runner 的 `catch (RuntimeException)` | 异步侧不双发错误事件；同步侧不裸栈炸调用方 |
 
 ### advisor 链（order 决定顺序，不是数组顺序）
 
@@ -1263,6 +1277,8 @@ OSC 0/2 双发是因为不同终端认的不是同一个。`sanitize` 剥掉全�
 | `{DEEPSEEK,ZHIPU,DASHSCOPE,ANTHROPIC,OPENAI,OPENCODE_GO}_API_KEY` | `createProviderRegistry` | 至少配一个 |
 | 同上 `_BASE_URL` / `_MODELS` | 同上 | baseUrl 覆盖；`_MODELS` 逗号分隔、首项为默认 |
 | `CODETUI_LLM_READ_TIMEOUT_SECONDS` | `LlmTimeouts` | 300，钳 [10,3600]；兼作流式空闲超时 |
+| `CODETUI_HEADLESS_MCP_WAIT_SECONDS` | `HeadlessRunner` | 10，钳 [1,300]；`-p` 模式 MCP 连接等待上限，超时告警后继续执行 |
+| `CODETUI_HEADLESS_MAX_SECONDS` | 同上 | 3600，钳 [60,86400]；`-p` 模式单回合总硬顶，超时 dispose 回合 + 退出 1 |
 | `CODETUI_CONTEXT_WINDOWS` | `ModelContextWindows` | `provider:model=值`，逗号分隔 |
 | `CODETUI_UNKNOWN_CONTEXT_WINDOW` | 同上 | 128000 |
 | `CODETUI_SUBAGENT_CONCURRENCY` | `AgentTools` → `SubagentRunner` | 4，钳 [1,32] |

@@ -73,6 +73,20 @@ C:\path\to\springai-code-tui-<version>\bin\code-tui.cmd
 /path/to/springai-code-tui-<version>/bin/code-tui --resume 20260412T0930
 ```
 
+### 非交互（脚本）用法
+
+加 `-p` 即非交互模式：跑一个回合后退出，**stdout 只输出最终回复**（进度、工具调用走 stderr），
+适合管道与脚本。退出码 0=正常、1=失败、2=模型发起了无法交互的问询；工具权限请求一律
+fail-closed 拒绝（可用 `--permission-mode` 或 allow 规则放宽）。
+
+```bash
+/path/to/springai-code-tui-<version>/bin/code-tui -p "只回复四个字：收到请讲"
+echo "长提示词整段" | /path/to/springai-code-tui-<version>/bin/code-tui -p -        # 提示词从 stdin 读
+/path/to/springai-code-tui-<version>/bin/code-tui -p "..." --output-last-message reply.txt   # 回复同时写入文件
+# 链式多步：从 stderr 的「（会话 id：…）」行取 id，交给下一步的 --resume
+/path/to/springai-code-tui-<version>/bin/code-tui -p "第二步，接着上文" --resume 20260412T093015-1a2b3c
+```
+
 ### 临时使用环境变量
 
 如果只是临时试用，也可以不创建 `bin/config.env`，直接在启动前设置环境变量：

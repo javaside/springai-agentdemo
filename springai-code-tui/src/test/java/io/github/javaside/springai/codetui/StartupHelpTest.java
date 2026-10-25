@@ -52,6 +52,8 @@ class StartupHelpTest {
                 "--dangerously-skip-permissions", "--insert-lines", "-h", "--help"}) {
             assertTrue(usage.contains(flag), "帮助文本应包含 " + flag);
         }
+        assertTrue(usage.contains("-p <提示词>"), "help 必须覆盖 -p");
+        assertTrue(usage.contains("--output-last-message"), "help 必须覆盖 --output-last-message");
         for (String mode : new String[]{"default", "acceptEdits", "plan"}) {
             assertTrue(usage.contains(mode), "帮助文本应说明 --permission-mode 的合法取值 " + mode);
         }
