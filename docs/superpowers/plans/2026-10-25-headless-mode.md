@@ -112,7 +112,7 @@ class HeadlessAgentListenerTest {
     }
 
     @Test
-    void permissionDenied_withNotice_turnContinues() {
+    void permissionDenied_withNotice_turnContinues() throws Exception {
         RecPerm perm = new RecPerm();
         PermissionRequest req = new PermissionRequest(1L, null, "Bash", "rm -rf /tmp/x",
                 "{}", "测试", null, perm);
@@ -124,7 +124,7 @@ class HeadlessAgentListenerTest {
     }
 
     @Test
-    void questionCancelsTurn_exit2_latchAlwaysReleased() {
+    void questionCancelsTurn_exit2_latchAlwaysReleased() throws Exception {
         RecAsk ask = new RecAsk();
         AtomicInteger disposed = new AtomicInteger();
         listener.bindTurn(recordingDisposable(disposed));
@@ -146,7 +146,7 @@ class HeadlessAgentListenerTest {
     }
 
     @Test
-    void planCancels_recordsText_exit0() {
+    void planCancels_recordsText_exit0() throws Exception {
         RecPlanResponder plan = new RecPlanResponder();
         AtomicInteger disposed = new AtomicInteger();
         listener.bindTurn(recordingDisposable(disposed));
@@ -410,7 +410,7 @@ git commit -m "feat: HeadlessAgentListener（分段/fail-closed 模态处置/lat
 
 **Interfaces:**
 - Consumes: 既有 `resumeFlagValue` 解析纪律（`log.warn` 缺值先例）。
-- Produces（Task 4 依赖）: `static boolean hasPrintFlag(String[] args)`；`static String headlessPrompt(String[] args)`（null=未给；`"-"`=stdin 哨兵；非法/空白抛 `IllegalArgumentException` 中文消息）；`static String outputLastMessagePath(String[] args)`（null=未给/缺值）。
+- Produces（Task 4 依赖；`headlessPrompt`/`outputLastMessagePath` **直接定义 public**——`headless` 包生产消费，javadoc 注明「生产跨包消费，非为测试放宽」；`hasPrintFlag` 包级，main 同包）: `static boolean hasPrintFlag(String[] args)`；`public static String headlessPrompt(String[] args)`（null=未给；`"-"`=stdin 哨兵；非法/空白抛 `IllegalArgumentException` 中文消息）；`public static String outputLastMessagePath(String[] args)`（null=未给/缺值）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -457,17 +457,19 @@ class HeadlessStartupTest {
 }
 ```
 
-`StartupHelpTest` 追加断言（放既有 usage 断言旁）：
+`StartupHelpTest` 追加断言（放 `usageCoversAllFlags` 既有断言旁——该测试用局部变量 `String usage = CodeTuiApplication.usageText();`，追加写法对齐）：
 
 ```java
-        assertTrue(usageText().contains("-p <提示词>"), "help 必须覆盖 -p");
-        assertTrue(usageText().contains("--output-last-message"), "help 必须覆盖 --output-last-message");
+        assertTrue(usage.contains("-p <提示词>"), "help 必须覆盖 -p");
+        assertTrue(usage.contains("--output-last-message"), "help 必须覆盖 --output-last-message");
 ```
+
+（取舍注明：spec 测试策略列的「-h 优先」由 main 结构保证——help 判定是 main 第一件事、`-p` 分叉在其后，无独立可单测的纯函数，不加用例。）
 
 - [ ] **Step 2: 跑测试确认红**
 
 Run: `mvn -pl springai-code-tui -am test -Dtest='HeadlessStartupTest,StartupHelpTest' -Dsurefire.failIfNoSpecifiedTests=false`
-Expected: `HeadlessStartupTest` 编译失败（三符号缺失）；`StartupHelpTest` 断言红（usage 无两行）。
+Expected: 编译失败（三符号缺失）——编译错误会中止整个 test 阶段，`StartupHelpTest` 的断言红此刻观察不到（其验证在 Task 2 完成后的 Step 4 一起跑绿）。
 
 - [ ] **Step 3: 最小实现**
 
@@ -490,9 +492,9 @@ Expected: `HeadlessStartupTest` 编译失败（三符号缺失）；`StartupHelp
      * 提取 {@code -p} 的提示词：null=未给；{@code "-"}=stdin 哨兵（由 Runner 读全）；否则原文。
      * 非法（尾部缺值 / 下一参以 - 开头且非 - 本身 / 空白）抛 IllegalArgumentException——main 捕获后
      * stderr + 退出 1。与 {@link #resumeFlagValue} 的差异：{@code -} 本身在此是合法值（stdin），
-     * 不能照抄「一律当选项」的判定。
+     * 不能照抄「一律当选项」的判定。public：headless 包生产消费（非为测试放宽）。
      */
-    static String headlessPrompt(String[] args) {
+    public static String headlessPrompt(String[] args) {
         for (int i = 0; i < args.length; i++) {
             if (!"-p".equals(args[i])) {
                 continue;
@@ -513,8 +515,8 @@ Expected: `HeadlessStartupTest` 编译失败（三符号缺失）；`StartupHelp
         return null;
     }
 
-    /** 提取 {@code --output-last-message <路径>} / {@code =路径}；未给或缺值返回 null（缺值 WARN 不算失败）。 */
-    static String outputLastMessagePath(String[] args) {
+    /** 提取 {@code --output-last-message <路径>} / {@code =路径}；未给或缺值返回 null（缺值 WARN 不算失败）。public：headless 包生产消费。 */
+    public static String outputLastMessagePath(String[] args) {
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
             if (a.equals("--output-last-message")) {
@@ -556,20 +558,22 @@ git commit -m "feat: -p 与 --output-last-message 参数解析（stdin 哨兵 + 
 
 **Interfaces:**
 - Consumes: main 现有装配链（spec 事实 #8 的 14 处调用点清单）；`AgentTools.build(registry, root, listener, mcpRegistry, permissionEngine, cfg, goalManager)`、`AgentTools.wireL1/wireGoal/wireTodoReminder`、CodingAgent 23 参构造器（实参序照 main L186-192 原样）。
-- Produces（Task 4 依赖）:
-  - `record Assembled(ProviderRegistry registry, TokenUsageAccumulator usage, McpRegistry mcpRegistry, GoalEvaluationRunner goalRunner, AgentTools.AgentRuntime runtime, CodingAgent agent, boolean wantContinue, boolean latestPresent)`
-  - `static Assembled assemble(String[] args, Path root, AgentListener listener, java.util.function.Consumer<String> notice, boolean tuiMode, String sessionId, boolean resumed)`
+- Produces（Task 4 依赖；**可见性定案**：被 `headless` 包生产消费的四件升 public——javadoc 注明「生产跨包消费，非为测试放宽」，与 StartupHelpTest 的包级口径不冲突；`hasPrintFlag` 仍包级，main 同包）:
+  - `public record Assembled(ProviderRegistry registry, TokenUsageAccumulator usage, McpRegistry mcpRegistry, GoalEvaluationRunner goalRunner, AgentTools.AgentRuntime runtime, CodingAgent agent, boolean wantContinue, boolean latestPresent)`
+  - `public static Assembled assemble(String[] args, Path root, AgentListener listener, java.util.function.Consumer<String> notice, boolean tuiMode, String sessionId)`
   - `static void restoreLastModel(ProviderRegistry, Path, java.util.function.Consumer<String> notice)`（ConversationState 版一行委托保留）
+  - `headlessPrompt` / `outputLastMessagePath` 已在 Task 2 定义为 public（headless 包生产消费）；`hasPrintFlag` 保持包级，main 同包。
 
 - [ ] **Step 1: 重构（纯搬家，无新测试——守护是全量回归）**
 
 要点（顺序与现 main 严格一致，只是搬进方法）：
 
 1. main 保留：`-h`、`applyRenderDiagFlags`、JUL 桥、root、**会话选择段（L94-121，不依赖 state，两模式共用）**、`-p` 分叉位（本任务只留注释占位，Task 4 接线）。
-2. `assemble(...)` 体 = 现 L76-93 的 usageAccumulator/registry 创建（**key 缺失 catch 分支按 tuiMode 分流**：tuiMode 走原 `System.out.println + return`——注意 return 在方法里要改成抛/返回 null？**不改**：保持 `System.exit` 语义太重；采用「key 缺失时 TUI 分支打印后 `throw new StartupAbort()`（私有静态类 extends RuntimeException）」太繁——**最简**：tuiMode 时原样打印后 `return null`，main TUI 路径判 null 直接 return；headless（Task 4）传 tuiMode=false 时走 `System.err.println + System.exit(1)`（spec 定案）。main TUI 调用处 `Assembled a = assemble(...); if (a == null) return;`）→ restoreLastModel（重载版）→ 权限引擎与 5 处 notice（`notice.accept(...)`）→ `McpRegistry.init(root, listener, permissionEngine)` → goal 三件构造 → try 段内 build/CodingAgent 构造/wireL1 + `if (tuiMode) { wireGoal; wireTodoReminder; }`。
+2. `assemble(...)` 体 = 现 L76-93 的 usageAccumulator/registry 创建（**key 缺失 catch 分支双模式统一 `return null`**：tuiMode 走原 `System.out.println(原中文文案)` 后 return null，main TUI 调用处 `if (a == null) return;`；tuiMode=false 走 `System.err.println(同文案)` 后 return null，headless 由 Runner 判 null 返回 1、main `System.exit(1)`——**退出决定权归调用方，assemble 绝不 System.exit**（否则杀死同 JVM 直调 run() 的真机冒烟，spec 定案的 stderr+退出 1 语义不变））→ restoreLastModel（重载版）→ 权限引擎与 5 处 notice（`notice.accept(...)`）→ `McpRegistry.init(root, listener, permissionEngine)` → goal 三件构造 → try 段内 build/CodingAgent 构造/wireL1 + `if (tuiMode) { wireGoal; wireTodoReminder; }`。
 3. `Assembled.wantContinue/latestPresent` 供 TUI 开场提示块（L205-211）用——该块与 replayHistory、`CodeTuiView` 构造、`view.run()`、catch/finally（`mcpRegistry.close(); goalRunner.close(); System.exit`）**留在 main TUI 路径**。
 4. `activeTurnId` 移入 assemble（仅 CodingAgent 消费）；`ConversationState state` 与 `state::pushInfo` 由 main TUI 路径构造后传入。
 5. 原 L139-157 的 `state.pushInfo(...)` 全部改 `notice.accept(...)`；restoreLastModel 重载把 `state.pushInfo` 换 `notice.accept`，原三参版本一行委托 `restoreLastModel(registry, root, state::pushInfo)`。
+6. **边缘差异注记**（重构后与现码不完全同序）：key 检测从「会话选择之前」后移到「会话选择之后」（assemble 内）——无 key 且 resume 冲突的机器上报错先后翻转、无 key 机器也会先扫目录。无害（两者都退出），实现时在 assemble 的 key 缺失分支注释里记一句。
 
 - [ ] **Step 2: 全量回归（重构的「绿」）**
 
@@ -594,7 +598,7 @@ git commit -m "refactor: main 公共装配抽为 assemble（listener/通告器�
 
 **Interfaces:**
 - Consumes: Task 1 `HeadlessAgentListener` 全部产出口；Task 2 三解析函数；Task 3 `assemble`/`Assembled`。
-- Produces: `static int HeadlessRunner.run(String[] args, Path root, String sessionId, boolean resumed)`（返回退出码，System.exit 留给 main）；`static long mcpWaitSeconds()` / `static long maxSeconds()` / `static String prompt(String[] args)`（包级，可单测）。
+- Produces: `public static int HeadlessRunner.run(String[] args, Path root, String sessionId, boolean resumed)`（main 跨包调用；返回退出码，System.exit 留给 main）；`static long mcpWaitSeconds()` / `static long maxSeconds()` / `static String prompt(String[] args)`（包级，可单测）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -662,7 +666,7 @@ public final class HeadlessRunner {
 
     private HeadlessRunner() {}
 
-    static int run(String[] args, Path root, String sessionId, boolean resumed) {
+    public static int run(String[] args, Path root, String sessionId, boolean resumed) {
         String promptSpec;
         try {
             promptSpec = CodeTuiApplication.headlessPrompt(args);   // 非法/空白在此抛
@@ -671,10 +675,16 @@ public final class HeadlessRunner {
             return 1;
         }
         HeadlessAgentListener listener = new HeadlessAgentListener(System.err);
-        CodeTuiApplication.Assembled a = CodeTuiApplication.assemble(
-                args, root, listener, System.err::println, false, sessionId, resumed);
+        CodeTuiApplication.Assembled a;
+        try {
+            a = CodeTuiApplication.assemble(args, root, listener, System.err::println, false, sessionId);
+        } catch (Throwable t) {   // init 之后装配步骤抛异常会裸栈逃出（现 main 同窗口）；headless 卖点是脚本友好，stderr + 退出 1
+            System.err.println("✗ 装配失败：" + t);
+            return 1;
+        }
         if (a == null) {
-            return 1;   // key 缺失（assemble 内 headless 分支已 stderr + 决定退出；此为防御回退）
+            // key 缺失：assemble 的 headless 分支已 System.err 打过中文文案（双模式统一 return null，退出权在调用方）
+            return 1;
         }
         try {
             if (resumed) {
@@ -698,19 +708,21 @@ public final class HeadlessRunner {
                 return 1;
             }
             String reply = listener.planText() != null ? listener.planText() : listener.finalReply();
-            System.out.println(reply);
+            if (!reply.isBlank()) {
+                System.out.println(reply);   // 空则不打（stdout 只有最终回复——exit-2 等空回复场景不出空行）
+            }
             writeLastMessage(args, reply);
             var snap = a.usage().snapshot();
-            System.err.println("（会话 id：" + sessionId + "；--resume " + sessionId + " 可续跑。token："
-                    + snap.promptTokens() + " in / " + snap.completionTokens() + " out）");
+            System.err.println("（会话 id：" + sessionId + "；--resume " + sessionId + " 可续跑。）");
+            System.err.println("（token：" + snap.promptTokens() + " in / " + snap.completionTokens() + " out）");
             return listener.exitCode();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             System.err.println("✗ headless 被中断。");
             return 1;
         } finally {
+            a.mcpRegistry().close();   // 与 main 同序：先 MCP 后 goal 池
             a.goalRunner().close();
-            a.mcpRegistry().close();
         }
     }
 
@@ -769,7 +781,7 @@ public final class HeadlessRunner {
         }
 ```
 
-注意：`assemble` 的 headless 分支（tuiMode=false）key 缺失时执行 `System.err.println(同文案); System.exit(1);`（spec 定案）——Task 3 已实现该分支的话此处自然生效；若 Task 3 把它实现为 `return null` 的统一形状，则 headless 判 null 后补 stderr + `System.exit(1)` 再 return（以 Task 3 实际形状为准，两路都满足 spec「stderr + 退出 1」）。
+注意：`assemble` 双模式统一「key 缺失 → 各自通道打印中文文案 + `return null`」（Task 3 要点 2 定案），退出决定权归调用方——TUI 的 main 判 null 后 return（原「打印+return」语义不变），headless 的 Runner 判 null 返回 1、main `System.exit(1)`（spec「stderr + 退出 1」达成）。
 
 - [ ] **Step 4: 跑测试确认绿 + 回归**
 
@@ -890,13 +902,14 @@ Expected: 2/2 PASS（或 SKIPPED）。
 Run: `mvn -pl springai-code-tui -am test`
 Expected: 全 PASS（20 skipped 为 env 门控；已知 flaky CodingAgentSpikeTest.todoTurnIdBinding 若红按 CONTRIBUTING 单跑复核）。
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 5: 提交（两笔：测试与文档各一件事，仓库无复合前缀先例）**
 
 ```bash
-git add springai-code-tui/src/test/java/io/github/javaside/springai/codetui/headless/HeadlessSmokeTest.java \
-        springai-code-tui/docs/implementation-map.md springai-code-tui/README.md \
+git add springai-code-tui/src/test/java/io/github/javaside/springai/codetui/headless/HeadlessSmokeTest.java
+git commit -m "test: headless 真机冒烟（一次性回复/会话落盘/--resume 链式）"
+git add springai-code-tui/docs/implementation-map.md springai-code-tui/README.md \
         springai-code-tui/docs/guide/reference.md
-git commit -m "test+docs: headless 真机冒烟与文档（-p 用法/退出码/env 表/§3 过时句修正）"
+git commit -m "docs: headless -p 用法（退出码/env 表/§1 小节/§3 过时句修正）"
 ```
 
 ---
@@ -907,3 +920,4 @@ git commit -m "test+docs: headless 真机冒烟与文档（-p 用法/退出码/e
 2. **占位符扫描**：无 TBD/TODO/「落地时再改」类注记（写作过程中的笔误已当场清干净）。
 3. **类型一致性**：`HeadlessAgentListener` 产出口（bindTurn/exitCode/planText/finalReply/awaitDone/awaitMcpReady）在 Task 4 逐一消费且签名一致；`assemble`/`Assembled` 字段在 Task 3 定义、Task 4 消费（registry/usage/mcpRegistry/goalRunner/runtime/agent 均用到）；`hasPrintFlag/headlessPrompt/outputLastMessagePath` Task 2 定义、Task 4 消费。
 4. **已知执行期对齐点**（注记在任务内）：Task 3 纯重构以全量回归为绿（无先红）；Task 5 冒烟直调 `run()` 依赖「System.exit 只在 main」这一 Task 4 定案。
+5. **评审修订记录（subagent 评审 2026-10-25，已全部落实）**：跨包可见性定案（`Assembled`/`assemble`/`headlessPrompt`/`outputLastMessagePath`/`run` 升 public，javadoc 注明生产消费）；Task 1 三个测试方法补 `throws Exception`；key 缺失双模式统一 `return null`（assemble 绝不 System.exit——保真机冒烟可直调 run）；Runner 的 assemble 调用包 `try/catch(Throwable)`；空回复不打 stdout 空行；stderr 收尾拆两行；finally 关闭顺序对齐 main；`assemble` 去掉无消费的 `resumed` 参数；`StartupHelpTest` 追加片段对齐局部变量 `usage`；Task 2 Step 2 预期改为纯编译失败；Task 5 提交拆 `test:`/`docs:` 两笔；Task 3 补 key 检测次序后移的边缘差异注记；spec 测试策略两项缺口（-h 优先/无模型依赖落盘用例）注明取舍。
