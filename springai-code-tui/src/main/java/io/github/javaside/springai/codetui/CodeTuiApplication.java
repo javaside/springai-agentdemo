@@ -26,6 +26,7 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionConfig;
 import io.github.javaside.springai.codetui.agent.permission.PermissionConfigLoader;
 import io.github.javaside.springai.codetui.agent.permission.PermissionEngine;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
+import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.session.SessionCatalog;
 import io.github.javaside.springai.codetui.agent.session.SessionIds;
@@ -42,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * springai-code-tui 入口 —— 接入真实 {@link CodingAgent}，装配模型 / 工具 / TUI 并启动。
@@ -70,26 +72,10 @@ public class CodeTuiApplication {
         SLF4JBridgeHandler.install();
         Path root = Path.of(System.getProperty("user.dir")).toAbsolutePath();
 
-        // 多家 provider：谁配了 key 谁 available。至少需一家可用（通常 DeepSeek）。
-        // base-url 可选：配了 *_BASE_URL 就覆盖，否则用各家内置默认（便于走代理/私有网关）。
-        // 模型清单可选：配了 *_MODELS（逗号分隔，首项为默认模型）就覆盖，否则用各家内置清单。
-        TokenUsageAccumulator usageAccumulator = new TokenUsageAccumulator();   // 会话级 token 采集（主/子/摘要共享）
-        ProviderRegistry registry;
-        try {
-            registry = createProviderRegistry(root, System.getenv(), usageAccumulator);
-        } catch (IllegalStateException e) {
-            System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
-                    "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENCODE_GO_API_KEY，再运行。");
-            return;
-        }
-
-        ConversationState state = new ConversationState();       // implements AgentListener
-        restoreLastModel(registry, root, state);                 // 上次用的模型（<root>/.codetui/model.json）
-        AtomicLong activeTurnId = new AtomicLong();
-
         // 会话选择（多槽）：默认每次启动 = 新 session（干净上下文、新文件，不读旧历史）；
         // -c / --continue 恢复「最近一次」会话（按文件最后修改时间选），--resume <前缀> 恢复指定会话。
         // 目录扫描无条件执行但只读文件名+mtime（瞬时）；会话内容仍惰性加载——默认启动不解析任何会话文件。
+        // 这一段不依赖 ConversationState，TUI 与 headless（-p）两模式共用（spec 定案）。
         Path sessionsDir = root.resolve(".codetui").resolve("sessions");
         boolean wantContinue = hasContinueFlag(args);
         String resumeValue = resumeFlagValue(args);
@@ -120,6 +106,122 @@ public class CodeTuiApplication {
         String sessionId = resumeTarget != null ? resumeTarget
                 : (resumed ? latest.get() : SessionIds.newId());
 
+        // headless（-p）分叉位：会话选择之后（两模式共用 -c/--resume 语义）、TUI 装配之前。
+        // 本任务（公共装配抽取）只留占位，Task 4 接线：
+        //   if (hasPrintFlag(args)) { System.exit(HeadlessRunner.run(args, root, sessionId, resumed)); }
+
+        // TUI 路径的 UI 接缝与通告器是同一个对象：state 既是 AgentListener（build/init/agent 的
+        // 接缝参），pushInfo 又把开场提示落进 scrollback；headless 侧会换成它自己的监听器 + stderr。
+        ConversationState state = new ConversationState();       // implements AgentListener
+        Assembled a = assemble(args, root, state, state::pushInfo, true, sessionId);
+        if (a == null) {
+            return;   // key 缺失：文案已由 assemble 按 TUI 通道（System.out）打印，原「打印+return」语义不变
+        }
+
+        // view 段仍全程 try/finally 关 MCP/goal 池；装配段（build/agent/wire）的同一义务已随搬家
+        // 落进 assemble——init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
+        int exitCode = 0;
+        try {
+            // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
+            // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
+            // 会话事实（wantContinue/latestPresent）取自装配产物 Assembled——headless 共用装配后，
+            // 这两组事实的单一真相在 Assembled 而非 main 的局部变量。
+            if (resumed) {
+                state.replayHistory(a.runtime().sessionService().getMessages(sessionId));
+            } else if (a.wantContinue()) {
+                state.pushInfo("（没有可恢复的会话，已开始新会话。）");
+            } else if (a.latestPresent()) {
+                state.pushInfo("（提示：存在上次会话，加 -c / --continue 启动可恢复。）");
+            }
+
+            CodeTuiView view = new CodeTuiView(state, a.agent(), root);   // root：diff 渲染时读原文件 + 相对化展示路径
+            view.run();
+        } catch (Throwable t) {
+            t.printStackTrace();
+            exitCode = 1;
+        } finally {
+            // 保证任何路径（含装配期抛异常）都关闭 MCP 子进程（有界 2s），避免孤儿进程
+            a.mcpRegistry().close();
+            // goal 评估线程池同一纪律：任何退出路径都关池。close 幂等；池是 daemon、在飞评估照跑完
+            // 不拖 JVM（见 GoalEvaluationRunner 类注释），关闭后再 submit 抛 RejectedExecutionException
+            // 是 app 退出路径的正常竞态。
+            a.goalRunner().close();
+        }
+        // /exit 后立即终止 JVM。HTTP 客户端会留下非 daemon 线程——实测 OkHttp（OpenAI/智谱/Anthropic
+        // 走这条）的 "OkHttp Dispatcher" 线程 keep-alive 达 60s，若不强制退出，进程会在 /exit 后卡 ~60s 才自然
+        // 消亡（用户报错后立即 /exit 恰落在这 60s 窗口内，故"报过错就卡很久"）。TUI 退出语义即"立即终止"：
+        // 会话已按事件原子落盘、无待刷新状态，quit() 也已在 run() 返回前恢复终端，故 System.exit 安全。
+        System.exit(exitCode);
+    }
+
+    /**
+     * {@link #assemble} 的产物：调用方（TUI 的 main / headless 的 Runner）继续运行所需的句柄，
+     * 外加 TUI 开场提示块要的两组会话事实（wantContinue/latestPresent）。
+     * public：headless 包生产消费（非为测试放宽）。
+     */
+    public record Assembled(
+            ProviderRegistry registry,
+            TokenUsageAccumulator usage,
+            McpRegistry mcpRegistry,
+            GoalEvaluationRunner goalRunner,
+            AgentTools.AgentRuntime runtime,
+            CodingAgent agent,
+            boolean wantContinue,
+            boolean latestPresent) {
+    }
+
+    /**
+     * main 与 headless（-p）共用的公共装配段：provider 注册表 → 上次模型恢复 → 权限引擎
+     * （开场通告经 {@code notice}，TUI 落 scrollback / headless 走 stderr）→ MCP → goal 三件 →
+     * runtime/agent 构造与接线（wireGoal/wireTodoReminder 仅 {@code tuiMode}——headless 不接
+     * goal/todo 提醒线）。key 缺失与装配失败的处置见方法体内注记。
+     *
+     * <p><b>绝不 System.exit</b>：真机冒烟要能在同 JVM 里直调 run()，进程内退出会杀死它；
+     * 退出决定权归调用方——TUI 的 main 判 null 后 return（原「打印+return」语义不变），
+     * headless 的 Runner 判 null 返回 1、由 main System.exit。</p>
+     *
+     * <p><b>失败路径的资源纪律</b>：McpRegistry.init 之后的装配步骤抛异常时，catch 内先关
+     * MCP 与 goal 池再原样 rethrow——init 已可能拉起子进程，不能让它们变孤儿；成功路径不关
+     * （资源交给调用方用：TUI 整场、headless 一回合），故是 catch-关闭-rethrow 而非 finally。</p>
+     *
+     * <p>public：headless 包生产消费（非为测试放宽）。</p>
+     *
+     * @param args      启动参数（权限开关、-c 等从中解析）
+     * @param root      工作区根目录
+     * @param listener  UI 接缝：TUI 传 ConversationState，headless 传它自己的监听器
+     * @param notice    开场通告通道：TUI 传 {@code state::pushInfo}，headless 传 {@code System.err::println}
+     * @param tuiMode   true=TUI（key 缺失走 stdout、接 goal/todo 提醒线）；false=headless（key 缺失走 stderr）
+     * @param sessionId 会话 id（会话选择在两模式共用段完成，由调用方传入）
+     * @return 装配产物；key 缺失时 null（文案已按 {@code tuiMode} 选通道打印）
+     */
+    public static Assembled assemble(String[] args, Path root, AgentListener listener,
+                                      Consumer<String> notice, boolean tuiMode, String sessionId) {
+        // 多家 provider：谁配了 key 谁 available。至少需一家可用（通常 DeepSeek）。
+        // base-url 可选：配了 *_BASE_URL 就覆盖，否则用各家内置默认（便于走代理/私有网关）。
+        // 模型清单可选：配了 *_MODELS（逗号分隔，首项为默认模型）就覆盖，否则用各家内置清单。
+        TokenUsageAccumulator usageAccumulator = new TokenUsageAccumulator();   // 会话级 token 采集（主/子/摘要共享）
+        ProviderRegistry registry;
+        try {
+            registry = createProviderRegistry(root, System.getenv(), usageAccumulator);
+        } catch (IllegalStateException e) {
+            // key 缺失：双模式统一「打印中文文案 + return null」，绝不 System.exit（退出决定权归调用方，
+            // 见方法 javadoc）。通道按 tuiMode 分流——TUI 保持原 stdout 文案；headless 的 stdout 只有
+            // 最终回复，提示类输出全走 stderr（spec 定案）。
+            // 边缘差异（有意接受）：key 检测原在 main 的会话选择之前，抽出后随调用方落位到会话选择之后——
+            // 无 key 且 --resume/-c 冲突的机器上报错先后翻转、无 key 机器也会先扫会话目录；两者都以退出收场，无害。
+            if (tuiMode) {
+                System.out.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
+                        "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENCODE_GO_API_KEY，再运行。");
+            } else {
+                System.err.println("⚠️  未检测到任何可用大模型 key。请至少配置一个：" +
+                        "DEEPSEEK_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENCODE_GO_API_KEY，再运行。");
+            }
+            return null;
+        }
+
+        restoreLastModel(registry, root, notice);                 // 上次用的模型（<root>/.codetui/model.json）
+        AtomicLong activeTurnId = new AtomicLong();               // 回合计数器，仅 CodingAgent 消费，随装配内移
+
         // 权限引擎：整个进程<b>只有这一个</b>，三处装配点（AgentTools 装饰循环 / buildMemoryTools /
         // McpRegistry.decorate）共用它。必须建在 McpRegistry.init <b>之前</b>——MCP 工具在 init 里
         // 就被发现并装饰，那时就得拿到引擎；「MCP 工具延迟装饰」不是替代方案（运行期 /mcp 新启用的
@@ -136,25 +238,25 @@ public class CodeTuiApplication {
                 : (cliMode != null ? cliMode : permissionConfig.defaultMode());
         PermissionEngine permissionEngine = new PermissionEngine(root, permissionConfig, startMode);
         if (skipPermissions) {
-            state.pushInfo("⚠ 已启用 --dangerously-skip-permissions：除 deny 规则与内置危险检查外，"
+            notice.accept("⚠ 已启用 --dangerously-skip-permissions：除 deny 规则与内置危险检查外，"
                     + "全部工具调用不再询问。");
             if (cliMode != null) {
-                state.pushInfo("• 已忽略 --permission-mode " + cliMode.label()
+                notice.accept("• 已忽略 --permission-mode " + cliMode.label()
                         + "：--dangerously-skip-permissions 优先级更高。");
             }
         } else if (startMode == PermissionMode.PLAN) {
-            state.pushInfo("⏸ 已进入计划模式：只能读取和探索，产出计划后经你批准才会动手。");
+            notice.accept("⏸ 已进入计划模式：只能读取和探索，产出计划后经你批准才会动手。");
         }
         String rootNotice = overBroadRootNotice(root);
         if (!rootNotice.isEmpty()) {
-            state.pushInfo(rootNotice);
+            notice.accept(rootNotice);
         }
 
         // 诊断开关可见性（Terminal.app 崩溃诱因二分）：任一开关开启时开场明示，
         // 避免「以为开了其实没开」让二分结论失真。三个开关默认全关=行为与主线一致。
         String diagToggles = diagnosticTogglesNotice();
         if (!diagToggles.isEmpty()) {
-            state.pushInfo("⚠ 渲染诊断开关生效中：" + diagToggles + "（用于 Terminal.app 崩溃定位，勿长期开启）");
+            notice.accept("⚠ 渲染诊断开关生效中：" + diagToggles + "（用于 Terminal.app 崩溃定位，勿长期开启）");
         }
 
         // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
@@ -162,28 +264,35 @@ public class CodeTuiApplication {
         // init 立即返回，连接在后台跑：实测一个远程 HTTP server 就要 5~8 秒，等它等的是一块空屏。
         // 「已发现 N 个工具」那行改由 registry 在全部连完时经 AgentListener.onMcpReady 回调补上
         // ——在这里同步算只会数到 0。
-        McpRegistry mcpRegistry = McpRegistry.init(root, state, permissionEngine);
+        McpRegistry mcpRegistry = McpRegistry.init(root, listener, permissionEngine);
 
         // goal 循环（spec §6/§7）：配置读 env 一次，状态机 / 评估调度器 / 评估器在此建成<b>唯一实例</b>，随后共享：
         // goalManager 经 build 第 7 参 → runtime.goalManager()（View goal 槽与 wireGoal 的 bindGoal
         // 都从这一份取）；goalRunner（评估线程池）与 goalEvaluator（裸 client 评估器）由 wireGoal 接进
         // agent。另建一个等于 UI 永远看不到真相（同 AgentRuntime.interjections 字段的先例措辞）。
-        // goalRunner 建在 try 之外，退出路径 finally 里 close（与 mcpRegistry.close() 同一纪律）。
+        // goalRunner 建在 try 之外，失败路径 catch 里 close（与 mcpRegistry.close() 同一纪律）。
         GoalConfig goalConfig = GoalConfig.fromEnv();
         GoalManager goalManager = new GoalManager(goalConfig, usageAccumulator);
         GoalEvaluationRunner goalRunner = new GoalEvaluationRunner(goalConfig);
         GoalEvaluator goalEvaluator = ChatClientGoalEvaluator.create(registry, goalConfig);
 
-        // 从此处起装配 runtime/agent/view 直至 view.run() 全程 try/finally 关 MCP：
-        // init() 已可能拉起子进程，任一装配步骤抛异常也不能让它们变孤儿。
-        int exitCode = 0;
+        // 开场提示块要的两组会话事实（经 Assembled 带给调用方）：从 args/root 现算——签名里没有
+        // 这两项，而 headless 调用方手里也没有 main 的局部变量。会话目录扫描只读文件名+mtime（瞬时），
+        // 与 main 会话选择段里 catalog/latest 那两次扫描同类，不算新量级的开销。
+        boolean wantContinue = hasContinueFlag(args);
+        boolean latestPresent =
+                FileSessionRepository.latestSessionId(root.resolve(".codetui").resolve("sessions")).isPresent();
+
+        // 从此处起装配 runtime/agent 直至 return：init() 已可能拉起子进程，任一装配步骤抛异常也不能
+        // 让它们变孤儿（catch 内关闭后原样 rethrow，见方法 javadoc 的资源纪律）。
+        AgentTools.AgentRuntime runtime;
+        CodingAgent agent;
         try {
             // 唯一一次读 CODETUI_STREAM_RETRY：同一 cfg 同时喂给 build（L1 三元）与 CodingAgent 构造
             // （L2 白名单），结构上保证两层开关永不漂移（勿在此处或 build 内再 fromEnv 一次）。
             StreamRetryConfig cfg = StreamRetryConfig.fromEnv();
-            AgentTools.AgentRuntime runtime =
-                    AgentTools.build(registry, root, state, mcpRegistry, permissionEngine, cfg, goalManager);
-            CodingAgent agent = new CodingAgent(registry, runtime.clients(), state, sessionId, activeTurnId,
+            runtime = AgentTools.build(registry, root, listener, mcpRegistry, permissionEngine, cfg, goalManager);
+            agent = new CodingAgent(registry, runtime.clients(), listener, sessionId, activeTurnId,
                     runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
                     runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer(),
@@ -194,40 +303,21 @@ public class CodeTuiApplication {
             // 这里在 CodingAgent 构造完成后 bind（agent::onL1Retry 是包私有方法，跨包方法引用编译失败，
             // 故必须经 AgentTools.wireL1 在 agent 包内接线——见 wireL1 javadoc）。
             AgentTools.wireL1(runtime, agent);
-            // goal 三件套同一形状的两段式接线（bindGoal 包私有，经 wireGoal 在 agent 包内转接）：
-            // agent 从此把回合错误/完成/清空通知 goal 状态机，并能倒扫会话尾供评估器取素材。
-            AgentTools.wireGoal(runtime, agent, goalRunner, goalEvaluator);
-            // 任务面板过期提醒接线（镜像 wireGoal）：/clear 时 CodingAgent 经此清空装饰链共用的那份快照。
-            AgentTools.wireTodoReminder(runtime, agent);
-
-            // 开场提示：恢复则把上次对话回放进 scrollback（仿 Claude Code --continue，直观重现，见 ConversationState.replayHistory）；
-            // -c 但无可恢复则说明；默认启动但存在旧会话则提示可用 -c。
-            if (resumed) {
-                state.replayHistory(runtime.sessionService().getMessages(sessionId));
-            } else if (wantContinue) {
-                state.pushInfo("（没有可恢复的会话，已开始新会话。）");
-            } else if (latest.isPresent()) {
-                state.pushInfo("（提示：存在上次会话，加 -c / --continue 启动可恢复。）");
+            if (tuiMode) {
+                // goal 三件套同一形状的两段式接线（bindGoal 包私有，经 wireGoal 在 agent 包内转接）：
+                // agent 从此把回合错误/完成/清空通知 goal 状态机，并能倒扫会话尾供评估器取素材。
+                // headless 不接——非交互回合没有 goal/todo 面板可喂。
+                AgentTools.wireGoal(runtime, agent, goalRunner, goalEvaluator);
+                // 任务面板过期提醒接线（镜像 wireGoal）：/clear 时 CodingAgent 经此清空装饰链共用的那份快照。
+                AgentTools.wireTodoReminder(runtime, agent);
             }
-
-            CodeTuiView view = new CodeTuiView(state, agent, root);   // root：diff 渲染时读原文件 + 相对化展示路径
-            view.run();
         } catch (Throwable t) {
-            t.printStackTrace();
-            exitCode = 1;
-        } finally {
-            // 保证任何路径（含装配期抛异常）都关闭 MCP 子进程（有界 2s），避免孤儿进程
             mcpRegistry.close();
-            // goal 评估线程池同一纪律：任何退出路径都关池。close 幂等；池是 daemon、在飞评估照跑完
-            // 不拖 JVM（见 GoalEvaluationRunner 类注释），关闭后再 submit 抛 RejectedExecutionException
-            // 是 app 退出路径的正常竞态。
             goalRunner.close();
+            throw t;
         }
-        // /exit 后立即终止 JVM。HTTP 客户端会留下非 daemon 线程——实测 OkHttp（OpenAI/智谱/Anthropic
-        // 走这条）的 "OkHttp Dispatcher" 线程 keep-alive 达 60s，若不强制退出，进程会在 /exit 后卡 ~60s 才自然
-        // 消亡（用户报错后立即 /exit 恰落在这 60s 窗口内，故"报过错就卡很久"）。TUI 退出语义即"立即终止"：
-        // 会话已按事件原子落盘、无待刷新状态，quit() 也已在 run() 返回前恢复终端，故 System.exit 安全。
-        System.exit(exitCode);
+        return new Assembled(registry, usageAccumulator, mcpRegistry, goalRunner, runtime, agent,
+                wantContinue, latestPresent);
     }
 
     /** 按环境变量构建全部 provider 并加载工作区思考配置。供 main 与测试共用。 */
@@ -309,6 +399,11 @@ public class CodeTuiApplication {
         return envFlag("CODETUI_INSERT_LINES") ? "INSERT_LINES(旧插行模式)" : "";
     }
 
+    /** TUI 路径的一行委托：通告器就是 {@code state::pushInfo}，行为与抽取前完全一致。 */
+    static void restoreLastModel(ProviderRegistry registry, Path root, ConversationState state) {
+        restoreLastModel(registry, root, state::pushInfo);
+    }
+
     /**
      * 恢复上次用的模型（{@code <root>/.codetui/model.json}）。
      *
@@ -319,8 +414,9 @@ public class CodeTuiApplication {
      * 不等就说明「这个模型现在用不了了」。不需要新增任何 API。
      * （那条静默忽略的行为由 {@code ProviderRegistryTest.selectUnknownModelIsIgnored} 钉着。）
      *
-     * <p><b>必须在 {@link ConversationState} 建好之后调用</b>：回退提示要走
-     * {@code state.pushInfo} 落进开场 scrollback，和权限模式的开场提示同一条路。
+     * <p><b>必须在调用方建好通告器之后调用</b>：回退提示要经 {@code notice} 落进开场
+     * scrollback（TUI 传 {@code state::pushInfo}，与权限模式的开场提示同一条路）或
+     * stderr（headless）。
      *
      * <p><b>与 {@code -c} 正交</b>：模型记忆独立于会话恢复，不带 {@code -c} 的默认启动
      * 照样生效——那正是这个功能存在的理由。
@@ -339,7 +435,7 @@ public class CodeTuiApplication {
      * 写在这里是因为「哪天有人让生产代码用上 {@code client()}」和「哪天有人挪动这行」
      * 是两件独立的事，凑到一起才出事，而那时谁都不会想到看这个方法。
      */
-    static void restoreLastModel(ProviderRegistry registry, Path root, ConversationState state) {
+    static void restoreLastModel(ProviderRegistry registry, Path root, Consumer<String> notice) {
         Optional<ModelPreference.Choice> remembered = ModelPreference.read(root);
         if (remembered.isEmpty()) {
             return;                            // 首次运行：走原有行为，一个字都不多说
@@ -350,7 +446,7 @@ public class CodeTuiApplication {
             registry.select(choice.providerId(), choice.modelId());
             if (!choice.modelId().equals(registry.activeModelId())
                     || !choice.providerId().equals(registry.active().id())) {
-                state.pushInfo("• 上次用的模型 " + choice.providerId() + "/" + choice.modelId()
+                notice.accept("• 上次用的模型 " + choice.providerId() + "/" + choice.modelId()
                         + " 现在不可用，已回退到 " + registry.active().id() + "/"
                         + registry.activeModelId() + "。");
             }
@@ -360,7 +456,7 @@ public class CodeTuiApplication {
         String id = choice.modelId();
         registry.select(id);
         if (!id.equals(registry.activeModelId())) {
-            state.pushInfo("• 上次用的模型 " + id + " 现在不可用，已回退到 "
+            notice.accept("• 上次用的模型 " + id + " 现在不可用，已回退到 "
                     + registry.activeModelId() + "。");
         }
     }
