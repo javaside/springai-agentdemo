@@ -60,8 +60,8 @@
 9. `new CodeTuiView(state, agent, root).run()`，全程 try/finally 关 MCP。
 10. `System.exit(exitCode)` —— 必须强制退，OkHttp Dispatcher 线程 keep-alive 60s。
 
-启动参数：`-c` / `--continue`、`--permission-mode <default|acceptEdits|plan>`、
-`--dangerously-skip-permissions`、`-p <提示词>`（非交互，见下节）、`-h` / `--help`
+启动参数：`-c` / `--continue`、`--resume <会话id前缀>`（两者互斥）、`--permission-mode <default|acceptEdits|plan>`、
+`--dangerously-skip-permissions`、`-p <提示词>`（非交互，见下节；配套 `--output-last-message <文件>`）、`-h` / `--help`
 （打印用法说明后直接退出，判定在 `main` 第一件事——早于 key 检测，没配任何 key 也能看帮助）。
 `--permission-mode` **刻意不认 `bypass`**（启动即裸奔只该有
 一个显眼开关）。
