@@ -31,6 +31,7 @@ import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
 import io.github.javaside.springai.codetui.agent.session.SessionCatalog;
 import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
+import io.github.javaside.springai.codetui.headless.HeadlessRunner;
 import io.github.javaside.springai.codetui.ui.CodeTuiView;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.slf4j.Logger;
@@ -106,9 +107,11 @@ public class CodeTuiApplication {
         String sessionId = resumeTarget != null ? resumeTarget
                 : (resumed ? latest.get() : SessionIds.newId());
 
-        // headless（-p）分叉位：会话选择之后（两模式共用 -c/--resume 语义）、TUI 装配之前。
-        // 本任务（公共装配抽取）只留占位，Task 4 接线：
-        //   if (hasPrintFlag(args)) { System.exit(HeadlessRunner.run(args, root, sessionId, resumed)); }
+        // headless 分叉：会话选择之后（两模式共用 -c/--resume 语义）、TUI 装配之前。
+        // System.exit 在此——Runner 只返回退出码（测试可直调 run 不退出）。
+        if (hasPrintFlag(args)) {
+            System.exit(HeadlessRunner.run(args, root, sessionId, resumed));
+        }
 
         // TUI 路径的 UI 接缝与通告器是同一个对象：state 既是 AgentListener（build/init/agent 的
         // 接缝参），pushInfo 又把开场提示落进 scrollback；headless 侧会换成它自己的监听器 + stderr。
