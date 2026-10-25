@@ -547,8 +547,8 @@ public class CodeTuiApplication {
 
     /**
      * 提取 {@code -p} 的提示词：null=未给；{@code "-"}=stdin 哨兵（由 Runner 读全）；否则原文。
-     * 非法（尾部缺值 / 下一参以 - 开头且非 - 本身 / 空白）抛 IllegalArgumentException——main 捕获后
-     * stderr + 退出 1。与 {@link #resumeFlagValue} 的差异：{@code -} 本身在此是合法值（stdin），
+     * 非法（尾部缺值 / 下一参以 - 开头且非 - 本身 / 空白）抛 IllegalArgumentException——HeadlessRunner.run
+     * 捕获后 stderr + 退出 1。与 {@link #resumeFlagValue} 的差异：{@code -} 本身在此是合法值（stdin），
      * 不能照抄「一律当选项」的判定。public：headless 包生产消费（非为测试放宽）。
      */
     public static String headlessPrompt(String[] args) {

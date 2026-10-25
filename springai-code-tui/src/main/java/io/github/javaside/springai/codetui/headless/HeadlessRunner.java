@@ -17,10 +17,10 @@ public final class HeadlessRunner {
     private HeadlessRunner() {}
 
     public static int run(String[] args, Path root, String sessionId, boolean resumed) {
-        String promptSpec;
+        String promptText;
         try {
-            promptSpec = CodeTuiApplication.headlessPrompt(args);   // 非法/空白在此抛
-        } catch (IllegalArgumentException e) {
+            promptText = resolvePrompt(args);   // 解析非法/stdin 空白在此抛（stderr + 退出 1，见 resolvePrompt）
+        } catch (IllegalArgumentException | IllegalStateException e) {
             System.err.println("错误：" + e.getMessage());
             return 1;
         }
@@ -37,24 +37,27 @@ public final class HeadlessRunner {
             return 1;
         }
         try {
-            if (resumed) {
-                System.err.println("（已恢复会话 " + sessionId + "，历史进入上下文。）");
+            String notice = resumeNotice(resumed, a.wantContinue(), sessionId);
+            if (notice != null) {
+                System.err.println(notice);
             }
             // 零 enabled server 时 onMcpReady 不发（spec 事实 #6）——先查 connectingCount 再等
-            if (a.mcpRegistry().connectingCount() > 0 && !listener.awaitMcpReady(mcpWaitSeconds())) {
-                System.err.println("⚠ MCP 连接等待超时（" + mcpWaitSeconds() + "s），工具可能缺席，继续执行。");
+            long mcpWait = mcpWaitSeconds();
+            if (a.mcpRegistry().connectingCount() > 0 && !listener.awaitMcpReady(mcpWait)) {
+                System.err.println("⚠ MCP 连接等待超时（" + mcpWait + "s），工具可能缺席，继续执行。");
             }
             Disposable turn;
             try {
-                turn = a.agent().submit(prompt(args));
+                turn = a.agent().submit(promptText);
             } catch (RuntimeException e) {   // submit 同步段会抛且无外层 catch（spec 事实/评审修订）
                 System.err.println("✗ 提交失败：" + e);
                 return 1;
             }
             listener.bindTurn(turn);
-            if (!listener.awaitDone(maxSeconds())) {   // 总硬顶：空闲超时只杀静默流（spec 事实 #9）
+            long maxWait = maxSeconds();   // 总硬顶：空闲超时只杀静默流（spec 事实 #9）
+            if (!listener.awaitDone(maxWait)) {
                 turn.dispose();
-                System.err.println("✗ headless 回合超时（CODETUI_HEADLESS_MAX_SECONDS=" + maxSeconds() + "s）。");
+                System.err.println("✗ headless 回合超时（CODETUI_HEADLESS_MAX_SECONDS=" + maxWait + "s）。");
                 return 1;
             }
             String reply = listener.planText() != null ? listener.planText() : listener.finalReply();
@@ -76,16 +79,48 @@ public final class HeadlessRunner {
         }
     }
 
-    static String prompt(String[] args) {
+    /**
+     * 解析提示词：{@code headlessPrompt} 只解析一次（run 的 submit 用同一份，勿再调 {@code prompt(args)} 二次解析）；
+     * {@code "-"} 哨兵读全 stdin。
+     *
+     * <p><b>读 stdin 绝不 close</b>：{@code System.in} 是进程级单例、不归本次读取所有——真机冒烟的纪律是
+     * 同 JVM 直调 {@code run()} 多次（HeadlessSmokeTest 链式两步），第一次就把流关了，第二次 {@code -p -}
+     * 必抛 Stream closed。读尽即止，关闭留给 JVM。
+     *
+     * <p><b>stdin 空白与解析非法同路</b>：{@code echo "" | codetui -p -} 若照常 submit 空串，
+     * 脚本拿到的是模型侧 400 而非「提示词为空」——与 {@code headlessPrompt} 拒绝 {@code -p "  "} 对称。
+     * 读取失败（IOException）包装 ISE 一并交给 run 的同一段 catch（stderr + 退出 1）。
+     */
+    static String resolvePrompt(String[] args) {
         String spec = CodeTuiApplication.headlessPrompt(args);
         if (!"-".equals(spec)) {
             return spec;
         }
-        try (var in = System.in) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        String text;
+        try {
+            text = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("读取 stdin 失败", e);
         }
+        if (text.isBlank()) {
+            throw new IllegalArgumentException("-p 从 stdin 读到的提示词为空。");
+        }
+        return text;
+    }
+
+    /**
+     * 开场会话提示（stderr）：恢复 → 报会话 id；{@code -c} 但无可恢复 → <b>必须明说已开新会话</b>——
+     * 脚本链式调用默认上下文在延续，静默新开会丢前文且无任何征兆（TUI 同分支有同款提示）；
+     * 默认启动 → null（不打扰）。
+     */
+    static String resumeNotice(boolean resumed, boolean wantContinue, String sessionId) {
+        if (resumed) {
+            return "（已恢复会话 " + sessionId + "，历史进入上下文。）";
+        }
+        if (wantContinue) {
+            return "（没有可恢复的会话，已开始新会话。）";
+        }
+        return null;
     }
 
     static long mcpWaitSeconds() {
