@@ -89,8 +89,13 @@ final class Theme {
     static final Style DIFF_NO_DEL = Style.create().fg(Color.indexed(210)).bg(DEL_BG);   // 删除行号=浅红
     static final Style DIFF_NO_CTX = Style.create().fg(GRAY_MUTED);                      // 上下文行号=次要灰
     static final Style DIFF_TRUNC  = Style.create().fg(GRAY_MUTED);
+    // /diff 的原始行（Kind.DIFF，pushRawLines 通道）：+绿/-红 仅前景单样式。前景与上面 diff
+    // 行号列同源（114/210，别新造色值），刻意不铺整行底色——那套色带属于 edit/write 的
+    // 结构化 diff 块，原始行混用同一形态会让人误以为带真实行号。
+    static final Style DIFF_RAW_ADD = Style.create().fg(Color.indexed(114));   // + 行=浅绿（同 DIFF_NO_ADD 前景）
+    static final Style DIFF_RAW_DEL = Style.create().fg(Color.indexed(210));   // - 行=浅红（同 DIFF_NO_DEL 前景）
 
-    /** 把一条已下沉行的类型映射到样式；{@code ASSISTANT} 返回 null（用默认色，正文最易读）。 */
+    /** 把一条已下沉行的类型映射到样式；{@code ASSISTANT} 与 {@code DIFF} 返回 null——前者用默认色（正文最易读），后者的 +绿/-红 由 {@code ScrollbackPrinter} 按行前缀覆盖（Theme 是纯调色板，不放行为）。 */
     static Style styleFor(OutputLine.Kind kind) {
         return switch (kind) {
             case USER -> USER;
@@ -104,6 +109,7 @@ final class Theme {
             case SUBAGENT_START -> RUNNING;   // ▸ Task(...) 起始：青色，醒目区分委派
             case SUBAGENT_TOOL -> TOOL;       // 内部工具行：与主流工具同为淡黄
             case SUBAGENT_END -> INFO_LINE;   // 结论行：灰白
+            case DIFF -> null;   // DIFF 基色由 ScrollbackPrinter 按行前缀覆盖（Theme 是纯调色板，不放行为）
         };
     }
 }

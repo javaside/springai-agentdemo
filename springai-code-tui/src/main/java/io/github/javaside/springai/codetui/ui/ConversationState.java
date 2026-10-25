@@ -76,7 +76,7 @@ public final class ConversationState implements AgentListener, UiChangeSource {
      */
     public record OutputLine(String text, Kind kind, String toolName, String raw) {
         public enum Kind { USER, ASSISTANT, TOOL_START, TOOL_OK, TOOL_FAIL, TODO, ERROR, INFO,
-                           SUBAGENT_START, SUBAGENT_TOOL, SUBAGENT_END }
+                           SUBAGENT_START, SUBAGENT_TOOL, SUBAGENT_END, DIFF }
 
         /** 普通行（无工具元数据）。 */
         public OutputLine(String text, Kind kind) {
@@ -283,6 +283,24 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         Change change;
         synchronized (this) {
             pending.add(new OutputLine(text, OutputLine.Kind.INFO));
+            change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
+        }
+        publish(change);
+    }
+
+    /**
+     * UI 主动输出通道（/diff 专用）：锁内逐行入 pending、锁外一次 publish——同 {@link #pushInfo} 的并发契约，
+     * 但不受 {@code acceptingTurnId} 门控（它管的是模型流的迟到丢弃，这里是 UI 自己的输出）。
+     */
+    public void pushRawLines(List<String> lines, OutputLine.Kind kind) {
+        if (lines.isEmpty()) {
+            return;
+        }
+        Change change;
+        synchronized (this) {
+            for (String line : lines) {
+                pending.add(new OutputLine(line, kind));
+            }
             change = changed(UiDirty.OUTPUT | UiDirty.VIEW);
         }
         publish(change);
