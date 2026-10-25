@@ -395,6 +395,8 @@ public class CodeTuiApplication {
 
                 选项：
                   -c, --continue                  恢复最近一次会话（按会话文件最后修改时间选取）
+                   -p <提示词>                     非交互模式：跑一个回合，stdout 只输出最终回复（-p - 从 stdin 读）
+                   --output-last-message <文件>    （-p 模式）最终回复同时写入该文件
                   --resume <会话id前缀>            恢复指定会话（id 前缀唯一即可；与 -c 互斥）
                   --permission-mode <模式>        起始权限档位：default / acceptEdits / plan
                                                   （也接受 --permission-mode=plan 写法；优先级低于
@@ -434,6 +436,57 @@ public class CodeTuiApplication {
             }
             if (a.startsWith("--resume=")) {
                 return a.substring("--resume=".length());
+            }
+        }
+        return null;
+    }
+
+    /** -p 是否出现（main 在会话选择后据此分叉进 headless）。 */
+    static boolean hasPrintFlag(String[] args) {
+        return java.util.Arrays.asList(args).contains("-p");
+    }
+
+    /**
+     * 提取 {@code -p} 的提示词：null=未给；{@code "-"}=stdin 哨兵（由 Runner 读全）；否则原文。
+     * 非法（尾部缺值 / 下一参以 - 开头且非 - 本身 / 空白）抛 IllegalArgumentException——main 捕获后
+     * stderr + 退出 1。与 {@link #resumeFlagValue} 的差异：{@code -} 本身在此是合法值（stdin），
+     * 不能照抄「一律当选项」的判定。public：headless 包生产消费（非为测试放宽）。
+     */
+    public static String headlessPrompt(String[] args) {
+        for (int i = 0; i < args.length; i++) {
+            if (!"-p".equals(args[i])) {
+                continue;
+            }
+            if (i + 1 >= args.length) {
+                throw new IllegalArgumentException("-p 缺少提示词参数（长文本可用 -p - 从 stdin 读取）。");
+            }
+            String next = args[i + 1];
+            if (!"-".equals(next) && next.startsWith("-")) {
+                throw new IllegalArgumentException(
+                        "-p 后面跟的是另一个选项（" + next + "）；长提示词可用 -p - 从 stdin 读取。");
+            }
+            if (!"-".equals(next) && next.isBlank()) {
+                throw new IllegalArgumentException("-p 提示词为空。");
+            }
+            return next;
+        }
+        return null;
+    }
+
+    /** 提取 {@code --output-last-message <路径>} / {@code =路径}；未给或缺值返回 null（缺值 WARN 不算失败）。public：headless 包生产消费。 */
+    public static String outputLastMessagePath(String[] args) {
+        for (int i = 0; i < args.length; i++) {
+            String a = args[i];
+            if (a.equals("--output-last-message")) {
+                if (i + 1 >= args.length || args[i + 1].startsWith("-")) {
+                    log.warn("--output-last-message 缺少文件路径参数，忽略。");
+                    return null;
+                }
+                return args[i + 1];
+            }
+            if (a.startsWith("--output-last-message=")) {
+                String v = a.substring("--output-last-message=".length());
+                return v.isBlank() ? null : v;
             }
         }
         return null;
