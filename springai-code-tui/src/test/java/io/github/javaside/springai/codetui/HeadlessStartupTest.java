@@ -36,5 +36,10 @@ class HeadlessStartupTest {
         assertNull(CodeTuiApplication.outputLastMessagePath(new String[]{"-p", "x"}));
         assertNull(CodeTuiApplication.outputLastMessagePath(new String[]{"--output-last-message"}),
                 "尾部缺值按未给处理（headless 下 stdout 仍有回复，不算失败）");
+        assertNull(CodeTuiApplication.outputLastMessagePath(
+                        new String[]{"--output-last-message", "--permission-mode"}),
+                "下一参以 - 开头 → 当缺值（选项不得被当成输出路径）");
+        assertNull(CodeTuiApplication.outputLastMessagePath(new String[]{"--output-last-message="}),
+                "= 后空值按未给处理");
     }
 }
