@@ -4,7 +4,7 @@
 > 面向使用者的说明在 [README](../README.md) 与 [docs/guide/](guide/)；本文只讲实现。
 >
 > 类名省略公共前缀 `io.github.javaside.springai.codetui`；`agent.` / `ui.` / `agent.permission.` /
-> `agent.media.` / `agent.background.` / `agent.thinking.` 为子包。标 *(lib)* 的来自
+> `agent.media.` / `agent.background.` / `agent.thinking.` / `agent.hooks.` 为子包。标 *(lib)* 的来自
 > `org.springaicommunity:spring-ai-agent-utils`。
 
 ## 速查表
@@ -26,6 +26,7 @@
 | 会话持久化 / `-c` | `FileSessionRepository` | `SessionEvents`、`ui.HistoryReplay` | [7](#7-会话持久化与恢复) |
 | 会话管理 /resume /fork | `CodeTuiView.openSessionsPanel` | `SessionCatalog`、`CodingAgent.switchContext`、`FileSessionRepository.fork` | [7](#7-会话持久化与恢复) |
 | 工具体系 | `AgentTools.build` 装饰循环 | `PermissionCallback` → `ToolEventCallback` → `MediaExternalizingCallback` | [8](#8-工具体系) |
+| 生命周期钩子 /hooks | `CodeTuiView.openHooksPanel` | `agent.hooks.HookRegistry`（信任态可运行期翻转） | [8](#8-工具体系) |
 | 权限层 | `PermissionCallback.call` | `permission.PermissionEngine` | [9](#9-权限层) |
 | MCP | `McpRegistry.init` | `McpConfigLoader`、`McpClientManager` | [10](#10-mcp) |
 | 技能 / `/skill` | `ReloadableSkillTool` | `SkillCatalog` | [11](#11-技能) |
@@ -362,6 +363,7 @@ Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改
 | `/skills` | `printSkills()` | 无 |
 | `/reload` | `reloadSkills()`（技能 + MCP 配置，后者仅空闲） | MCP 部分忙碌时跳过并提示 |
 | `/mcp` | `openMcpPicker()`（面板内 `r` 键 = `reloadMcpConfig()`） | 仅空闲 |
+| `/hooks` | `openHooksPanel()`（按事件分组列表；`t` 信任项目层即时生效） | 无（只读列表 + 信任翻转，不摘工具不关连接，任何时候可开，同 `/tasks`） |
 | `/permissions` | `printPermissions()` + `openPermsPanel()` | 无 |
 | `/init` | 固定提示词 dispatch/enqueue（生成/改进项目级 AGENTS.md：已存在则通读后改进不整篇重写、明说重启后生效） | 忙时排队（`busy()` 闸门，同 `/continue`） |
 | `/review` | 非 git 预检（`GitSnapshot.isGitRepo`，一行 notice 拒绝）+ 固定提示词（四维度按严重程度只读审查，未跟踪文件也看不改） | 忙时排队（另有非 git 预检） |
@@ -378,7 +380,7 @@ Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改
 
 ### 面板抽象：两套，边界清楚
 
-**本地选择器**（`/model`、思考设置、`/skill`、`/mcp`、`/permissions`、`/tasks`）——纯 UI 态，
+**本地选择器**（`/model`、思考设置、`/skill`、`/mcp`、`/hooks`、`/permissions`、`/tasks`）——纯 UI 态，
 统一四件套：一个 `boolean picking*` 字段 + `render()` 里一行 `scope` + `onInputKey` 里一行前置分派
 （键处理器**始终返回 HANDLED**，屏蔽全部文本编辑）+ `statusLine()` 里一行。
 共享约定：`clampIndex` 夹下标、↑↓ 移动、`1-9` **只移高亮不隐式确认**、Esc 关闭、空列表直接 return
@@ -547,7 +549,7 @@ sessionExists / forkSession / deleteSession / sessionMessages）。`FileSessionR
 
 ## 8. 工具体系
 
-装配入口 `AgentTools.build`，产物 `AgentRuntime`（16 字段 record，`client()` = `clients.get(activeProviderId)`）。
+装配入口 `AgentTools.build`，产物 `AgentRuntime`（22 字段 record，`client()` = `clients.get(activeProviderId)`）。
 
 ### 8.1 内置工具清单
 
@@ -592,6 +594,33 @@ PermissionCallback( ToolEventCallback( MediaExternalizingCallback( 真实工具 
 `Task` / `ParallelTasks` / `TaskOutput` / `ListTasks` / `ExitPlanMode` / 记忆工具**只包两层**
 （返回值是纯文本，无媒体可外置）；包 `PermissionCallback` 是为了「所有工具走同一条链」，
 虽然它们类别都是 INTERNAL 恒放行。
+
+### 8.3 生命周期钩子（hooks）
+
+`agent.hooks` 6 类：`HookDefinition`、`HookEvent`（配置键 `PreToolUse`/`PostToolUse`/`Stop`/
+`SessionStart`）、`HookSource`、`HookConfigLoader`、`HookRegistry`、`HookExecutor`。两层 hooks.json
+（用户层 `~/.codetui/` + 项目层 `<root>/.codetui/`）**concat 合并**：同事件用户层在前、全部按序执行
+（无名字可覆盖）；文件缺失/JSON 非法/缺 command/matcher 非正则 → WARN 跳过该文件或该条，绝不抛。
+
+- **四事件语义**：Pre 在权限放行后同步跑，**exit 2 = 拦截**（stderr 截 2000 回给模型，UI 呈现
+  started→fail；非 2 失败 WARN 放行）；Post 取 exit 0 且非空 stdout（截 2000）以
+  `[PostToolUse 钩子输出]` 段追加进工具结果（在 `onToolFinished` **前**——UI 与模型都可见；失败
+  不追加、经 `onHookNotice` 回执一行）；Stop 在 `handleComplete` 里**异步**提交（专用单线程 daemon
+  executor，不阻塞 reactive 线程）；SessionStart 在 `assemble` 里同步跑（最坏 60s×N 拖首屏）。
+  执行统一 `sh -c command`、cwd=root、stdin 喂 JSON payload、超时 `destroyForcibly`，**永不抛**。
+- **超时**默认 60 钳 [1,120]（<1 回退默认，>120 截到 120）：上界刻意远小于流空闲默认 300s——钩子
+  在工具线程同步静默，逼近空闲判定会自造「流重试→工具重跑→钩子再跑」循环。
+- **信任模型**：项目层 hooks.json 的 sha256 记在 `~/.codetui/hooks-trust.json`（用户空间、按项目根
+  绝对路径）；内容任何变更即失信任（下次启动 hash 失配 → 未信任，四事件全不跑）。`HookRegistry`
+  是**活单实例**（build 第 8 参与 `wireHooks`→`bindHooks` 共享同一份），信任态 volatile——/hooks
+  面板 `t` 原子写信任文件 + 就地翻转，对装饰链**即时生效**；文件 mtime 晚于信任时刻另有 ⚠ 复查提示。
+- **挂载点**：Pre/Post 挂 `ToolEventCallback` 第 4 可选参（null=停用），`AgentTools` 内 **7 处构造点**
+  （装饰循环/Task/ParallelTasks/TaskOutput/ListTasks/记忆/ExitPlanMode）全传；子 agent 与后台任务
+  同样触发（payload 带 `taskId`/`turnId=-1` 供钩子自辨来源，引擎不筛来源）。
+- **MCP 工具不挂钩**（非目标）：`McpRegistry.decorate` 维持 2 参构造（hooks=null），matcher 写
+  `mcp__` 前缀永远等不到——黑名单场景对 MCP 价值低（权限层已对 UNKNOWN 兜底 ASK/DENY）。
+- **残余风险**：hash 信任只防「信任后被改」，防不住 agent 自写信任文件（无沙箱既定立场，跨会话
+  持久化执行向量，spec 已声明接受），见 `docs/superpowers/specs/2026-10-25-hooks-design.md`。
 
 ---
 
@@ -1305,11 +1334,12 @@ OSC 0/2 双发是因为不同终端认的不是同一个。`sanitize` 剥掉全�
 ├── model.json              上次用的 provider + model
 ├── thinking.json           每模型的思考档位
 ├── permissions.json        项目级权限规则（只能收紧）
+├── hooks.json              项目层生命周期钩子（未信任不执行，见 8.3）
 └── mcp.json                项目级 MCP 配置
 ```
 
-用户级同名文件在 `~/.codetui/` 下（`permissions.json`、`mcp.json`、`skills/`、`AGENTS.md`、
-`config.env`）。
+用户级同名文件在 `~/.codetui/` 下（`permissions.json`、`mcp.json`、`hooks.json`、`skills/`、
+`AGENTS.md`、`config.env`），另有仅存用户空间的 `hooks-trust.json`（项目层钩子信任记录，按项目绝对路径）。
 
 
 

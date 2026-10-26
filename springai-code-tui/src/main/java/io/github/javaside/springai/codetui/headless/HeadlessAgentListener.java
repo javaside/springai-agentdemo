@@ -184,6 +184,11 @@ public final class HeadlessAgentListener implements AgentListener {
         err.println("（会话压缩失败：" + message + "）");
     }
 
+    /** 钩子回执走 stderr（stdout 通道由 Runner 独占——spec：stdout 只有最终回复）。 */
+    @Override public synchronized void onHookNotice(String message) {
+        err.println(message);
+    }
+
     /** 工具开始=上一段收口；段文本先打 stderr（spec：中间段全部进 stderr），再打工具行。 */
     private void sealSegment() {
         String s = currentSegment.toString();

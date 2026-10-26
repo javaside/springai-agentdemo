@@ -31,6 +31,8 @@ import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
 import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
 import io.github.javaside.springai.codetui.agent.goal.GoalManager;
 import io.github.javaside.springai.codetui.agent.goal.GoalTurnMaterial;
+import io.github.javaside.springai.codetui.agent.hooks.HookEvent;
+import io.github.javaside.springai.codetui.agent.hooks.HookRegistry;
 import io.github.javaside.springai.codetui.agent.llm.ModelOption;
 import io.github.javaside.springai.codetui.agent.llm.RetryingStreamChatModel;
 import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
@@ -62,6 +64,7 @@ import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
+import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -138,6 +141,12 @@ public final class CodingAgent implements SubmitHandler {
      * /clear 时经此清空快照与计数；volatile 同 {@link #goalManager} 纪律：装配期一次性写入，之后只读。
      */
     private volatile io.github.javaside.springai.codetui.agent.tools.TodoStaleReminder todoReminder;
+    /**
+     * 生命周期钩子注册表（可空：装配期 null，{@code AgentTools.wireHooks} 后有值；Stop 提交用，
+     * Pre/Post 在装饰链的 ToolEventCallback 里、不经本字段）。volatile 同 {@link #todoReminder} 纪律：
+     * 装配期一次性写入，之后只读——registry 自身的信任态才是运行期可变的那个 volatile。
+     */
+    private volatile HookRegistry hookRegistry;
     /** 系统提示词估算 token（装配期快照，每回合固定重发）；contextStats() 分类展示用，单-client 桩路径为 0。 */
     private final long systemPromptTokens;
     private volatile String model = MODELS.get(0).id();   // 运行时可经 /model 切换，对后续回合生效
@@ -535,6 +544,9 @@ public final class CodingAgent implements SubmitHandler {
         // 调用方（与 client==null 的 IllegalStateException 一处），不会变成 error 信号经 doOnError 处理，
         // 也就绝不会与 handleErrorWithRetryPrefix 双发 listener.onError。别为「优雅」把它挪进 defer。
         ModelCapabilities capabilities = capabilitiesSnapshot();
+        // 会话 id 快照：defer 体内（reactive 线程）读 volatile sessionId，而 /clear 在 UI 线程换 id——
+        // 与 handleErrorWithRetryPrefix 等处的快照纪律对齐，本回合 toolContext 与记忆键取同一 id、不撕裂。
+        String sidSnapshot = sessionId;
         String effectiveOutbound = effectiveText;   // 重放表达式恒从 submit 闭包原始值重建（composeResumeUser 唯一输入）
         // 组装/订阅整体移入 defer：续跑重订阅 = 每轮经 defer 重建 spec（同一 chatClientResponse Flux 实例二次
         // 订阅抛 IllegalStateException: No StreamAdvisors——defer 内重建是重订阅安全的唯一形态，V1 实证）。
@@ -579,9 +591,10 @@ public final class CodingAgent implements SubmitHandler {
                             .param(AgentTools.PERMISSION_MODE_KEY, PermissionModePrompt.of(permissionMode())))
                     .toolContext(Map.of(
                             "turnId", turnId,
+                            ToolEventCallback.SESSION_ID_KEY, sidSnapshot,
                             MediaExternalizingCallback.CAPABILITIES_KEY, capabilities))   // 冻结「发起本回合的模型」能力
                     // 会话记忆键：SessionMemoryAdvisor 按此解析/自动创建会话（值即 chat_memory_conversation_id）
-                    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))
+                    .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sidSnapshot))
                     .stream().chatClientResponse();
         })
                 // 阻塞准备段与 advisor 链不跑在 parallel 调度器；位置必须在 defer 与 retryWhen 之间（覆盖重订阅）。
@@ -1314,6 +1327,16 @@ public final class CodingAgent implements SubmitHandler {
         this.todoReminder = reminder;
     }
 
+    /**
+     * 装配后由 {@code AgentTools.wireHooks} 绑定 runtime 里那份钩子注册表（两段式 bind，
+     * 镜像 {@link #bindTodoReminder}：跨包直调包私有方法编译不过）。<b>必须传 runtime 那一份</b>——
+     * 装饰链 7 处 {@code ToolEventCallback}（Pre/Post）用的是同一实例，另建一个等于信任翻转
+     * 只对 Stop 或只对 Pre/Post 生效。null 合法（桩路径/未装配，Stop 提交 null 守卫降级）。
+     */
+    void bindHooks(HookRegistry registry) {
+        this.hookRegistry = registry;
+    }
+
     @Override
     public GoalManager goal() {
         return goalManager;
@@ -1327,6 +1350,16 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public GoalEvaluator goalEvaluator() {
         return goalEvaluator;
+    }
+
+    /**
+     * 钩子注册表（/hooks 面板取用，{@code mcpServers()} 同款门面）：未装配为 null，调用方自行降级。
+     * <b>与 {@link #bindHooks} 绑进来的是同一实例</b>——面板据此读钩子表/翻信任态，翻转对装饰链
+     * （Pre/Post）与本 agent 的 Stop 提交即时生效（registry 是活单实例，spec 定案）。
+     */
+    @Override
+    public HookRegistry hookRegistry() {
+        return hookRegistry;
     }
 
     /**
@@ -1507,7 +1540,13 @@ public final class CodingAgent implements SubmitHandler {
         }
     }
 
-    private void handleComplete(long turnId) {
+    /**
+     * 回合成功收尾（<b>包级可见便于测试直调，同 {@link #handleError} 先例</b>——CodingAgentStopHookTest
+     * 同包直调验证 Stop 异步提交）。顺序：插话补历史 → blank 清除 → goal 记账 → Stop 异步提交 →
+     * onTurnComplete。Stop 提交只入队不等待（reactive 线程不阻塞，spec 定案），回执可能晚于
+     * {@code onTurnComplete} 到达（通知型次序损失已接受）。
+     */
+    void handleComplete(long turnId) {
         persistInterjection();          // ⚠ 必须在 onTurnComplete 之前，见该方法注释
         // 最后一轮续跑成功后不再有 prepareResume：成功路径的 blank 伪影（FROM_TOOLS 轮 before() 落下的
         // 空 user）只能在这里清。onTurnComplete 之前完成，-c 恢复/压缩读取到的都是干净历史。
@@ -1516,7 +1555,19 @@ public final class CodingAgent implements SubmitHandler {
         if (goalManager != null) {
             goalManager.onTurnCompleted();   // 成功收场先于 UI 终态事件：goal 记账（errorStreak 清零）不被本轮渲染截断
         }
+        // Stop 钩子：异步提交（reactive 线程不阻塞——spec 定案）；registry null 降级。
+        // 回执经 onHookNotice，可能晚于 onTurnComplete 到达（通知型次序损失已接受）。
+        if (hookRegistry != null) {
+            hookRegistry.runNotifyAsync(HookEvent.STOP, this::fireHookNotice);
+        }
         listener.onTurnComplete(turnId);
+    }
+
+    /** 钩子回执出口（Stop 异步线程经它转发给 listener；包私有，{@code wireHooks} 侧同包可见）。 */
+    void fireHookNotice(String message) {
+        if (listener != null) {
+            listener.onHookNotice(message);
+        }
     }
 
     /**

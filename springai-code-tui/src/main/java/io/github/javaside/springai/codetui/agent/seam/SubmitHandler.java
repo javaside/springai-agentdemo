@@ -231,6 +231,14 @@ public interface SubmitHandler {
      */
     default McpRegistry.ReloadResult reloadMcp() { return null; }
 
+    // ── 生命周期钩子（/hooks 面板用；默认 null=未装配，桩/回显实现零改动） ──
+    /**
+     * 钩子注册表（{@code mcpServers()} 同款门面）：{@code /hooks} 面板经它读钩子表、翻项目层信任态。
+     * 未装配为 {@code null}，调用方自行降级；信任翻转对装饰链（Pre/Post）与 Stop 提交即时生效
+     * （registry 是活单实例，见 {@code HookRegistry}）。
+     */
+    default io.github.javaside.springai.codetui.agent.hooks.HookRegistry hookRegistry() { return null; }
+
     // ── 权限管理（/permissions 与 Shift+Tab 用；默认空实现，便于回显桩/测试桩省略） ──
     /** 当前权限模式（状态栏与面板显示）。默认非空，状态栏不必判 null。 */
     default PermissionMode permissionMode() { return PermissionMode.DEFAULT; }

@@ -1367,6 +1367,12 @@ public final class ConversationState implements AgentListener, UiChangeSource {
         publish(change);
     }
 
+    /** 钩子回执（Stop/SessionStart 通知、PostToolUse 失败）：一行 INFO 进 scrollback，不打断当前回合。 */
+    @Override
+    public void onHookNotice(String message) {
+        pushInfo(message);
+    }
+
     // ── 内部 ────────────────────────────────────────────────────────────
 
     /**

@@ -329,6 +329,8 @@ public final class CodeTuiView extends InlineApp {
     private int taskIndex;                                           // 任务面板高亮项下标
     private boolean taskExpanded;                                    // Enter 展开选中任务的结果正文
     private String taskPendingKill;                                  // 非 null = 终止确认态（待确认的 taskId）
+    private boolean pickingHooks;                                    // /hooks 钩子面板是否激活
+    private int hookIndex;                                           // 钩子面板高亮项下标
     // volatile：按键线程写、摘要 daemon 线程逐条回写前读——不加它 daemon 可能永远看不到「已关」
     private volatile boolean pickingSessions;           // /resume 会话面板是否激活
     private int sessionIndex;                          // 会话面板高亮项
@@ -405,6 +407,7 @@ public final class CodeTuiView extends InlineApp {
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
             new SlashCommand("/reload",  "重扫技能目录与 MCP 配置（SKILL.md / mcp.json 改动生效）"),
             new SlashCommand("/mcp",     "管理 MCP 服务器（启停 / r 重载配置）"),
+            new SlashCommand("/hooks",   "查看生命周期钩子（可信任项目层）"),
             new SlashCommand("/permissions", "查看权限模式与生效规则"),
             new SlashCommand("/init",   "分析项目并生成/改进 AGENTS.md（重启后生效）"),
             new SlashCommand("/review", "只读审查工作树改动（正确性/安全/测试/可维护性）"),
@@ -675,6 +678,7 @@ public final class CodeTuiView extends InlineApp {
                 scope(pickingMcp, mcpPickerChildren()),             // /mcp 管理面板
                 scope(pickingPerms, permsPanelChildren()),          // /permissions 规则面板（可删）
                 scope(pickingTasks, tasksPanelChildren()),          // /tasks 后台任务面板（可展开结果 / 终止）
+                scope(pickingHooks, hooksPanelChildren()),          // /hooks 钩子面板（只读 + t 信任项目层）
                 scope(pickingSessions, sessionsPanelChildren()),   // /resume 会话面板
                 scope(activeAsk != null, askChildren()),            // AskUserQuestion 作答面板
                 scope(activePermission != null, permissionChildren()),   // 权限审批面板
@@ -2139,6 +2143,7 @@ public final class CodeTuiView extends InlineApp {
         if (pickingMcp) return onMcpPickerKey(k);       // MCP 管理面板同理
         if (pickingPerms) return onPermsPanelKey(k);    // 权限规则面板同理
         if (pickingTasks) return onTasksPanelKey(k);    // 后台任务面板同理
+        if (pickingHooks) return onHooksPanelKey(k);    // 钩子面板同理（只读 + t 信任）
         if (pickingSessions) return onSessionsPanelKey(k); // 会话面板同理
         // 取消图片附件。⚠️ 不要改回 Ctrl+G：Chrome 的 Gemini 扩展把它注册成 OS 级全局热键，
         // 键在任何终端应用看到它之前就被抢走（用户实机撞车，按下去弹的是 Chrome 对话框）。
@@ -2632,6 +2637,13 @@ public final class CodeTuiView extends InlineApp {
             clearInput();
             printPermissions();
             openPermsPanel();
+            return;
+        }
+        if (cmd.equals("/hooks")) {             // 钩子面板：<b>任何时候可开</b>——只读列表 + t 翻信任位，
+            // 不像 /mcp 要空闲（不摘工具不关连接，没东西可撞）；「回合正忙时项目层钩子拦了什么」
+            // 恰是最想查看的时刻（同 /tasks 的理由）。
+            clearInput();
+            openHooksPanel();
             return;
         }
         if (cmd.equals("/tasks")) {             // 后台任务面板：<b>任何时候可开</b>（同 /permissions，不像 /mcp 要求空闲）
@@ -4313,6 +4325,79 @@ public final class CodeTuiView extends InlineApp {
     boolean pickingTasksForTest() { return pickingTasks; }
     String tasksStatusTextForTest() { return tasksStatusText(); }
 
+    // ── /hooks 钩子面板 ─────────────────────────────────────────────────
+    private void openHooksPanel() {
+        hookIndex = 0;
+        pickingHooks = true;
+    }
+
+    /** 键位：↑↓ 移动 · t 信任项目层（未信任时）· Esc 关闭；始终 HANDLED；空列表防除零。 */
+    private EventResult onHooksPanelKey(KeyEvent k) {
+        var registry = onSubmit.hookRegistry();
+        if (k.isCancel()) { pickingHooks = false; return EventResult.HANDLED; }
+        if (registry == null) return EventResult.HANDLED;
+        // t 分支在 n==0 早返回【之前】：即使运行期过滤后无可跑钩子（全部未信任/不匹配），
+        // 用户仍要能信任项目层——「能看到才能信任」是面板的存在理由
+        if ((k.isChar('t') || k.isChar('T')) && registry.projectLayerUntrusted()) {
+            registry.trustProjectLayer();
+            state.setNotice("已信任项目层 hooks.json（本会话即时生效；内容再改需重新信任）");
+            return EventResult.HANDLED;
+        }
+        int n = 0;
+        for (var event : io.github.javaside.springai.codetui.agent.hooks.HookEvent.values()) {
+            n += registry.allFor(event).size();   // 列表口：忽略信任过滤与 matcher
+        }
+        if (n == 0) return EventResult.HANDLED;
+        hookIndex = clampIndex(hookIndex, n);
+        if (k.code() == KeyCode.UP)   { hookIndex = (hookIndex - 1 + n) % n; return EventResult.HANDLED; }
+        if (k.code() == KeyCode.DOWN) { hookIndex = (hookIndex + 1) % n; return EventResult.HANDLED; }
+        return EventResult.HANDLED;
+    }
+
+    /** 按事件分组的钩子行（allFor 列表口——未信任的也列出并标记）+ mtime 可疑提示。 */
+    private Element[] hooksPanelChildren() {
+        if (!pickingHooks) return new Element[0];
+        if (activePermission != null || activePlan != null || activeAsk != null) return new Element[0];
+        var registry = onSubmit.hookRegistry();
+        List<Element> els = new ArrayList<>();
+        els.add(text("  ⚙ 钩子（↑↓ 选择 · t 信任项目层 · Esc 关闭）").style(PICK_TITLE));
+        if (registry == null) {
+            els.add(text("    （当前装配未启用钩子）可在 ~/.codetui/hooks.json 或 <root>/.codetui/hooks.json 配置。")
+                    .style(PICK_DESC));
+            return els.toArray(new Element[0]);
+        }
+        boolean any = false;
+        int idx = 0;
+        for (var event : io.github.javaside.springai.codetui.agent.hooks.HookEvent.values()) {
+            for (var h : registry.allFor(event)) {
+                any = true;
+                String untrusted = (h.source() == io.github.javaside.springai.codetui.agent.hooks.HookSource.PROJECT
+                        && registry.projectLayerUntrusted()) ? " · ⚠未信任（未执行）" : "";
+                String line = "  " + event.configKey() + " · " + h.command()
+                        + (h.matcher().isEmpty() ? "" : " · matcher=" + h.matcher())
+                        + " · " + h.timeoutSeconds() + "s · " + h.source() + untrusted;
+                els.add(text(line).style(idx == hookIndex ? PICK_SEL : PICK_DESC));
+                idx++;
+            }
+        }
+        if (!any) {
+            els.add(text("    （暂无钩子）在 ~/.codetui/hooks.json 或 <root>/.codetui/hooks.json 配置；"
+                    + "项目层首次使用需在此信任。").style(PICK_DESC));
+        }
+        String mtimeWarn = registry.projectFileMtimeNotice();
+        if (!mtimeWarn.isEmpty()) els.add(text("  " + mtimeWarn).style(PICK_DESC));
+        return els.toArray(new Element[0]);
+    }
+
+    String hooksStatusText() {
+        String notice = state.notice();
+        if (notice != null && !notice.isEmpty()) return notice + " · Esc 关闭";
+        return "⚙ 钩子 · ↑↓ 选择 · t 信任 · Esc 关闭";
+    }
+
+    // 测试钩子
+    boolean pickingHooksForTest() { return pickingHooks; }
+
     // ── /resume 会话面板 ────────────────────────────────────────────────
 
     /** 打开面板：scan（瞬时）立即显示，摘要后台补齐（192 个文件的流式解析不占按键线程，模式同 MCP 后台连接）。 */
@@ -4855,6 +4940,7 @@ public final class CodeTuiView extends InlineApp {
         if (activeAsk != null) return text(askStatusText()).style(THINK);
         if (pickingPerms) return text(permsStatusText()).style(THINK);
         if (pickingTasks) return text(tasksStatusText()).style(THINK);
+        if (pickingHooks) return text(hooksStatusText()).style(THINK);
         if (pickingSessions) return text(sessionsStatusText()).style(THINK);
         if (configuringThinking) return text("↑↓/kj 选择 · ←→/hl 调整 · Enter 保存 · Esc 放弃").style(THINK);
         if (pickingModel) {
