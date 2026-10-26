@@ -265,4 +265,10 @@ public interface AgentListener {
      * @param message 失败原因（已做 null 安全处理的字符串）
      */
     void onCompactionFailed(String message);
+
+    /**
+     * 通知型钩子（Stop/SessionStart）与 PostToolUse 失败的回执通道。默认空实现；
+     * 异步 Stop 的回执可能晚于 {@link #onTurnComplete} 到达（spec 定案）。
+     */
+    default void onHookNotice(String message) { }
 }

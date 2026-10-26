@@ -62,6 +62,7 @@ import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
+import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -579,6 +580,7 @@ public final class CodingAgent implements SubmitHandler {
                             .param(AgentTools.PERMISSION_MODE_KEY, PermissionModePrompt.of(permissionMode())))
                     .toolContext(Map.of(
                             "turnId", turnId,
+                            ToolEventCallback.SESSION_ID_KEY, sessionId,
                             MediaExternalizingCallback.CAPABILITIES_KEY, capabilities))   // 冻结「发起本回合的模型」能力
                     // 会话记忆键：SessionMemoryAdvisor 按此解析/自动创建会话（值即 chat_memory_conversation_id）
                     .advisors(a -> a.param(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, sessionId))

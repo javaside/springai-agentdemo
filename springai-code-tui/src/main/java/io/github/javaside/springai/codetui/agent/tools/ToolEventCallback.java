@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent.tools;
 
+import io.github.javaside.springai.codetui.agent.hooks.HookRegistry;
 import io.github.javaside.springai.codetui.agent.seam.AgentListener;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
@@ -25,6 +26,9 @@ public final class ToolEventCallback implements ToolCallback {
      */
     public static final String BACKGROUND_TASK_ID_KEY = "backgroundTaskId";
 
+    /** <p><b>内部类型</b>：升 public 仅为跨包装配，勿在 agent 包外依赖。 */
+    public static final String SESSION_ID_KEY = "sessionId";
+
     /** TodoWriteTool 的 todoEventHandler 只收 Todos、拿不到 turnId；用 ThreadLocal 把当前执行回合的
      *  turnId 传给同线程同步触发的 handler。 */
     private static final ThreadLocal<Long> CURRENT_TURN = ThreadLocal.withInitial(() -> -1L);
@@ -37,15 +41,22 @@ public final class ToolEventCallback implements ToolCallback {
     private final AgentListener listener;
     /** 可空：任务面板过期提醒（见 {@link TodoStaleReminder}）；null=停用，McpRegistry 等既有构造点维持原行为。 */
     private final TodoStaleReminder reminder;
+    private final HookRegistry hooks;   // 可空：null=停用（McpRegistry 等既有构造点维持原行为）
 
     public ToolEventCallback(ToolCallback delegate, AgentListener listener) {
         this(delegate, listener, null);
     }
 
     public ToolEventCallback(ToolCallback delegate, AgentListener listener, TodoStaleReminder reminder) {
+        this(delegate, listener, reminder, null);
+    }
+
+    public ToolEventCallback(ToolCallback delegate, AgentListener listener, TodoStaleReminder reminder,
+                             HookRegistry hooks) {
         this.delegate = delegate;
         this.listener = listener;
         this.reminder = reminder;
+        this.hooks = hooks;
     }
 
     @Override public ToolDefinition getToolDefinition() { return delegate.getToolDefinition(); }
@@ -58,13 +69,34 @@ public final class ToolEventCallback implements ToolCallback {
         String taskId = extractTaskId(toolContext);
         String name = delegate.getToolDefinition().name();
         listener.onToolStarted(turnId, taskId, name, toolInput);
+        // Pre 钩子：权限已在外层放行（ASK 先于 Pre——被拒调用不跑钩子，spec §7 对照）。
+        // 拦截呈现为 started→fail（与工具异常路径同构）——「运行中→失败带理由」是诚实呈现，
+        // 与权限 DENY 不发事件的纪律不同属有意选择。
+        if (hooks != null) {
+            HookRegistry.PreResult pre = hooks.runPre(name, toolInput,
+                    extractSessionId(toolContext), turnId, taskId);
+            if (pre.blocked()) {
+                listener.onToolFinished(turnId, taskId, name, pre.message(), false);
+                return pre.message();
+            }
+        }
         Long prevTurn = CURRENT_TURN.get();
         String prevTask = CURRENT_TASK.get();
         CURRENT_TURN.set(turnId);
         CURRENT_TASK.set(taskId);
         try {
             String out = (toolContext == null) ? delegate.call(toolInput) : delegate.call(toolInput, toolContext);
-            listener.onToolFinished(turnId, taskId, name, out, true);   // UI 只见原始输出
+            // Post 钩子：stdout 追加在 onToolFinished 之前——lint 输出 UI 与模型都可见
+            // （与 TodoStaleReminder 的「之后追加」方向相反，同为有意选择，见 spec §7）。
+            // 失败钩子经 onHookNotice 回执（spec 执行语义表「UI 一行提示」）。
+            if (hooks != null) {
+                String append = hooks.runPost(name, toolInput, out,
+                        extractSessionId(toolContext), turnId, taskId, listener::onHookNotice);
+                if (append != null) {
+                    out = out + append;
+                }
+            }
+            listener.onToolFinished(turnId, taskId, name, out, true);
             // 过期清单提醒追加在 onToolFinished 之后：模型看到过期状态，scrollback 不受污染。
             // 只管控制器级调用（taskId==null）——子 agent 内部 todo 不上面板，提醒无意义。
             // 异常路径不提醒：失败的调用没有「清单过期该更新」的证据。
@@ -89,6 +121,13 @@ public final class ToolEventCallback implements ToolCallback {
     static String extractTaskId(ToolContext ctx) {
         if (ctx == null) return null;
         Object v = ctx.getContext().get(TASK_ID_KEY);
+        return (v instanceof String s) ? s : null;
+    }
+
+    /** 包私有：Pre/Post 钩子 payload 需要 sessionId（CodingAgent.submit 的 toolContext 注入）。 */
+    static String extractSessionId(ToolContext ctx) {
+        if (ctx == null) return null;
+        Object v = ctx.getContext().get(SESSION_ID_KEY);
         return (v instanceof String s) ? s : null;
     }
 
