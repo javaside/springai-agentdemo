@@ -22,6 +22,7 @@ import io.github.javaside.springai.codetui.agent.interjection.Interjections;
 import io.github.javaside.springai.codetui.agent.goal.GoalEvaluationRunner;
 import io.github.javaside.springai.codetui.agent.goal.GoalEvaluator;
 import io.github.javaside.springai.codetui.agent.goal.GoalManager;
+import io.github.javaside.springai.codetui.agent.hooks.HookRegistry;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
 import io.github.javaside.springai.codetui.agent.media.ArtifactGc;
 import io.github.javaside.springai.codetui.agent.media.MediaArtifactStore;
@@ -400,24 +401,42 @@ public final class AgentTools {
     }
 
     /**
-     * 生产装配（全参）：与 6-arg 兼容重载的唯一差别是多第 7 参 {@code goalManager}。
+     * 向后兼容重载：hooks 未装配（{@link AgentRuntime#hookRegistry()} 为 null——装饰链 7 处构造点
+     * 传 null、Stop/SessionStart 降级不跑），其余同
+     * {@link #build(ProviderRegistry, Path, AgentListener, McpRegistry, PermissionEngine, StreamRetryConfig, GoalManager, HookRegistry)}
+     * 全参重载。旧调用点（测试为主）不破；生产装配只有 {@code CodeTuiApplication} 一处传真实例。
+     */
+    public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
+                                      McpRegistry mcpRegistry, PermissionEngine permissionEngine,
+                                      StreamRetryConfig retryConfig, GoalManager goalManager) {
+        return build(registry, root, listener, mcpRegistry, permissionEngine, retryConfig, goalManager, null);
+    }
+
+    /**
+     * 生产装配（全参）：与 7-arg 兼容重载的唯一差别是多第 8 参 {@code hooks}。
      *
      * <p><b>为什么 retryConfig 必须注入、而不是在 build 内读环境变量</b>：测试无法安全修改
      * {@code System.getenv}，而开发者本机真设了 {@code CODETUI_STREAM_RETRY} 会让链序断言随机红。
      * 注入重载让守卫测试逐档断言开关语义（off/l2 → 不包装直通，l1/all → 包 RetryingStreamChatModel）；
      * 默认重载走 {@link StreamRetryConfig#fromEnv()}（生产入口 {@code CodeTuiApplication} 调本
-     * 7-arg 重载即此路径）。
+     * 8-arg 重载即此路径）。
      *
      * @param retryConfig L1/L2 计费总闸（CODETUI_STREAM_RETRY：all/l1/l2/off），见 {@link StreamRetryConfig}
      * @param goalManager goal 循环状态机，<b>由调用方创建并传入</b>——build 不新建、只原样透传进
      *                    {@link AgentRuntime#goalManager()}，与 View goal 槽/CodingAgent（Task 9 的
      *                    bindGoal）共享同一实例，另建一个等于 UI 永远看不到真相（同 interjections 先例）。
-     *                    <b>null = goal 未装配</b>：兼容重载（5/6 参）一律传 null，runtime 其余组件照常，
+     *                    <b>null = goal 未装配</b>：兼容重载（5/6/7 参）一律传 null，runtime 其余组件照常，
      *                    只是没有 goal 循环；生产装配只有 {@code CodeTuiApplication} 一处传真实例。
+     * @param hooks       生命周期钩子注册表（活单实例，信任态可运行期翻转）。<b>由调用方创建并传入</b>，
+     *                    经 {@link AgentRuntime#hookRegistry()} 透传——同一实例既喂本方法装饰循环里
+     *                    7 处 {@link ToolEventCallback}（Pre/Post），也经 {@link #wireHooks} bind 给
+     *                    CodingAgent（Stop）；另建一个等于装饰链与 Stop 各查各表、信任翻转只对一边生效。
+     *                    <b>null = 钩子未装配</b>：兼容重载一律传 null，Pre/Post/Stop 全降级不跑。
      */
     public static AgentRuntime build(ProviderRegistry registry, Path root, AgentListener listener,
                                       McpRegistry mcpRegistry, PermissionEngine permissionEngine,
-                                      StreamRetryConfig retryConfig, GoalManager goalManager) {
+                                      StreamRetryConfig retryConfig, GoalManager goalManager,
+                                      HookRegistry hooks) {
         java.util.Objects.requireNonNull(permissionEngine, "permissionEngine 不可为 null：漏传等于全线无权限层");
         // 不设 allowedDirectory：沙箱是库的 opt-in 特性，空列表即放行任何路径
         // （见 FileSystemTools.validateAllowedAccess：allowedDirectories.isEmpty() → 直接返回放行）。
@@ -555,7 +574,7 @@ public final class AgentTools {
         for (int i = 0; i < all.size(); i++) {
             decorated[i] = new PermissionCallback(new ToolEventCallback(
                     new MediaExternalizingCallback(all.get(i), mediaStore, mediaHandler, root, visionBudget),
-                    listener, todoReminder),
+                    listener, todoReminder, hooks),
                     permissionEngine, listener);
             if (all.get(i) == reloadableSkill) {
                 decoratedSkillTool = decorated[i];   // 记住 Skill 代理装饰后的实例（供手动 /skill 复用）
@@ -591,7 +610,7 @@ public final class AgentTools {
         // Task / ParallelTasks 也包一层：它们类别是 INTERNAL、恒放行，包一层零行为差异，
         // 只为「所有工具走同一条链」——否则以后给它们加类别时会漏掉这两个。
         ToolCallback decoratedTaskTool =
-                new PermissionCallback(new ToolEventCallback(taskTool, listener, todoReminder),
+                new PermissionCallback(new ToolEventCallback(taskTool, listener, todoReminder, hooks),
                         permissionEngine, listener);
 
         // 批量 ParallelTasks 工具：并发执行多个独立子 agent。parentTurnId 在工具线程（fan-out 前）从 ThreadLocal 取，
@@ -601,7 +620,7 @@ public final class AgentTools {
                         subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()),
                 subagentRunner::runInBackground);
         ToolCallback decoratedParallelTool = new PermissionCallback(
-                new ToolEventCallback(parallelTool, listener, todoReminder), permissionEngine, listener);
+                new ToolEventCallback(parallelTool, listener, todoReminder, hooks), permissionEngine, listener);
 
         // 插话队列：UI 忙时投递，ChatModel 装饰层在下一次调用时取走随 prompt 送达。
         // 所有 provider 共用一个实例——插话与用哪家模型无关，切模型不该把没送出去的话弄丢。
@@ -618,16 +637,16 @@ public final class AgentTools {
                 new ToolEventCallback(
                         BackgroundTaskTool.create(backgroundRegistry, backgroundResults,
                                 resolveTaskOutputTimeout(), () -> interjections.pendingCount() > 0),
-                        listener, todoReminder),
+                        listener, todoReminder, hooks),
                 permissionEngine, listener);
 
         // ListTasks：同样<b>仅主 agent</b>——理由与 TaskOutput 逐字相同（子 agent 没有属于自己的后台任务）。
         ToolCallback decoratedListTasksTool = new PermissionCallback(
-                new ToolEventCallback(BackgroundTaskListTool.create(backgroundRegistry), listener, todoReminder),
+                new ToolEventCallback(BackgroundTaskListTool.create(backgroundRegistry), listener, todoReminder, hooks),
                 permissionEngine, listener);
 
         // 长期记忆工具：仅主 agent 拥有——不进 decoratedList，避免子 agent 写长期记忆。
-        ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine, todoReminder);
+        ToolCallback[] memoryDecorated = buildMemoryTools(root, listener, permissionEngine, todoReminder, hooks);
 
         // ExitPlanMode：计划模式的唯一出口。同样<b>仅主 agent</b>——不进 decoratedList（照记忆工具的既有做法）：
         // 子 agent 没有自己的模式（继承主会话），提交计划只属于主 agent；给了它反而会让子 agent 替用户切模式。
@@ -636,7 +655,7 @@ public final class AgentTools {
         // 不包 MediaExternalizingCallback：返回值是纯文本，没有媒体可外置（与 Task/ParallelTasks 同）。
         PlanApprovalBridge planBridge = new PlanApprovalBridge(listener, permissionEngine::setMode);
         ToolCallback decoratedExitPlanTool = new PermissionCallback(
-                new ToolEventCallback(PlanApprovalBridge.exitPlanModeTool(planBridge), listener, todoReminder),
+                new ToolEventCallback(PlanApprovalBridge.exitPlanModeTool(planBridge), listener, todoReminder, hooks),
                 permissionEngine, listener);
 
         // 主 agent 工具集 = 原装饰工具 + 记忆工具（仅主 agent）+ ExitPlanMode（仅主 agent）+ Task + ParallelTasks + TaskOutput + ListTasks
@@ -808,7 +827,7 @@ public final class AgentTools {
         return new AgentRuntime(clients, registry.active().id(), sessionService, sessionRepository,
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
-                backgroundRegistry, backgroundResults, interjections, goalManager,
+                backgroundRegistry, backgroundResults, interjections, goalManager, hooks,
                 systemPromptTokens, bridge, quotaBridge, todoReminder);
     }
 
@@ -1140,6 +1159,10 @@ public final class AgentTools {
      * @param goalManager         goal 循环状态机，与 View goal 槽/CodingAgent.bindGoal 共享同一实例——
      *                            另建一个等于 UI 永远看不到真相（照 interjections 字段先例措辞）。
      *                            <b>null = goal 未装配</b>（兼容重载路径）：runtime 其余组件照常，只是没有 goal 循环
+     * @param hookRegistry        生命周期钩子注册表（活单实例），与 7 处 {@code ToolEventCallback} 装饰点及
+     *                            {@code wireHooks} bind 给 CodingAgent 的 Stop 提交共享同一实例——另建一个
+     *                            等于 Pre/Post 与 Stop 各查各表、信任翻转只对一边生效。
+     *                            <b>null = 钩子未装配</b>（兼容重载路径）：Pre/Post/Stop 全降级不跑
      * @param backgroundRegistry  后台任务注册表（进程内、不落盘）；{@code TaskOutput} / {@code ListTasks} / {@code /tasks} 面板共用
      * @param backgroundResults   后台结果限幅存储；超长正文落 artifacts 并在返回文本里给出路径
      * @param systemPromptTokens  装配期一次性估算的系统提示词 token 数，供 {@code /context} 与状态栏用同一分母
@@ -1167,6 +1190,7 @@ public final class AgentTools {
                                TaskResultStore backgroundResults,
                                Interjections interjections,
                                GoalManager goalManager,
+                               HookRegistry hookRegistry,
                                long systemPromptTokens,
                                L1ReporterBridge bridge,
                                L1QuotaBridge quotaBridge,
@@ -1214,6 +1238,17 @@ public final class AgentTools {
      */
     public static void wireTodoReminder(AgentRuntime rt, CodingAgent agent) {
         agent.bindTodoReminder(rt.todoReminder());
+    }
+
+    /**
+     * 把 {@link AgentRuntime#hookRegistry()} 绑到 {@code CodingAgent}（Stop 钩子的两段式接线，
+     * 镜像 {@link #wireTodoReminder} 的形状）：{@code CodingAgent.bindHooks} 是<b>包私有</b>方法，
+     * 跨包直调编译失败，须经本方法在 agent 包内转接。
+     * <b>必须传 runtime 那一份</b>——装饰链 7 处 {@code ToolEventCallback}（Pre/Post）用的是同一实例，
+     * 另建一个等于信任翻转（/hooks 面板 t 键）只对 Stop 或只对 Pre/Post 生效。
+     */
+    public static void wireHooks(AgentRuntime rt, CodingAgent agent) {
+        agent.bindHooks(rt.hookRegistry());
     }
 
     /**
@@ -1294,21 +1329,32 @@ public final class AgentTools {
      * {@code deny: MemoryDelete(*)} 时它得真管用。
      */
     static ToolCallback[] buildMemoryTools(Path root, AgentListener listener, PermissionEngine engine) {
-        return buildMemoryTools(root, listener, engine, null);
+        return buildMemoryTools(root, listener, engine, null, null);
     }
 
     /**
-     * 完整形状：{@code reminder} 参与装饰（null=停用，向后兼容重载走这里）。
-     * 记忆工具仅主 agent 使用，控制器级调用照常计数/提醒（MemoryView 这类「读记忆」也算工作进展）。
+     * 兼容重载：hooks 未装配（null=停用），其余同
+     * {@link #buildMemoryTools(Path, AgentListener, PermissionEngine, TodoStaleReminder, HookRegistry)}。
      */
     static ToolCallback[] buildMemoryTools(Path root, AgentListener listener, PermissionEngine engine,
                                            TodoStaleReminder reminder) {
+        return buildMemoryTools(root, listener, engine, reminder, null);
+    }
+
+    /**
+     * 完整形状：{@code reminder}/{@code hooks} 参与装饰（null=停用，向后兼容重载走这里）。
+     * 记忆工具仅主 agent 使用，控制器级调用照常计数/提醒（MemoryView 这类「读记忆」也算工作进展）；
+     * Pre/Post 钩子与其余 6 处装饰点共用 build 第 8 参那份 registry。
+     */
+    static ToolCallback[] buildMemoryTools(Path root, AgentListener listener, PermissionEngine engine,
+                                           TodoStaleReminder reminder, HookRegistry hooks) {
         Path dir = memoryDir(root);
         AutoMemoryTools memoryTools = AutoMemoryTools.builder().memoriesDir(dir).build();
         ToolCallback[] raw = ToolCallbacks.from(memoryTools);
         ToolCallback[] decorated = new ToolCallback[raw.length];
         for (int i = 0; i < raw.length; i++) {
-            decorated[i] = new PermissionCallback(new ToolEventCallback(raw[i], listener, reminder), engine, listener);
+            decorated[i] = new PermissionCallback(
+                    new ToolEventCallback(raw[i], listener, reminder, hooks), engine, listener);
         }
         return decorated;
     }

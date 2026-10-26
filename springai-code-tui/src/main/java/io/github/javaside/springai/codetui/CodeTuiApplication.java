@@ -175,9 +175,10 @@ public class CodeTuiApplication {
 
     /**
      * main 与 headless（-p）共用的公共装配段：provider 注册表 → 上次模型恢复 → 权限引擎
-     * （开场通告经 {@code notice}，TUI 落 scrollback / headless 走 stderr）→ MCP → goal 三件 →
-     * runtime/agent 构造与接线（wireGoal/wireTodoReminder 仅 {@code tuiMode}——headless 不接
-     * goal/todo 提醒线）。key 缺失与装配失败的处置见方法体内注记。
+     * （开场通告经 {@code notice}，TUI 落 scrollback / headless 走 stderr）→ 生命周期钩子
+     * （SessionStart 同步跑，两模式共用）→ MCP → goal 三件 → runtime/agent 构造与接线
+     * （wireGoal/wireTodoReminder 仅 {@code tuiMode}——headless 不接 goal/todo 提醒线；
+     * wireHooks 两模式都接——Stop 钩子不挑交互形态）。key 缺失与装配失败的处置见方法体内注记。
      *
      * <p><b>绝不 System.exit</b>：真机冒烟要能在同 JVM 里直调 run()，进程内退出会杀死它；
      * 退出决定权归调用方——TUI 的 main 判 null 后 return（原「打印+return」语义不变），
@@ -262,6 +263,20 @@ public class CodeTuiApplication {
             notice.accept("⚠ 渲染诊断开关生效中：" + diagToggles + "（用于 Terminal.app 崩溃定位，勿长期开启）");
         }
 
+        // 生命周期钩子（hooks）：两层加载 + 项目层信任判定（活单实例，信任态可运行期翻转）。
+        // 建在 McpRegistry.init 之前：goal 三件之前均可，放 init 前保持「init 已可能拉起子进程」的
+        // 孤儿防线边界不变——registry 不起进程，位置无资源约束。SessionStart 同步跑（阻塞可接受）；
+        // 未信任通告/mtime 警告/钩子失败回执经 notice 通道，TUI 落 scrollback / headless 走 stderr 天然分流。
+        io.github.javaside.springai.codetui.agent.hooks.HookRegistry hookRegistry =
+                io.github.javaside.springai.codetui.agent.hooks.HookRegistry.load(root);
+        if (hookRegistry.projectLayerUntrusted()) {
+            notice.accept("⚠ 项目层 hooks.json 未信任，其钩子已跳过——/hooks 查看并信任");
+        } else {
+            String mtimeWarn = hookRegistry.projectFileMtimeNotice();
+            if (!mtimeWarn.isEmpty()) notice.accept(mtimeWarn);
+        }
+        hookRegistry.runNotify(io.github.javaside.springai.codetui.agent.hooks.HookEvent.SESSION_START, notice);
+
         // MCP：启动期全量加载 .codetui/mcp.json（两层，含禁用项）→ 并行连接 enabled 项 → 发现+装饰工具。
         // 运行期 /mcp 可启停（详见 McpRegistry）。连接失败进 error 态、静默降级。
         // init 立即返回，连接在后台跑：实测一个远程 HTTP server 就要 5~8 秒，等它等的是一块空屏。
@@ -294,7 +309,8 @@ public class CodeTuiApplication {
             // 唯一一次读 CODETUI_STREAM_RETRY：同一 cfg 同时喂给 build（L1 三元）与 CodingAgent 构造
             // （L2 白名单），结构上保证两层开关永不漂移（勿在此处或 build 内再 fromEnv 一次）。
             StreamRetryConfig cfg = StreamRetryConfig.fromEnv();
-            runtime = AgentTools.build(registry, root, listener, mcpRegistry, permissionEngine, cfg, goalManager);
+            runtime = AgentTools.build(registry, root, listener, mcpRegistry, permissionEngine, cfg, goalManager,
+                    hookRegistry);
             agent = new CodingAgent(registry, runtime.clients(), listener, sessionId, activeTurnId,
                     runtime.sessionService(), runtime.manualStrategy(), runtime.tokenCountEstimator(),
                     runtime.skills(), runtime.skillTool(), runtime.sessionRepository(),
@@ -314,6 +330,9 @@ public class CodeTuiApplication {
                 // 任务面板过期提醒接线（镜像 wireGoal）：/clear 时 CodingAgent 经此清空装饰链共用的那份快照。
                 AgentTools.wireTodoReminder(runtime, agent);
             }
+            // 钩子 Stop 接线（bindHooks 包私有，经 wireHooks 在 agent 包内转接）：刻意在 if(tuiMode) 外——
+            // headless 也走 assemble，Stop/SessionStart 须两模式都生效（spec 定案）。
+            AgentTools.wireHooks(runtime, agent);
         } catch (Throwable t) {
             mcpRegistry.close();
             goalRunner.close();
