@@ -57,6 +57,7 @@
 | `/reload` | 重扫技能目录 + 重载 MCP 配置（`SKILL.md` 与 `mcp.json` 改动即时生效，无需重启；MCP 部分仅空闲时执行，忙碌时跳过并提示） |
 | `/mcp` | 管理 MCP 服务器：列出全部（含禁用/失败项），Enter 启用/禁用（即时生效 + 回写 `mcp.json`），`r` 重载配置文件（diff：新增/移除/参数变更即时生效，未变不闪断），Tab 展开工具清单（仅空闲时可用） |
 | `/permissions` | 打开权限规则面板：↑↓ 选择、`d` 删除（先确认）、Esc 关闭；当前模式与内置底线摘要仍打进对话区。**新增**规则走审批面板的「允许，永久」 |
+| `/hooks` | 打开生命周期钩子面板（任何时候可开）：按事件分组列出全部钩子（命令 / matcher / 超时 / 来源，项目层未信任条目带 ⚠ 标记），`t` 信任项目层（写 `~/.codetui/hooks-trust.json`，即时生效）、Esc 关闭。配置格式见下方「生命周期钩子」 |
 | `/init` | 让 agent 分析当前项目并生成/改进**项目级 `AGENTS.md`**（目标固定为工作目录下的 `AGENTS.md`，不碰用户级 `~/.codetui/AGENTS.md`）：只写「从代码推不出来的事实」（构建/测试命令、关键约定、注意事项）；已存在时先通读、在既有内容基础上改进而非整篇重写。`AGENTS.md` 在启动时一次性加载，**重启 code-tui 后生效**；agent 忙时排队（同 `/continue`） |
 | `/review` | 让 agent **只读审查**当前工作树的改动（先 `git diff HEAD` 与 `git status` 了解全貌，不动手修改）：从正确性 / 安全 / 测试 / 可维护性四个维度找问题，按严重程度从高到低输出，每条给出文件:行号、问题描述、为什么要紧、建议修法，没有问题的维度不硬凑；未跟踪的新文件也会读来看（同样不改）。非 git 目录直接提示拒绝（不白烧一回合）；agent 忙时排队 |
 | `/resume` | 打开历史会话面板：↑↓ 浏览（id 前缀 + 本地时间 + 首条用户消息摘要，摘要后台逐条补齐、面板秒开），Enter 恢复选中会话、`f` 分叉选中项、`d` 两段式删除（当前会话不可删）、Esc 关闭 |
@@ -82,6 +83,80 @@
 | `--output-last-message <文件>` | 配合 `-p`：最终回复在打印到 stdout 的同时写入该文件（写入失败仅 stderr 告警，不改退出码）；缺路径参数时忽略并告警 |
 
 权限相关的启动参数（`--permission-mode`、`--dangerously-skip-permissions`）见 [permissions.md](permissions.md#启动参数)。
+
+
+## 生命周期钩子（hooks）
+
+在固定生命周期时点自动执行你配置的 shell 命令。四个事件：
+
+| 事件 | 触发时机 | 退出码语义 |
+| --- | --- | --- |
+| `PreToolUse` | 工具执行前（权限已放行后） | `exit 2` = **拦截**本次调用，stderr（截 2000 字）作为理由返回给模型；`exit 0` = 放行（stdout 丢弃）；其它非零 / 超时 / 启动失败 = 不拦截，仅记日志 |
+| `PostToolUse` | 工具执行成功后 | `exit 0` 且 stdout 非空 → stdout（截 2000 字）以 `[PostToolUse 钩子输出]` 段追加进工具结果（UI 与模型都可见）；非零 → 不追加任何内容，UI 一行提示 |
+| `Stop` | 回合结束时 | 通知型：输出忽略，非零的 stderr 首行进通告通道；**异步执行**，不阻塞回合收尾 |
+| `SessionStart` | 启动装配时 | 通知型：同上；**同步执行**，慢钩子会拖慢首屏（通知型建议配短 timeout） |
+
+### hooks.json 格式
+
+配置文件两层：`~/.codetui/hooks.json`（用户层）与 `<工作目录>/.codetui/hooks.json`（项目层），
+同事件**合并全部执行**（用户层在前）。文件缺失、JSON 非法或某条目缺字段只跳过该文件/该条并记 WARN，
+不影响其余钩子。
+
+```json
+{
+  "hooks": {
+    "PreToolUse":   [ { "matcher": "Bash|Write", "command": "./ci/guard.sh", "timeout": 30 } ],
+    "PostToolUse":  [ { "matcher": "Write|Edit", "command": "npx prettier --check" } ],
+    "Stop":         [ { "command": "notify-send done" } ],
+    "SessionStart": [ { "command": "./scripts/env-check.sh" } ]
+  }
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `command` | 是 | 缺失该条跳过（WARN）。经 `sh -c` 执行，工作目录为项目根 |
+| `matcher` | 否 | **工具名正则（整段匹配）**，如 `Bash\|Write`；省略或空 = 全部工具。仅对 Pre/Post 有意义，Stop/SessionStart 恒匹配（写了也忽略）。**对 MCP 工具无效**：MCP 工具不触发钩子，matcher 写 `mcp__` 前缀永远等不到 |
+| `timeout` | 否 | 秒数；默认 60，有效范围 [1,120]——小于 1 回退默认 60，大于 120 截到 120。上界刻意远小于流式空闲超时默认 300s |
+
+未知事件键跳过（WARN）；未知字段忽略（向前兼容）。**没有热重载**：改 hooks.json 需重启生效。
+
+### stdin payload
+
+钩子进程的 stdin 收到一行 UTF-8 JSON（工具入参以原始 JSON 串形式内嵌）：
+
+```json
+{"event":"PreToolUse","toolName":"Bash","toolInput":"{\"command\":\"ls\"}","sessionId":"20261025T093015-1a2b3c","turnId":3,"taskId":"","root":"/path/to/project"}
+```
+
+| 字段 | 出现于 | 空值行为 |
+| --- | --- | --- |
+| `event` | 全部事件 | 恒有，值为事件名（同配置键） |
+| `toolName` | 仅 Pre/Post | Stop/SessionStart **不发**该字段（而非发空串） |
+| `toolInput` | 仅 Pre/Post | 原始入参 JSON 串，超长截 8KB；Stop/SessionStart 不发 |
+| `toolOutput` | 仅 Post | 工具输出，超长截 8KB |
+| `sessionId` | 全部事件 | 无值时发 `""`（空串，非 null） |
+| `turnId` | 全部事件 | 无归属回合（Stop/SessionStart、后台任务）时为 `-1` |
+| `taskId` | 全部事件 | 无值时发 `""`（空串，非 null）；子 agent / 后台任务调用时是任务 id |
+| `root` | 全部事件 | 项目根绝对路径（即钩子进程的工作目录） |
+
+子 agent 与后台任务的工具调用同样触发 Pre/Post——引擎不按来源筛选，钩子要区分来源时读
+`taskId` / `turnId` 自行判断。
+
+### 项目层信任
+
+hooks 能执行任意命令，而项目层 hooks.json 随仓库分发——clone 别人仓库不该自动执行其中的命令。因此：
+
+- 项目层钩子默认**不执行**（四个事件全部），启动时通告一行「⚠ 项目层 hooks.json 未信任」。
+- `/hooks` 面板查看全部钩子（未信任的项目层条目也列出并标记），按 `t` 信任：把当前文件内容的
+  sha256 记入 `~/.codetui/hooks-trust.json`（用户空间、按项目根绝对路径），**即时生效**。
+- 文件内容任何变更都会使记录失配——下次启动回到未信任，需重新 `t`；面板对 mtime 晚于信任时刻的
+  文件标 ⚠ 提示复查。用户层钩子（你自己写的）无需信任。
+
+残余风险（已声明接受）：hash 信任只防「信任后被改」，防不住 agent 自写信任文件（本工具无沙箱是既有
+立场，真修需要进程外信任锚，超出本项目范围）。headless（`-p`）无面板：在同仓库开一次 TUI 执行
+`/hooks` + `t` 后信任持久生效；`--dangerously-skip-permissions` 不旁路钩子信任。MCP 工具（`mcp__`
+前缀）不触发钩子——黑名单场景对 MCP 价值低（权限层已对未知工具兜底询问/拒绝），列为本期非目标。
 
 
 ## 已知限制

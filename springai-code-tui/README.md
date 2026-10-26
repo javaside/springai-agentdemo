@@ -204,6 +204,17 @@ DEEPSEEK_API_KEY=你的key
 |------|------|------|
 | `CODETUI_TODO_REMIND_EVERY` | 8 | 触发阈值（控制器级工具调用次数）；清单更新后重新计数，`/clear` 清空快照；0 = 关闭 |
 
+### 生命周期钩子（hooks）
+
+在四个生命周期时点自动执行你配置的 shell 命令：`PreToolUse`（工具执行前，钩子 `exit 2` 可拦截
+本次调用并把 stderr 作为理由回给模型）、`PostToolUse`（工具执行后，stdout 追加进工具结果，常用来
+挂 lint / format 检查）、`Stop`（回合结束通知）、`SessionStart`（启动通知）。
+
+- 配置放 `~/.codetui/hooks.json`（用户层）或工作目录 `.codetui/hooks.json`（项目层），同事件合并
+  全部执行；格式、stdin payload 字段与退出码语义见 [reference.md](docs/guide/reference.md#生命周期钩子hooks)。
+- 项目层随仓库分发、默认不执行：在 `/hooks` 面板按 `t` 信任（即时生效；文件内容再改需重新信任）。
+- 每条钩子可配 `timeout`（秒），默认 60、上限 120。
+
 ### 项目数据
 
 code-tui 在工作目录的 `.codetui/` 下保存项目级数据，主要包括：
@@ -213,7 +224,8 @@ code-tui 在工作目录的 `.codetui/` 下保存项目级数据，主要包括�
 - `model.json`：上次选择的模型；
 - `thinking.json`：各模型的思考模式与强度（仅对主/子 agent 生效，摘要与网页抽取沿用官方默认）；
 - `mcp.json`：项目 MCP 配置；
-- `permissions.json`：项目权限规则。
+- `permissions.json`：项目权限规则；
+- `hooks.json`：项目层生命周期钩子（首次使用需在 `/hooks` 面板信任）。
 
 这些数据按项目隔离。`-c` 只恢复最近会话，不恢复上次的权限模式；权限模式每次启动都回到默认档。
 
