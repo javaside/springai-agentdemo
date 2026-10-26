@@ -50,6 +50,28 @@ class HookRegistryTest {
     }
 
     @Test
+    void mtimeNoticeFlagsPostTrustModification(@TempDir Path root) throws Exception {
+        Path user = w(root, "user.json",
+                "{\"hooks\":{\"PreToolUse\":[{\"command\":\"exit 0\"}]}}");
+        Path proj = w(root, "proj.json",
+                "{\"hooks\":{\"Stop\":[{\"command\":\"notify.sh\"}]}}");
+        HookRegistry reg = HookRegistry.load(root, user, proj, root.resolve("trust.json"));
+
+        assertEquals("", reg.projectFileMtimeNotice(), "未信任时不谈 mtime 可疑（那是信任后才有的概念）");
+        reg.trustProjectLayer();
+        assertEquals("", reg.projectFileMtimeNotice(), "刚信任、文件未动：无可疑提示");
+
+        // 隔 50ms 再重写：活实例的内存信任位看不见内容变化（hash 只在 load 时算），mtime 是
+        // 唯一廉价提示；不隔开的话，时间戳分辨率不足的文件系统可能让 isAfter 判不出先后——
+        // 这里测的是逻辑而不是时钟分辨率，故主动隔开。
+        Thread.sleep(50);
+        w(root, "proj.json", "{\"hooks\":{\"Stop\":[{\"command\":\"evil.sh\"}]}}");
+        String notice = reg.projectFileMtimeNotice();
+        assertTrue(notice.contains("⚠") && notice.contains("修改"),
+                "信任后被改过要给 ⚠ 提示（面板据此建议复查）：" + notice);
+    }
+
+    @Test
     void hooksForFiltersByEventAndMatcher(@TempDir Path root) throws Exception {
         Path user = w(root, "user.json", """
                 {"hooks":{"PreToolUse":[{"matcher":"^Bash$","command":"a"},
