@@ -6,6 +6,8 @@ import io.github.javaside.springai.codetui.agent.llm.RetryPolicy;
 import io.github.javaside.springai.codetui.agent.llm.RetryingChatModel;
 import io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry;
 import io.github.javaside.springai.codetui.agent.mcp.McpRegistry;
+import io.github.javaside.springai.codetui.agent.media.MediaExternalizingCallback;
+import io.github.javaside.springai.codetui.agent.media.VisionBudget;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.prompt.PermissionModePrompt;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
@@ -18,10 +20,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -90,6 +94,13 @@ public final class SubagentRunner implements UiChangeSource {
      * 每次派发都经 {@link #effectiveSystemPrompt} 现取现算。
      */
     private final Supplier<PermissionMode> modeSupplier;
+    /**
+     * 可空：视觉接缝。null = 不接线（旧行为，见 {@link SubagentVision}）。
+     *
+     * <p>与 {@link #modeSupplier} 同为装配期注入的运行期能力入口：它把「视觉怎么接」的知识
+     * 留在 {@code AgentTools} 一处，本类只负责在每次派发时调用一次。
+     */
+    private final SubagentVision vision;
 
     /** 当前在飞的<b>前台</b>子 agent 数（串行 run + 并行 runAll）。供 UI busy 闸门判断「取消后是否还有旧子 agent 未清」。 */
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -209,7 +220,21 @@ public final class SubagentRunner implements UiChangeSource {
                           String projectInstructions, int maxConcurrency, McpRegistry mcpRegistry,
                           Supplier<PermissionMode> modeSupplier) {
         this(registry, tools, listener, projectInstructions, maxConcurrency,
-                () -> "task_" + UUID.randomUUID(), mcpRegistry, modeSupplier);
+                () -> "task_" + UUID.randomUUID(), mcpRegistry, modeSupplier, null);
+    }
+
+    /**
+     * 生产装配用：额外接一个视觉接缝（传 null 等同于不接线）。
+     *
+     * <p>只加<b>一个</b>不可分参数：视觉接线需要 root（物化读文件）与预算实例同时到位，
+     * 拆成两个可空参数就允许「传了 root 忘了 budget」的半开状态——那会写出
+     * 「Read 一次就能看」却永远兑现不了的假话，且没有任何断言会响。
+     */
+    public SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                          String projectInstructions, int maxConcurrency, McpRegistry mcpRegistry,
+                          Supplier<PermissionMode> modeSupplier, SubagentVision vision) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency,
+                () -> "task_" + UUID.randomUUID(), mcpRegistry, modeSupplier, vision);
     }
 
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
@@ -227,6 +252,13 @@ public final class SubagentRunner implements UiChangeSource {
     SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
                    String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier,
                    McpRegistry mcpRegistry, Supplier<PermissionMode> modeSupplier) {
+        this(registry, tools, listener, projectInstructions, maxConcurrency, taskIdSupplier,
+                mcpRegistry, modeSupplier, null);
+    }
+
+    SubagentRunner(ProviderRegistry registry, List<ToolCallback> tools, AgentListener listener,
+                   String projectInstructions, int maxConcurrency, Supplier<String> taskIdSupplier,
+                   McpRegistry mcpRegistry, Supplier<PermissionMode> modeSupplier, SubagentVision vision) {
         this.registry = registry;
         this.tools = tools;
         this.listener = listener;
@@ -235,6 +267,7 @@ public final class SubagentRunner implements UiChangeSource {
         this.maxConcurrency = Math.max(1, maxConcurrency);
         this.mcpRegistry = mcpRegistry;
         this.modeSupplier = modeSupplier == null ? () -> null : modeSupplier;
+        this.vision = vision;
     }
 
     /** 执行一次委派，返回子 agent 最终文本。parentTurnId=发起 Task 的回合。 */
@@ -310,8 +343,24 @@ public final class SubagentRunner implements UiChangeSource {
             }
             listener.onQuotaWaitScheduled(turnId, resetAtEpochMs, "子任务 " + reason);
         };
+        // 每派发自带预算：作用域 = 一次派发。实例隔离让「同一 prompt 重跑」不会累计进上一次派发的桶
+        // （turnKey 只由锚点文本+下标算出，而子 agent 锚点恒为 1），派发结束随实例被 GC，
+        // 因此不需要任何 release 生命周期。
+        VisionBudget dispatchBudget = vision == null ? null : new VisionBudget();
+        // 整表复制，绝不列举键：后台派发还带着 BACKGROUND_TASK_ID_KEY，漏掉它会让后台审批
+        // 从「就地拒绝」静默退化成「在无人值守线程上等一个永远不会来的面板」。
+        Map<String, Object> ctx = new HashMap<>(toolContext);
+        if (vision != null) {
+            ctx.put(MediaExternalizingCallback.CAPABILITIES_KEY,
+                    selection.provider().capabilities(selection.modelId()));
+            ctx.put(MediaExternalizingCallback.BUDGET_KEY, dispatchBudget);
+        }
+        ChatModel base = RetryingChatModel.wrap(selection.provider().chatModel(), quotaHook);
+        // 链序 Vision(Retrying(raw))：Vision 在最外层，故瞬态重试复用同一个已物化 Prompt、
+        // 不会重复解码与重复扣额度；400 拒图降级落在 Vision 的 catch 分支里。
+        ChatModel model = vision == null ? base : vision.decorate(base, selection, dispatchBudget);
         ChatClient client = ChatClient.builder(
-                        RetryingChatModel.wrap(selection.provider().chatModel(), quotaHook),
+                        model,
                         ObservationRegistry.NOOP, null, null,
                         ToolCallingAdvisor.builder().toolCallingManager(TurnToolLimitWiring.create()))
                 .defaultTools(effectiveTools(spec).toArray())
@@ -322,7 +371,7 @@ public final class SubagentRunner implements UiChangeSource {
                 .user(prompt)
                 // .options 接收 native builder（与 CodingAgent.submit 一致，mutate 保留 maxTokens 等）
                 .options(options.mutate())
-                .toolContext(toolContext)
+                .toolContext(ctx)
                 .call()
                 .content();
         return result == null ? "" : result;

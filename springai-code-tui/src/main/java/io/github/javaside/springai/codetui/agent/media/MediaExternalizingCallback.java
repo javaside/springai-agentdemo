@@ -23,6 +23,12 @@ public final class MediaExternalizingCallback implements ToolCallback {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     /** ToolContext 里能力快照的键（CodingAgent.submit 写入，本装饰器读取）。public 供跨包引用。 */
     public static final String CAPABILITIES_KEY = "capabilities";
+    /**
+     * ToolContext 里「本次工具调用所属派发的预算」键。子 agent 每次派发塞一个自有实例
+     * （见 {@code SubagentRunner}）——出站兑现与工具侧判断必须同一个实例，否则「额度已尽」
+     * 永远判错；而每派发一个新的，又让额度天然按派发隔离、不需要回收生命周期。
+     */
+    public static final String BUDGET_KEY = "visionBudget";
 
     private final ToolCallback delegate;
     private final MediaArtifactStore store;
@@ -48,9 +54,23 @@ public final class MediaExternalizingCallback implements ToolCallback {
         this.visionBudget = visionBudget;
     }
 
-    /** 本回合视觉额度是否已耗尽；无预算来源（测试桩/旧装配）恒 false，行为与引入前一致。 */
-    private boolean turnExhausted() {
-        return visionBudget != null && visionBudget.currentTurnExhausted();
+    /**
+     * 本次工具调用的预算来源：<b>ctx 优先</b>——子 agent 的预算随 ToolContext 下发、各带各的，
+     * 这样它读到的额度才是「我自己这次派发的」；ctx 没有则回退装配期注入的那个（主 agent 形态）。
+     *
+     * <p>不能只靠构造注入：那个实例是装配期建一次、全进程共享的，工具执行时根本无法判断
+     * 「刚才这次模型请求属于哪个 agent」——子 agent 的 Read 会读到主 agent（或别的子 agent）的额度。
+     */
+    private VisionBudget budgetOf(ToolContext ctx) {
+        if (ctx != null && ctx.getContext().get(BUDGET_KEY) instanceof VisionBudget b) {
+            return b;
+        }
+        return visionBudget;
+    }
+
+    /** 该预算的「本回合额度已尽」；无预算来源恒 false（测试桩/旧装配/MCP 形态）。 */
+    private static boolean turnExhausted(VisionBudget budget) {
+        return budget != null && budget.currentTurnExhausted();
     }
 
     @Override public ToolDefinition getToolDefinition() { return delegate.getToolDefinition(); }
@@ -60,14 +80,14 @@ public final class MediaExternalizingCallback implements ToolCallback {
     public String call(String toolInput, ToolContext toolContext) {
         String raw = (toolContext == null) ? delegate.call(toolInput) : delegate.call(toolInput, toolContext);
         try {
-            return externalize(raw, toolInput, capsOf(toolContext));
+            return externalize(raw, toolInput, capsOf(toolContext), budgetOf(toolContext));
         } catch (RuntimeException e) {
             log.warn("媒体外置失败 tool={}：{}", delegate.getToolDefinition().name(), e.toString());  // 不打印内容
             return raw;   // 保守：外置失败则原样返回（媒体检测阶段的失败不该丢工具结果）
         }
     }
 
-    private String externalize(String raw, String toolInput, ModelCapabilities caps) {
+    private String externalize(String raw, String toolInput, ModelCapabilities caps, VisionBudget budget) {
         if (raw == null || raw.isEmpty() || FileReference.isReference(raw)) return raw;
 
         // 1) MCP：顶层内容块数组
@@ -78,7 +98,7 @@ public final class MediaExternalizingCallback implements ToolCallback {
             for (McpMediaParser.MediaBlock mb : p.mediaBlocks()) {
                 try {
                     MediaArtifact a = store.put(mb.bytes(), mb.declaredMimeType(), synthesizeName(mb.bytes()));
-                    out.append(handler.represent(a, caps, turnExhausted())).append('\n');
+                    out.append(handler.represent(a, caps, turnExhausted(budget))).append('\n');
                 } catch (RuntimeException e) {
                     log.warn("媒体块外置失败，已降级为占位（未泄露字节）：{}", e.toString());  // 不打印内容
                     out.append("[media externalization failed; content omitted]").append('\n');
@@ -93,7 +113,7 @@ public final class MediaExternalizingCallback implements ToolCallback {
         Path original = resolveReadPath(toolInput);
         if (original != null && !MagicSniffer.isTextFile(original)) {
             MediaArtifact a = referenceExistingFile(original);
-            if (a != null) return handler.represent(a, caps, turnExhausted());
+            if (a != null) return handler.represent(a, caps, turnExhausted(budget));
         }
 
         // 2b) 越界但真实存在的非文本文件（项目外路径，如 ~/Downloads/x.png）：Read 越界时
@@ -106,7 +126,7 @@ public final class MediaExternalizingCallback implements ToolCallback {
             Path outside = resolveOutsideReadPath(toolInput);
             if (outside != null && !MagicSniffer.isTextFile(outside)) {
                 MediaArtifact a = copyIntoStore(outside);
-                if (a != null) return handler.represent(a, caps, turnExhausted());
+                if (a != null) return handler.represent(a, caps, turnExhausted(budget));
                 // 已确认是项目外二进制：外置失败必须 fail-closed，绝不能掉到 return raw。
                 // Read 的 PNG/PDF hexdump 往往通不过 BinarySniff，放行会重新泄漏原始字节。
                 return "[工具返回二进制文件，外置失败后内容已从会话移除]";
