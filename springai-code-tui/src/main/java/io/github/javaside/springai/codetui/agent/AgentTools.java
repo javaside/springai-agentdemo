@@ -49,6 +49,7 @@ import io.github.javaside.springai.codetui.agent.subagent.SubagentLoader;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentTool;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentVision;
 import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
 import io.github.javaside.springai.codetui.agent.tools.DeepSeekWebSearchTool;
 import io.github.javaside.springai.codetui.agent.tools.PermissionCallback;
@@ -588,10 +589,19 @@ public final class AgentTools {
         // Task 工具本身也用 ToolEventCallback 装饰，故委派本身在主流显示为一行。
         java.util.List<ToolCallback> decoratedList = java.util.List.of(decorated);
         int subagentConcurrency = resolveSubagentConcurrency();
+        // 子 agent 视觉接缝：能力谓词按 provider 注入（勿用全局 VisionModels——兼容网关会把已知 id
+        // 转发到别处、OpencodeGo 有独立白名单，用全局判定会对这些模型判错），ImageProfile 按 provider
+        // 取口径（统一套 Anthropic 口径会让 DeepSeek 的 token 高估 3.6 倍、把额度白白吃光）。
+        // 预算不由这里给：SubagentRunner 每次派发新建一个并随 ToolContext 下发，作用域天然是一次派发。
+        SubagentVision subagentVision = (base, sel, budget) -> VisionMaterializingChatModel.wrap(
+                base, root,
+                modelId -> sel.provider().capabilities(modelId).supportsImageInput(),
+                budget,
+                ImageProfile.forProvider(sel.provider().id()));
         // permissionEngine::mode 是「实时」来源，不是快照：子 agent 的模式提示段每次派发现取现算，
         // 使 Shift+Tab 切档在下一次委派即生效（见 SubagentRunner.effectiveSystemPrompt）。
         SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener,
-                projectInstructions, subagentConcurrency, mcpRegistry, permissionEngine::mode);
+                projectInstructions, subagentConcurrency, mcpRegistry, permissionEngine::mode, subagentVision);
         java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
 
         // 后台子 agent 子系统：注册表（进程内、不落盘）+ 结果限幅落盘 + 常驻线程池。
