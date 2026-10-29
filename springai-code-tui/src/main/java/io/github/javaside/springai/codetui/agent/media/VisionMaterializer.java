@@ -130,7 +130,9 @@ public final class VisionMaterializer {
      * <p><b>单槽而非按 turnKey 分桶</b>（{@link VisionBudget} 是分桶的）：那边分桶是<b>正确性</b>
      * 需要——并发子 agent 共用计数器会互相冲掉额度、真的多发图；这边只是<b>显示</b>，而
      * {@code /context} 要显示的就是「用户当前这一轮」。分桶反而说不清面板该读哪个桶。
-     * 代价是并发子 agent 的回合会覆盖主 agent 的账，两者交替时数字会跳。
+     * 代价是同一实例上并发 agent 的回合会覆盖彼此的账、交替时数字会跳；但子 agent 侧
+     * <b>每次派发新建 materializer 实例</b>（2026-10-29 接线），故 {@code /context} 读的主链实例
+     * 只会被主 agent 自己的回合覆盖。
      *
      * <p>读旧值→加→写回不是原子的，并发下最坏是丢一次累加（统计信息，可接受）；但每次写出去的
      * 都是一个完整 record，读侧绝不会看到「张数已加、token 未加」的半截状态。

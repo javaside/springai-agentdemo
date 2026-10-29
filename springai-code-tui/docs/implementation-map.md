@@ -1154,8 +1154,15 @@ id 口径 `contentHashIfInStore`：父目录是 `.codetui/artifacts` 且文件�
 
 **出站统一收口** `VisionMaterializingChatModel`（**兑现的唯一接线点**）：
 
-- `call` 与 `stream` **都要走**（主 agent 走 stream，子 agent 经 `RetryingChatModel` 桥到 stream，
-  只改一条等于子 agent 没有视觉）。
+- `call` 与 `stream` **都要走**（主 agent 走 stream，子 agent 走 call，只改一条等于子 agent 没有视觉）。
+- **子 agent 侧已实装**（2026-10-29）：`SubagentRunner.execute` 在 `RetryingChatModel` 外包一层
+  `VisionMaterializingChatModel`（链序 `Vision(Retrying(raw))`，走 `call` 入口），接缝见
+  `SubagentVision`、装配在 `AgentTools`（能力谓词按 provider 注入、`ImageProfile` 按 provider 取口径）。
+  `execute` **每次派发新建一个 `VisionBudget`**，与 `provider.capabilities(modelId)` 一起整表复制进
+  `ToolContext`（`BUDGET_KEY` / `CAPABILITIES_KEY`）；工具侧 `MediaExternalizingCallback` **优先读
+  ctx、回退构造注入**。实例隔离让「同一 prompt 重跑」不会累计进同一个桶（turnKey 只由锚点文本 +
+  下标算出，而子 agent 锚点恒为 1），派发结束随实例 GC，**不需要释放钩子**。
+  代价：拒绝集是实例态，同一张被服务端拒过的图每次派发都会重传并再吃一个 400。
 - 模型 id 取自**出站 Prompt 的 options**（实际发出去的那个，子 agent 跑在另一家时天然正确）。
 - 位置选在 ChatModel 层而非 advisor：兑现必须在会话记忆**之后**（早了会写进存储、
   图片永久化跨回合累积，那正是整个设计要消灭的）又必须在真正发出**之前**；
