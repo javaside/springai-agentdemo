@@ -632,15 +632,19 @@ public final class InlineDisplay implements AutoCloseable {
     }
 
     /**
-     * 批末把 live 区恢复到屏幕底部，<b>不逐行 EL</b>。
+     * 批末把 live 区恢复到屏幕底部，<b>逐行 EL</b>。
      *
-     * <p>可以不擦是因为每一行落点上的内容本来就等于要写的内容：println 的 ESC[1L 只是把 live 区
-     * 整体下推（内容不变），被挤出屏幕的行则由本方法行间的 LF 滚屏重新腾出——那是<b>全新的空行</b>。
-     * 先擦后写反而会让不支持同步输出的终端（如 Apple Terminal）看到「边框先没后有」的中间帧，
-     * 模型输出期间每批一次，看起来就是输入框在闪。
+     * <p><b>必须擦（2026-11-01 用户实报：⏱ 面板任务行行尾多一根横线）</b>：「不擦也干净」只在
+     * live 区<b>形状不变</b>、restore 落点恰好是同一批旧行时成立。live 区高度一变（面板出现/消失、
+     * 预览行增删），restore 写到的每一行落点是旧 live 的<b>另一行</b>——短行（面板行）落到长行
+     * （满宽边框）上时，覆写只覆盖新内容那么宽，旧行尾（─…╮）残留在任务行后面。MiniVt/pyte
+     * 重放均可复现（InlineDisplayOffBottomTest）。
+     *
+     * <p>EL 与行内容在同一次写入里紧贴发出（\r + EL + 内容），不支持同步输出的终端也看不到
+     * 「边框先没后有」的行级中间帧。
      */
     private void appendLiveRestore(StringBuilder batch, Buffer source, int cursorX, int cursorY) {
-        appendLiveArea(batch, source, cursorX, cursorY, false);
+        appendLiveArea(batch, source, cursorX, cursorY, true);
     }
 
     private void appendLiveArea(StringBuilder batch, Buffer source, int cursorX, int cursorY, boolean eraseRowTails) {
