@@ -260,7 +260,7 @@ class InlineDisplayDiffTest {
     }
 
     @Test
-    void printBatchRedrawDoesNotEraseLiveRowsBeforeRepaintingThem() {
+    void printBatchRestoreErasesEachLiveRowTailBeforeRepainting() {
         InlineDisplay display = display(3);
         renderBox(display, "input");
         backend.resetCounts();
@@ -272,8 +272,10 @@ class InlineDisplayDiffTest {
         String raw = backend.outputUtf8();
         assertTrue(raw.contains("╭"), raw);
         assertTrue(raw.contains("╯"), raw);
-        // println 清理新插入的 scrollback 行尾时保留一次 EL；live 区恢复前不得再逐行擦除。
-        assertEquals(1, occurrences(raw, "\u001b[K"), raw);
+        // 正文行 1 次 EL + live 区每行 1 次 EL（3 行）。2026-11-01 起批末恢复必须逐行擦行尾：
+        // live 区形状变化时 restore 落点是旧 live 的另一行，短行覆写满宽行会残留旧行尾
+        // （用户实报「⏱ 面板任务行行尾多一根横线」，画面级回归见 InlineDisplayOffBottomTest）。
+        assertEquals(4, occurrences(raw, "\u001b[K"), raw);
     }
 
     @Test

@@ -358,17 +358,30 @@ def check_background_panel_and_input_visible(session):
         die("⏱ 面板计数不对：%r" % session.screen.display[title_row].strip(),
             session.screen.display)
 
+    # 任务行残影专项（2026-11-01 用户实报「每个任务后面多一根横线」）：面板短行行尾
+    # 不得残留旧输入框边框的 ─/╮。根因是 InlineDisplay 批末 live 恢复不擦行尾——
+    # live 区形状变化时短行覆写满宽行，旧边框尾巴留在任务后面（离屏画面级守卫见
+    # patch 模块 InlineDisplayOffBottomTest，这里再钉一层真实 PTY + pyte 的）。
+    for ln in session.screen.display:
+        if ln.lstrip().startswith("▶ task_") and ("─" in ln or "╮" in ln):
+            die("任务行行尾残留旧边框横线（批末 live 恢复未擦行尾）：%r" % ln.strip(),
+                session.screen.display)
+    print("场景 2 OK：任务行行尾无残影.")
+
     # 状态栏后缀。<b>不能只匹配「⏱」</b>：面板标题里也有它，屏幕上到处都是。
     # 宽度用 120（同其余脚本）：整条状态行显示宽 109，在 100 列下尾部的「· /tasks」
     # 会被<b>如实截掉</b>（这是设计好的取舍，见 backgroundStatusSuffix 的注释——
     # 后缀刻意挂在最尾，宁可它先被截）。窄窗口断言这一条只是在测截断，不是在测后缀。
-    status = session.screen.display[session.rows - 1]
-    if "⏱ 3 个后台任务" not in status:
-        die("状态栏尾部没有「⏱ 3 个后台任务」后缀，实际：%r" % status.strip(),
-            session.screen.display)
+    # <b>按内容找行、不硬取 rows-1</b>：v1.26.4 首帧不钉底后 live 区锚在启动光标处，
+    # 空 pty 启动（本脚本的环境）光标在屏首附近，live 不贴屏幕底、状态行不在最后一行。
+    status_row = find_row(session, "⏱ 3 个后台任务")
+    if status_row < 0:
+        die("屏幕上找不到带「⏱ 3 个后台任务」的状态行", session.screen.display)
+    status = session.screen.display[status_row]
     if "/tasks" not in status:
         die("状态栏后缀没提示 /tasks，实际：%r" % status.strip(), session.screen.display)
-    print("场景 2 OK：⏱ 面板 3 条、状态栏尾部含「⏱ 3 个后台任务 · /tasks」.")
+    print("场景 2 OK：⏱ 面板 3 条、状态行含「⏱ 3 个后台任务 · /tasks」（第 %d 行）."
+          % status_row)
 
     # ── 输入框可见性（本任务的核心疑点）──
     session.write(BOX_PROBE.encode())      # 只打字、不发送
