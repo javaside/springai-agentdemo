@@ -168,6 +168,10 @@ public final class CodeTuiView extends InlineApp {
     // 模型目录已有 17+ 个且只会增多，不封顶时 live 区（todo 面板 + 选择器 + 输入框/状态行）很容易
     // 超过终端实际高度——这一档 InlineDisplay 的光标相对移动会被终端边界夹断，超出部分的位置计算
     // 全部错位，表现为 Esc 关闭后输入框整段消失、要等下一次不相关的事件才会被带回来的另一帧重画。
+    private static final int SLASH_MENU_CAP = 10; // 斜杠补全菜单可见行上限，理由同 MODEL_PICKER_CAP：
+    // 命令全表 21 条全量渲染时，计划面板（最多 12 行）+ 菜单 21 + 输入框/状态行 ≈ 37 行 live 区，
+    // 常规终端装不下——2026-11-01 用户实报敲 "/" 出现双份输入框边框（pty 30 行复现：滚动腾行
+    // 记账整体错位，菜单尾部与状态行丢失、底边框画两遍）。
     // ⏱ 面板（后台任务）最多显示几条。这份列表<b>跨回合累积、只有 /clear 清</b>，已完成的永不移除：
     // 不封顶的话，一个会话派 20 个后台任务就常驻 21 行，把输入框一路顶下去。全量看 /tasks 面板。
     static final int BACKGROUND_CAP = 6;
@@ -4727,13 +4731,21 @@ public final class CodeTuiView extends InlineApp {
     private Element[] slashMenuChildren() {
         List<SlashCommand> m = slashMatches();
         int sel = clampIndex(slashIndex, m.size());
+        // 窗口化：同 modelPickerChildren，以选中项为中心截一段可见窗口——全量摊开时 live 区
+        // 超过终端高度会触发 InlineDisplay 位置记账错位（见 SLASH_MENU_CAP 处注释）。
+        int visible = Math.min(SLASH_MENU_CAP, m.size());
+        int from = Math.max(0, Math.min(sel - visible / 2, m.size() - visible));
+        int to = from + visible;
         List<Element> els = new ArrayList<>();
-        for (int i = 0; i < m.size(); i++) {
+        for (int i = from; i < to; i++) {
             SlashCommand c = m.get(i);
             String name = c.name();
             String pad = " ".repeat(Math.max(1, 10 - displayWidth(name)));   // 命令名对齐
             els.add(text("  " + (i == sel ? "❯ " : "  ") + name + pad + c.desc())
                     .style(i == sel ? PICK_SEL : PICK_ITEM));
+        }
+        if (m.size() > visible) {
+            els.add(text("  显示 " + (from + 1) + "-" + to + " / 共 " + m.size() + " 条命令").style(DIM));
         }
         return els.toArray(new Element[0]);
     }
