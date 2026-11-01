@@ -158,6 +158,7 @@ public final class CodeTuiView extends InlineApp {
      */
     private static final int MAX_ROWS_PER_DRAIN = 300;
     private static final int TODO_CAP = 10;      // 计划面板（主 agent todo）最多显示几条
+    private static final int TODO_LEAD = 2;      // 窗口锚点（首条未完成项）上方保留几行已完成上下文
     private static final int SUBTASK_CAP = 6;    // 任务面板（子 agent 状态）最多显示几条
     private static final int SKILL_PICKER_CAP = 10; // 技能选择器可见行上限；避免大量技能撑高 InlineDisplay、触发终端反复重排
     private static final int SESSIONS_PICKER_CAP = 10; // /resume 会话面板可见行上限，理由同 SKILL_PICKER_CAP：
@@ -4741,12 +4742,36 @@ public final class CodeTuiView extends InlineApp {
     private Element[] todoChildren(List<String> todos) {
         List<Element> els = new ArrayList<>();
         els.add(text("📋 计划").style(TODO_TITLE));   // 主 agent（控制器）的 todo
-        int shown = Math.min(todos.size(), TODO_CAP);
-        for (int i = 0; i < shown; i++) els.add(todoRow(todos.get(i)));
-        if (todos.size() > TODO_CAP) {
-            els.add(text("  … 还有 " + (todos.size() - TODO_CAP) + " 项").style(DIM));
+        int from = todoWindowFrom(todos.size(), firstUndone(todos));
+        int to = Math.min(todos.size(), from + TODO_CAP);
+        if (from > 0) {                       // 折掉的必是完成段：注记在顶部，与任务面板一致
+            els.add(text("  … 前 " + from + " 项已折叠").style(DIM));
+        }
+        for (int i = from; i < to; i++) els.add(todoRow(todos.get(i)));
+        if (to < todos.size()) {
+            els.add(text("  … 还有 " + (todos.size() - to) + " 项").style(DIM));
         }
         return els.toArray(new Element[0]);
+    }
+
+    /** 第一条非完成项（▶/○）下标；全部完成返回 size。判定靠行首状态符，与 todoRow 的分色同源。 */
+    private static int firstUndone(List<String> todos) {
+        for (int i = 0; i < todos.size(); i++) {
+            if (!todos.get(i).startsWith("✓")) return i;
+        }
+        return todos.size();
+    }
+
+    /**
+     * 计划面板可见窗口起点：锚定第一条非完成项（上方留 {@link #TODO_LEAD} 行已完成上下文，能看见
+     * 刚落定的进展），向后取满 {@link #TODO_CAP} 条。不锚头部是因为计划一旦超上限，排在后面的
+     * 待办<b>永远</b>滑不进视野（最后要运行的几项看不到）；不照搬任务面板的「取末尾」是因为
+     * 计划刚写完、从第 1 条开跑时会把 ▶ 运行项折掉。锚点靠近尾部时 {@code min} 自然把窗口贴到
+     * 末尾（含全部完成——firstUndone 返回 size——的退化情形，同一式子覆盖，无需特判）。
+     */
+    static int todoWindowFrom(int size, int firstUndone) {
+        if (size <= TODO_CAP) return 0;
+        return Math.max(0, Math.min(firstUndone - TODO_LEAD, size - TODO_CAP));
     }
 
     /**
