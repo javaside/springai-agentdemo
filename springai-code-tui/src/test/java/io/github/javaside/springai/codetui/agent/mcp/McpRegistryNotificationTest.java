@@ -139,12 +139,16 @@ class McpRegistryNotificationTest {
         McpRegistry reg = McpRegistry.initWithConnector(root, new StubListener(),
                 List.of(server(root, "s1", true)), AgentTools.testEngine(root), gated);
         try {
-            reg.close();       // 进程要退了：结果注定被丢弃
+            // 监听与版本基准必须在 close() 之前取：close 的 shutdownNow 会打断 gate.await，
+            // 被打断的收尾不等 countDown 就会跑完——晚挂监听会让那次 VIEW 打到 noop 上
+            // （2026-11-01 CI Java 17 偶发命中：bits 空、用例 36ms 即败）。
+            // 先挂不混入存量通知：init 返回时「进入」通知已在主线程发完，不会进 bits。
             List<Integer> bits = new ArrayList<>();
             reg.setUiChangeListener(bits::add);
             long before = reg.uiVersion();
 
-            gate.countDown();  // 连接这才返回
+            reg.close();       // 进程要退了：结果注定被丢弃（此后收尾无论抢跑还是等放行，都恰好一次 VIEW）
+            gate.countDown();  // 没被打断时，连接这才返回
             awaitIdle(reg);
 
             assertTrue(reg.activeTools().isEmpty(), "前置：被 close 丢弃，未写回");
