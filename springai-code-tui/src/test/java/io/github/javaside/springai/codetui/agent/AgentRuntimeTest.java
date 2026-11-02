@@ -2,7 +2,11 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
+import io.github.javaside.springai.codetui.agent.subagent.ReloadableSubagentTool;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentCatalog;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentLoader;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentReloader;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentTool;
 import io.github.javaside.springai.codetui.ui.ConversationState;
 import org.junit.jupiter.api.Test;
@@ -10,8 +14,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -95,5 +104,115 @@ class AgentRuntimeTest {
         // 描述里列出了四个 agent
         String desc = task.getToolDefinition().description();
         org.junit.jupiter.api.Assertions.assertTrue(desc.contains("explore"));
+    }
+
+    /**
+     * 装配级 roster 断言（spec §6 尾注 / plan T4）：项目层 {@code .codetui/agents/reviewer.md}
+     * 在 {@code AgentTools.build} 之后必须出现在 Task 工具描述的可用 agent 清单里。
+     *
+     * <p>取 Task 描述的唯一现成通道是测试助手 {@code RuntimeToolSet.toolsOf(rt)}——AgentRuntime
+     * 没有 Task 访问器，工具只能从装配产物 ChatClient 上掏回。
+     */
+    @Test
+    void customSubagentInTaskRosterAfterAssembly(@TempDir Path root, @TempDir Path fakeHome) throws Exception {
+        Path agentsDir = root.resolve(".codetui/agents");
+        Files.createDirectories(agentsDir);
+        Files.writeString(agentsDir.resolve("reviewer.md"), """
+                ---
+                name: reviewer
+                description: 评审代码变更的子 agent。
+                ---
+
+                你是代码评审员。
+                """);
+        // user.home 临时替换（照 build_alwaysRegistersReloadableSkillTool 的隔离法）：装配的 home 三层
+        // 目录来自真实 ~，本机残留的用户级 agent 定义会污染 roster 断言的可解释性。
+        String prevHome = System.getProperty("user.home");
+        System.setProperty("user.home", fakeHome.toString());
+        try {
+            AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
+            String taskDesc = RuntimeToolSet.toolsOf(rt).get("Task").getToolDefinition().description();
+            assertTrue(taskDesc.contains("reviewer"),
+                    "装配后 Task 描述 roster 应含项目层自定义 agent reviewer：\n" + taskDesc);
+        } finally {
+            if (prevHome == null) System.clearProperty("user.home");
+            else System.setProperty("user.home", prevHome);
+        }
+    }
+
+    /**
+     * 装配级安全结构钉（spec §6.5）：自定义 agent 在 frontmatter {@code tools:} 里索要
+     * {@code Task}/{@code MemoryCreate}/{@code ExitPlanMode} 也拿不到——{@code effectiveTools}
+     * 从 decoratedList 过滤，这三个主 agent 专属工具不在其中，故递归 fan-out / 写长期记忆 /
+     * 替用户切模式在<b>结构上</b>不可能。
+     *
+     * <p>刻意做装配级（build 出真 runner）而非「自建 runner + 自造工具列表」的单测版：
+     * 自造列表里本来就没有 Task，断言恒绿，看不见装配面改动（spec 明文否掉的那种假绿灯）。
+     */
+    @Test
+    void securityPinCustomAgentCannotGetTaskOrMemoryOrExitPlan(@TempDir Path root, @TempDir Path fakeHome) {
+        String prevHome = System.getProperty("user.home");
+        System.setProperty("user.home", fakeHome.toString());   // 装配会扫 home 三层，隔离保持用例确定性
+        try {
+            AgentTools.AgentRuntime rt = AgentTools.build(dummyRegistry(), root, new ConversationState());
+            SubagentSpec hostile = new SubagentSpec("pinner", "d", "sys",
+                    List.of("Task", "MemoryCreate", "ExitPlanMode"), List.of(), null, List.of());
+            List<String> got = effectiveToolNames(rt, hostile);
+            assertFalse(got.contains("Task"), "自定义 agent 不得拿到 Task（防递归 fan-out）：" + got);
+            assertFalse(got.contains("MemoryCreate"), "自定义 agent 不得写长期记忆：" + got);
+            assertFalse(got.contains("ExitPlanMode"), "自定义 agent 不得替用户切模式：" + got);
+
+            // 正向对照（杀恒空实现）：allow=[Read] 必须真拿到 Read——过滤链若被改成「一律清空」，
+            // 上面三条 assertFalse 照样绿，只有这里红得出真相。
+            SubagentSpec reader = new SubagentSpec("reader", "d", "sys",
+                    List.of("Read"), List.of(), null, List.of());
+            List<String> readGot = effectiveToolNames(rt, reader);
+            assertTrue(readGot.contains("Read"), "allow=[Read] 应拿到 Read（正向对照）：" + readGot);
+        } finally {
+            if (prevHome == null) System.clearProperty("user.home");
+            else System.setProperty("user.home", prevHome);
+        }
+    }
+
+    /** spec.allowTools 过滤后的注册名清单（装配级 runner 上取，非自造列表）。 */
+    private static List<String> effectiveToolNames(AgentTools.AgentRuntime rt, SubagentSpec spec) {
+        return rt.subagentRunner().effectiveTools(spec).stream()
+                .map(c -> c.getToolDefinition().name())
+                .toList();
+    }
+
+    /**
+     * {@code /reload} 联动（plan T4 两分法）：CodingAgent 的 {@code reloadSkills()} 是否触发子 agent
+     * 重载、{@code subagentsSummary()} 是否给出摘要，按协调者 null / 非 null 两条路径分别钉死。
+     *
+     * <p>null 桩路径用既有单-client 桩构造（那里硬编码 reloader=null，注入不了真 Reloader）；
+     * 非 null 用新尾加重载、其余参数全 null + 真 {@code SubagentReloader}（计数 catalog）——
+     * 已核实全参构造体仅 {@code interjections != null} 才触碰 listener，reloadSkills/subagentsSummary
+     * 只读 reloader，全 null 无 NPE（skills 除外：{@code List.copyOf(null)} 会 NPE，须传 {@code List.of()}）。
+     */
+    @Test
+    void reloadSkillsTriggersSubagentReload() {
+        // null 桩路径：回显桩/既有测试全走这条路——摘要空串、reload 不炸。
+        CodingAgent stub = new CodingAgent(null, new StubListener(), "sid", new AtomicLong(),
+                null, null, null);
+        assertEquals("", stub.subagentsSummary(), "桩路径无子 agent 装配，摘要应为空串");
+        assertDoesNotThrow(stub::reloadSkills);
+
+        // 非 null 路径：真协调者 + 计数 catalog。
+        AtomicInteger loads = new AtomicInteger();
+        SubagentReloader reloader = new SubagentReloader(
+                () -> {
+                    loads.incrementAndGet();
+                    return new SubagentCatalog.Loaded(SubagentLoader.loadBuiltins(), 0, List.of());
+                },
+                new ReloadableSubagentTool(specs -> SubagentTool.create(specs, (s, p, d, t) -> s.name())),
+                new ReloadableSubagentTool(specs -> SubagentTool.createParallel(specs, (d, t) -> List.of())));
+        CodingAgent agent = new CodingAgent(null, null, new StubListener(), "sid", new AtomicLong(),
+                null, null, null, List.of(), null, null, null, null, null, null, null, null, null, null, null,
+                null, 0L, null, reloader);
+        int before = loads.get();   // Reloader 构造即首装，此处恒 1
+        agent.reloadSkills();
+        assertEquals(before + 1, loads.get(), "reloadSkills 应触发恰好一次子 agent 重载（计数 catalog）");
+        assertFalse(agent.subagentsSummary().isEmpty(), "装配协调者后摘要应非空（来自最近一次装载）");
     }
 }

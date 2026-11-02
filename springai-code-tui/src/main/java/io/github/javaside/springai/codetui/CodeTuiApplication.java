@@ -317,7 +317,9 @@ public class CodeTuiApplication {
                     runtime.reloadableSkill(), runtime.subagentRunner(), runtime.fileExternalizer(),
                     mcpRegistry, runtime.permissionEngine(), runtime.visionModels(),
                     runtime.backgroundRegistry(), runtime.backgroundResults(), runtime.interjections(),
-                    usageAccumulator, runtime.systemPromptTokens(), cfg);
+                    // 子 agent 重载协调者必须传 runtime 那一份（持有生产 Task/ParallelTasks 两代理）——
+                    // 漏传不报错（null 合法），但 /reload 从此不重载子 agent、subagentsSummary() 恒空。
+                    usageAccumulator, runtime.systemPromptTokens(), cfg, runtime.subagentReloader());
             // L1 两段式桥接线：装配期 build 已把 runtime.bridge() 包进主链 RetryingStreamChatModel，
             // 这里在 CodingAgent 构造完成后 bind（agent::onL1Retry 是包私有方法，跨包方法引用编译失败，
             // 故必须经 AgentTools.wireL1 在 agent 包内接线——见 wireL1 javadoc）。

@@ -105,7 +105,7 @@ public final class SubagentTool {
      *
      * @param description       3-5 词简述，进 UI 任务面板
      * @param prompt            自包含的任务提示（子 agent 看不到主对话）
-     * @param subagent_type     子 agent 名，取值见 {@code SubagentLoader.loadBuiltins()}
+     * @param subagent_type     子 agent 名，取值见本工具描述的 Available subagent types（内置 + 六层目录自定义，随 /reload 热更新）
      * @param run_in_background true = 后台执行；null / 缺省 = 前台，判空请用 {@link #background()}
      */
     public record SubagentCall(

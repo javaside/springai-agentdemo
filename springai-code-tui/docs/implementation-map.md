@@ -30,7 +30,7 @@
 | 权限层 | `PermissionCallback.call` | `permission.PermissionEngine` | [9](#9-权限层) |
 | MCP | `McpRegistry.init` | `McpConfigLoader`、`McpClientManager` | [10](#10-mcp) |
 | 技能 / `/skill` | `ReloadableSkillTool` | `SkillCatalog` | [11](#11-技能) |
-| 子 agent | `SubagentTool` | `SubagentRunner`、`SubagentLoader` | [12](#12-子-agent) |
+| 子 agent（内置 + 自定义） | `SubagentTool`（`ReloadableSubagentTool` 代理） | `SubagentCatalog`、`SubagentRunner`、`SubagentLoader` | [12](#12-子-agent) |
 | 后台任务 / `/tasks` | `SubagentTool`(background) | `background.BackgroundTaskRegistry` | [13](#13-后台任务) |
 | 回合中插话 | `CodeTuiView.submissionRoute` | `Interjections`、`InterjectingChatModel` | [14](#14-回合中插话) |
 | 计划模式 | `PlanApprovalBridge` | `PlanRequest`、`PermissionModePrompt` | [15](#15-计划模式) |
@@ -56,7 +56,7 @@
    `--permission-mode` > 配置文件 `defaultMode`。
 6. `McpRegistry.init(root, state, engine)` —— **立即返回**，连接在后台跑（实测一个远程 HTTP
    server 要 5~8 秒）。「已发现 N 个工具」那行由 `onMcpReady` 回调补上。
-7. `AgentTools.build(...)` → `AgentRuntime`（16 字段 record）→ `new CodingAgent(...)`。
+7. `AgentTools.build(...)` → `AgentRuntime`（23 字段 record）→ `new CodingAgent(...)`。
 8. `resumed` 时 `state.replayHistory(...)` 回放历史进 scrollback，并从历史最后一次 TodoWrite 调用重建 todo 面板。
 9. `new CodeTuiView(state, agent, root).run()`，全程 try/finally 关 MCP。
 10. `System.exit(exitCode)` —— 必须强制退，OkHttp Dispatcher 线程 keep-alive 60s。
@@ -361,7 +361,7 @@ Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改
 | `/context` | `ctxUsage.report()` | 无（任何时刻可查） |
 | `/skill` | `openSkillPicker()` | — |
 | `/skills` | `printSkills()` | 无 |
-| `/reload` | `reloadSkills()`（技能 + MCP 配置，后者仅空闲） | MCP 部分忙碌时跳过并提示 |
+| `/reload` | `reloadSkills()`（技能 + 子 agent 定义 + MCP 配置，最后者仅空闲） | 子 agent 摘要行走 `subagentsSummary()`；MCP 部分忙碌时跳过并提示 |
 | `/mcp` | `openMcpPicker()`（面板内 `r` 键 = `reloadMcpConfig()`） | 仅空闲 |
 | `/hooks` | `openHooksPanel()`（按事件分组列表；`t` 信任项目层即时生效） | 无（只读列表 + 信任翻转，不摘工具不关连接，任何时候可开，同 `/tasks`） |
 | `/permissions` | `printPermissions()` + `openPermsPanel()` | 无 |
@@ -549,7 +549,7 @@ sessionExists / forkSession / deleteSession / sessionMessages）。`FileSessionR
 
 ## 8. 工具体系
 
-装配入口 `AgentTools.build`，产物 `AgentRuntime`（22 字段 record，`client()` = `clients.get(activeProviderId)`）。
+装配入口 `AgentTools.build`，产物 `AgentRuntime`（23 字段 record，`client()` = `clients.get(activeProviderId)`）。
 
 ### 8.1 内置工具清单
 
@@ -567,7 +567,7 @@ sessionExists / forkSession / deleteSession / sessionMessages）。`FileSessionR
 | `ZhipuWebSearch` | `ZhipuWebSearchTool`（自写 REST） | 仅配 `ZHIPU_API_KEY`（与大模型共用一把）才注册；不引官方 SDK，离线 stub 单测全覆盖 |
 | `DeepSeekWebSearch` | `DeepSeekWebSearchTool`（自写 REST） | 配 `DEEPSEEK_API_KEY`（与大模型共用一把）且 `DEEPSEEK_SEARCH_ENABLED≠0` 才注册；工具只留 `query` 一参（时间/域名过滤靠搜索语法写进搜索词），summary 渲染截断 800 字符；离线 stub 单测 + 真机冒烟全覆盖 |
 | `Skill` | `ReloadableSkillTool` 代理 → 库 `SkillsTool` | **始终注册**，零技能退化成空 delegate |
-| `Task` `ParallelTasks` | `SubagentTool` | `ParallelTasks` 仅主 agent |
+| `Task` `ParallelTasks` | `ReloadableSubagentTool` 代理 → `SubagentTool` | `ParallelTasks` 仅主 agent；specs = 内置 4 + 六层目录自定义（见 [12](#12-子-agent)），`/reload` 热重载 |
 | `TaskOutput` `ListTasks` | `background.BackgroundTaskTool` / `BackgroundTaskListTool` | 仅主 agent |
 | `ExitPlanMode` | `PlanApprovalBridge.exitPlanModeTool` | 仅主 agent |
 
@@ -904,12 +904,29 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 
 ## 12. 子 agent
 
-工具 `Task` / `ParallelTasks`（`SubagentTool`）→ `SubagentRunner` → `SubagentLoader` / `SubagentSpec`。
+工具 `Task` / `ParallelTasks`（`SubagentTool`，经 `ReloadableSubagentTool` 实例恒定代理挂载）→
+`SubagentRunner` → `SubagentCatalog` / `SubagentLoader` / `SubagentSpec`。
 
-**定义加载**：`SubagentLoader.loadBuiltins()` 读 4 个 classpath 资源
+**定义加载** `SubagentCatalog.load(root)`：先装内置、再扫六层自定义目录（LinkedHashMap 插入序即覆盖序，
+内置必须最先入 map，否则覆盖失效）。内置来自 `SubagentLoader.loadBuiltins()` 读 4 个 classpath 资源
 `/agents/{general-purpose,explore,plan,bash}.md`，用库 `MarkdownParser` 解 frontmatter
-（`name` / `description` / `tools`→allow / `disallowedTools`→deny / `model` / `skills`）+ 正文→systemPrompt。
-**不支持用户自定义子 agent**（无代码扫描 `.codetui/agents/`；`parse(uri)` 支持 `file:` 但无调用方）。
+（`name` / `description` / `tools`→allow / `disallowedTools`→deny / `model` / `skills`）+ 正文→systemPrompt，
+不走容错（坏即程序缺陷，装配期爆炸）。自定义是**六层目录发现**，与技能侧 `SkillCatalog` 同层序同原则
+（**项目 > 用户，自有 > 兼容**）：`~/.claude/agents/` → `~/.agents/agents/` → `~/.codetui/agents/` →
+`<root>/.claude/agents/` → `<root>/.agents/agents/` → `<root>/.codetui/agents/`（自有层最高优先级，可随仓库
+版本化）。文件形态是平铺单文件 `<层>/<名>.md`，name 以 frontmatter 为准；同层按文件名字典序装载（roster
+行序跨 reload 不漂移）。加载顺序即优先级，同名后层覆盖——六层任何一层都可覆盖内置同名（`parse(uri)` 的
+`file:` 能力从此有了调用方）。坏文件（IO/解析抛/缺 name/缺 description）只跳过该文件并记 warnings，
+不炸整体；层目录不存在静默跳过。
+
+**热重载**：`Task` / `ParallelTasks` 的描述 roster 与路由 map 都烘焙在 `SubagentTool` 实例里，经
+`.defaultTools` 进 ChatClient 后无法增删，故挂的是 `ReloadableSubagentTool` 代理（同 `ReloadableSkillTool`
+论证：引擎每次请求现调 `getToolDefinition()`，原子换 delegate 即换 roster + 路由，无需重建 ChatClient；
+装饰链包在代理外层且只包一次）。`SubagentReloader.reload()` **单次** `SubagentCatalog.load` 喂双代理
+（Task 与 ParallelTasks 必须出自同一快照，否则出现「Task 认识 x 而 ParallelTasks 不认识」的双快照分歧）；
+构造体首行即首次 reload，装配期 delegate 已有全量 specs。`/reload`（`CodingAgent.reloadSkills`）联动重扫
+六层目录，`CodeTuiView.reloadSkills` 把 `subagentsSummary()` 的「子 agent：共 M 个（内置 B · 自定义文件 N，
+跳过 K 个坏文件…）」摘要行打在技能行后（桩路径未装配协调者时返回空串、整行跳过）。
 
 内置四个的工具约束：`general-purpose` deny `AskUserQuestionTool, TodoWrite`（前者无问询，后者内容被 UI 丢弃）；
 `explore` / `plan` allow `Read, Grep, Glob`；`bash` allow `Bash, BashOutput, KillShell`。

@@ -108,6 +108,13 @@ public interface SubmitHandler {
     default void reloadSkills() { }
 
     /**
+     * 最近一次子 agent 装载的摘要行（{@code /reload} 输出用：「子 agent：共 M 个（内置 B · 自定义文件 N…）」，
+     * 口径见 {@code SubagentReloader.summary}）。默认<b>空串 = 无自定义子 agent 装配</b>
+     * （回显桩/测试桩/单-client 桩路径），调用方据此跳过整行输出，不打印无信息的空行。
+     */
+    default String subagentsSummary() { return ""; }
+
+    /**
      * 是否仍有在飞子 agent（上一回合被取消后可能仍在跑、且其迟到写入会污染会话）。
      * UI 的 busy 闸门据此把 {@code /continue} 等新回合排队而非立即起跑，避免两回合并发写同一会话。
      * 默认 false，便于回显桩/测试桩省略。

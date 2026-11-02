@@ -45,9 +45,10 @@ import io.github.javaside.springai.codetui.agent.seam.UserQuestionBridge;
 import io.github.javaside.springai.codetui.agent.skill.ReloadableSkillTool;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
 import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
-import io.github.javaside.springai.codetui.agent.subagent.SubagentLoader;
+import io.github.javaside.springai.codetui.agent.subagent.ReloadableSubagentTool;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentCatalog;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentReloader;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
-import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentTool;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentVision;
 import io.github.javaside.springai.codetui.agent.tools.BochaWebSearchTool;
@@ -602,7 +603,6 @@ public final class AgentTools {
         // 使 Shift+Tab 切档在下一次委派即生效（见 SubagentRunner.effectiveSystemPrompt）。
         SubagentRunner subagentRunner = new SubagentRunner(registry, decoratedList, listener,
                 projectInstructions, subagentConcurrency, mcpRegistry, permissionEngine::mode, subagentVision);
-        java.util.Map<String, SubagentSpec> subagentSpecs = SubagentLoader.loadBuiltins();
 
         // 后台子 agent 子系统：注册表（进程内、不落盘）+ 结果限幅落盘 + 常驻线程池。
         // 必须在建 Task / ParallelTasks 之前接上：那两个工具的后台分支拿到的就是这里的派发器引用，
@@ -611,26 +611,39 @@ public final class AgentTools {
         TaskResultStore backgroundResults = new TaskResultStore(root);
         subagentRunner.enableBackground(backgroundRegistry, resolveBackgroundConcurrency());
 
-        ToolCallback taskTool = SubagentTool.create(subagentSpecs, registry.allModels(),
-                (spec, prompt, desc, turnIgnored) ->
-                        // 真实 parentTurnId 从 ThreadLocal 取（Task 工具被 ToolEventCallback 装饰，call 时已压入）
-                        subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()),
-                // 后台派发不带 turnId：后台任务没有归属回合（见 SubagentRunner.runBackgroundBody 传 -1）。
-                subagentRunner::runInBackground);
+        // 自定义子 agent（六层目录发现，见 SubagentCatalog）：Task / ParallelTasks 不再用 build 期一次性的
+        // loadBuiltins() 快照，改挂实例恒定的热重载代理——工具描述 roster 与路由 map 都烘焙在工具实例里，
+        // 经 .defaultTools 进 ChatClient 后无法增删，运行期换 agent 只能换 delegate（原址改 map 模型看不到）。
+        // factory 闭包持上面建好的 registry / subagentRunner 引用：两者建一次永不替换，
+        // delegate 重建后闭包持续成立（reload 只换 specs，不换派发链）。
+        ReloadableSubagentTool reloadableTask = new ReloadableSubagentTool(specs ->
+                SubagentTool.create(specs, registry.allModels(),
+                        (spec, prompt, desc, turnIgnored) ->
+                                // 真实 parentTurnId 从 ThreadLocal 取（Task 工具被 ToolEventCallback 装饰，call 时已压入）
+                                subagentRunner.run(spec, prompt, desc, ToolEventCallback.currentTurnId()),
+                        // 后台派发不带 turnId：后台任务没有归属回合（见 SubagentRunner.runBackgroundBody 传 -1）。
+                        subagentRunner::runInBackground));
+        ReloadableSubagentTool reloadableParallel = new ReloadableSubagentTool(specs ->
+                SubagentTool.createParallel(specs, registry.allModels(),
+                        (dispatches, turnIgnored) ->
+                                subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()),
+                        subagentRunner::runInBackground));
+        // 协调者构造即首次 reload：两代理 delegate 在装配期就有全量 specs（内置 + 自定义），下面的 ChatClient
+        // build 发生在其后，无「首装前描述为空」窗口；此后每次 reload 单次装载喂双代理（同一快照，无双快照分歧）。
+        SubagentReloader subagentReloader = new SubagentReloader(
+                () -> SubagentCatalog.load(root), reloadableTask, reloadableParallel);
         // Task / ParallelTasks 也包一层：它们类别是 INTERNAL、恒放行，包一层零行为差异，
         // 只为「所有工具走同一条链」——否则以后给它们加类别时会漏掉这两个。
+        // ⚠ 装饰链包在<b>代理</b>外层且只包一次：delegate 重建在代理内部原子替换、不穿透装饰层——
+        // 若把装饰写进 factory（随 delegate 每次重建），/reload 会换掉链上的 listener/权限引用。
         ToolCallback decoratedTaskTool =
-                new PermissionCallback(new ToolEventCallback(taskTool, listener, todoReminder, hooks),
+                new PermissionCallback(new ToolEventCallback(reloadableTask, listener, todoReminder, hooks),
                         permissionEngine, listener);
 
         // 批量 ParallelTasks 工具：并发执行多个独立子 agent。parentTurnId 在工具线程（fan-out 前）从 ThreadLocal 取，
-        // 再由 runAll 显式传入每个子任务闭包（子线程不读 ThreadLocal）。
-        ToolCallback parallelTool = SubagentTool.createParallel(subagentSpecs, registry.allModels(),
-                (dispatches, turnIgnored) ->
-                        subagentRunner.runAll(dispatches, ToolEventCallback.currentTurnId()),
-                subagentRunner::runInBackground);
+        // 再由 runAll 显式传入每个子任务闭包（子线程不读 ThreadLocal）。装饰与 Task 同款：包代理、只包一次。
         ToolCallback decoratedParallelTool = new PermissionCallback(
-                new ToolEventCallback(parallelTool, listener, todoReminder, hooks), permissionEngine, listener);
+                new ToolEventCallback(reloadableParallel, listener, todoReminder, hooks), permissionEngine, listener);
 
         // 插话队列：UI 忙时投递，ChatModel 装饰层在下一次调用时取走随 prompt 送达。
         // 所有 provider 共用一个实例——插话与用哪家模型无关，切模型不该把没送出去的话弄丢。
@@ -838,7 +851,7 @@ public final class AgentTools {
                 manualStrategy, tokenCountEstimator, reloadableSkill.skills(), decoratedSkillTool,
                 reloadableSkill, subagentRunner, fileExternalizer, permissionEngine, visionModels,
                 backgroundRegistry, backgroundResults, interjections, goalManager, hooks,
-                systemPromptTokens, bridge, quotaBridge, todoReminder);
+                systemPromptTokens, bridge, quotaBridge, todoReminder, subagentReloader);
     }
 
     /**
@@ -1182,6 +1195,10 @@ public final class AgentTools {
      * @param quotaBridge         L1 限额等待事件的两段式桥（spec §3.6）——镜像 {@code bridge}：与三参 wrap 进
      *                            provider 主链的是<b>同一个实例</b>；经 {@link #wireL1} bind 到
      *                            {@code agent::onL1QuotaWait}（装配期未 bind，volatile null 守卫 no-op）
+     * @param subagentReloader    自定义子 agent 重载协调者——与 Task/ParallelTasks 两代理是<b>同一组实例</b>：
+     *                            CodingAgent 经它 /reload 重扫六层目录喂两代理、subagentsSummary() 经它出摘要行。
+     *                            另建一个等于喂的是没人用的代理、生产工具 roster 永不更新（生产构造点
+     *                            {@code CodeTuiApplication} 必须传本字段，漏传不报错只是 /reload 对子 agent 失效）
      */
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
@@ -1204,7 +1221,8 @@ public final class AgentTools {
                                long systemPromptTokens,
                                L1ReporterBridge bridge,
                                L1QuotaBridge quotaBridge,
-                               TodoStaleReminder todoReminder) {
+                               TodoStaleReminder todoReminder,
+                               SubagentReloader subagentReloader) {
 
         /** 便捷：激活 provider 的 ChatClient（单-provider 用法与旧代码兼容）。 */
         public ChatClient client() { return clients.get(activeProviderId); }

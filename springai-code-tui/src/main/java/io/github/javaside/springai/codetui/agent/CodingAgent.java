@@ -63,6 +63,7 @@ import io.github.javaside.springai.codetui.agent.session.SessionEvents;
 import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
+import io.github.javaside.springai.codetui.agent.subagent.SubagentReloader;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
 import io.github.javaside.springai.codetui.ui.update.UiChangeListener;
@@ -117,6 +118,12 @@ public final class CodingAgent implements SubmitHandler {
     private final ReloadableSkillTool reloadableSkill;   // 可空：生产路径的可重载技能源（/reload 命令触发重扫）
     private final SessionRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel）
     private final SubagentRunner subagentRunner;   // 可空（测试桩）：取消回合时 shutdownNow 在飞并行子 agent + 供 busy 闸门查在飞数
+    /**
+     * 可空（测试桩/未接线）：自定义子 agent 重载协调者——{@code /reload} 经它重扫六层 agent 目录并喂
+     * 装配期的 Task/ParallelTasks 两代理，{@code subagentsSummary()} 经它出摘要行。null 时两方法各自降级
+     * （不重载子 agent / 返回空串），须与 {@code AgentRuntime.subagentReloader()} 是同一实例（见尾加重载 javadoc）。
+     */
+    private final SubagentReloader subagentReloader;
     private final SessionFileExternalizer fileExternalizer;   // 可空（测试桩）：路径②，submit 开头把过往大文本 tool 结果外置为引用
     private final McpRegistry mcpRegistry;   // 可空：MCP 运行期中枢；submit 每回合 .tools(activeTools) 快照注入 + /mcp 门面委托
     /** 可空（测试桩）：权限引擎，与三处装配点里的 PermissionCallback 共用同一实例；门面（模式/规则）直通它。 */
@@ -212,6 +219,7 @@ public final class CodingAgent implements SubmitHandler {
         this.reloadableSkill = null;   // 单-client 桩路径：无可重载源，skills() 用固定 skills、reloadSkills() 无操作
         this.sessionRepository = sessionRepository;
         this.subagentRunner = null;    // 单-client 桩路径：无子 agent 执行器
+        this.subagentReloader = null;  // 单-client 桩路径：无自定义子 agent 装配（subagentsSummary 恒空串、reloadSkills 不重载子 agent）
         this.fileExternalizer = null;  // 单-client 桩路径：无路径②外置器
         this.mcpRegistry = null;       // 单-client 桩路径：无 MCP 支持
         this.permissionEngine = null;  // 单-client 桩路径：无权限引擎（门面退回默认值，见 permissionMode）
@@ -400,6 +408,7 @@ public final class CodingAgent implements SubmitHandler {
     /**
      * 多 provider 生产构造（全参，含 L2 开关）：其余 telescoping 重载一律默认
      * {@code new StreamRetryConfig(StreamRetryMode.ALL)} 委托到本构造——不读环境变量，测试必须可控。
+     * 子 agent 重载协调者未装配（等价 {@code subagentReloader=null}，见尾加重载 javadoc）。
      */
     public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
@@ -416,6 +425,36 @@ public final class CodingAgent implements SubmitHandler {
                        TokenUsageAccumulator usageAccumulator,
                        long systemPromptTokens,
                        StreamRetryConfig retryConfig) {
+        this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
+                tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner,
+                fileExternalizer, mcpRegistry, permissionEngine, visionModels, backgroundRegistry,
+                backgroundResults, interjections, usageAccumulator, systemPromptTokens, retryConfig, null);
+    }
+
+    /**
+     * 多 provider 生产构造（全参 + 子 agent 重载协调者，spec §4.3 装配接线的落点）：
+     * {@code subagentReloader} 必须传 {@code AgentRuntime.subagentReloader()} 那一份——它持有装配期
+     * 建好的 Task/ParallelTasks 两代理，另建一个等于 /reload 喂的是没人用的代理、生产工具的
+     * roster 永不更新（漏传<b>不报错</b>：null 合法，只是 /reload 永不重载子 agent、
+     * subagentsSummary() 恒空——装配面最隐蔽的假绿点，CodeTuiApplication 生产构造点是唯一必查处）。
+     * null = 未装配（桩/旧路径）：reloadSkills 只重扫技能，subagentsSummary() 返回空串。
+     */
+    public CodingAgent(ProviderRegistry registry, java.util.Map<String, ChatClient> clientsByProvider,
+                       AgentListener listener, String sessionId, AtomicLong activeTurnId,
+                       SessionService sessionService, CompactionStrategy manualStrategy,
+                       TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
+                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
+                       SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
+                       PermissionEngine permissionEngine,
+                       java.util.Map<String, VisionMaterializingChatModel> visionModels,
+                       io.github.javaside.springai.codetui.agent.background.BackgroundTaskRegistry backgroundRegistry,
+                       io.github.javaside.springai.codetui.agent.background.TaskResultStore backgroundResults,
+                       Interjections interjections,
+                       TokenUsageAccumulator usageAccumulator,
+                       long systemPromptTokens,
+                       StreamRetryConfig retryConfig,
+                       SubagentReloader subagentReloader) {
         this.chatClient = null;
         this.registry = registry;
         this.clientsByProvider = clientsByProvider;
@@ -430,6 +469,7 @@ public final class CodingAgent implements SubmitHandler {
         this.reloadableSkill = reloadableSkill;
         this.sessionRepository = sessionRepository;
         this.subagentRunner = subagentRunner;
+        this.subagentReloader = subagentReloader;
         this.fileExternalizer = fileExternalizer;
         this.mcpRegistry = mcpRegistry;
         this.permissionEngine = permissionEngine;
@@ -947,12 +987,24 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public List<SkillInfo> skills() { return reloadableSkill != null ? reloadableSkill.skills() : skills; }
 
-    /** {@code /reload}：重扫技能目录（用户级 + 项目级），使运行中新增/删除的技能对模型与 {@code /skills} 生效。 */
+    /**
+     * {@code /reload}：重扫技能目录（用户级 + 项目级），使运行中新增/删除的技能对模型与 {@code /skills} 生效；
+     * 装配了子 agent 协调者时同一次重扫六层 agent 目录（Task/ParallelTasks 两代理换新快照，spec §4.3）。
+     */
     @Override
     public void reloadSkills() {
         if (reloadableSkill != null) {
             reloadableSkill.reload();
         }
+        if (subagentReloader != null) {
+            subagentReloader.reload();
+        }
+    }
+
+    /** 最近一次子 agent 装载的摘要（{@code /reload} 输出用）；未装配协调者（桩路径）返回空串，调用方跳过整行。 */
+    @Override
+    public String subagentsSummary() {
+        return subagentReloader == null ? "" : subagentReloader.summary();
     }
 
     /** busy 闸门查询（层③）：仍有在飞子 agent 时，UI 把 /continue 等新回合排队而非立即起跑。桩路径（runner 为 null）恒 false。 */
