@@ -21,8 +21,8 @@
 ## 2. 参与的类（一张图）
 
 ```
-定义层    agents/*.md ──→ SubagentLoader ──→ SubagentSpec（name/描述/系统提示/allow/deny/model）
-                                                    │
+定义层    agents/*.md（内置 classpath + 六层目录自定义）──→ SubagentCatalog → SubagentLoader ──→ SubagentSpec（name/描述/系统提示/allow/deny/model）
+                                                    │        六层同名后层覆盖 / 坏文件跳过并警告
 工具层    SubagentTool ── "Task"（单个）            │
          SubagentTool ── "ParallelTasks"（批量）    │  路由：subagent_type → spec
          BackgroundTaskTool ── "TaskOutput"（取结果，仅主 agent）
@@ -59,7 +59,27 @@ You are a codebase exploration specialist...                ← systemPrompt 正
 - `model` 可空——这是定义层的**静态**默认值，可被下面 §3.1 的**按次覆盖**盖过。
 - 内置四件：`general-purpose`（几乎全工具）、`explore`/`plan`（只读三件套）、
   `bash`（Bash 系列）。
-- 不支持用户自定义子 agent（没有扫描 `.codetui/agents/` 的代码）。
+- **支持用户自定义子 agent**：往下面六层约定目录放 .md 即可，同名可覆盖内置（见下段）。
+
+**自定义入口（六层目录，放 .md 即生效）**：与技能侧同六层约定，加载顺序即优先级，
+原则**项目 > 用户、自有 > 兼容**——同名后层覆盖，六层任何一层都可覆盖内置同名：
+
+| 优先级（低 → 高） | 层 | 目录 |
+| --- | --- | --- |
+| ①② | 用户级兼容 | `~/.claude/agents/`、`~/.agents/agents/` |
+| ③ | 用户级自有 | `~/.codetui/agents/`（个人跨项目复用） |
+| ④⑤ | 项目级兼容 | `<root>/.claude/agents/`、`<root>/.agents/agents/` |
+| ⑥ | 项目级自有 | `<root>/.codetui/agents/`（随仓库版本化，最高优先级） |
+
+- 文件形态是平铺单文件 `<层>/<名>.md`，格式与内置完全一致：frontmatter
+  `name` / `description` 必填（缺一即跳过），`tools` / `disallowedTools` / `model`
+  可选，**正文即系统提示**；name 以 frontmatter 为准，文件名只是发现入口。
+- 坏文件（缺 name / 缺 description / 解析失败）只跳过该文件并计入 `/reload` 摘要的
+  「跳过 N 个坏文件」，其余定义与内置四件照常可用。
+- **`/reload` 即时生效**：`Task` / `ParallelTasks` 挂的是实例恒定的热重载代理
+  （`ReloadableSubagentTool`，由 `SubagentReloader` 单次装载喂双代理，实现见
+  [implementation-map.md §12](../implementation-map.md)）——改完文件敲 `/reload`，
+  下一次委派模型就看到新 roster，无需重启。
 
 子 agent 的系统提示**每次派发现拼**：spec 正文 + AGENTS.md 项目指令 +
 权限模式段（实时读当前模式，Shift+Tab 切档下一次委派即生效）+ 产物路径提示
