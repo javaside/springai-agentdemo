@@ -410,7 +410,7 @@ public final class CodeTuiView extends InlineApp {
             // 若 /skills 在前，输入 "/skill" 回车会误选到 /skills（只读清单）而进不了选择器。
             new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
-            new SlashCommand("/reload",  "重扫技能目录与 MCP 配置（SKILL.md / mcp.json 改动生效）"),
+            new SlashCommand("/reload",  "重扫技能 / 子 agent 目录与 MCP 配置（SKILL.md / agents/*.md / mcp.json 生效）"),
             new SlashCommand("/mcp",     "管理 MCP 服务器（启停 / r 重载配置）"),
             new SlashCommand("/hooks",   "查看生命周期钩子（可信任项目层）"),
             new SlashCommand("/permissions", "查看权限模式与生效规则"),
@@ -4667,13 +4667,17 @@ public final class CodeTuiView extends InlineApp {
     List<SessionCatalog.SessionSummary> sessionsForTest() { return sessionList; }
     int sessionIndexForTest() { return sessionIndex; }
 
-    /** /reload：重扫两层技能目录 + （空闲时）重载 MCP 配置，各打一行结果
-     * （运行中增删 SKILL.md、改 mcp.json 即时生效，无需重启）。 */
+    /** /reload：重扫技能目录 + 子 agent 定义 + （空闲时）重载 MCP 配置，各打一行结果
+     * （运行中增删 SKILL.md、agents/*.md、改 mcp.json 即时生效，无需重启）。 */
     private void reloadSkills() {
         onSubmit.reloadSkills();
         int n = onSubmit.skills().size();
         state.pushInfo("↻ 已重新扫描技能目录：当前 " + n + " 个技能");
         printSkills();
+        // 子 agent 摘要固定排在技能行后（同一次 /reload 的输出保序由这里顺序输出保证；
+        // headless -p 无 /reload 入口，不走此方法）。空串 = 未装配协调者（测试桩路径），静默跳过。
+        String s = onSubmit.subagentsSummary();
+        if (!s.isEmpty()) state.pushInfo(s);
         reloadMcpConfig();
     }
 
@@ -4685,7 +4689,7 @@ public final class CodeTuiView extends InlineApp {
     private void reloadMcpConfig() {
         if (mcpReloading) return;                               // 一次一个
         if (busy()) {
-            state.pushInfo("⏳ MCP 配置重载需空闲（回合中摘工具会撞在飞调用），技能已重扫——回合结束后再 /reload");
+            state.pushInfo("⏳ MCP 配置重载需空闲（回合中摘工具会撞在飞调用），技能与子 agent 已重扫——回合结束后再 /reload");
             return;
         }
         mcpReloading = true;
