@@ -1,5 +1,6 @@
 package io.github.javaside.springai.codetui.agent.subagent;
 
+import java.util.List;
 import java.util.function.Supplier;
 
 /**
@@ -85,5 +86,14 @@ public final class SubagentReloader {
     /** 首条警告截 80 字符：绝对路径 + 原因可能很长，整条塞进一行摘要会挤爆 /reload 输出；截断加省略号保留「还有下文」信号。 */
     private static String abbreviate(String warning) {
         return warning.length() <= 80 ? warning : warning.substring(0, 80) + "…";
+    }
+
+    /**
+     * 当前全部子 agent 的 UI 投影（{@code /agents} 清单用）：name / description / 来源层标签，
+     * 含内置与六层自定义、同名覆盖后的胜者。与 {@link #summary()} 同读 {@code lastLoaded}——
+     * 构造即首装，故永不为 null、生产恒 ≥ 内置 4 条；reload 后跟随最近一次快照换新。
+     */
+    public List<AgentInfo> agents() {
+        return lastLoaded.infos();
     }
 }

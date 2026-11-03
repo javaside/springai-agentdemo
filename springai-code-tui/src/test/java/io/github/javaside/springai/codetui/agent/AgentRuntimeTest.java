@@ -2,6 +2,7 @@ package io.github.javaside.springai.codetui.agent;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 
+import io.github.javaside.springai.codetui.agent.subagent.AgentInfo;
 import io.github.javaside.springai.codetui.agent.subagent.ReloadableSubagentTool;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentCatalog;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentLoader;
@@ -183,7 +184,8 @@ class AgentRuntimeTest {
 
     /**
      * {@code /reload} 联动（plan T4 两分法）：CodingAgent 的 {@code reloadSkills()} 是否触发子 agent
-     * 重载、{@code subagentsSummary()} 是否给出摘要，按协调者 null / 非 null 两条路径分别钉死。
+     * 重载、{@code subagentsSummary()} 是否给出摘要，按协调者 null / 非 null 两条路径分别钉死；
+     * 同一用例顺带钉 {@code agents()} 两路径（非 null 非空 / null 桩空列表，spec §4.3）。
      *
      * <p>null 桩路径用既有单-client 桩构造（那里硬编码 reloader=null，注入不了真 Reloader）；
      * 非 null 用新尾加重载、其余参数全 null + 真 {@code SubagentReloader}（计数 catalog）——
@@ -192,10 +194,11 @@ class AgentRuntimeTest {
      */
     @Test
     void reloadSkillsTriggersSubagentReload() {
-        // null 桩路径：回显桩/既有测试全走这条路——摘要空串、reload 不炸。
+        // null 桩路径：回显桩/既有测试全走这条路——摘要空串、agents() 空列表、reload 不炸。
         CodingAgent stub = new CodingAgent(null, new StubListener(), "sid", new AtomicLong(),
                 null, null, null);
         assertEquals("", stub.subagentsSummary(), "桩路径无子 agent 装配，摘要应为空串");
+        assertTrue(stub.agents().isEmpty(), "桩路径无子 agent 装配，agents() 应为空列表");
         assertDoesNotThrow(stub::reloadSkills);
 
         // 非 null 路径：真协调者 + 计数 catalog。
@@ -203,7 +206,7 @@ class AgentRuntimeTest {
         SubagentReloader reloader = new SubagentReloader(
                 () -> {
                     loads.incrementAndGet();
-                    return new SubagentCatalog.Loaded(SubagentLoader.loadBuiltins(), 0, List.of());
+                    return builtinLoaded();
                 },
                 new ReloadableSubagentTool(specs -> SubagentTool.create(specs, (s, p, d, t) -> s.name())),
                 new ReloadableSubagentTool(specs -> SubagentTool.createParallel(specs, (d, t) -> List.of())));
@@ -214,5 +217,21 @@ class AgentRuntimeTest {
         agent.reloadSkills();
         assertEquals(before + 1, loads.get(), "reloadSkills 应触发恰好一次子 agent 重载（计数 catalog）");
         assertFalse(agent.subagentsSummary().isEmpty(), "装配协调者后摘要应非空（来自最近一次装载）");
+        assertFalse(agent.agents().isEmpty(), "装配协调者后 agents() 应非空（构造即首装，内置 4 条起）");
+    }
+
+    /**
+     * 与生产同口径的内置装载快照：specs=内置 4、infos=同序 {@code AgentInfo(source=内置)}。
+     * 第四参从 {@code loadBuiltins()} 派生而非手工塞 {@code List.of()}——后者会让
+     * 「agents() 非空」断言恒假（spec §3.2 明文警告的假绿灯）。注：plan 首选的
+     * {@code SubagentCatalog.load(null, null)} 是包级可见，本测试在 agent 包调不到，
+     * 故走 plan 给出的等价备选「从 loadBuiltins() 派生」。
+     */
+    private static SubagentCatalog.Loaded builtinLoaded() {
+        java.util.Map<String, SubagentSpec> builtins = SubagentLoader.loadBuiltins();
+        List<AgentInfo> infos = builtins.values().stream()
+                .map(s -> new AgentInfo(s.name(), s.description(), "内置"))
+                .toList();
+        return new SubagentCatalog.Loaded(builtins, 0, List.of(), infos);
     }
 }

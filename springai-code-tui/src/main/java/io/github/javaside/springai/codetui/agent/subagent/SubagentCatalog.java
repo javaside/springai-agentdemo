@@ -63,8 +63,17 @@ public final class SubagentCatalog {
      *                    ——它不保证迭代序）
      * @param customCount 六层成功装载的文件总数（含覆盖内置的；摘要「自定义文件 N」口径）
      * @param warnings    {@code "<绝对路径>: <原因>"} 列表，坏文件/坏目录各一条
+     * @param infos       UI 投影（{@code /agents} 用）：与 {@code specs} 同 key 同序——装载循环
+     *                    <b>同一次迭代双写</b>（{@code SkillCatalog} 的 byName+fixes 同款先例）构造性
+     *                    保证；同名覆盖时换条目但位置保持，来源层标签自动跟随胜者。
+     *                    {@code List.copyOf} 保序快照，与 {@code specs} 的 unmodifiableMap 同批冻结
      */
-    public record Loaded(Map<String, SubagentSpec> specs, int customCount, List<String> warnings) {
+    public record Loaded(Map<String, SubagentSpec> specs, int customCount, List<String> warnings,
+                         List<AgentInfo> infos) {
+    }
+
+    /** 一层 = 目录 + {@code /agents} 清单里的来源层标签（{@code SkillCatalog.Layer} 同款）。 */
+    private record Layer(Path dir, String source) {
     }
 
     /**
@@ -87,11 +96,18 @@ public final class SubagentCatalog {
         // LinkedHashMap：插入序即覆盖序（put 后勝ち），内置必须最先入 map——
         // 「先层后内置」会让覆盖失效，层序是本类唯一优先级真相。
         LinkedHashMap<String, SubagentSpec> specs = new LinkedHashMap<>();
+        // infos 与 specs 同 key 同序：唯一的维护方式是装载循环同一次迭代双写（见 Loaded.infos javadoc），
+        // 分开维护必然漂移——SubagentCatalogTest 的 keySet 等序断言专杀「只写 specs 忘写 infos」。
+        LinkedHashMap<String, AgentInfo> infos = new LinkedHashMap<>();
         // 内置不走容错：classpath 资源随发布包走，坏即程序缺陷，应在装配期爆炸而非静默降级。
-        specs.putAll(SubagentLoader.loadBuiltins());
+        for (Map.Entry<String, SubagentSpec> builtin : SubagentLoader.loadBuiltins().entrySet()) {
+            specs.put(builtin.getKey(), builtin.getValue());
+            infos.put(builtin.getKey(), new AgentInfo(builtin.getKey(), builtin.getValue().description(), "内置"));
+        }
         List<String> warnings = new ArrayList<>();
         int customCount = 0;
-        for (Path dir : layers(projectRoot, homeDir)) {
+        for (Layer layer : layers(projectRoot, homeDir)) {
+            Path dir = layer.dir();
             if (!Files.isDirectory(dir)) {
                 continue;   // 约定目录普遍不存在（多扫三约定的常态），静默跳过
             }
@@ -115,6 +131,7 @@ public final class SubagentCatalog {
                             continue;
                         }
                         specs.put(spec.name(), spec);
+                        infos.put(spec.name(), new AgentInfo(spec.name(), spec.description(), layer.source()));
                         customCount++;
                     } catch (RuntimeException ex) {
                         warnings.add(file.toAbsolutePath() + ": " + ex.getMessage());
@@ -126,23 +143,27 @@ public final class SubagentCatalog {
             }
         }
         // unmodifiableMap 包 LinkedHashMap 而非 Map.copyOf：后者不保迭代序，roster 依赖插入序。
-        return new Loaded(Collections.unmodifiableMap(specs), customCount, List.copyOf(warnings));
+        // List.copyOf(values()) 按集合迭代序固化（即 LinkedHashMap 插入序），与 specs 同批冻结。
+        return new Loaded(Collections.unmodifiableMap(specs), customCount, List.copyOf(warnings),
+                List.copyOf(infos.values()));
     }
 
-    /** 按优先级排出六层；projectRoot/homeDir 为 null 的整块跳过。 */
-    private static List<Path> layers(Path projectRoot, Path homeDir) {
-        List<Path> layers = new ArrayList<>(6);
+    /**
+     * 按优先级排出六层；projectRoot/homeDir 为 null 的整块跳过。层标签与 {@code SkillCatalog}
+     * 逐字同口径（用户/项目级 {@code .codetui} 是裸「用户/项目」）——两清单并排看时口径分家
+     * 会制造「同名目录两种叫法」的记忆负担。
+     */
+    private static List<Layer> layers(Path projectRoot, Path homeDir) {
+        List<Layer> layers = new ArrayList<>(6);
         if (homeDir != null) {
-            for (String compat : COMPAT_DIR_NAMES) {
-                layers.add(homeDir.resolve(compat));
-            }
-            layers.add(homeDir.resolve(DIR_NAME));
+            layers.add(new Layer(homeDir.resolve(".claude/agents"), "用户·claude"));
+            layers.add(new Layer(homeDir.resolve(".agents/agents"), "用户·agents"));
+            layers.add(new Layer(homeDir.resolve(DIR_NAME), "用户"));
         }
         if (projectRoot != null) {
-            for (String compat : COMPAT_DIR_NAMES) {
-                layers.add(projectRoot.resolve(compat));
-            }
-            layers.add(projectRoot.resolve(DIR_NAME));
+            layers.add(new Layer(projectRoot.resolve(".claude/agents"), "项目·claude"));
+            layers.add(new Layer(projectRoot.resolve(".agents/agents"), "项目·agents"));
+            layers.add(new Layer(projectRoot.resolve(DIR_NAME), "项目"));
         }
         return layers;
     }

@@ -361,6 +361,7 @@ Agent/source mutation          Agent 线程 / 工具线程 / MCP 后台线程改
 | `/context` | `ctxUsage.report()` | 无（任何时刻可查） |
 | `/skill` | `openSkillPicker()` | — |
 | `/skills` | `printSkills()` | 无 |
+| `/agents` | `printAgents()` | 无（只读清单） |
 | `/reload` | `reloadSkills()`（技能 + 子 agent 定义 + MCP 配置，最后者仅空闲） | 子 agent 摘要行走 `subagentsSummary()`；MCP 部分忙碌时跳过并提示 |
 | `/mcp` | `openMcpPicker()`（面板内 `r` 键 = `reloadMcpConfig()`） | 仅空闲 |
 | `/hooks` | `openHooksPanel()`（按事件分组列表；`t` 信任项目层即时生效） | 无（只读列表 + 信任翻转，不摘工具不关连接，任何时候可开，同 `/tasks`） |
@@ -927,6 +928,8 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 构造体首行即首次 reload，装配期 delegate 已有全量 specs。`/reload`（`CodingAgent.reloadSkills`）联动重扫
 六层目录，`CodeTuiView.reloadSkills` 把 `subagentsSummary()` 的「子 agent：共 M 个（内置 B · 自定义文件 N，
 跳过 K 个坏文件…）」摘要行打在技能行后（桩路径未装配协调者时返回空串、整行跳过）。
+`/agents` 则经 `SubmitHandler.agents()` 取 `SubagentReloader.agents()`（`lastLoaded.infos()`——
+`AgentInfo` 含来源层标签，同名覆盖后跟随胜者）。
 
 内置四个的工具约束：`general-purpose` deny `AskUserQuestionTool, TodoWrite`（前者无问询，后者内容被 UI 丢弃）；
 `explore` / `plan` allow `Read, Grep, Glob`；`bash` allow `Bash, BashOutput, KillShell`。

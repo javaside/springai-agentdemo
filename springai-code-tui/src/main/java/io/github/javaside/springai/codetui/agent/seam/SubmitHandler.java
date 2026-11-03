@@ -10,6 +10,7 @@ import io.github.javaside.springai.codetui.agent.media.ModelCapabilities;
 import io.github.javaside.springai.codetui.agent.permission.PermissionMode;
 import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+import io.github.javaside.springai.codetui.agent.subagent.AgentInfo;
 import io.github.javaside.springai.codetui.agent.session.ContextStats;
 import io.github.javaside.springai.codetui.agent.thinking.ModelThinkingSettings;
 import io.github.javaside.springai.codetui.agent.thinking.ThinkingConfig;
@@ -113,6 +114,14 @@ public interface SubmitHandler {
      * （回显桩/测试桩/单-client 桩路径），调用方据此跳过整行输出，不打印无信息的空行。
      */
     default String subagentsSummary() { return ""; }
+
+    /**
+     * 当前全部可用子 agent 清单（{@code /agents} 展示：一行 name + 来源层标签、一行 description）。
+     * 含内置与六层自定义、同名覆盖后的胜者；返回类型引用 {@code agent.subagent} 包——
+     * {@link #skills()} 返回 skill 包 {@code SkillInfo} 的同款跨包先例，seam 本就是 UI↔agent 的桥。
+     * 默认空列表，便于回显桩/测试桩省略。
+     */
+    default List<AgentInfo> agents() { return List.of(); }
 
     /**
      * 是否仍有在飞子 agent（上一回合被取消后可能仍在跑、且其迟到写入会污染会话）。

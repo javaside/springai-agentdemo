@@ -63,6 +63,7 @@ import io.github.javaside.springai.codetui.agent.session.SessionEvents;
 import io.github.javaside.springai.codetui.agent.session.SessionIds;
 import io.github.javaside.springai.codetui.agent.session.SessionTokenEstimator;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
+import io.github.javaside.springai.codetui.agent.subagent.AgentInfo;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentReloader;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
 import io.github.javaside.springai.codetui.agent.tools.ToolEventCallback;
@@ -1005,6 +1006,12 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public String subagentsSummary() {
         return subagentReloader == null ? "" : subagentReloader.summary();
+    }
+
+    /** 当前全部子 agent 的 UI 投影（{@code /agents} 用）；未装配协调者（桩路径）返回空列表，与 summary 的 null 降级同款。 */
+    @Override
+    public List<AgentInfo> agents() {
+        return subagentReloader == null ? List.of() : subagentReloader.agents();
     }
 
     /** busy 闸门查询（层③）：仍有在飞子 agent 时，UI 把 /continue 等新回合排队而非立即起跑。桩路径（runner 为 null）恒 false。 */

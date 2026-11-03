@@ -50,7 +50,18 @@ class SubagentReloaderTest {
 
     private static SubagentCatalog.Loaded loaded(Map<String, SubagentSpec> specs, int customCount,
                                                  List<String> warnings) {
-        return new SubagentCatalog.Loaded(specs, customCount, warnings);
+        return new SubagentCatalog.Loaded(specs, customCount, warnings, deriveInfos(specs));
+    }
+
+    /**
+     * 第四参 infos 在助手<b>内部</b>从 specs 现场派生（保序；source 统一测试标签——层标签语义
+     * 由 SubagentCatalogTest 钉死，这里只关心 agents() 跟随快照换新）。机械传 {@code List.of()}
+     * 会让「构造后 agents() 含初始 agent」断言恒假——spec §3.2 明文警告的假绿灯，故派生而非硬塞。
+     */
+    private static List<AgentInfo> deriveInfos(Map<String, SubagentSpec> specs) {
+        return specs.values().stream()
+                .map(s -> new AgentInfo(s.name(), s.description(), "测试"))
+                .toList();
     }
 
     /**
@@ -74,6 +85,8 @@ class SubagentReloaderTest {
 
         SubagentReloader reloader = new SubagentReloader(countingCatalog, task, parallel);
         assertEquals(1, loadCount.get(), "构造即首次装载，应恰好 load 一次");
+        assertEquals(List.of("alpha"), reloader.agents().stream().map(AgentInfo::name).toList(),
+                "构造即首装，agents() 应含初始快照的 alpha");
 
         catalog.set(loaded(specs("beta"), 1, List.of()));
         reloader.reload();
@@ -89,6 +102,8 @@ class SubagentReloaderTest {
                 "ParallelTasks 代理描述应含同一次快照的 beta：\n" + parallelDesc);
         assertFalse(parallelDesc.contains("alpha"),
                 "ParallelTasks 代理描述不应残留旧快照的 alpha：\n" + parallelDesc);
+        assertEquals(List.of("beta"), reloader.agents().stream().map(AgentInfo::name).toList(),
+                "agents() 应跟随 reload 换新——恰为 beta，不残留 alpha");
     }
 
     /**
@@ -103,12 +118,15 @@ class SubagentReloaderTest {
         ReloadableSubagentTool parallel =
                 new ReloadableSubagentTool(specs -> SubagentTool.createParallel(specs, BATCH_STUB));
 
-        new SubagentReloader(() -> loaded(specs("alpha"), 1, List.of()), task, parallel);
+        SubagentReloader reloader =
+                new SubagentReloader(() -> loaded(specs("alpha"), 1, List.of()), task, parallel);
 
         assertTrue(task.getToolDefinition().description().contains("- alpha: does alpha things"),
                 "构造后未调任何方法，Task 代理描述即应含初始装载的 alpha");
         assertTrue(parallel.getToolDefinition().description().contains("- alpha: does alpha things"),
                 "构造后未调任何方法，ParallelTasks 代理描述即应含初始装载的 alpha");
+        assertTrue(reloader.agents().stream().anyMatch(i -> i.name().equals("alpha")),
+                "构造后未调任何方法，agents() 即应含初始装载的 alpha（非空断言的杀恒空版）");
     }
 
     /** 摘要口径（spec §4.1）：M=specs.size()、N=customCount、K=warnings.size() 各归各位。 */

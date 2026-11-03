@@ -64,12 +64,14 @@ You are a codebase exploration specialist...                ← systemPrompt 正
 **自定义入口（六层目录，放 .md 即生效）**：与技能侧同六层约定，加载顺序即优先级，
 原则**项目 > 用户、自有 > 兼容**——同名后层覆盖，六层任何一层都可覆盖内置同名：
 
-| 优先级（低 → 高） | 层 | 目录 |
-| --- | --- | --- |
-| ①② | 用户级兼容 | `~/.claude/agents/`、`~/.agents/agents/` |
-| ③ | 用户级自有 | `~/.codetui/agents/`（个人跨项目复用） |
-| ④⑤ | 项目级兼容 | `<root>/.claude/agents/`、`<root>/.agents/agents/` |
-| ⑥ | 项目级自有 | `<root>/.codetui/agents/`（随仓库版本化，最高优先级） |
+| 优先级（低 → 高） | 层 | 目录 | `/agents` 标签 |
+| --- | --- | --- | --- |
+| ①② | 用户级兼容 | `~/.claude/agents/`、`~/.agents/agents/` | `用户·claude` / `用户·agents` |
+| ③ | 用户级自有 | `~/.codetui/agents/`（个人跨项目复用） | `用户` |
+| ④⑤ | 项目级兼容 | `<root>/.claude/agents/`、`<root>/.agents/agents/` | `项目·claude` / `项目·agents` |
+| ⑥ | 项目级自有 | `<root>/.codetui/agents/`（随仓库版本化，最高优先级） | `项目` |
+
+「`/agents` 标签」列即 `/agents` 命令在每个子 agent 名字旁显示的来源层；内置四件显示为「内置」。
 
 - 文件形态是平铺单文件 `<层>/<名>.md`，格式与内置完全一致：frontmatter
   `name` / `description` 必填（缺一即跳过），`tools` / `disallowedTools` / `model`
@@ -80,6 +82,10 @@ You are a codebase exploration specialist...                ← systemPrompt 正
   （`ReloadableSubagentTool`，由 `SubagentReloader` 单次装载喂双代理，实现见
   [implementation-map.md §12](../implementation-map.md)）——改完文件敲 `/reload`，
   下一次委派模型就看到新 roster，无需重启。
+- **`/agents` 随时可看当前名单**：把全部可用子 agent（内置 + 六层自定义，含同名
+  覆盖后的胜者——标签跟随胜者所在层）打进对话区，每条一行名字 + 来源层标签、
+  一行描述；只读、无闸门，任何时候可看（同 `/skills`，命令总表见
+  [reference.md](reference.md)）。
 
 子 agent 的系统提示**每次派发现拼**：spec 正文 + AGENTS.md 项目指令 +
 权限模式段（实时读当前模式，Shift+Tab 切档下一次委派即生效）+ 产物路径提示

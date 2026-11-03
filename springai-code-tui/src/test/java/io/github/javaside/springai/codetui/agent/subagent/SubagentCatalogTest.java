@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -139,6 +140,56 @@ class SubagentCatalogTest {
         int bravo = keys.indexOf("bravo");
         assertTrue(alpha >= 4 && bravo >= 4, "自定义应在 4 个内置之后: " + keys);
         assertTrue(alpha < bravo, "同层应按文件名字典序（a.md 先于 b.md）: " + keys);
+    }
+
+    /**
+     * infos 投影（spec §4.1）：六层各一 .md → infos 序 = 内置 4（source=「内置」）先、
+     * 六层按层序后，各条 source 与 {@code SkillCatalog} 层标签逐字同口径；再放项目
+     * {@code .codetui/agents/explore.md} 覆盖内置 → 该条<b>换条目</b>（source/描述跟随胜者）
+     * 但<b>位置保持</b>（LinkedHashMap 同名 put 不挪位）。两段装载后各附一次 keySet 等序
+     * 断言——锁死「只写 specs 忘写 infos」的将来漂移；第二段同时锁「覆盖换条目但位置保持」这半边。
+     */
+    @Test
+    void infosCarrySourceAndFollowOverride(@TempDir Path root, @TempDir Path home) throws Exception {
+        subagentFile(home, ".claude/agents", "u-claude", "U-CLAUDE-BODY");
+        subagentFile(home, ".agents/agents", "u-agents", "U-AGENTS-BODY");
+        subagentFile(home, ".codetui/agents", "u-codetui", "U-CODETUI-BODY");
+        subagentFile(root, ".claude/agents", "p-claude", "P-CLAUDE-BODY");
+        subagentFile(root, ".agents/agents", "p-agents", "P-AGENTS-BODY");
+        subagentFile(root, ".codetui/agents", "p-codetui", "P-CODETUI-BODY");
+
+        SubagentCatalog.Loaded first = SubagentCatalog.load(root, home);
+
+        // 内置 4 按 BUILTIN_URIS 插入序（description 不硬编码，取装载结果本身）+ 六层按层序。
+        List<AgentInfo> expected = new ArrayList<>();
+        for (String builtin : List.of("general-purpose", "explore", "plan", "bash")) {
+            expected.add(new AgentInfo(builtin, first.specs().get(builtin).description(), "内置"));
+        }
+        // 六个自定义条目的 description 都是 subagentFile 写死的 "d"（探明区别于内置的长描述）。
+        expected.add(new AgentInfo("u-claude", "d", "用户·claude"));
+        expected.add(new AgentInfo("u-agents", "d", "用户·agents"));
+        expected.add(new AgentInfo("u-codetui", "d", "用户"));
+        expected.add(new AgentInfo("p-claude", "d", "项目·claude"));
+        expected.add(new AgentInfo("p-agents", "d", "项目·agents"));
+        expected.add(new AgentInfo("p-codetui", "d", "项目"));
+        assertEquals(expected, first.infos(), "infos 应 = 内置 4 + 六层按层序，source 跟随所在层");
+        assertEquals(List.copyOf(first.specs().keySet()),
+                first.infos().stream().map(AgentInfo::name).toList(),
+                "infos 与 specs 必须同 key 同序（spec §4.1 原文断言）");
+
+        // 第二段：项目自有层覆盖内置 explore。
+        subagentFile(root, ".codetui/agents", "explore", "OVERRIDDEN-BODY");
+        SubagentCatalog.Loaded second = SubagentCatalog.load(root, home);
+
+        AgentInfo explore = second.infos().stream()
+                .filter(i -> i.name().equals("explore")).findFirst().orElseThrow();
+        assertEquals("项目", explore.source(), "同名覆盖后 source 应跟随胜者（项目层）");
+        assertEquals("d", explore.description(), "覆盖应是整条换成项目层条目，而非只改标签");
+        expected.set(1, new AgentInfo("explore", "d", "项目"));   // explore 固定位次 1：整表重断也锁住「位置保持」
+        assertEquals(expected, second.infos(), "除 explore 换条目外，其余条目与序应原样保持");
+        assertEquals(List.copyOf(second.specs().keySet()),
+                second.infos().stream().map(AgentInfo::name).toList(),
+                "覆盖后 infos 仍须与 specs 同 key 同序");
     }
 
     /** 在 base/<layerDir> 下写 <name>.md：frontmatter name/description + 一行正文（plan T1 约定的最小合法形态）。 */

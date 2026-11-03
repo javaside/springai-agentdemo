@@ -52,31 +52,31 @@ class CodeTuiViewSlashMenuTest {
         String screen = ViewScreen.of(v);
         assertEquals(10, menuRowCount(screen), "菜单必须封顶 10 行:\n" + screen);
         assertTrue(screen.contains("❯ /model"), "选中项（首条）应可见:\n" + screen);
-        assertFalse(screen.contains("/exit"), "第 21 条不应进屏（封顶的意义）:\n" + screen);
-        assertTrue(screen.contains("显示 1-10 / 共 21 条命令"), "应注明显示区间:\n" + screen);
+        assertFalse(screen.contains("/exit"), "第 22 条不应进屏（封顶的意义）:\n" + screen);
+        assertTrue(screen.contains("显示 1-10 / 共 22 条命令"), "应注明显示区间:\n" + screen);
     }
 
     @Test
     @DisplayName("选中项移到中部：窗口跟随，被折掉的头几条让位")
     void selectionInMiddle_windowFollows() {
         CodeTuiView v = viewWithSlash(new ConversationState(), "/");
-        for (int i = 0; i < 12; i++) v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));   // sel=12 → /resume
+        for (int i = 0; i < 12; i++) v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));   // sel=12 → /review（/agents 插队后顺移一位）
         String screen = ViewScreen.of(v);
-        assertTrue(screen.contains("❯ /resume"), "第 13 条选中时必须可见:\n" + screen);
+        assertTrue(screen.contains("❯ /review"), "第 13 条选中时必须可见:\n" + screen);
         assertFalse(Pattern.compile("^ +(❯ +)?/model\\b.*", Pattern.MULTILINE)
                         .matcher(screen).find(),
                 "/model 已滑出窗口，不应再画（状态行的 /model 不受影响）:\n" + screen);
-        assertTrue(screen.contains("显示 8-17 / 共 21 条命令"), "区间注记应跟随窗口:\n" + screen);
+        assertTrue(screen.contains("显示 8-17 / 共 22 条命令"), "区间注记应跟随窗口:\n" + screen);
     }
 
     @Test
     @DisplayName("选中项到末尾：窗口钳制在尾部，最后一条可见")
     void selectionAtTail_windowClampedToTail() {
         CodeTuiView v = viewWithSlash(new ConversationState(), "/");
-        for (int i = 0; i < 20; i++) v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));   // sel=20 → /exit
+        for (int i = 0; i < 21; i++) v.feedKeyForTest(KeyEvent.ofKey(KeyCode.DOWN));   // sel=21 → /exit（末条）
         String screen = ViewScreen.of(v);
         assertTrue(screen.contains("❯ /exit"), "最后一条选中时必须可见:\n" + screen);
-        assertTrue(screen.contains("显示 12-21 / 共 21 条命令"), "窗口应钳在尾部:\n" + screen);
+        assertTrue(screen.contains("显示 13-22 / 共 22 条命令"), "窗口应钳在尾部:\n" + screen);
     }
 
     @Test
