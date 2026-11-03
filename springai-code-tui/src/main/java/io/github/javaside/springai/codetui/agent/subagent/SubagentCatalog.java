@@ -102,7 +102,7 @@ public final class SubagentCatalog {
         // 内置不走容错：classpath 资源随发布包走，坏即程序缺陷，应在装配期爆炸而非静默降级。
         for (Map.Entry<String, SubagentSpec> builtin : SubagentLoader.loadBuiltins().entrySet()) {
             specs.put(builtin.getKey(), builtin.getValue());
-            infos.put(builtin.getKey(), new AgentInfo(builtin.getKey(), builtin.getValue().description(), "内置"));
+            infos.put(builtin.getKey(), project(builtin.getKey(), builtin.getValue(), "内置"));
         }
         List<String> warnings = new ArrayList<>();
         int customCount = 0;
@@ -131,7 +131,7 @@ public final class SubagentCatalog {
                             continue;
                         }
                         specs.put(spec.name(), spec);
-                        infos.put(spec.name(), new AgentInfo(spec.name(), spec.description(), layer.source()));
+                        infos.put(spec.name(), project(spec.name(), spec, layer.source()));
                         customCount++;
                     } catch (RuntimeException ex) {
                         warnings.add(file.toAbsolutePath() + ": " + ex.getMessage());
@@ -146,6 +146,18 @@ public final class SubagentCatalog {
         // List.copyOf(values()) 按集合迭代序固化（即 LinkedHashMap 插入序），与 specs 同批冻结。
         return new Loaded(Collections.unmodifiableMap(specs), customCount, List.copyOf(warnings),
                 List.copyOf(infos.values()));
+    }
+
+    /**
+     * spec → UI 投影。tools 两字段 null-safe 成空 List：{@code SubagentLoader} 恒产非空 List，
+     * 但测试/桩手造 spec 可能传 null，UI 侧按「空 = 全工具」解读不该顺带炸 NPE；model 照抄
+     * spec 值（null = 跟随当前），不做加工——{@code provider:modelId} 形态由 UI 原样展示。
+     */
+    private static AgentInfo project(String name, SubagentSpec spec, String source) {
+        return new AgentInfo(name, spec.description(), source,
+                spec.allowTools() == null ? List.of() : spec.allowTools(),
+                spec.denyTools() == null ? List.of() : spec.denyTools(),
+                spec.model());
     }
 
     /**

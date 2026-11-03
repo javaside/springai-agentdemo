@@ -230,7 +230,8 @@ class AgentRuntimeTest {
     private static SubagentCatalog.Loaded builtinLoaded() {
         java.util.Map<String, SubagentSpec> builtins = SubagentLoader.loadBuiltins();
         List<AgentInfo> infos = builtins.values().stream()
-                .map(s -> new AgentInfo(s.name(), s.description(), "内置"))
+                .map(s -> new AgentInfo(s.name(), s.description(), "内置",
+                        s.allowTools(), s.denyTools(), s.model()))
                 .toList();
         return new SubagentCatalog.Loaded(builtins, 0, List.of(), infos);
     }

@@ -11,6 +11,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -160,18 +161,21 @@ class SubagentCatalogTest {
 
         SubagentCatalog.Loaded first = SubagentCatalog.load(root, home);
 
-        // 内置 4 按 BUILTIN_URIS 插入序（description 不硬编码，取装载结果本身）+ 六层按层序。
+        // 内置 4 按 BUILTIN_URIS 插入序（description/tools/model 不硬编码，取装载结果本身）+ 六层按层序。
         List<AgentInfo> expected = new ArrayList<>();
         for (String builtin : List.of("general-purpose", "explore", "plan", "bash")) {
-            expected.add(new AgentInfo(builtin, first.specs().get(builtin).description(), "内置"));
+            SubagentSpec spec = first.specs().get(builtin);
+            expected.add(new AgentInfo(builtin, spec.description(), "内置",
+                    spec.allowTools(), spec.denyTools(), spec.model()));
         }
-        // 六个自定义条目的 description 都是 subagentFile 写死的 "d"（探明区别于内置的长描述）。
-        expected.add(new AgentInfo("u-claude", "d", "用户·claude"));
-        expected.add(new AgentInfo("u-agents", "d", "用户·agents"));
-        expected.add(new AgentInfo("u-codetui", "d", "用户"));
-        expected.add(new AgentInfo("p-claude", "d", "项目·claude"));
-        expected.add(new AgentInfo("p-agents", "d", "项目·agents"));
-        expected.add(new AgentInfo("p-codetui", "d", "项目"));
+        // 六个自定义条目的 description 都是 subagentFile 写死的 "d"（探明区别于内置的长描述）；
+        // subagentFile 不写 tools/disallowedTools/model，故投影恒为 空/空/null。
+        expected.add(new AgentInfo("u-claude", "d", "用户·claude", List.of(), List.of(), null));
+        expected.add(new AgentInfo("u-agents", "d", "用户·agents", List.of(), List.of(), null));
+        expected.add(new AgentInfo("u-codetui", "d", "用户", List.of(), List.of(), null));
+        expected.add(new AgentInfo("p-claude", "d", "项目·claude", List.of(), List.of(), null));
+        expected.add(new AgentInfo("p-agents", "d", "项目·agents", List.of(), List.of(), null));
+        expected.add(new AgentInfo("p-codetui", "d", "项目", List.of(), List.of(), null));
         assertEquals(expected, first.infos(), "infos 应 = 内置 4 + 六层按层序，source 跟随所在层");
         assertEquals(List.copyOf(first.specs().keySet()),
                 first.infos().stream().map(AgentInfo::name).toList(),
@@ -185,11 +189,50 @@ class SubagentCatalogTest {
                 .filter(i -> i.name().equals("explore")).findFirst().orElseThrow();
         assertEquals("项目", explore.source(), "同名覆盖后 source 应跟随胜者（项目层）");
         assertEquals("d", explore.description(), "覆盖应是整条换成项目层条目，而非只改标签");
-        expected.set(1, new AgentInfo("explore", "d", "项目"));   // explore 固定位次 1：整表重断也锁住「位置保持」
+        expected.set(1, new AgentInfo("explore", "d", "项目", List.of(), List.of(), null));   // explore 固定位次 1：整表重断也锁住「位置保持」
         assertEquals(expected, second.infos(), "除 explore 换条目外，其余条目与序应原样保持");
         assertEquals(List.copyOf(second.specs().keySet()),
                 second.infos().stream().map(AgentInfo::name).toList(),
                 "覆盖后 infos 仍须与 specs 同 key 同序");
+    }
+
+    /**
+     * infos 的 tools/model 投影（/agents 单行式的数据面）：allowTools/denyTools/model 从 spec
+     * 原样投影——内置 explore 的白名单、general-purpose 的剔除清单、自定义 frontmatter 的
+     * model 逐一钉死。「装载循环双写只写了 name/description/source、漏了新三字段」的变异
+     * （投影处传空/null）在本用例必红。
+     */
+    @Test
+    void infosProjectToolsAndModel(@TempDir Path root, @TempDir Path home) throws Exception {
+        Path dir = root.resolve(".codetui/agents");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("with-model.md"),
+                "---\nname: with-model\ndescription: d\ntools: Read, Grep\ndisallowedTools: Bash\nmodel: qwen-max\n---\nBODY");
+
+        SubagentCatalog.Loaded loaded = SubagentCatalog.load(root, home);
+
+        AgentInfo explore = infoByName(loaded, "explore");
+        assertEquals(List.of("Read", "Grep", "Glob"), explore.allowTools(),
+                "内置 explore 的 tools 白名单应投影进 infos");
+        assertTrue(explore.denyTools().isEmpty(), "explore 未写 disallowedTools，deny 应为空");
+
+        AgentInfo gp = infoByName(loaded, "general-purpose");
+        assertTrue(gp.denyTools().contains("TodoWrite"),
+                "内置 general-purpose 的 disallowedTools 应投影进 infos（含 TodoWrite）");
+        assertTrue(gp.allowTools().isEmpty(), "general-purpose 未写 tools，allow 应为空（= 全工具）");
+
+        assertNull(infoByName(loaded, "bash").model(), "未写 model 的条目 model 应为 null（跟随当前）");
+
+        AgentInfo withModel = infoByName(loaded, "with-model");
+        assertEquals("qwen-max", withModel.model(), "自定义 frontmatter 的 model 应原样投影");
+        assertEquals(List.of("Read", "Grep"), withModel.allowTools(), "自定义 tools 应投影");
+        assertEquals(List.of("Bash"), withModel.denyTools(), "自定义 disallowedTools 应投影");
+    }
+
+    /** 按 name 取 infos 里唯一条目；取不到直接让测试红（orElseThrow）。 */
+    private static AgentInfo infoByName(SubagentCatalog.Loaded loaded, String name) {
+        return loaded.infos().stream()
+                .filter(i -> i.name().equals(name)).findFirst().orElseThrow();
     }
 
     /** 在 base/<layerDir> 下写 <name>.md：frontmatter name/description + 一行正文（plan T1 约定的最小合法形态）。 */

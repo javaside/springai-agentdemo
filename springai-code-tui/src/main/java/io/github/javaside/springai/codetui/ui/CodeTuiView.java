@@ -4736,9 +4736,18 @@ public final class CodeTuiView extends InlineApp {
 
     /**
      * /agents：把全部可用子 agent（内置 + 自定义，含同名覆盖后的胜者）打进 scrollback（灰色信息行），
-     * 两行式仿 {@link #printSkills}——与 /skills 分工：那边管技能清单、这边管子 agent 清单，
-     * 格式刻意一致让用户只学一次。空态文案却不同：技能空是真实用户状态（值得教怎么加 SKILL.md），
-     * 子 agent 空仅桩路径可达（生产装配恒有内置 4 条），故不教添加、只说装配未提供。
+     * <b>分组单行式</b>——头行计数，随后「内置：」「自定义：」两组，每个 agent 恰好一行。
+     *
+     * <p><b>为何放弃旧两行式</b>（仿 {@link #printSkills} 的名字+标签一行、description 全文一行）：
+     * description 是 frontmatter 原文，动辄两三行长句，全文摊开后条目边界糊成一团——这正是旧版
+     * 「看着乱」的根因。单行式把每条压成「名字 + 工具范围 + 指定模型 + 描述首句」：tools/model 是
+     * 扫读清单时价值最高的信息（能读能写？跑在哪个模型上？），description 只留首句当身份提示。
+     *
+     * <p><b>分组而非逐条贴标签</b>：纯内置（生产缺省形态）时每条挂个 [内置] 是重复噪音，组头一次
+     * 说清；自定义条目才带 [来源层] 标签——覆盖内置的同名条目自然落进自定义组，标签跟随胜者。
+     * deny 剔除不占条目行，全部条目打完后集中做脚注（通常只有 general-purpose 一行）。
+     * 空态文案与 /skills 分工的理由照旧：技能空值得教怎么加 SKILL.md，子 agent 空仅桩路径可达
+     * （生产装配恒有内置 4 条），故只说装配未提供。
      */
     private void printAgents() {
         List<AgentInfo> list = onSubmit.agents();
@@ -4746,11 +4755,86 @@ public final class CodeTuiView extends InlineApp {
             state.pushInfo("当前装配未提供子 agent 清单");
             return;
         }
-        state.pushInfo("可用子 agent（Task/ParallelTasks 按 subagent_type 委派）：");
+        List<AgentInfo> builtin = new ArrayList<>();
+        List<AgentInfo> custom = new ArrayList<>();
         for (AgentInfo a : list) {
-            state.pushInfo("  • " + a.name() + "  [" + a.source() + "]");
-            state.pushInfo("      " + a.description());
+            if ("内置".equals(a.source())) {   // 「内置」字面量是 AgentInfo.source 契约的一层（javadoc 钉死），技能侧无此层
+                builtin.add(a);
+            } else {
+                custom.add(a);
+            }
         }
+        // 计数数条目而非 Loaded.customCount：后者数文件（覆盖内置的文件也 +1），条目数才与
+        // 下面逐行打出的行数自洽——/reload 摘要那边叫「自定义文件 N」是有意的口径差。
+        state.pushInfo("子 agent 共 " + list.size() + " 个（内置 " + builtin.size()
+                + " · 自定义 " + custom.size() + "）：");
+        // 填充宽度按全部条目（跨组）最长名算，两组的名字列才对得齐；组空则整组不输出（含内置组：
+        // 四个内置全被自定义覆盖时头行就是「内置 0」，此时打出空组头反而误导）。
+        int nameWidth = 0;
+        for (AgentInfo a : list) {
+            nameWidth = Math.max(nameWidth, displayWidth(a.name()));
+        }
+        if (!builtin.isEmpty()) {
+            state.pushInfo("内置：");
+            for (AgentInfo a : builtin) {
+                state.pushInfo(agentRow(a, nameWidth, false));
+            }
+        }
+        if (!custom.isEmpty()) {
+            state.pushInfo("自定义：");
+            for (AgentInfo a : custom) {
+                state.pushInfo(agentRow(a, nameWidth, true));
+            }
+        }
+        for (AgentInfo a : list) {
+            if (!a.denyTools().isEmpty()) {
+                state.pushInfo("※ " + a.name() + " 另剔除：" + String.join(", ", a.denyTools()));
+            }
+        }
+    }
+
+    /**
+     * 单行条目：{@code "  • " + name + 填充 + [来源层标签] + 工具段 + [ · model] + [ — 描述首句]}。
+     * 填充把 name 对齐到最长名 + 2 空格，宽度走 {@link #displayWidth}（CJK 占 2 列）——
+     * {@code String.format} 按 char 数补空格，中文名每字差 1 列必错位（slash 菜单命令对齐同款论证）。
+     */
+    private static String agentRow(AgentInfo a, int nameWidth, boolean customGroup) {
+        StringBuilder row = new StringBuilder("  • ").append(a.name())
+                .append(" ".repeat(nameWidth + 2 - displayWidth(a.name())));
+        if (customGroup) {
+            row.append('[').append(a.source()).append("] ");
+        }
+        row.append(a.allowTools().isEmpty() ? "全工具" : String.join(", ", a.allowTools()));
+        if (a.model() != null && !a.model().isBlank()) {
+            row.append(" · ").append(a.model());
+        }
+        String desc = firstSentence(a.description());
+        if (!desc.isEmpty()) {
+            row.append(" — ").append(desc);
+        }
+        return row.toString();
+    }
+
+    /**
+     * 描述首句：切到第一个 {@code ". "} 或 {@code "。"}（含句号，不带尾随空格），超过 60 字符截到
+     * 57 + "…"；description 空/空白返回空串（调用方据此省略整段 {@code " — …"}）。
+     */
+    private static String firstSentence(String description) {
+        String d = description == null ? "" : description.trim();
+        if (d.isEmpty()) {
+            return "";
+        }
+        int end = d.length();
+        int dot = d.indexOf(". ");
+        int zh = d.indexOf("。");
+        if (dot >= 0) {
+            end = Math.min(end, dot + 1);
+        }
+        if (zh >= 0) {
+            end = Math.min(end, zh + 1);
+        }
+        String sentence = d.substring(0, end);
+        return sentence.length() > 60 ? sentence.substring(0, 57) + "…" : sentence;
     }
 
     /**
