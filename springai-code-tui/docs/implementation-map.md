@@ -929,7 +929,7 @@ frontmatter 至少 name + description。目录不存在的层静默跳过；某�
 六层目录，`CodeTuiView.reloadSkills` 把 `subagentsSummary()` 的「子 agent：共 M 个（内置 B · 自定义文件 N，
 跳过 K 个坏文件…）」摘要行打在技能行后（桩路径未装配协调者时返回空串、整行跳过）。
 `/agents` 则经 `SubmitHandler.agents()` 取 `SubagentReloader.agents()`（`lastLoaded.infos()`——
-`AgentInfo` 含来源层标签，同名覆盖后跟随胜者）。
+`AgentInfo` 含来源层标签与 tools/model 投影，同名覆盖后跟随胜者）。
 
 内置四个的工具约束：`general-purpose` deny `AskUserQuestionTool, TodoWrite`（前者无问询，后者内容被 UI 丢弃）；
 `explore` / `plan` allow `Read, Grep, Glob`；`bash` allow `Bash, BashOutput, KillShell`。

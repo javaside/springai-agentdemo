@@ -60,7 +60,8 @@ class SubagentReloaderTest {
      */
     private static List<AgentInfo> deriveInfos(Map<String, SubagentSpec> specs) {
         return specs.values().stream()
-                .map(s -> new AgentInfo(s.name(), s.description(), "测试"))
+                .map(s -> new AgentInfo(s.name(), s.description(), "测试",
+                        s.allowTools(), s.denyTools(), s.model()))
                 .toList();
     }
 

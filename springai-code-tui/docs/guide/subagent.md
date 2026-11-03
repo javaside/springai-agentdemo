@@ -71,7 +71,7 @@ You are a codebase exploration specialist...                ← systemPrompt 正
 | ④⑤ | 项目级兼容 | `<root>/.claude/agents/`、`<root>/.agents/agents/` | `项目·claude` / `项目·agents` |
 | ⑥ | 项目级自有 | `<root>/.codetui/agents/`（随仓库版本化，最高优先级） | `项目` |
 
-「`/agents` 标签」列即 `/agents` 命令在每个子 agent 名字旁显示的来源层；内置四件显示为「内置」。
+「`/agents` 标签」列即 `/agents` 清单里自定义条目名字旁显示的来源层标签；内置四件归「内置：」分组，组名即其标签。
 
 - 文件形态是平铺单文件 `<层>/<名>.md`，格式与内置完全一致：frontmatter
   `name` / `description` 必填（缺一即跳过），`tools` / `disallowedTools` / `model`
@@ -83,8 +83,9 @@ You are a codebase exploration specialist...                ← systemPrompt 正
   [implementation-map.md §12](../implementation-map.md)）——改完文件敲 `/reload`，
   下一次委派模型就看到新 roster，无需重启。
 - **`/agents` 随时可看当前名单**：把全部可用子 agent（内置 + 六层自定义，含同名
-  覆盖后的胜者——标签跟随胜者所在层）打进对话区，每条一行名字 + 来源层标签、
-  一行描述；只读、无闸门，任何时候可看（同 `/skills`，命令总表见
+  覆盖后的胜者——标签跟随胜者所在层）打进对话区，一行一个：名字 + 工具范围
+  （全工具/清单）+ 指定模型 + 描述首句，按内置/自定义分组，自定义条目带来源层
+  标签；只读、无闸门，任何时候可看（同 `/skills`，命令总表见
   [reference.md](reference.md)）。
 
 子 agent 的系统提示**每次派发现拼**：spec 正文 + AGENTS.md 项目指令 +
