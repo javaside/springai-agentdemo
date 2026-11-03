@@ -121,7 +121,7 @@ export DEEPSEEK_API_KEY=你的key
 | 模型与 provider | DeepSeek、智谱 GLM、通义千问、Anthropic、OpenAI、OpenCode Go；`/model` 运行时切换，选择按项目记忆在 `.codetui/model.json` |
 | 编码与联网工具 | 文件读写、Shell、Grep/Glob、任务计划、网页抓取、博查中文搜索、Brave 英文搜索、智谱联网搜索（按次计费，`ZHIPU_SEARCH_ENABLED=0` 可关）、DeepSeek 联网搜索（按次计费，`DEEPSEEK_SEARCH_ENABLED=0` 可关）、向用户提问 |
 | 权限与安全 | 有副作用的调用执行前审批；`Shift+Tab` 切换默认、自动接受编辑、计划、跳过权限检查四种模式 |
-| 子 agent 与计划 | `Task`、`ParallelTasks`、后台任务、计划面板和任务面板 |
+| 子 agent 与计划 | `Task`、`ParallelTasks`、后台任务、计划面板和任务面板；自定义子 agent——往六层约定目录（如 `<root>/.codetui/agents/reviewer.md`）放一个 .md 即新增或覆盖内置，`/reload` 即时生效 |
 | 自主目标循环 | `/goal` 设定完成条件，agent 跨轮自主推进：独立小模型逐轮评估、结论注入下一轮，三重熔断 + 两级 Esc |
 | 会话与记忆 | `-c` 恢复会话、自动/手动上下文压缩、项目级长期记忆、`AGENTS.md` 项目指令 |
 | 扩展与多模态 | MCP、Skills、视觉输入、回合中插话 |
@@ -278,7 +278,7 @@ mvn -pl springai-code-tui -am clean package -Pdist
 | [security.md](docs/guide/security.md) | 安全边界、权限层已知限制和使用建议 |
 | [permissions.md](docs/guide/permissions.md) | 审批面板、规则 DSL、权限模式和内置底线 |
 | [background-agent.md](docs/guide/background-agent.md) | 后台子 agent、结果回收、面板和权限矩阵 |
-| [subagent.md](docs/guide/subagent.md) | 子 agent 实现原理：三种执行模式、指定模型、结果回收与取消语义 |
+| [subagent.md](docs/guide/subagent.md) | 子 agent 实现原理：三种执行模式、指定模型、结果回收与取消语义、自定义子 agent（六层目录 + 热重载） |
 | [vision.md](docs/guide/vision.md) | 视觉输入、模型支持、限制和图片处理 |
 | [mcp.md](docs/guide/mcp.md) | MCP 的 stdio / Streamable HTTP 配置和运行期管理 |
 | [skills.md](docs/guide/skills.md) | 技能目录、`SKILL.md` 格式和热加载 |
