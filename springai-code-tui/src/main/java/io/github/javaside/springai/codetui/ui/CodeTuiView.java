@@ -29,6 +29,7 @@ import io.github.javaside.springai.codetui.agent.permission.PermissionRule;
 import io.github.javaside.springai.codetui.agent.permission.RuleScope;
 import io.github.javaside.springai.codetui.agent.session.SessionCatalog;
 import io.github.javaside.springai.codetui.agent.skill.SkillInfo;
+import io.github.javaside.springai.codetui.agent.subagent.AgentInfo;
 import io.github.javaside.springai.codetui.agent.background.BackgroundNotifier;
 import io.github.javaside.springai.codetui.agent.media.ArtifactSource;
 import io.github.javaside.springai.codetui.agent.media.FileReference;
@@ -410,6 +411,7 @@ public final class CodeTuiView extends InlineApp {
             // 若 /skills 在前，输入 "/skill" 回车会误选到 /skills（只读清单）而进不了选择器。
             new SlashCommand("/skill",   "为本条消息指定技能"),
             new SlashCommand("/skills",  "查看可用技能（模型按需自动调用）"),
+            new SlashCommand("/agents",  "列出可用子 agent（内置 + 自定义，含来源层）"),
             new SlashCommand("/reload",  "重扫技能 / 子 agent 目录与 MCP 配置（SKILL.md / agents/*.md / mcp.json 生效）"),
             new SlashCommand("/mcp",     "管理 MCP 服务器（启停 / r 重载配置）"),
             new SlashCommand("/hooks",   "查看生命周期钩子（可信任项目层）"),
@@ -2622,6 +2624,11 @@ public final class CodeTuiView extends InlineApp {
             printSkills();
             return;
         }
+        if (cmd.equals("/agents")) {           // 只读清单：任何时刻都可查，不打断（同 /skills，无前缀冲突）
+            clearInput();
+            printAgents();
+            return;
+        }
         if (cmd.equals("/skill")) {                  // 打开技能选择器（选中后显示为输入框上方标签，发送时加载）
             clearInput();
             openSkillPicker();
@@ -4724,6 +4731,25 @@ public final class CodeTuiView extends InlineApp {
         for (SkillInfo s : list) {
             state.pushInfo("  • " + s.name() + "  [" + s.source() + "]");
             state.pushInfo("      " + s.description());
+        }
+    }
+
+    /**
+     * /agents：把全部可用子 agent（内置 + 自定义，含同名覆盖后的胜者）打进 scrollback（灰色信息行），
+     * 两行式仿 {@link #printSkills}——与 /skills 分工：那边管技能清单、这边管子 agent 清单，
+     * 格式刻意一致让用户只学一次。空态文案却不同：技能空是真实用户状态（值得教怎么加 SKILL.md），
+     * 子 agent 空仅桩路径可达（生产装配恒有内置 4 条），故不教添加、只说装配未提供。
+     */
+    private void printAgents() {
+        List<AgentInfo> list = onSubmit.agents();
+        if (list.isEmpty()) {
+            state.pushInfo("当前装配未提供子 agent 清单");
+            return;
+        }
+        state.pushInfo("可用子 agent（Task/ParallelTasks 按 subagent_type 委派）：");
+        for (AgentInfo a : list) {
+            state.pushInfo("  • " + a.name() + "  [" + a.source() + "]");
+            state.pushInfo("      " + a.description());
         }
     }
 
