@@ -40,9 +40,11 @@ source 标签口径：**六个自定义层标签与技能侧逐字同口径**（
 - 装载时同步维护 `LinkedHashMap<String, AgentInfo>`（与 specs 同 key 同序；
   put 覆盖时 infos 一并覆盖——同名覆盖后标签自动跟随胜者）；
 - `Loaded(specs, customCount, warnings, infos)` 四组件。**破坏性变更**（main 无构造点，
-  仅 test 两处）：`SubagentReloaderTest` 的 `loaded()` 助手（3 处调用共用，改一行）与
-  `AgentRuntimeTest` L206 内联构造——后者第四参**必须传内置 4 个的非空 infos**
-  （机械补 `List.of()` 会让 §4.3「agents() 非空」断言恒假）；
+  仅 test 两处）：`SubagentReloaderTest` 的 `loaded()` 助手（**4 处调用共用**，L64/78/106/119
+  ——助手**内部**从 specs 派生第四参，签名与调用点不动）与 `AgentRuntimeTest` L206
+  内联构造——后者直接改为 `return SubagentCatalog.load(null, null)`（两层目录全空 →
+  恰好内置 4 条自带非空 infos）或从 `loadBuiltins()` 派生；**机械补 `List.of()` 会让
+  §4.3「agents() 非空」断言恒假**；
 - `summary()` 不动（仍从 specs/customCount/warnings 算，不依赖 infos）。
 - 双 map（specs↔infos）「同 key 同序」由装载循环**同一次迭代双写**构造性保证
   （SkillCatalog 的 byName+fixes 同款先例）；§4.1 另加 keySet 等序断言显式锁死
