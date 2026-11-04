@@ -4746,6 +4746,8 @@ public final class CodeTuiView extends InlineApp {
      * <p><b>分组而非逐条贴标签</b>：纯内置（生产缺省形态）时每条挂个 [内置] 是重复噪音，组头一次
      * 说清；自定义条目才带 [来源层] 标签——覆盖内置的同名条目自然落进自定义组，标签跟随胜者。
      * deny 剔除不占条目行，全部条目打完后集中做脚注（通常只有 general-purpose 一行）。
+     * 行宽对着终端宽度六级降级（见 {@link #agentRow}）：窄窗口按「描述 → 模型 → 工具清单 → 标签」
+     * 逐级省略，任何窗口下每条恒一行不折行——出口软折行的续行顶格会打穿列对齐。
      * 空态文案与 /skills 分工的理由照旧：技能空值得教怎么加 SKILL.md，子 agent 空仅桩路径可达
      * （生产装配恒有内置 4 条），故只说装配未提供。
      */
@@ -4774,45 +4776,134 @@ public final class CodeTuiView extends InlineApp {
         for (AgentInfo a : list) {
             nameWidth = Math.max(nameWidth, displayWidth(a.name()));
         }
+        // 宽度一次取齐再逐行传下去：同一份清单各行共用同一 termWidth，降级档位才不会行与行漂移
+        int termWidth = terminalWidth();
         if (!builtin.isEmpty()) {
             state.pushInfo("内置：");
             for (AgentInfo a : builtin) {
-                state.pushInfo(agentRow(a, nameWidth, false));
+                state.pushInfo(agentRow(a, nameWidth, false, termWidth));
             }
         }
         if (!custom.isEmpty()) {
             state.pushInfo("自定义：");
             for (AgentInfo a : custom) {
-                state.pushInfo(agentRow(a, nameWidth, true));
+                state.pushInfo(agentRow(a, nameWidth, true, termWidth));
             }
         }
         for (AgentInfo a : list) {
             if (!a.denyTools().isEmpty()) {
-                state.pushInfo("※ " + a.name() + " 另剔除：" + String.join(", ", a.denyTools()));
+                state.pushInfo(denyFootnote(a, termWidth));
             }
         }
     }
 
     /**
-     * 单行条目：{@code "  • " + name + 填充 + [来源层标签] + 工具段 + [ · model] + [ — 描述首句]}。
+     * 单行条目（宽度自适应）：{@code "  • " + name + 填充 + [来源层标签] + 工具段 + [ · model] + [ — 描述首句]}。
      * 填充把 name 对齐到最长名 + 2 空格，宽度走 {@link #displayWidth}（CJK 占 2 列）——
      * {@code String.format} 按 char 数补空格，中文名每字差 1 列必错位（slash 菜单命令对齐同款论证）。
+     *
+     * <p><b>为何宁可丢段也不折行</b>：scrollback 出口的 {@link TextWrap} 会把超宽逻辑行软折行，
+     * 且续行从第 0 列顶格起排——列对齐（名字列、工具列）瞬间被打穿，一条裂成多行后「分组单行式」
+     * 的扫读价值归零。折行并没有保住信息，只是把旧版「看着乱」原样还回来；按宽降级至少保证
+     * 每一行都完整、可读、可数。取第一个 {@code displayWidth(row) <= termWidth} 的候选，全超用末级。
+     *
+     * <p><b>降级次序的理由</b>（信息价值从低到高丢）：description 只是身份提示，丢了行还是「谁」，
+     * 最先丢；model / tools 是能力画像，中间丢；name 是锚点（用户委派时念的就是它），永远最后丢：
+     * <ol>
+     *   <li>完整行（宽窗现状格式，逐字节不变）；</li>
+     *   <li>砍「 — 描述首句」整段；</li>
+     *   <li>再砍「 · model」段；</li>
+     *   <li>tools 清单缩短为前 2 个 + {@code ", …"}；allow ≤ 2 个时缩短反而更长、空 allow 的
+     *       「全工具」三字已无可缩，两者都直接进下一级；</li>
+     *   <li>只剩 name（仍按 nameWidth 对齐——对齐跨组、跨行有价值）+ [来源层标签]；</li>
+     *   <li>极窄兜底：放弃对齐保身份，name 按显示宽度截到 {@code termWidth - 5} 列 + {@code …}
+     *       （前缀 4 列 + 省略号 1 列；{@code TerminalWidth.substringByWidth} 保证不切半宽字符，
+     *       截完必 ≤ termWidth）。</li>
+     * </ol>
+     *
+     * <p>{@code termWidth} 下限钳 20（极端小窗的保底）。包级纯函数 = 可测接缝
+     * （{@code CodeTuiViewAgentRowTest} 直测，不必起 TUI）。
      */
-    private static String agentRow(AgentInfo a, int nameWidth, boolean customGroup) {
+    static String agentRow(AgentInfo a, int nameWidth, boolean customGroup, int termWidth) {
+        int width = Math.max(20, termWidth);
+        String tools = toolsLabel(a.allowTools());
+        String full = candidateRow(a, nameWidth, customGroup, tools, true, true);
+        if (displayWidth(full) <= width) {
+            return full;
+        }
+        String noDesc = candidateRow(a, nameWidth, customGroup, tools, true, false);
+        if (displayWidth(noDesc) <= width) {
+            return noDesc;
+        }
+        String toolsOnly = candidateRow(a, nameWidth, customGroup, tools, false, false);
+        if (displayWidth(toolsOnly) <= width) {
+            return toolsOnly;
+        }
+        if (a.allowTools().size() > 2) {
+            String shortTools = String.join(", ", a.allowTools().subList(0, 2)) + ", …";
+            String shortened = candidateRow(a, nameWidth, customGroup, shortTools, false, false);
+            if (displayWidth(shortened) <= width) {
+                return shortened;
+            }
+        }
+        String nameTag = nameTagRow(a, nameWidth, customGroup);
+        if (displayWidth(nameTag) <= width) {
+            return nameTag;
+        }
+        return "  • " + dev.tamboui.text.TerminalWidth.substringByWidth(a.name(), width - 5) + "…";
+    }
+
+    /** 工具段文案：allow 为空 = 全工具（继承主 agent 工具集），非空 = 逗号清单。 */
+    private static String toolsLabel(List<String> allowTools) {
+        return allowTools.isEmpty() ? "全工具" : String.join(", ", allowTools);
+    }
+
+    /** 降级第 1~4 级共用的候选行骨架：name + 填充 + [标签] + tools + 可选 model 段 + 可选描述段。 */
+    private static String candidateRow(AgentInfo a, int nameWidth, boolean customGroup,
+                                       String tools, boolean withModel, boolean withDesc) {
         StringBuilder row = new StringBuilder("  • ").append(a.name())
                 .append(" ".repeat(nameWidth + 2 - displayWidth(a.name())));
         if (customGroup) {
             row.append('[').append(a.source()).append("] ");
         }
-        row.append(a.allowTools().isEmpty() ? "全工具" : String.join(", ", a.allowTools()));
-        if (a.model() != null && !a.model().isBlank()) {
+        row.append(tools);
+        if (withModel && a.model() != null && !a.model().isBlank()) {
             row.append(" · ").append(a.model());
         }
-        String desc = firstSentence(a.description());
-        if (!desc.isEmpty()) {
-            row.append(" — ").append(desc);
+        if (withDesc) {
+            String desc = firstSentence(a.description());
+            if (!desc.isEmpty()) {
+                row.append(" — ").append(desc);
+            }
         }
         return row.toString();
+    }
+
+    /**
+     * 降级第 5 级：只剩 name（仍按 nameWidth 对齐）+ [标签]。内置组无标签时填充成尾随空白——
+     * 肉眼不可见却虚增显示宽度，会把明明放得下的行挤进第 6 级，故剥掉。
+     */
+    private static String nameTagRow(AgentInfo a, int nameWidth, boolean customGroup) {
+        StringBuilder row = new StringBuilder("  • ").append(a.name())
+                .append(" ".repeat(nameWidth + 2 - displayWidth(a.name())));
+        if (customGroup) {
+            row.append('[').append(a.source()).append(']');
+        }
+        return row.toString().stripTrailing();
+    }
+
+    /**
+     * deny 脚注（宽度自适应）：超宽时按显示宽度截断 + {@code …}，恒一行不折行（理由同
+     * {@link #agentRow}）。不做多级降级——脚注只是补充信息，截断即够；行主体才值得逐级保内容。
+     * 截断预算 {@code width - 1} 给省略号留 1 列，截完必 ≤ width。
+     */
+    static String denyFootnote(AgentInfo a, int termWidth) {
+        String footnote = "※ " + a.name() + " 另剔除：" + String.join(", ", a.denyTools());
+        int width = Math.max(20, termWidth);
+        if (displayWidth(footnote) <= width) {
+            return footnote;
+        }
+        return dev.tamboui.text.TerminalWidth.substringByWidth(footnote, width - 1) + "…";
     }
 
     /**
