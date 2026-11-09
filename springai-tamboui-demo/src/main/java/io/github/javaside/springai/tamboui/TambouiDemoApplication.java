@@ -3,6 +3,7 @@ package io.github.javaside.springai.tamboui;
 import java.util.Comparator;
 import io.github.javaside.springai.tamboui.demo.BufferBlockDemo;
 import io.github.javaside.springai.tamboui.demo.InlineEventsDemo;
+import io.github.javaside.springai.tamboui.demo.ToolkitChatDemo;
 import io.github.javaside.springai.tamboui.demo.TextStylesWidthDemo;
 import java.util.List;
 import java.util.Scanner;
@@ -21,7 +22,8 @@ public final class TambouiDemoApplication {
         List<TambouiDemo> demos = List.of(
                 new TextStylesWidthDemo(),
                 new BufferBlockDemo(),
-                new InlineEventsDemo()
+                new InlineEventsDemo(),
+                new ToolkitChatDemo()
         );
 
         new TambouiDemoApplication(demos).run();
