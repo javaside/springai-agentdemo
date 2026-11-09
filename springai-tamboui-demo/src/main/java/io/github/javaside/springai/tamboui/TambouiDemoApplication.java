@@ -4,6 +4,7 @@ import java.util.Comparator;
 import io.github.javaside.springai.tamboui.demo.HelloTuiDemo;
 import io.github.javaside.springai.tamboui.demo.TextStyleDemo;
 import io.github.javaside.springai.tamboui.demo.EventsDemo;
+import io.github.javaside.springai.tamboui.demo.ToolkitDslDemo;
 import io.github.javaside.springai.tamboui.demo.WidgetsLayoutDemo;
 import io.github.javaside.springai.tamboui.demo.ToolkitChatDemo;
 import java.util.List;
@@ -36,6 +37,7 @@ public final class TambouiDemoApplication {
                 TextStyleDemo::new,
                 WidgetsLayoutDemo::new,
                 EventsDemo::new,
+                ToolkitDslDemo::new,
                 ToolkitChatDemo::new
         );
     }

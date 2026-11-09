@@ -28,9 +28,8 @@ class DemoSuppliersTest {
     @Test
     void demosInTeachingOrder() {
         List<Supplier<TambouiDemo>> suppliers = TambouiDemoApplication.demoSuppliers();
-        assertEquals(5, suppliers.size());
-        // 第 5 课 Toolkit DSL 尚未落地；旧聊天示例暂占第 6 位，L6 落地后归位
-        assertEquals(List.of(1, 2, 3, 4, 6),
+        assertEquals(6, suppliers.size());
+        assertEquals(List.of(1, 2, 3, 4, 5, 6),
                 suppliers.stream().map(s -> s.get().order()).toList());
     }
 }
