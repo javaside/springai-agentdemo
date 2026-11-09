@@ -103,7 +103,7 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
                                 panel("统计（每帧现算）", richText(stats(stats))),
                                 // Toolkit 自定义按键惯例：focusable + onKeyEvent（Tab 聚焦到本面板后 +/- 生效）
                                 panel(FocusMarks.title("目标行数练习", TARGET_ID.equals(focusedId)),
-                                        text("目标行数: " + targetLines + "（标题带 ▶ 时按 + / - 调整）"))
+                                        text("目标行数: " + targetLines + "（标题带 ▶ 时按 + / - 调整，中文输入法的 ＋－ 也认）"))
                                         .id(TARGET_ID)   // 可聚焦元素必须显式给 id——无 id 不进焦点链（0.4.0 只打 warning）
                                         .focusable()
                                         .onKeyEvent(this::onTargetKey),
@@ -113,17 +113,30 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
                 text("Tab 切换焦点（看标题前的 ▶ 跳动）· Ctrl+C 退出（输入框要能打字，退出键只留 Ctrl+C）"));
     }
 
-    /** 目标行数面板的按键处理：Toolkit 惯例——返回 HANDLED 表示吃掉该键（框架随即重绘）。 */
+    /**
+     * 目标行数面板的按键处理：Toolkit 惯例——返回 HANDLED 表示吃掉该键（框架随即重绘）。
+     * 键位判定见 {@link #isPlus}/{@link #isMinus}（兼容中文输入法的全角 ＋－ 与未按 Shift 的 = _）。
+     */
     private dev.tamboui.toolkit.event.EventResult onTargetKey(dev.tamboui.tui.event.KeyEvent key) {
-        if (key.isChar('+')) {
+        if (isPlus(key)) {
             targetLines = Math.min(20, targetLines + 1);
             return dev.tamboui.toolkit.event.EventResult.HANDLED;
         }
-        if (key.isChar('-')) {
+        if (isMinus(key)) {
             targetLines = Math.max(1, targetLines - 1);
             return dev.tamboui.toolkit.event.EventResult.HANDLED;
         }
         return dev.tamboui.toolkit.event.EventResult.UNHANDLED;
+    }
+
+    /** 加一键：半角 +、全角 ＋（中文输入法形态，用户实报根因）、别名 =。 */
+    static boolean isPlus(dev.tamboui.tui.event.KeyEvent key) {
+        return key.isChar('+') || key.isChar('＋') || key.isChar('=');
+    }
+
+    /** 减一键：半角 -、全角 －、别名 _。 */
+    static boolean isMinus(dev.tamboui.tui.event.KeyEvent key) {
+        return key.isChar('-') || key.isChar('－') || key.isChar('_');
     }
 
     private static Text stats(NotesStats s) {
