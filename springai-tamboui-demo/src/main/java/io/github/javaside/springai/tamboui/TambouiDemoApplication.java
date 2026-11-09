@@ -2,6 +2,7 @@ package io.github.javaside.springai.tamboui;
 
 import java.util.Comparator;
 import io.github.javaside.springai.tamboui.demo.HelloTuiDemo;
+import io.github.javaside.springai.tamboui.demo.TextStyleDemo;
 import io.github.javaside.springai.tamboui.demo.InlineEventsDemo;
 import io.github.javaside.springai.tamboui.demo.ToolkitChatDemo;
 import java.util.List;
@@ -31,6 +32,7 @@ public final class TambouiDemoApplication {
     static List<Supplier<TambouiDemo>> demoSuppliers() {
         return List.of(
                 HelloTuiDemo::new,
+                TextStyleDemo::new,
                 InlineEventsDemo::new,
                 ToolkitChatDemo::new
         );
