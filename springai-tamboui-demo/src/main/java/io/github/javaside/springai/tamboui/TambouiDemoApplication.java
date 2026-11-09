@@ -6,7 +6,7 @@ import io.github.javaside.springai.tamboui.demo.TextStyleDemo;
 import io.github.javaside.springai.tamboui.demo.EventsDemo;
 import io.github.javaside.springai.tamboui.demo.ToolkitDslDemo;
 import io.github.javaside.springai.tamboui.demo.WidgetsLayoutDemo;
-import io.github.javaside.springai.tamboui.demo.ToolkitChatDemo;
+import io.github.javaside.springai.tamboui.demo.InlineChatDemo;
 import java.util.List;
 import java.util.Scanner;
 import java.util.function.Supplier;
@@ -38,7 +38,7 @@ public final class TambouiDemoApplication {
                 WidgetsLayoutDemo::new,
                 EventsDemo::new,
                 ToolkitDslDemo::new,
-                ToolkitChatDemo::new
+                InlineChatDemo::new
         );
     }
 
