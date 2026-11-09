@@ -20,10 +20,10 @@
 这是一个 Java 后端开发者**从零学会 Agent 开发**的实战项目。
 
 路线只有一条：先从 **Spring AI 2.0** 学起，把 Agent 开发的基本概念一个个跑通——对话、提示词模板、
-流式输出、结构化输出、RAG、工具调用、对话记忆、自动装配、终端界面；再用这些知识去读透一个
+流式输出、结构化输出、RAG、工具调用、对话记忆、自动装配、终端界面与 TUI 框架；再用这些知识去读透一个
 真正的编码智能体 **springai-code-tui**，完成实战。走完这条路，Agent 开发对你来说就不再是黑盒。
 
-全项目只有一个核心公式——**Agent = 模型 + 工具 + 记忆 + 循环**。五个模块按这条路线排列
+全项目只有一个核心公式——**Agent = 模型 + 工具 + 记忆 + 循环**。六个模块按这条路线排列
 （仓库里另有一个构建辅助模块 `springai-tamboui-inline-patch`，用于给 TamboUI 打内联补丁，不在学习路线上）：
 
 | 步 | 模块 | 对应公式 | 一句话 |
@@ -32,7 +32,8 @@
 | ② | [springai-agent-demo](springai-agent-demo/README.md) | 工具 + 记忆 + 循环 | `@Tool` 工具调用、对话记忆、多步 Agent |
 | ③ | [springai-boot-demo](springai-boot-demo/README.md) | （工程化） | Spring Boot 自动装配、MCP |
 | ④ | [springai-jline-demo](springai-jline-demo/README.md) | （界面） | JLine 3 终端界面基础 |
-| ⑤ | [springai-code-tui](springai-code-tui/README.md) | 全部组装 | 真正的命令行编码智能体 |
+| ⑤ | [springai-tamboui-demo](springai-tamboui-demo/README.md) | （界面·框架） | TamboUI 终端 UI 框架：文本/立即模式/事件循环/Toolkit DSL |
+| ⑥ | [springai-code-tui](springai-code-tui/README.md) | 全部组装 | 真正的命令行编码智能体 |
 
 > **两类读者**：想学 Agent 开发 → 从下方第 1 步开始；只想用终端编码智能体 →
 > [⬇️ 下载 code-tui](https://github.com/javaside/springai-agentdemo/releases/latest)
@@ -42,8 +43,8 @@
 
 > 全程用 [DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）做对话模型，
 > 一个 API Key 就能跑通全部核心示例（第 3 步的 MCP 示例为可选，需另备 Node.js 环境）。
-> 预期投入：第 1–4 步每步半天左右（第 1 步最长，7 个示例 + 首次启动下载 90MB 模型；第 4 步最短）；
-> API 费用预计在个位数人民币（示例 prompt 都很短）。**第 5 步例外**：默认模型偏强推理、加上子 Agent
+> 预期投入：第 1–5 步每步半天左右（第 1 步最长，7 个示例 + 首次启动下载 90MB 模型；第 5 步最短，不需要 API key）；
+> API 费用预计在个位数人民币（示例 prompt 都很短）。**第 6 步例外**：默认模型偏强推理、加上子 Agent
 > 并发，重度使用一天的花费是几十元量级——可在 `/model` 切换更便宜的模型、用 `/context` 盯用量。
 
 ### 第 1 步 · springai-core-demo —— 学会「跟模型说话」
@@ -115,22 +116,41 @@
 **本步核心认知**：starter = 原始库 + 自动配置。跑一遍「自动配置揭秘」，对照第 1 步手动创建的对象，
 你就能弄清 Boot 替你做了什么。这也是初学者最容易迷糊的地方。
 
-> 注：第 5 步的 code-tui 出于启动速度与装配可控性选择了**手动装配**（回到第 1、2 步的写法），
+> 注：第 6 步的 code-tui 出于启动速度与装配可控性选择了**手动装配**（回到第 1、2 步的写法），
 > 它从本步带走的是 MCP；Boot 自动装配的知识用在你自己的业务项目上。
 
 ### 第 4 步 · springai-jline-demo —— 学会「做终端界面」
 
 Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `Terminal` 接口 Javadoc 分块
 逐节演示：创建与生命周期、输入输出、能力查询（颜色/控制序列）、原始模式。
-交互块（读一行、等一键）会停下来等你操作。第 5 步的流式输出、计划面板、状态栏，
-建立在本步的原始模式与按键读取上（窗口缩放等信号处理由 TUI 框架的 jline3 后端承担）。
+交互块（读一行、等一键）会停下来等你操作。第 6 步的流式输出、计划面板、状态栏，
+建立在本步的原始模式与按键读取上（窗口缩放等信号处理由 TUI 框架的 jline3 后端承担——
+就是下一步 springai-tamboui-demo 教的那个框架）。
 
 **本步核心认知**：终端是一块可编程的画布——原始模式与按键读取是 TUI 的地基。
 
-### 第 5 步 · springai-code-tui —— 拼成一个真正的 Agent
+### 第 5 步 · springai-tamboui-demo —— 学会「用 TUI 框架」
 
-前四步的零件，在这里以生产级形态组装。**先说清体量**：code-tui 是一个近三万行、
-二十多个功能域的真实工程，不是又一个 demo。第 5 步不是「读完」，而是「边用边读」，请合理安排时间。
+第 4 步学会了跟终端打交道（原始模式、按键），但直接拿它写一个完整 TUI 还差一层框架。
+这一步用 [TamboUI](https://tamboui.dev)（Java 版 ratatui，code-tui 的 UI 层）把这一层补上，
+四个示例递进：富文本与宽度口径 → Buffer 立即模式与差分渲染 → 行内事件循环与粘贴 →
+Toolkit 声明式 DSL——最后一个示例是第 6 步 `CodeTuiView` 的 ~150 行缩影
+（live 区差分重绘 + scrollback 下沉双通道）。不需要任何 API key。
+
+覆盖面严格对齐 code-tui 实际用到的 API 子集，并刻意用上游原版 jar 展示它的「病」
+（宽度口径算错、大段粘贴掐断）——这正是仓库里 `springai-tamboui-inline-patch` 模块
+存在的理由（详见[模块 README](springai-tamboui-demo/README.md)）。
+
+**本步核心认知**：TUI 应用 = 事件循环 + 每事件按需重绘；你只描述整屏应该长什么样，
+框架负责算最小差量。
+
+**✅ 自测**：跑示例 1 的宽度对照表，指着带病行说出「上游算几列、终端实际几列」；
+再解释为什么 code-tui 要维护 inline-patch。
+
+### 第 6 步 · springai-code-tui —— 拼成一个真正的 Agent
+
+前五步的零件，在这里以生产级形态组装。**先说清体量**：code-tui 是一个近三万行、
+二十多个功能域的真实工程，不是又一个 demo。第 6 步不是「读完」，而是「边用边读」，请合理安排时间。
 
 | 你学过的概念 | 在 code-tui 里的样子 |
 |---|---|
@@ -138,7 +158,7 @@ Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `T
 | 多步 Agent（第 2 步） | 自动规划并连续调用工具完成编码任务 |
 | 对话记忆（第 2 步） | 升级为事件溯源会话（每轮对话当事件追加存储、可重放）+ 自动压缩（接入 Advisor 链），另有跨会话长期记忆与 `AGENTS.md` 项目指令，详见模块 README |
 | MCP（第 3 步） | 本地 stdio + 远程 Streamable HTTP，`/mcp` 面板运行期启停，`/reload` / 面板 `r` 键重载配置（无需重启） |
-| 终端基础（第 4 步） | 单栏对话式 TUI：流式输出、计划面板、任务面板、状态栏 |
+| 终端基础（第 4 步）+ TUI 框架（第 5 步） | 单栏对话式 TUI：流式输出、计划面板、任务面板、状态栏（TamboUI 行内模式 + Toolkit DSL） |
 
 另有学习路线之外的进阶能力：多 provider 切换、子 Agent（`Task`/`ParallelTasks` 并发委派）、
 权限审批（四档权限模式 + 任何 allow 规则都盖不住的内置底线）、回合中插话、视觉输入（图片不写入对话记忆）。
@@ -146,7 +166,7 @@ Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `T
 
 **怎么学这一步**：先下载发布包，把它当工具用一天；然后对照 [implementation-map.md](springai-code-tui/docs/implementation-map.md)
 （按功能列出「入口 → 关键类 → 实现要点」，主要面向要改代码的读者）阅读源码——你会不断遇到
-前四步学过的概念，只是换成了生产级实现；读不懂的部分可以先跳过。
+前五步学过的概念，只是换成了生产级实现；读不懂的部分可以先跳过。
 这一步的难点更多在终端 UI 与权限工程，而不是新的 Agent 概念。
 
 **✅ 自测**：用它干一天活后回答——执行前后各看一次 `/context`，占用变化最大的分桶是哪个？为什么长会话没把上下文撑爆？
@@ -183,7 +203,10 @@ java -jar springai-boot-demo/target/springai-boot-demo-<version>.jar    # fat ja
 # 第 4 步：交互式终端程序，需在真实终端运行（文件名同样带版本号）
 java -jar springai-jline-demo/target/springai-jline-demo-<version>.jar
 
-# 第 5 步 code-tui：从可随意丢弃、被 Git 干净纳管的项目目录启动（详见该步说明）
+# 第 5 步：TUI 框架示例，同样需真实终端
+java -jar springai-tamboui-demo/target/springai-tamboui-demo-<version>.jar
+
+# 第 6 步 code-tui：从可随意丢弃、被 Git 干净纳管的项目目录启动（详见该步说明）
 cd /path/to/disposable-git-project
 java -jar /path/to/springai-agentdemo/springai-code-tui/target/springai-code-tui.jar
 ```

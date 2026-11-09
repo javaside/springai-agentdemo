@@ -7,8 +7,8 @@
 ## 项目概览
 
 Java 后端开发者从零学会 Agent 开发的教学项目（Apache-2.0），主线是 Spring AI 2.0：
-前四个模块按学习路线递进（对话 → 工具/记忆/循环 → Boot 自动装配 → 终端界面），
-第五个模块 `springai-code-tui` 把全部知识组装成一个近三万行的生产级命令行编码智能体。
+前五个模块按学习路线递进（对话 → 工具/记忆/循环 → Boot 自动装配 → 终端界面 → TUI 框架），
+第六个模块 `springai-code-tui` 把全部知识组装成一个近三万行的生产级命令行编码智能体。
 
 - 技术栈：Java 17、Maven 3.9+、Spring AI 2.0.x（BOM 统一版本；core/agent 模块**不用** Spring Boot）。
 - 文档语言：中文（注释、错误消息、提交正文均为中文，这是仓库常态）。
@@ -21,7 +21,8 @@ Java 后端开发者从零学会 Agent 开发的教学项目（Apache-2.0），�
 | `springai-agent-demo` | 第②步：`@Tool` 工具调用、对话记忆、多步 Agent | 少量 |
 | `springai-boot-demo` | 第③步：Spring Boot starter 自动装配 + MCP | 无 |
 | `springai-jline-demo` | 第④步：JLine 3 终端基础 | 无 |
-| `springai-code-tui` | 第⑤步：编码智能体（主要开发阵地，绝大多数测试在这里） | 全量 |
+| `springai-tamboui-demo` | 第⑤步：TamboUI 终端 UI 框架（对齐 code-tui 用到的 API 子集） | 少量 |
+| `springai-code-tui` | 第⑥步：编码智能体（主要开发阵地，绝大多数测试在这里） | 全量 |
 | `springai-tamboui-inline-patch` | 构建辅助：TamboUI 兼容层/shadow，**不发布到远程仓库** | 有 |
 
 读 code-tui 源码从 [springai-code-tui/docs/implementation-map.md](springai-code-tui/docs/implementation-map.md)
