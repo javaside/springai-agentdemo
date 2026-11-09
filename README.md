@@ -32,7 +32,7 @@
 | ② | [springai-agent-demo](springai-agent-demo/README.md) | 工具 + 记忆 + 循环 | `@Tool` 工具调用、对话记忆、多步 Agent |
 | ③ | [springai-boot-demo](springai-boot-demo/README.md) | （工程化） | Spring Boot 自动装配、MCP |
 | ④ | [springai-jline-demo](springai-jline-demo/README.md) | （界面） | JLine 3 终端界面基础 |
-| ⑤ | [springai-tamboui-demo](springai-tamboui-demo/README.md) | （界面·框架） | TamboUI 终端 UI 框架：文本/立即模式/事件循环/Toolkit DSL |
+| ⑤ | [springai-tamboui-demo](springai-tamboui-demo/README.md) | （界面·框架） | TamboUI 终端 UI 框架入门课程（六课：渲染模型→文本→布局→事件→DSL→行内） |
 | ⑥ | [springai-code-tui](springai-code-tui/README.md) | 全部组装 | 真正的命令行编码智能体 |
 
 > **两类读者**：想学 Agent 开发 → 从下方第 1 步开始；只想用终端编码智能体 →
@@ -43,7 +43,7 @@
 
 > 全程用 [DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）做对话模型，
 > 一个 API Key 就能跑通全部核心示例（第 3 步的 MCP 示例为可选，需另备 Node.js 环境）。
-> 预期投入：第 1–5 步每步半天左右（第 1 步最长，7 个示例 + 首次启动下载 90MB 模型；第 5 步最短，不需要 API key）；
+> 预期投入：第 1–5 步每步半天左右（第 1 步最长，7 个示例 + 首次启动下载 90MB 模型；第 5 步六课约一小时，不需要 API key）；
 > API 费用预计在个位数人民币（示例 prompt 都很短）。**第 6 步例外**：默认模型偏强推理、加上子 Agent
 > 并发，重度使用一天的花费是几十元量级——可在 `/model` 切换更便宜的模型、用 `/context` 盯用量。
 
@@ -132,26 +132,20 @@ Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `T
 ### 第 5 步 · springai-tamboui-demo —— 学会「用 TUI 框架」
 
 第 4 步学会了跟终端打交道（原始模式、按键），但直接拿它写一个完整 TUI 还差一层框架。
-这一步用 [TamboUI](https://tamboui.dev)（Java 版 ratatui，code-tui 的 UI 层）把这一层补上，
-四个示例递进，最后一个示例是第 6 步 `CodeTuiView` 的缩影
-（live 区差分重绘 + scrollback 下沉双通道）。不需要任何 API key。
+这一步用 [TamboUI](https://tamboui.dev)（Java 版 ratatui，code-tui 的 UI 层）把这一层补上：
+**六课递进的入门课程**，跟着做完就能用框架写自己的终端应用，最后一课衔接到第 6 步
+code-tui 的视图。不需要任何 API key。
 
-| # | 示例 | 你将学到 |
-|---|------|---------|
-| 1 | 富文本三粒度 + 宽度口径 | `Span/Line/Text/Style` 与 `CharWidth`——终端对齐的唯一真相源是渲染宽度 |
-| 2 | Buffer 立即模式与差分渲染 | `Buffer/Cell/Frame` + `Block` 边框——你描述整屏，库算最小差量 |
-| 3 | 事件循环与按键绑定 | `InlineTuiRunner` + 按键/粘贴/缩放事件；粘贴三段式 |
-| 4 | Toolkit DSL 迷你聊天 | `InlineApp` + `scope/textArea`——code-tui 视图的缩影 |
+| 课 | 主题 | 本课核心认知 |
+|---|------|-------------|
+| 1 | Hello TUI——渲染模型 | UI 是状态的纯函数；框架 diff 只发变化的格子 |
+| 2 | 文本与样式 | 富文本从带样式的片段（Span）开始；宽度是渲染口径 |
+| 3 | 组件与布局 | 先切区域（Layout/Constraint）再放组件（Block/List/Gauge） |
+| 4 | 事件与交互 | 事件只改状态，「请求重绘」是状态通往屏幕的唯一桥梁 |
+| 5 | Toolkit DSL | 声明式：render() 只声明 UI 树，布局焦点输入全交给框架 |
+| 6 | 行内模式——衔接 code-tui | live 区 + scrollback 双通道；CodeTuiView 的缩影 |
 
-覆盖面严格对齐 code-tui 实际用到的 API 子集，并刻意用上游原版 jar 展示它的「病」
-（宽度口径算错、大段粘贴掐断）——这正是仓库里 `springai-tamboui-inline-patch` 模块
-存在的理由（详见[模块 README](springai-tamboui-demo/README.md)）。
-
-**本步核心认知**：TUI 应用 = 事件循环 + 每事件按需重绘；你只描述整屏应该长什么样，
-框架负责算最小差量。
-
-**✅ 自测**：跑示例 1 的宽度对照表，指着带病行说出「上游算几列、终端实际几列」；
-再解释为什么 code-tui 要维护 inline-patch。
+**✅ 自测**：不看源码说出「一次按键之后屏幕为什么会变」——从事件到状态到重绘的完整链路。
 
 ### 第 6 步 · springai-code-tui —— 拼成一个真正的 Agent
 
@@ -209,7 +203,7 @@ java -jar springai-boot-demo/target/springai-boot-demo-<version>.jar    # fat ja
 # 第 4 步：交互式终端程序，需在真实终端运行（文件名同样带版本号）
 java -jar springai-jline-demo/target/springai-jline-demo-<version>.jar
 
-# 第 5 步：TUI 框架示例，同样需真实终端
+# 第 5 步：TUI 框架课程（六课菜单），同样需真实终端
 java -jar springai-tamboui-demo/target/springai-tamboui-demo-<version>.jar
 
 # 第 6 步 code-tui：从可随意丢弃、被 Git 干净纳管的项目目录启动（详见该步说明）
