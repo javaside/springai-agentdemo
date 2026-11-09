@@ -40,6 +40,9 @@ jobs:
       - name: 测试 springai-code-tui
         run: mvn -B -pl springai-code-tui -am test
 
+      - name: 测试 springai-tamboui-demo
+        run: mvn -B -pl springai-tamboui-demo -am test
+
       - name: 编译其余模块
         run: mvn -B -DskipTests package
 

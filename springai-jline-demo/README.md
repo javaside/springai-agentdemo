@@ -16,7 +16,8 @@ JLine 3 `Terminal` 接口的入门示例。
 | 4. Terminal Attributes | `enterRawMode()` 进原始模式，等你按键，看“无回显、不等回车” |
 
 > 信号处理（如窗口缩放 `Signal.WINCH`）与鼠标支持在完整 TUI 框架（如 TamboUI 的 jline3 后端）里更常见，
-> 本示例聚焦最稳定、最常用的四块核心能力。
+> 本示例聚焦最稳定、最常用的四块核心能力——那个框架的教学见下一步的
+> [springai-tamboui-demo](../springai-tamboui-demo/README.md)（学习路线第 5 步）。
 
 ## 运行
 
