@@ -82,7 +82,7 @@ public final class InlineChatDemo extends InlineApp implements TambouiDemo {
 
     @Override
     public String title() {
-        return "Toolkit DSL 迷你聊天（live 区 + scrollback 双通道）";
+        return "行内模式——迷你聊天（live 区 + scrollback 双通道，衔接 code-tui）";
     }
 
     @Override
