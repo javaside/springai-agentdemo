@@ -101,9 +101,10 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
                                 textArea(notes).id(NOTES_ID)),
                         column(
                                 panel("统计（每帧现算）", richText(stats(stats))),
-                                // Toolkit 自定义按键惯例：focusable + onKeyEvent（Tab 聚焦到本面板后 +/- 生效）
-                                panel(FocusMarks.title("目标行数练习", TARGET_ID.equals(focusedId)),
-                                        text("目标行数: " + targetLines + "（标题带 ▶ 时按 + / - 调整，中文输入法的 ＋－ 也认）"))
+                                // Toolkit 自定义按键惯例：focusable + onKeyEvent（Tab 聚焦到本面板后 +/- 生效）。
+                                // 目标值不是孤立数字：它驱动左侧统计面板的达标对照（见 stats()）。
+                                panel(FocusMarks.title("行数目标（写笔记的小目标）", TARGET_ID.equals(focusedId)),
+                                        text("目标: " + targetLines + " 行（标题带 ▶ 时按 + / - 调整，＋－ 也认）"))
                                         .id(TARGET_ID)   // 可聚焦元素必须显式给 id——无 id 不进焦点链（0.4.0 只打 warning）
                                         .focusable()
                                         .onKeyEvent(this::onTargetKey),
@@ -139,10 +140,14 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
         return key.isChar('-') || key.isChar('－') || key.isChar('_');
     }
 
-    private static Text stats(NotesStats s) {
+    private Text stats(NotesStats s) {
+        GoalProgress goal = GoalProgress.of(s.lines(), targetLines);
         return Text.from(
                 Line.from(Span.styled("字符 " + s.chars(), dev.tamboui.style.Style.create().fg(Color.CYAN))),
                 Line.from(Span.styled("行数 " + s.lines() + "（非空 " + s.nonEmptyLines() + "）",
-                        dev.tamboui.style.Style.create().fg(Color.GREEN))));
+                        dev.tamboui.style.Style.create().fg(Color.GREEN))),
+                // 目标面板 + / - 的结果落在这里：达标绿色 ✓，未达标黄色提示还差几行
+                Line.from(Span.styled("目标 " + targetLines + " 行 · " + goal.label(),
+                        dev.tamboui.style.Style.create().fg(goal.reached() ? Color.GREEN : Color.YELLOW))));
     }
 }
