@@ -29,8 +29,16 @@ public final class DashboardPainter {
     private DashboardPainter() {
     }
 
-    /** 画一帧完整课程面板。listState 由调用方持有（第 4 课将用它做交互）。 */
+    private static final String DEFAULT_FOOTER =
+            "布局语言：length(n) 固定 · percentage(n) 比例 · fill() 吃剩余——切分可嵌套 | 按 q / Esc / Ctrl+C 退出";
+
+    /** 画一帧完整课程面板。listState 由调用方持有（第 3 课静态展示用）。 */
     public static void paint(Frame frame, ListState listState) {
+        paint(frame, listState, 62, DEFAULT_FOOTER);
+    }
+
+    /** 动态版（第 4 课交互用）：Gauge 比例与尾行文本随状态变化——同一棵布局，不同的状态。 */
+    public static void paint(Frame frame, ListState listState, int gaugePercent, String footerText) {
         var parts = DashboardLayout.split(frame.area());
         var header = parts.get(0);
         var middle = parts.get(1);
@@ -59,19 +67,18 @@ public final class DashboardPainter {
                 columns.get(0), listState);
 
         frame.renderWidget(
-                Gauge.builder().ratio(0.62)
-                        .label(dev.tamboui.text.Span.styled("课程进度 62%",
+                Gauge.builder().ratio(gaugePercent / 100.0)
+                        .label(dev.tamboui.text.Span.styled("课程进度 " + gaugePercent + "%",
                                 dev.tamboui.style.Style.create().fg(dev.tamboui.style.Color.GREEN)))
                         .block(rounded("Gauge"))
                         .build(),
                 columns.get(1));
 
-        // 尾：操作提示（本课静态展示；交互是下一课的主题）
+        // 尾：操作提示/状态行（内容由调用方决定——静态课是提示语，交互课是最近按键）
         frame.renderWidget(
                 Paragraph.builder().text(dev.tamboui.text.Text.from(
                         dev.tamboui.text.Line.from(dev.tamboui.text.Span.styled(
-                                "布局语言：length(n) 固定 · percentage(n) 比例 · fill() 吃剩余——切分可嵌套 | 按 q / Esc / Ctrl+C 退出",
-                                dev.tamboui.style.Style.create().fg(dev.tamboui.style.Color.GRAY)))))
+                                footerText, dev.tamboui.style.Style.create().fg(dev.tamboui.style.Color.GRAY)))))
                         .build(),
                 footer);
     }

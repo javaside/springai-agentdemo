@@ -3,6 +3,7 @@ package io.github.javaside.springai.tamboui;
 import java.util.Comparator;
 import io.github.javaside.springai.tamboui.demo.HelloTuiDemo;
 import io.github.javaside.springai.tamboui.demo.TextStyleDemo;
+import io.github.javaside.springai.tamboui.demo.EventsDemo;
 import io.github.javaside.springai.tamboui.demo.WidgetsLayoutDemo;
 import io.github.javaside.springai.tamboui.demo.ToolkitChatDemo;
 import java.util.List;
@@ -34,6 +35,7 @@ public final class TambouiDemoApplication {
                 HelloTuiDemo::new,
                 TextStyleDemo::new,
                 WidgetsLayoutDemo::new,
+                EventsDemo::new,
                 ToolkitChatDemo::new
         );
     }

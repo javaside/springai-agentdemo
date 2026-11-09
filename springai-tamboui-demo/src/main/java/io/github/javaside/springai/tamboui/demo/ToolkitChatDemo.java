@@ -68,7 +68,7 @@ public final class ToolkitChatDemo extends InlineApp implements TambouiDemo {
 
     @Override
     public int order() {
-        return 4;
+        return 6;
     }
 
     @Override
