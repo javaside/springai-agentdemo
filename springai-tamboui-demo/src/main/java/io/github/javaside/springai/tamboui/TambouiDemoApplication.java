@@ -1,10 +1,9 @@
 package io.github.javaside.springai.tamboui;
 
 import java.util.Comparator;
-import io.github.javaside.springai.tamboui.demo.BufferBlockDemo;
+import io.github.javaside.springai.tamboui.demo.HelloTuiDemo;
 import io.github.javaside.springai.tamboui.demo.InlineEventsDemo;
 import io.github.javaside.springai.tamboui.demo.ToolkitChatDemo;
-import io.github.javaside.springai.tamboui.demo.TextStylesWidthDemo;
 import java.util.List;
 import java.util.Scanner;
 import java.util.function.Supplier;
@@ -31,8 +30,7 @@ public final class TambouiDemoApplication {
     /** 示例清单（供给方式：每次 get() 产生新实例）。 */
     static List<Supplier<TambouiDemo>> demoSuppliers() {
         return List.of(
-                TextStylesWidthDemo::new,
-                BufferBlockDemo::new,
+                HelloTuiDemo::new,
                 InlineEventsDemo::new,
                 ToolkitChatDemo::new
         );
