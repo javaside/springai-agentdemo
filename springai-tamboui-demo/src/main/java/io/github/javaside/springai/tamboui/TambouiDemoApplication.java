@@ -1,6 +1,7 @@
 package io.github.javaside.springai.tamboui;
 
 import java.util.Comparator;
+import io.github.javaside.springai.tamboui.demo.BufferBlockDemo;
 import io.github.javaside.springai.tamboui.demo.TextStylesWidthDemo;
 import java.util.List;
 import java.util.Scanner;
@@ -17,7 +18,8 @@ public final class TambouiDemoApplication {
     public static void main(String[] args) {
         // 示例注册点：按 order 顺序展示（order 递增即教学递进）。
         List<TambouiDemo> demos = List.of(
-                new TextStylesWidthDemo()
+                new TextStylesWidthDemo(),
+                new BufferBlockDemo()
         );
 
         new TambouiDemoApplication(demos).run();
