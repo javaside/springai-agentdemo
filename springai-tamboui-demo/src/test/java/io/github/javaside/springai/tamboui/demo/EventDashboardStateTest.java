@@ -50,7 +50,11 @@ class EventDashboardStateTest {
     @Test
     void uninterestingKeyDoesNotRequestRedraw() {
         EventDashboardState state = new EventDashboardState();
+        state.onKey(KeyEvent.ofChar('j'));   // 先产生一个有意义的 lastKey
+        String before = state.lastKey();
         assertFalse(state.onKey(KeyEvent.ofChar('x')));
+        // 纪律自洽：无关键既不请求重绘，也不改动任何状态（否则「返回 false = 无变化」名不副实）
+        assertEquals(before, state.lastKey(), "无关键不得改动 lastKey");
     }
 
     @Test

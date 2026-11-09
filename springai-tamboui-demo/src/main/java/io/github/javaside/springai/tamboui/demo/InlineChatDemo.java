@@ -54,7 +54,7 @@ import static dev.tamboui.toolkit.Toolkit.text;
  * <p>工程备注（不是演示，是使用须知）：code-tui 在生产上以 springai-tamboui-inline-patch
  * 加固了行内渲染与事件解析（差分帧提交、防写阻塞等，见该模块 README）；本课程按上游原版
  * 教学不受影响。另外上游 0.4.0 的 UiRunnable 执行后不触发重绘，所以本课保留默认 tick
- * 驱动流式重绘——code-tui 关掉 tick 依赖的是 patch 增补的重绘请求 API。</p>
+ * 驱动流式重绘（上游默认 tickRate 为 40ms）——code-tui 关掉 tick 依赖的是 patch 增补的重绘请求 API。</p>
  */
 public final class InlineChatDemo extends InlineApp implements TambouiDemo {
 

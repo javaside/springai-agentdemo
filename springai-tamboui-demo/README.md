@@ -17,6 +17,24 @@
 
 **建议学法**：按序做，每课跑一遍、读一遍源码（每个示例类都带逐行注释）；
 第 4 课的状态机、第 6 课的双通道是读 code-tui 源码前最值得吃透的两个模式。
+顺带一提：窗口缩放由框架自动触发重绘（渲染函数经 `frame.area()` 拿到新尺寸），不需要自己处理。
+
+## 每课动手自测（读懂 ≠ 会用，各改一处再跑）
+
+| 课 | 动手 |
+|---|------|
+| 1 | 把欢迎语换成你自己的名字（改 `paint` 里一行），再跑一次看网格打印 |
+| 2 | 把折行段的 `overflow(WRAP_WORD)` 分别换成 `CLIP` / `ELLIPSIS`，看三种裁断的差异 |
+| 3 | 把中段切分 `percentage(60)` 改成 `percentage(30)`，观察 List/Gauge 两栏怎么变 |
+| 4 | 给状态机加一个 `g` 键：按下 Gauge 直接跳到 100（模仿 `onKey` 里 j/k 的写法） |
+| 5 | 给统计面板再加一行「最长一行的字符数」（提示：`NotesStats` 加字段 + 测试先行） |
+| 6 | 把 `REPLY` 换成你自己的多行文本，观察定稿行逐行沉入 scrollback |
+
+## 本课程没教的（进阶出口，官方文档有全解）
+
+课程覆盖入门主线；以下能力未展开，需要时去 [官方文档](https://tamboui.dev/docs/main/index.html) 对应章节：
+更多组件（Table/Chart/Canvas/Calendar/Scrollbar…）、CSS/TCSS 样式、Markup（BBCode 风格）文本、
+Markdown 渲染、Forms 表单与验证、Pilot 测试框架、GraalVM 原生镜像打包。
 
 ## 运行
 

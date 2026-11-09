@@ -53,7 +53,7 @@ class DashboardTest {
         for (int y = 4; y < 20; y++) {
             String row = rowText(buf, y).replace("·", "");
             if (row.contains("▶")) foundHighlight = true;
-            if (row.contains("Gauge") || row.contains("List")) foundItem = true;
+            if (row.contains("第 1 课") || row.contains("第 6 课")) foundItem = true;   // 钉真实条目文本
         }
         assertTrue(foundHighlight, "List 选中行应有 ▶ 高亮");
         assertTrue(foundItem, "List 条目应可见");
