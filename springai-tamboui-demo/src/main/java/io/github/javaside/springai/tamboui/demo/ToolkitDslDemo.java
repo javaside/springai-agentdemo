@@ -45,6 +45,10 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
     /** 「目标行数」练习面板的状态（onKeyEvent 惯例的载体）。 */
     private int targetLines = 3;
 
+    /** 焦点元素 id——输入框与目标面板各一个（显式给 id：焦点链、focusManager 查询都靠它）。 */
+    private static final String NOTES_ID = "notes-input";
+    private static final String TARGET_ID = "target-lines-panel";
+
     @Override
     public int order() {
         return 5;
@@ -85,22 +89,28 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
     protected Element render() {
         NotesStats stats = NotesStats.of(notes.text());
         boolean empty = notes.text().isBlank();
+        // 焦点可视化：上游 Panel 聚焦不画任何标识（Tab 后画面零变化，学习者无从判断焦点在哪）。
+        // 这里在 render() 里查 focusManager().focusedId()，给聚焦面板的标题加 ▶——
+        // Tab 一按，▶ 在两个面板标题间跳动，焦点状态肉眼可见。
+        String focusedId = runner() == null ? null : runner().focusManager().focusedId();
         return column(
                 panel("第 5 课 · Toolkit DSL——render() 只声明这棵树",
                         text("布局/焦点/输入编辑都是框架的事；每个按键后框架重跑 render()，UI 自然跟随状态")),
                 row(
-                        panel("笔记（原生 textArea）", textArea(notes)),
+                        panel(FocusMarks.title("笔记（原生 textArea）", NOTES_ID.equals(focusedId)),
+                                textArea(notes).id(NOTES_ID)),
                         column(
                                 panel("统计（每帧现算）", richText(stats(stats))),
                                 // Toolkit 自定义按键惯例：focusable + onKeyEvent（Tab 聚焦到本面板后 +/- 生效）
-                                panel("目标行数练习", text("目标行数: " + targetLines + "（聚焦后按 + / - 调整）"))
-                                        .id("target-lines-panel")   // 可聚焦元素必须显式给 id——无 id 不进焦点链（0.4.0 只打 warning）
+                                panel(FocusMarks.title("目标行数练习", TARGET_ID.equals(focusedId)),
+                                        text("目标行数: " + targetLines + "（标题带 ▶ 时按 + / - 调整）"))
+                                        .id(TARGET_ID)   // 可聚焦元素必须显式给 id——无 id 不进焦点链（0.4.0 只打 warning）
                                         .focusable()
                                         .onKeyEvent(this::onTargetKey),
                                 // scope：条件为 false 时整块隐藏——「面板用完即收起」的全部机制
                                 InlineToolkit.scope(empty,
                                         panel("提示", text("输入为空时这块才出现；开打字它就收起"))))),
-                text("Tab 切换焦点（输入框 ↔ 目标行数面板）· Ctrl+C 退出（输入框要能打字，退出键只留 Ctrl+C）"));
+                text("Tab 切换焦点（看标题前的 ▶ 跳动）· Ctrl+C 退出（输入框要能打字，退出键只留 Ctrl+C）"));
     }
 
     /** 目标行数面板的按键处理：Toolkit 惯例——返回 HANDLED 表示吃掉该键（框架随即重绘）。 */
