@@ -72,7 +72,7 @@ public final class TextStylesWidthDemo implements TambouiDemo {
                     ? AnsiStringBuilder.styleToAnsi(Style.create().fg(Color.RED)) + "  ← 病（不符）" + AnsiStringBuilder.RESET
                     : "";
             System.out.printf("  %-12s %-4d %-8d %-8d%s%n",
-                    row.sample(), row.sample().length(), row.upstream(), row.actualTerminal(), mark);
+                    row.sample(), row.codePoints(), row.upstream(), row.actualTerminal(), mark);
         }
         System.out.println("""
 

@@ -29,6 +29,14 @@ import io.github.javaside.springai.tamboui.TambouiDemo;
  */
 public final class InlineEventsDemo implements TambouiDemo {
 
+    /**
+     * live 区高度。教学内容（含三段式教学块 7 行）画到第 12 行 + 底边框 1 行 = 14——
+     * 高度不足时 Buffer.setString 对越界行<b>静默丢弃</b>（上游 0.4.0 实测），「药方」末行
+     * 会无声消失（终审 Critical 修复：此前为 12，药方第二行每次运行都被丢弃）。
+     * InlineEventsPaintTest 钉住「末行可见 + 底边框完整」。
+     */
+    static final int LIVE_HEIGHT = 14;
+
     private static final KeyTrigger UP = KeyTrigger.key(KeyCode.UP);
     private static final KeyTrigger DOWN = KeyTrigger.key(KeyCode.DOWN);
     private static final KeyTrigger LEFT = KeyTrigger.key(KeyCode.LEFT);
@@ -56,7 +64,7 @@ public final class InlineEventsDemo implements TambouiDemo {
         // bracketedPaste(true)：启用括号粘贴协议，粘贴才会作为 PasteEvent 整体到达
         // （否则被拆成逐键事件，与「慢慢打字」无法区分）。code-tui 同款开关。
         try (InlineTuiRunner runner = InlineTuiRunner.create(
-                InlineTuiConfig.builder(12).bracketedPaste(true).build())) {
+                InlineTuiConfig.builder(LIVE_HEIGHT).bracketedPaste(true).build())) {
 
             Renderer renderer = frame -> paint(frame.buffer(), frame.width(), frame.height());
 
@@ -83,8 +91,8 @@ public final class InlineEventsDemo implements TambouiDemo {
         }
     }
 
-    /** 整帧重画仪表盘（立即模式：不看上一帧，全量描述）。 */
-    private void paint(Buffer buf, int width, int height) {
+    /** 整帧重画仪表盘（立即模式：不看上一帧，全量描述）。包内可见供画布适配测试离屏调用。 */
+    void paint(Buffer buf, int width, int height) {
         Rect area = new Rect(0, 0, width, height);
         dev.tamboui.widgets.block.Block block = dev.tamboui.widgets.block.Block.builder()
                 .borders(dev.tamboui.widgets.block.Borders.ALL)

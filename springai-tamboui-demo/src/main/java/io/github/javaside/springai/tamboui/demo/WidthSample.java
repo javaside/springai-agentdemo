@@ -11,4 +11,9 @@ package io.github.javaside.springai.tamboui.demo;
  * @param sick           两口径是否不符（带病行——教学展示的核心）
  */
 public record WidthSample(String label, String sample, int upstream, int actualTerminal, boolean sick) {
+
+    /** 码点个数（≠ String.length() 的 UTF-16 单元数——ZWJ 家族 5 个码点占 8 个 char）。 */
+    public int codePoints() {
+        return sample.codePointCount(0, sample.length());
+    }
 }

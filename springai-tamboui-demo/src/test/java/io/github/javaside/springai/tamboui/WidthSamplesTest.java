@@ -88,6 +88,19 @@ class WidthSamplesTest {
     }
 
     @Test
+    void codePointCountColumnCountsCodePointsNotUtf16Units() {
+        // 「码点数」列必须按码点计：ZWJ 家族是 5 个码点、8 个 UTF-16 单元
+        // （终审 Important 修复：此前展示 String.length()，把 UTF-16 单元数当码点数教）
+        List<WidthSample> table = WidthSamples.table();
+        assertEquals(1, table.get(0).codePoints());
+        assertEquals(1, table.get(1).codePoints());
+        assertEquals(2, table.get(2).codePoints());
+        assertEquals(3, table.get(3).codePoints());
+        assertEquals(5, table.get(4).codePoints());
+        assertEquals(3, table.get(5).codePoints());
+    }
+
+    @Test
     void everyUpstreamValueMatchesLiveLibrary() {
         // 表与库现场互证：WidthSamples 里写死的 upstream 值必须等于当场调 CharWidth 的返回值。
         for (WidthSample row : WidthSamples.table()) {

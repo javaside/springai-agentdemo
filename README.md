@@ -133,9 +133,15 @@ Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `T
 
 第 4 步学会了跟终端打交道（原始模式、按键），但直接拿它写一个完整 TUI 还差一层框架。
 这一步用 [TamboUI](https://tamboui.dev)（Java 版 ratatui，code-tui 的 UI 层）把这一层补上，
-四个示例递进：富文本与宽度口径 → Buffer 立即模式与差分渲染 → 行内事件循环与粘贴 →
-Toolkit 声明式 DSL——最后一个示例是第 6 步 `CodeTuiView` 的 ~150 行缩影
+四个示例递进，最后一个示例是第 6 步 `CodeTuiView` 的缩影
 （live 区差分重绘 + scrollback 下沉双通道）。不需要任何 API key。
+
+| # | 示例 | 你将学到 |
+|---|------|---------|
+| 1 | 富文本三粒度 + 宽度口径 | `Span/Line/Text/Style` 与 `CharWidth`——终端对齐的唯一真相源是渲染宽度 |
+| 2 | Buffer 立即模式与差分渲染 | `Buffer/Cell/Frame` + `Block` 边框——你描述整屏，库算最小差量 |
+| 3 | 事件循环与按键绑定 | `InlineTuiRunner` + 按键/粘贴/缩放事件；粘贴三段式 |
+| 4 | Toolkit DSL 迷你聊天 | `InlineApp` + `scope/textArea`——code-tui 视图的缩影 |
 
 覆盖面严格对齐 code-tui 实际用到的 API 子集，并刻意用上游原版 jar 展示它的「病」
 （宽度口径算错、大段粘贴掐断）——这正是仓库里 `springai-tamboui-inline-patch` 模块

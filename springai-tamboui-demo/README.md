@@ -13,7 +13,7 @@
 | 3 | 事件循环与按键绑定 | `InlineTuiRunner/InlineTuiConfig` + `KeyEvent/PasteEvent/ResizeEvent` + `KeyTrigger`；粘贴三段式 |
 | 4 | Toolkit DSL 迷你聊天 | `InlineApp` + `Toolkit.text/richText/column/scope` + `textArea`——code-tui 视图的 ~150 行缩影 |
 
-示例 1 不进 TUI 模式（stdout 直出）；示例 2、3、4 会接管终端，`q`/`Esc` 或 `Ctrl+C` 退出。
+示例 1 不进 TUI 模式（stdout 直出）；示例 2、3 会接管终端（`q`/`Esc` 退出），示例 4 是聊天输入框——里面要打字，故只绑 `Ctrl+C` 退出（`q`/`Esc` 会进输入框，这是 code-tui 的同款键位设计）。
 
 ## 运行
 
