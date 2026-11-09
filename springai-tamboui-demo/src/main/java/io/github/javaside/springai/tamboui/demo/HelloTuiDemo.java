@@ -17,6 +17,7 @@ import io.github.javaside.springai.tamboui.TambouiDemo;
  * 第 1 课 Hello TUI——渲染模型 —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p>全屏模式（{@link TuiRunner} + 备用屏幕）：应用运行时接管整个终端，退出后终端复原。
+ * 默认退出键 q/Q/Ctrl+C（Esc 绑定的是 cancel 动作）。
  * 一个最小的 TUI 应用只有两个函数：</p>
  * <ul>
  *   <li><b>渲染函数</b>（renderer）：把「这一帧应该长什么样」整帧画进 {@code Frame}——
@@ -72,14 +73,17 @@ public final class HelloTuiDemo implements TambouiDemo {
         System.out.println("框架拿本帧与上一帧的 Buffer 做 diff，只把变化的 Cell 发给终端。");
     }
 
-    /** 画一帧：居中的欢迎语 + 提示行。Frame 是 Buffer 的封装入口，renderWidget 把组件画进区域。 */
+    /**
+     * 画一帧：居中的欢迎语 + 提示行。Frame 是 Buffer 的封装入口，renderWidget 把组件画进区域。
+     * （paint 里用到的 Span/Style/Color 着色调用是第 2 课的正题，这里先当作「带颜色的字符串」即可。）
+     */
     private void paint(Frame frame) {
         Text text = Text.from(
                 Line.from(Span.styled("你好，TamboUI！", Style.create().fg(Color.CYAN).bold())).centered(),
                 Line.from(Span.raw("")).centered(),
                 Line.from(Span.styled("第 1 课：这一屏就是一个 Cell 网格，你按任意退出键后我会把它打印出来",
                         Style.create().fg(Color.GRAY))).centered(),
-                Line.from(Span.styled("按 q / Esc / Ctrl+C 退出", Style.create().fg(Color.YELLOW))).centered()
+                Line.from(Span.styled("按 q / Ctrl+C 退出（Esc 是框架的 cancel 动作，不退出）", Style.create().fg(Color.YELLOW))).centered()
         );
         frame.renderWidget(Paragraph.builder().text(text).build(), frame.area());
         // 留一份快照：退出后打印网格，让「Buffer」从概念变成实物

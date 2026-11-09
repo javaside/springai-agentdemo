@@ -20,8 +20,9 @@ import java.time.Duration;
  *
  * <pre>事件 → 状态迁移（EventDashboardState）→（状态变了才）返回 true 请求重绘 → 下一帧自然反映</pre>
  *
- * <p>注意 tickRate(100ms) 只是让 TickEvent 周期到达——Tick 的语义是「请求重绘的脉冲」，
- * 不携带时间；状态变化与否由状态机回答，渲染函数永远只看状态。</p>
+ * <p>tickRate(100ms) 让 TickEvent 周期到达；事件自带真实时长（elapsedSeconds()），
+ * 本课按计数简化。状态变化与否由状态机回答，渲染函数永远只看状态。另：窗口缩放
+ * 由框架自动触发重绘（渲染函数经 frame.area() 拿到新尺寸），不需要自己处理。</p>
  *
  * <p><b>本课核心认知</b>：事件只改状态，「请求重绘」是状态通往屏幕的唯一桥梁；
  * 按需重绘（没变就返回 false）是 TUI 的基本纪律。</p>
@@ -70,6 +71,6 @@ public final class EventsDemo implements TambouiDemo {
 
     private void paint(Frame frame) {
         DashboardPainter.paint(frame, listState, state.gaugePercent(),
-                "最近按键: " + state.lastKey() + " | j/k 或 ↓/↑ 移动 | q / Esc / Ctrl+C 退出");
+                "最近按键: " + state.lastKey() + " | j/k 或 ↓/↑ 移动 | q / Ctrl+C 退出");
     }
 }

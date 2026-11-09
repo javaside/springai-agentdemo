@@ -30,7 +30,7 @@ public final class DashboardPainter {
     }
 
     private static final String DEFAULT_FOOTER =
-            "布局语言：length(n) 固定 · percentage(n) 比例 · fill() 吃剩余——切分可嵌套 | 按 q / Esc / Ctrl+C 退出";
+            "布局语言：length(n) 固定 · percentage(n) 比例 · fill() 吃剩余——切分可嵌套 | 按 q / Ctrl+C 退出";
 
     /** 画一帧完整课程面板。listState 由调用方持有（第 3 课静态展示用）。 */
     public static void paint(Frame frame, ListState listState) {

@@ -32,12 +32,18 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  * 键盘代码——对比第 4 课），右边统计面板（每帧由 render() 从状态现算），输入为空时出现
  * 提示面板、有内容即收起（{@code scope} 隐藏 = 面板消失）。</p>
  *
+ * <p><b>Toolkit 层的自定义按键惯例</b>：给元素挂 {@code .focusable().onKeyEvent(…)}——
+ * 本课的「目标行数」面板即此写法（聚焦后按 +/- 调整）。多个可聚焦元素时用 Tab 切换焦点
+ * （这正是第 6 课/code-tui 解绑焦点导航的原因：它们只有一个输入框，Tab 要留给编辑）。</p>
+ *
  * <p><b>本课核心认知</b>：声明式 = 你只描述「UI 应该长什么样（随状态）」，框架决定
  * 「怎么画、怎么把事件送到焦点元素」。</p>
  */
 public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
 
     private final TextAreaState notes = new TextAreaState();
+    /** 「目标行数」练习面板的状态（onKeyEvent 惯例的载体）。 */
+    private int targetLines = 3;
 
     @Override
     public int order() {
@@ -55,8 +61,9 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
     }
 
     /**
-     * 键位定制：退出只留 Ctrl+C（默认还绑 q/Q——输入框需要能打出这些字母），
-     * 并解绑焦点导航让 Tab 落进输入框。与 code-tui 的 configure 同款考量。
+     * 键位定制：退出只留 Ctrl+C（默认还绑 q/Q——输入框需要能打出这些字母）。
+     * 焦点导航（Tab/Shift+Tab）<b>保留</b>：本课有两个可聚焦元素（输入框与目标行数面板），
+     * Tab 切换焦点正是所需——对比第 6 课/code-tui 只有一个输入框时的解绑做法。
      */
     @Override
     protected TuiConfig configure() {
@@ -65,8 +72,6 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
                 .bracketedPaste(true)
                 .bindings(base.bindings().toBuilder()
                         .rebind(KeyTrigger.ctrl('c'), Actions.QUIT)
-                        .unbind(Actions.FOCUS_NEXT)
-                        .unbind(Actions.FOCUS_PREVIOUS)
                         .build())
                 .build();
     }
@@ -87,10 +92,28 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
                         panel("笔记（原生 textArea）", textArea(notes)),
                         column(
                                 panel("统计（每帧现算）", richText(stats(stats))),
+                                // Toolkit 自定义按键惯例：focusable + onKeyEvent（Tab 聚焦到本面板后 +/- 生效）
+                                panel("目标行数练习", text("目标行数: " + targetLines + "（聚焦后按 + / - 调整）"))
+                                        .id("target-lines-panel")   // 可聚焦元素必须显式给 id——无 id 不进焦点链（0.4.0 只打 warning）
+                                        .focusable()
+                                        .onKeyEvent(this::onTargetKey),
                                 // scope：条件为 false 时整块隐藏——「面板用完即收起」的全部机制
                                 InlineToolkit.scope(empty,
                                         panel("提示", text("输入为空时这块才出现；开打字它就收起"))))),
-                text("Ctrl+C 退出（输入框要能打字，退出键只留 Ctrl+C）"));
+                text("Tab 切换焦点（输入框 ↔ 目标行数面板）· Ctrl+C 退出（输入框要能打字，退出键只留 Ctrl+C）"));
+    }
+
+    /** 目标行数面板的按键处理：Toolkit 惯例——返回 HANDLED 表示吃掉该键（框架随即重绘）。 */
+    private dev.tamboui.toolkit.event.EventResult onTargetKey(dev.tamboui.tui.event.KeyEvent key) {
+        if (key.isChar('+')) {
+            targetLines = Math.min(20, targetLines + 1);
+            return dev.tamboui.toolkit.event.EventResult.HANDLED;
+        }
+        if (key.isChar('-')) {
+            targetLines = Math.max(1, targetLines - 1);
+            return dev.tamboui.toolkit.event.EventResult.HANDLED;
+        }
+        return dev.tamboui.toolkit.event.EventResult.UNHANDLED;
     }
 
     private static Text stats(NotesStats s) {

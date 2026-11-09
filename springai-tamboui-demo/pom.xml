@@ -12,7 +12,7 @@
 
     <artifactId>springai-tamboui-demo</artifactId>
     <name>springai-tamboui-demo</name>
-    <description>第⑤步：TamboUI 终端 UI 框架示例——文本/宽度口径、Buffer 立即模式、行内事件循环、Toolkit DSL（覆盖 code-tui 实际使用的 API 子集）</description>
+    <description>第⑤步：TamboUI 终端 UI 框架入门课程——六课递进（渲染模型/文本样式/组件布局/事件交互/Toolkit DSL/行内模式），衔接第⑥步 code-tui 视图</description>
 
     <dependencies>
         <!--
