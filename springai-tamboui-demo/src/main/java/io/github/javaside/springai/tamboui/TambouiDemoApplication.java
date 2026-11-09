@@ -3,7 +3,7 @@ package io.github.javaside.springai.tamboui;
 import java.util.Comparator;
 import io.github.javaside.springai.tamboui.demo.HelloTuiDemo;
 import io.github.javaside.springai.tamboui.demo.TextStyleDemo;
-import io.github.javaside.springai.tamboui.demo.InlineEventsDemo;
+import io.github.javaside.springai.tamboui.demo.WidgetsLayoutDemo;
 import io.github.javaside.springai.tamboui.demo.ToolkitChatDemo;
 import java.util.List;
 import java.util.Scanner;
@@ -33,7 +33,7 @@ public final class TambouiDemoApplication {
         return List.of(
                 HelloTuiDemo::new,
                 TextStyleDemo::new,
-                InlineEventsDemo::new,
+                WidgetsLayoutDemo::new,
                 ToolkitChatDemo::new
         );
     }

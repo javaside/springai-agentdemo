@@ -32,6 +32,6 @@ class DemoSuppliersTest {
         assertEquals(1, suppliers.get(0).get().order());
         assertEquals(2, suppliers.get(1).get().order());
         assertEquals(3, suppliers.get(2).get().order());
-        assertEquals(4, suppliers.get(3).get().order());
+        assertEquals(4, suppliers.get(3).get().order());   // 旧聊天示例，第 6 课将替换
     }
 }
