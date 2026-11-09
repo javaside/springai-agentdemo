@@ -55,7 +55,9 @@ code-tui 对 TamboUI 0.4.0 打了「同包同名类 shadow」补丁（靠 classp
   patch shadow `EventParser` 提高静默预算并修 CR 泄漏
   （见 `docs/superpowers/specs/2026-10-09-cr-paste-leak-and-vs16-width-design.md`）。
 - **事件驱动重绘**：上游 `UiRunnable` 执行后不触发重绘（示例 4 因此保留默认 tick）；code-tui 关掉
-  tick、靠 patch 增补的 `requestUiUpdate` 实现「空闲零周期任务、零 ANSI 输出」。
+  tick、靠 patch 增补的 `requestUiUpdate` 实现「空闲零周期任务、零 ANSI 输出」。顺带一提：上游
+  `InlineDisplay` **未变化的帧也全量重写**——示例 3 曾因「默认 tick + handler 恒返回 true」在真机上
+  持续滚屏（边框线不断滚入 scrollback），修复即改为事件驱动重绘（`InlineEventsDemo` javadoc 有完整事故记录）。
 
 patch 模块本身（`AsyncPtyWriter` 防写阻塞、`InlineDisplay` 渲染记账等）见
 [../springai-tamboui-inline-patch](../springai-tamboui-inline-patch)。

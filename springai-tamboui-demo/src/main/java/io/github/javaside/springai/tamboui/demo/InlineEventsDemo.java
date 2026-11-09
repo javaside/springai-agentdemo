@@ -61,34 +61,50 @@ public final class InlineEventsDemo implements TambouiDemo {
 
     @Override
     public void run() throws Exception {
+        // noTick()：关掉默认 40ms 的周期 tick——上游 0.4.0 的 InlineDisplay 没有差分渲染，
+        // 未变化的帧也会全量重写所有行（patch 模块正是为此而存在，见模块 README）。
+        // 仪表盘只在按键/粘贴/缩放时变化，重绘只该由这些事件触发：空闲期零输出。
         // bracketedPaste(true)：启用括号粘贴协议，粘贴才会作为 PasteEvent 整体到达
         // （否则被拆成逐键事件，与「慢慢打字」无法区分）。code-tui 同款开关。
         try (InlineTuiRunner runner = InlineTuiRunner.create(
-                InlineTuiConfig.builder(LIVE_HEIGHT).bracketedPaste(true).build())) {
+                InlineTuiConfig.builder(LIVE_HEIGHT).noTick().bracketedPaste(true).build())) {
 
             Renderer renderer = frame -> paint(frame.buffer(), frame.width(), frame.height());
-
-            InlineEventHandler handler = (Event event, InlineTuiRunner r) -> {
-                // Java 17 无 switch 模式匹配（21 才有），用 instanceof 模式匹配链平替
-                if (event instanceof KeyEvent key) {
-                    lastKey = key.toString();
-                    if (UP.matches(key)) cursorY = Math.max(3, cursorY - 1);
-                    else if (DOWN.matches(key)) cursorY = Math.min(r.height() - 2, cursorY + 1);
-                    else if (LEFT.matches(key)) cursorX = Math.max(1, cursorX - 2);
-                    else if (RIGHT.matches(key)) cursorX = Math.min(r.width() - 2, cursorX + 2);
-                    else if (key.isCharIgnoreCase('q') || key.isKey(KeyCode.ESCAPE)) r.quit();
-                } else if (event instanceof PasteEvent paste) {
-                    // 粘贴「正常」段：统计对了，说明括号粘贴协议把整段送到了
-                    pasteReport = "收到粘贴：" + PasteStats.of(paste.text());
-                } else if (event instanceof ResizeEvent resize) {
-                    sizeReport = resize.width() + " × " + resize.height();
-                }
-                // 其余事件（tick 等）不感兴趣；返回 true 表示仪表盘吃掉所有事件（演示性质）
-                return true;
-            };
-
-            runner.run(handler, renderer);
+            runner.run(this::onEvent, renderer);
         }
+    }
+
+    /**
+     * 事件分派：只对<b>改变了仪表盘状态</b>的事件返回 true（true = 请求重绘）。
+     *
+     * <p><b>为什么必须这么苛刻</b>：上游 InlineDisplay 未变化的帧也全量重写——
+     * 曾经「对所有事件返回 true」的写法叠加 40ms tick，造成每秒 25 次全量重写，
+     * 真实终端上边框线不断滚入 scrollback（真机事故，InlineEventsHandlerTest 钉住）。
+     * 这就是 code-tui「重绘只在 requestUiUpdate / 按键 / resize 时发生」纪律的由来。</p>
+     *
+     * <p>包内可见供契约测试离屏调用（runner 在纯 char 键路径下不被解引用）。</p>
+     */
+    boolean onEvent(Event event, InlineTuiRunner r) {
+        // Java 17 无 switch 模式匹配（21 才有），用 instanceof 模式匹配链平替
+        if (event instanceof KeyEvent key) {
+            lastKey = key.toString();
+            if (UP.matches(key)) cursorY = Math.max(3, cursorY - 1);
+            else if (DOWN.matches(key)) cursorY = Math.min(r.height() - 2, cursorY + 1);
+            else if (LEFT.matches(key)) cursorX = Math.max(1, cursorX - 2);
+            else if (RIGHT.matches(key)) cursorX = Math.min(r.width() - 2, cursorX + 2);
+            else if (key.isCharIgnoreCase('q') || key.isKey(KeyCode.ESCAPE)) r.quit();
+            return true;   // 按键改变了 lastKey（或光标/退出）——需要重绘
+        }
+        if (event instanceof PasteEvent paste) {
+            // 粘贴「正常」段：统计对了，说明括号粘贴协议把整段送到了
+            pasteReport = "收到粘贴：" + PasteStats.of(paste.text());
+            return true;
+        }
+        if (event instanceof ResizeEvent resize) {
+            sizeReport = resize.width() + " × " + resize.height();
+            return true;
+        }
+        return false;   // tick 等与状态无关的事件：不重绘（返回 false，事件直接丢弃）
     }
 
     /** 整帧重画仪表盘（立即模式：不看上一帧，全量描述）。包内可见供画布适配测试离屏调用。 */
