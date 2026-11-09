@@ -31,9 +31,13 @@ import static dev.tamboui.toolkit.Toolkit.richText;
 import static dev.tamboui.toolkit.Toolkit.text;
 
 /**
- * 示例④ 迷你版 CodeTuiView —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 6 课 行内模式——衔接 code-tui —— 基于 TamboUI 0.4.0 实测 API。
  *
- * <p>{@code CodeTuiView extends InlineApp}（约 2000 行）的 ~150 行缩影，对应关系：</p>
+ * <p>前五课都是全屏（备用屏幕）；行内模式相反：终端照常滚动，一小块「live 区」钉在底部、
+ * 原地刷新——这正是聊天式 CLI（如 code-tui）需要的形态：历史对话留在 scrollback，
+ * 输入框与进行中的输出固定在底部。</p>
+ *
+ * <p>本课是 {@code CodeTuiView}（code-tui 的主视图）的缩影，对应关系：</p>
  * <table>
  *   <tr><td>钩子</td><td>本示例</td><td>code-tui</td></tr>
  *   <tr><td>{@link #height()}</td><td>4（空态）</td><td>4（空态）</td></tr>
@@ -42,12 +46,17 @@ import static dev.tamboui.toolkit.Toolkit.text;
  *   <tr><td>双通道</td><td>残行 live 区原地刷新；定稿行 {@code runner().println} 下沉</td><td>同构（ScrollbackPrinter + UiUpdateCoordinator）</td></tr>
  * </table>
  *
- * <p>本步核心认知：<b>live 区差分重绘 + scrollback println 下沉，两条通道各司其职</b>——
- * live 区只放「还会变的东西」（残行/面板/输入框/状态行），定稿内容立刻沉入 scrollback
- * 不再重绘。{@code scope(条件, 子元素)} 隐藏时 preferredSize=0 → 视口收缩 → 行被回收，
- * 这就是 code-tui「面板用完即收起」的全部机制。</p>
+ * <p><b>本课核心认知</b>：<b>live 区差分重绘 + scrollback println 下沉，两条通道各司其职</b>——
+ * live 区只放「还会变的东西」（残行/面板/输入框/状态行），定稿内容立刻经 {@code println}
+ * 沉入 scrollback 不再重绘。{@code scope(条件, 子元素)} 隐藏时 preferredSize=0 → 视口收缩
+ * → 行被回收，「面板用完即收起」不需要任何额外代码。</p>
+ *
+ * <p>工程备注（不是演示，是使用须知）：code-tui 在生产上以 springai-tamboui-inline-patch
+ * 加固了行内渲染与事件解析（差分帧提交、防写阻塞等，见该模块 README）；本课程按上游原版
+ * 教学不受影响。另外上游 0.4.0 的 UiRunnable 执行后不触发重绘，所以本课保留默认 tick
+ * 驱动流式重绘——code-tui 关掉 tick 依赖的是 patch 增补的重绘请求 API。</p>
  */
-public final class ToolkitChatDemo extends InlineApp implements TambouiDemo {
+public final class InlineChatDemo extends InlineApp implements TambouiDemo {
 
     /** 假流式的固定回复（多行，让「定稿下沉」有戏可看）。 */
     private static final String REPLY =
@@ -68,12 +77,12 @@ public final class ToolkitChatDemo extends InlineApp implements TambouiDemo {
 
     @Override
     public int order() {
-        return 4;
+        return 6;
     }
 
     @Override
     public String title() {
-        return "Toolkit DSL 迷你聊天（live 区 + scrollback 双通道）";
+        return "行内模式——迷你聊天（live 区 + scrollback 双通道，衔接 code-tui）";
     }
 
     @Override

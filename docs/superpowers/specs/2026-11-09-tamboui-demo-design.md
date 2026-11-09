@@ -204,3 +204,29 @@ README 写明须在真实终端运行。
 - 四个示例的实现顺序（①→④，依赖递增）与每步的验收（真实终端人工跑）；
 - 文档改造的具体 diff 范围；
 - 发版相关动作（版本 bump、release notes）是否随本分支——倾向随发版流程单独走。
+
+---
+
+## 附录：2026-11-09 二次改版——从「对齐 code-tui + 带病演示」转向「新手课程」（用户拍板）
+
+用户实测后反馈：四个示例新手看不懂、没有意义；要求改成**课程编排**——覆盖框架核心概念与组件、
+跟着学完就会用；**不做带病演示**（讲清框架本身才是目的）；**不使用 inline-patch**。
+
+新大纲（6 课，前 5 课全屏模式——全屏路径不走 InlineDisplay，天然无行内滚屏病；行内仅第 6 课衔接 code-tui）：
+
+| 课 | 主题 | 核心概念与组件 | 本课认知 |
+|---|---|---|---|
+| 1 | Hello TUI——渲染模型 | TuiRunner、Frame/renderWidget、Paragraph、Buffer/Cell 与 diff | UI 是状态的纯函数；库只发变化的格子 |
+| 2 | 文本与样式 | Span/Line/Text、Style 链、Color（命名/256/RGB）、Paragraph 对齐换行 | 富文本从带样式的片段开始 |
+| 3 | 组件与布局 | Block/Borders/BorderType、List（StatefulWidget）、Gauge、Layout.split+Constraint+Flex | 先切区域，再放组件 |
+| 4 | 事件与交互 | KeyEvent/KeyCode、状态驱动、ResizeEvent、TickEvent 动画 | 事件只改状态，重绘是唯一桥 |
+| 5 | Toolkit DSL | ToolkitApp、text/richText/column/row/scope、textArea、焦点 | 声明式：render() 返回整棵树 |
+| 6 | 行内模式——衔接 code-tui | InlineTuiRunner、live 区+println 双通道、迷你聊天 | 聊天式 CLI 为何行内；提及 patch 一句 |
+
+其他决定：
+- 版本仍锁 0.4.0（升级 BOM 波及 code-tui 属高危，用户明示先不升级）；官方最新文档对应 0.7.0-SNAPSHOT，
+  个别 API 有出入——每课实现前以 javap 核对 0.4.0 实际 API。
+- 删除全部带病演示（宽度病表、粘贴三段式）；宽度概念在第 2 课以正常 API 讲。
+- 纯逻辑测试保留可复用者（FakeStreamer、TextAreaState、菜单类），病值测试（WidthSamples）删除。
+- 同日的「示例③滚屏修复」（noTick+事件驱动）成果被本改版吸收：第 6 课行内示例沿用该纪律。
+- 原 plans 文档（2026-11-09-tamboui-demo.md）对本改版不再逐任务生效，以本附录为准。
