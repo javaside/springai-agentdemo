@@ -36,7 +36,7 @@ import static dev.tamboui.toolkit.Toolkit.textArea;
  * 本课的「目标行数」面板即此写法（聚焦后按 +/- 调整）。多个可聚焦元素时用 Tab 切换焦点
  * （这正是第 6 课/code-tui 解绑焦点导航的原因：它们只有一个输入框，Tab 要留给编辑）。</p>
  *
- * <p><b>本课核心认知</b>：声明式 = 你只描述「UI 应该长什么样（随状态）」，框架决定
+ * <p><b>本课核心认知</b>：声明式 = 只描述「UI 应该长什么样（随状态）」，框架决定
  * 「怎么画、怎么把事件送到焦点元素」。</p>
  */
 public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
