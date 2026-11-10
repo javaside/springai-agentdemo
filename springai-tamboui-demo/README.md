@@ -19,6 +19,24 @@
 第 4 课的状态机、第 6 课的双通道是读 code-tui 源码前最值得吃透的两个模式。
 顺带一提：窗口缩放由框架自动触发重绘（渲染函数经 `frame.area()` 拿到新尺寸），不需要自己处理。
 
+## 怎么创建一个 TUI 应用（入口与选型）
+
+**两条轴 × 两个层次 = 四种方式 + 一个底层入口**。轴 = 全屏（备用屏幕接管整个终端）还是
+行内（终端照常滚动，底部一小块 live 区——聊天式 CLI 的形态）；层次 = 声明式（只写
+`render()`，框架管事件）还是事件循环（自己写 handler）。
+
+| 方式 | 入口 | 课程示例 | 适用 |
+|---|---|---|---|
+| ① 全屏·声明式 | `class App extends ToolkitApp` → `new App().run()` | 第 5 课 | 大多数应用的首选（官方推荐主路径） |
+| ② 全屏·事件循环 | `TuiRunner.create()` + `run(handler, renderer)` | 第 1–4 课 | 完全控制事件/动画/自绘 |
+| ③ 行内·声明式 | `class Chat extends InlineApp`（钩子 `height()/render()/configure(int)`）→ `run()` | 第 6 课 | 聊天式 CLI、保留 scrollback |
+| ④ 行内·事件循环 | `InlineTuiRunner.create(InlineTuiConfig)` + `run(handler, renderer)` | — | 行内 + 自定义事件处理 |
+| ⑤ 立即模式（底层） | `BackendFactory.create()` → `new Terminal<>(backend)` → 手动 raw 模式/备用屏幕 + `terminal.draw(frame -> ...)` | 第 1 课的 Buffer 网格即它的画布 | 教学理解、框架内嵌、极端控制 |
+
+**Backend 的三种实现**（BOM 0.4.0 实测管理，按需换依赖即可）：`tamboui-jline3-backend`
+（本课程所用，纯 Java、兼容面广）、`tamboui-panama-backend`（Panama/FFM）、
+`tamboui-aesh-backend`。
+
 ## 每课 API 速查（重要的类怎么用）
 
 读课程源码时对照本节：每课出现的核心类、创建方式与关键方法，全部按 0.4.0 实测签名编写。
