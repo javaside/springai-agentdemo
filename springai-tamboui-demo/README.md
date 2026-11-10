@@ -8,7 +8,7 @@
 
 | 课 | 主题 | 你将学到 | 本课核心认知 |
 |---|------|---------|-------------|
-| 1 | Hello TUI——渲染模型 | `TuiRunner` 全屏应用、`Frame/renderWidget`、Paragraph；退出后打印那一帧的 Buffer 网格 | UI 是应用状态的纯函数：每帧全量重画，框架做 diff 只发变化的格子 |
+| 1 | Hello TUI——渲染模型 | `TuiRunner` 全屏应用、`Frame/renderWidget`、Paragraph；**空格在帧 A↔B 间切换**，退出后并排打印两帧网格 + diff 视图（■=框架实际发送的格子） | 屏幕是字符网格；render 只管整屏描述当前状态；框架做 diff 只发变化的格子 |
 | 2 | 文本与样式 | `Span/Line/Text` 三粒度、`Style` 不可变方法链、颜色三种来源（命名/256/RGB）、对齐、Paragraph 折行、宽度口径（ASCII 1 列 / 中文 2 列） | 终端富文本从「带样式的片段」开始；宽度是渲染口径 |
 | 3 | 组件与布局 | `Block`（边框/标题）、`ListWidget`（第一个 StatefulWidget）、`Gauge`、`Layout.split` + `Constraint`（length/percentage/fill）、嵌套切分 | 先把屏幕切成区域，再往区域放组件；有状态组件的状态外部持有 |
 | 4 | 事件与交互 | `KeyEvent`（j/k 与方向键）、状态机驱动 UI、`TickEvent` 动画、按需重绘 | 事件只改状态，「请求重绘」是状态通往屏幕的唯一桥梁 |
@@ -23,7 +23,7 @@
 
 | 课 | 动手 |
 |---|------|
-| 1 | 把欢迎语换成你自己的名字（改 `paint` 里一行），再跑一次看网格打印 |
+| 1 | 把帧 B 的 ◆ 挪个位置（改 `paint` 里一行），重跑看 diff 视图里 ■ 怎么变 |
 | 2 | 把折行段的 `overflow(WRAP_WORD)` 分别换成 `CLIP` / `ELLIPSIS`，看三种裁断的差异 |
 | 3 | 把中段切分 `percentage(60)` 改成 `percentage(30)`，观察 List/Gauge 两栏怎么变 |
 | 4 | 给状态机加一个 `g` 键：按下 Gauge 直接跳到 100（模仿 `onKey` 里 j/k 的写法） |
