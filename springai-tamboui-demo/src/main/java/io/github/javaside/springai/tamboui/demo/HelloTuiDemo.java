@@ -117,14 +117,17 @@ public final class HelloTuiDemo implements TambouiDemo {
                 showFrameB = keep;
             }
         }
-        System.out.println("\n—— 刚才两帧，在 Buffer（字符网格）里的样子 ——");
-        System.out.println("（一格一个字符；· 是宽字符的续格。网格视角下「屏幕」不再神秘）");
+        System.out.println("\n—— 运行时看到的两屏 vs 下面三张图，对应关系 ——");
+        System.out.println("· 运行时的整屏画面 = Buffer 这张字符网格照着画到终端的结果：");
+        System.out.println("  网格第 y 行 = 屏幕第 y 行，一格 = 屏幕一个字符位（· 为宽字符续格）；");
+        System.out.println("· 帧 A 网格 = 按空格之前那屏的底稿；帧 B 网格 = 按空格之后那屏的底稿；");
+        System.out.println("· diff 视图不是画面——是两张底稿的差异清单（■），框架每次只发这些格子。");
         if (lastFrameA != null) {
-            System.out.println("帧 A：");
+            System.out.println("\n帧 A（那屏的底稿）：");
             FrameDump.dump(lastFrameA).forEach(l -> System.out.println("  " + l));
         }
         if (lastFrameB != null) {
-            System.out.println("帧 B：");
+            System.out.println("帧 B（那屏的底稿）：");
             FrameDump.dump(lastFrameB).forEach(l -> System.out.println("  " + l));
         }
         if (lastFrameA != null && lastFrameB != null) {
@@ -134,7 +137,8 @@ public final class HelloTuiDemo implements TambouiDemo {
         System.out.println("""
 
                 本课核心认知（后面五课都踩在这上面）：
-                1. 屏幕 = 字符网格（Buffer），一格一个 Cell；
+                1. 画面由 Buffer 表示（Cell 字符网格，一格一个字符）；Frame 不是画面，
+                   是渲染入口（renderWidget 把组件画进 Buffer）；
                 2. render 只管「整屏描述当前状态」——翻转一个布尔位，就是重画整屏的理由；
                 3. 框架做 diff，只把 ■ 的格子发给终端。
                 第 3 课组件的 render(Rect, Buffer) 是「往网格的一块区域画」；第 4 课的
