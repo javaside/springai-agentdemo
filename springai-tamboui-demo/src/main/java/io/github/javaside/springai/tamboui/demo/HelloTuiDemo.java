@@ -38,6 +38,11 @@ public final class HelloTuiDemo implements TambouiDemo {
     /** 状态只有一个位：显示帧 A 还是帧 B。第 4 课会把「状态驱动 UI」展开成完整范式。 */
     private boolean showFrameB;
 
+    /** 仅供测试构造指定帧（离屏渲染用例）。 */
+    void setFrameBForTest(boolean frameB) {
+        this.showFrameB = frameB;
+    }
+
     /** 退出后打印教具用的两帧快照（渲染线程写、run() 返回后主线程读，先后有序）。 */
     private Buffer lastFrameA;
     private Buffer lastFrameB;
@@ -75,8 +80,8 @@ public final class HelloTuiDemo implements TambouiDemo {
         printTakeaway();
     }
 
-    /** 画一帧：整屏描述当前状态（帧 A 或帧 B，只差一个状态位）。 */
-    private void paint(Frame frame) {
+    /** 画一帧：整屏描述当前状态（帧 A 或帧 B，只差一个状态位）。包内可见供离屏测试。 */
+    void paint(Frame frame) {
         String which = showFrameB ? "帧 B" : "帧 A";
         String dotAt = showFrameB ? "                    ◆（帧 B：◆ 挪到了右边）" : "◆（帧 A）";
         Text text = Text.from(
@@ -92,6 +97,15 @@ public final class HelloTuiDemo implements TambouiDemo {
                         Style.create().fg(Color.YELLOW))).centered()
         );
         frame.renderWidget(Paragraph.builder().text(text).build(), frame.area());
+
+        // Buffer 在这里现形：renderWidget 只是把「批量画进网格」封装了，网格本体一直在
+        // Frame 手里。下面直接往网格「右上角那格」写当前帧标记（A/B）——手工写一格，
+        // 与组件画的内容落到同一张 Buffer 上；按空格切换后，这一格也会出现在 diff 的 ■ 里。
+        dev.tamboui.buffer.Buffer grid = frame.buffer();
+        int markX = grid.area().width() - 2;
+        grid.set(markX, 0, new dev.tamboui.buffer.Cell(showFrameB ? "B" : "A",
+                Style.create().fg(Color.YELLOW).bold()));
+
         // 留两帧快照：退出后的教学打印用。没按过空格时帧 B 快照缺失，退场时离屏补画一份。
         if (showFrameB) {
             lastFrameB = frame.buffer().copy();
