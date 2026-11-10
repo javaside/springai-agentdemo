@@ -25,13 +25,34 @@
 行内（终端照常滚动，底部一小块 live 区——聊天式 CLI 的形态）；层次 = 声明式（只写
 `render()`，框架管事件）还是事件循环（自己写 handler）。
 
-| 方式 | 入口 | 课程示例 | 适用 |
+| 方式 | 入口 | 代码在哪 | 适用 |
 |---|---|---|---|
-| ① 全屏·声明式 | `class App extends ToolkitApp` → `new App().run()` | 第 5 课 | 大多数应用的首选（官方推荐主路径） |
-| ② 全屏·事件循环 | `TuiRunner.create()` + `run(handler, renderer)` | 第 1–4 课 | 完全控制事件/动画/自绘 |
-| ③ 行内·声明式 | `class Chat extends InlineApp`（钩子 `height()/render()/configure(int)`）→ `run()` | 第 6 课 | 聊天式 CLI、保留 scrollback |
-| ④ 行内·事件循环 | `InlineTuiRunner.create(InlineTuiConfig)` + `run(handler, renderer)` | — | 行内 + 自定义事件处理 |
-| ⑤ 立即模式（底层） | `BackendFactory.create()` → `new Terminal<>(backend)` → 手动 raw 模式/备用屏幕 + `terminal.draw(frame -> ...)` | 第 1 课的 Buffer 网格即它的画布 | 教学理解、框架内嵌、极端控制 |
+| ① 全屏·声明式 | `class App extends ToolkitApp` → `new App().run()` | 第 5 课 `ToolkitDslDemo.java` | 大多数应用的首选（官方推荐主路径） |
+| ② 全屏·事件循环 | `TuiRunner.create()` + `run(handler, renderer)` | 第 1–4 课（`HelloTuiDemo.java` 等） | 完全控制事件/动画/自绘 |
+| ③ 行内·声明式 | `class Chat extends InlineApp`（钩子 `height()/render()/configure(int)`）→ `run()` | 第 6 课 `InlineChatDemo.java` | 聊天式 CLI、保留 scrollback |
+| ④ 行内·事件循环 | `InlineTuiRunner.create(InlineTuiConfig)` + `run(handler, renderer)` | 课程无完整示例——③ 的 `InlineApp` 底层正是它（片段见下） | 行内 + 自定义事件处理 |
+| ⑤ 立即模式（底层） | `BackendFactory.create()` → `new Terminal<>(backend)` → 手动 raw 模式/备用屏幕 + `terminal.draw(...)` | 课程无示例（片段见下）；第 1 课打印的网格就是它操作的 Buffer | 教学理解、框架内嵌、极端控制 |
+
+④ 与 ⑤ 课程未做成完整示例（主线全屏优先），最小用法片段：
+
+```java
+// ④ 行内·事件循环（InlineApp 之下的一层）
+try (InlineTuiRunner runner = InlineTuiRunner.create(
+        InlineTuiConfig.builder(4).bracketedPaste(true).build())) {   // 4 = live 区初始行数
+    runner.run((event, r) -> false,                                    // 事件处理：返回是否重绘
+            frame -> frame.renderWidget(Paragraph.from("hi"), frame.area()));   // 画帧
+}
+
+// ⑤ 立即模式：Terminal + Backend 全手工（无 Runner、无组件框架）
+try (Backend backend = BackendFactory.create()) {    // 默认装配 jline3 后端
+    backend.enableRawMode();                         // 一切终端状态自己管
+    backend.enterAlternateScreen();
+    Terminal<Backend> term = new Terminal<>(backend);
+    term.draw(frame -> frame.buffer().setString(0, 0, "hello", Style.EMPTY));  // 直接往网格画
+    backend.disableRawMode();
+    backend.leaveAlternateScreen();
+}
+```
 
 **Backend 的三种实现**（BOM 0.4.0 实测管理，按需换依赖即可）：`tamboui-jline3-backend`
 （本课程所用，纯 Java、兼容面广）、`tamboui-panama-backend`（Panama/FFM）、
