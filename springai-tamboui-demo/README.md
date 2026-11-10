@@ -19,6 +19,111 @@
 第 4 课的状态机、第 6 课的双通道是读 code-tui 源码前最值得吃透的两个模式。
 顺带一提：窗口缩放由框架自动触发重绘（渲染函数经 `frame.area()` 拿到新尺寸），不需要自己处理。
 
+## 每课 API 速查（重要的类怎么用）
+
+读课程源码时对照本节：每课出现的核心类、创建方式与关键方法，全部按 0.4.0 实测签名编写。
+
+### 第 1 课：跑起来一个全屏应用
+
+```java
+try (TuiRunner runner = TuiRunner.create()) {      // 进备用屏幕 + 原始模式，接管终端
+    runner.run(handler, renderer);                 // 事件循环（阻塞到 quit），handler 管事件、renderer 画帧
+}
+```
+
+| 类 | 角色 | 关键用法 |
+|---|---|---|
+| `TuiRunner` | 全屏应用发动机 | `create()` 接管终端；`run(handler, renderer)` 启动循环；`quit()` 退出；try-with-resources 保证终端复原 |
+| `EventHandler` | 事件处理 | `(event, runner) -> boolean`：处理事件并返回「是否需要重绘」；退出键里调 `runner.quit()` |
+| `Renderer` | 画帧函数 | `frame -> {...}`：把整帧画进 frame，不看上一帧（差分是框架的事） |
+| `Frame` | 渲染入口 | `area()` 可绘区域；`renderWidget(组件, 区域)`；`buffer()` 网格本体（Cell 二维数组，可 `get/set` 直接读写格子） |
+| `Paragraph` | 文本段组件 | `Paragraph.builder().text(文本).build()`，可选 `.block(边框)` `.centered()` `.overflow(...)` |
+| `KeyEvent` | 按键事件 | `isQuit()`（默认 q/Q/Ctrl+C）、`isChar('x')` 字符键判定 |
+
+### 第 2 课：文本与样式
+
+```java
+Span s  = Span.styled("片段", Style.create().fg(Color.RED).bold()); // 带样式的字符串片段
+Line l  = Line.from(s, Span.raw(" + "), s2).centered();             // 一行 = 多个 Span 拼接
+Text t  = Text.from(line1, line2).append(line3);                    // 段落；不可变——append/push 返回新实例
+```
+
+| 类 | 角色 | 关键用法 |
+|---|---|---|
+| `Style` | 不可变样式 | `Style.create().fg(Color).bold().italic().underlined()`——链式调用每个点都返回新对象 |
+| `Color` | 颜色 | 命名色 `Color.RED`；256 色 `Color.indexed(208)`；真彩 `Color.rgb(70,130,180)` |
+| `CharWidth` | 宽度口径 | `CharWidth.of("中文A")` → 5（中文 2 列、ASCII 1 列） |
+| `Overflow` | 超宽处理 | `WRAP_WORD` 折行 / `CLIP` 截断（**默认**，长文本静默裁掉）/ `ELLIPSIS` 省略号 |
+
+### 第 3 课：组件与布局
+
+```java
+List<Rect> 三段 = Layout.vertical()
+        .constraints(Constraint.length(3), Constraint.percentage(60), Constraint.fill())
+        .split(frame.area());                       // 切分可嵌套：拿子 Rect 再 split 就是多面板
+frame.renderWidget(paragraph, 三段.get(0));          // 无状态组件
+frame.renderStatefulWidget(listWidget, 三段.get(1), listState);   // 有状态组件多传一个状态
+```
+
+| 类 | 角色 | 关键用法 |
+|---|---|---|
+| `Block` | 边框/标题 | `Block.builder().borders(Borders.ALL).borderType(BorderType.ROUNDED).title("标题").build()`，常挂在组件的 `.block(...)` |
+| `ListWidget` + `ListState` | 列表（有状态组件典范） | 组件与状态分家：`ListWidget.builder().items("一","二").highlightSymbol("▶ ").build()`；状态 `new ListState()` 后 `select(i)` / `selectNext(n)`，渲染时传入 |
+| `Gauge` | 进度条 | `Gauge.builder().ratio(0.62).label(Span).build()` |
+| `Layout` + `Constraint` | 区域切分 | `Layout.vertical()/horizontal().constraints(...).split(Rect) → List<Rect>`；约束 `length(n)` 固定 / `percentage(n)` 比例 / `fill()` 吃剩余（另有 min/max/ratio/fit） |
+
+### 第 4 课：事件与交互
+
+```java
+if (event instanceof KeyEvent key && key.isQuit()) { runner.quit(); return false; }
+boolean changed = state.onKey(key);   // 事件只改状态（状态机独立成类，可单测）
+return changed;                       // 状态变了才返回 true 请求重绘
+```
+
+| 类 | 角色 | 关键用法 |
+|---|---|---|
+| `KeyEvent` | 按键 | `isChar('j')` 字符判定、`isKey(KeyCode.UP/DOWN/ENTER/ESCAPE)`、`toString()` 供显示 |
+| `TickEvent` | 周期重绘脉冲 | 自带 `elapsedSeconds()` / `frameCount()`——真实时间动画直接读，不用自己计时 |
+| `ResizeEvent` | 窗口缩放 | 框架自动触发重绘，渲染经 `frame.area()` 拿新尺寸，通常无需处理 |
+| `TuiConfig` | 运行配置 | `TuiConfig.builder().tickRate(Duration.ofMillis(100)).build()` → `TuiRunner.create(config)` |
+
+### 第 5 课：Toolkit DSL（声明式）
+
+```java
+public class MyApp extends ToolkitApp {
+    protected TuiConfig configure() { /* 键位/行为定制，可省略 */ }
+    protected Element render() {                      // 只声明 UI 树，布局/焦点/输入交给框架
+        return column(panel("标题", textArea(state)), text("状态行"));
+    }
+}
+new MyApp().run();                                    // 自举（无需自己建 runner）
+```
+
+| API | 角色 | 关键用法 |
+|---|---|---|
+| `Toolkit.*` 工厂 | 造元素 | `text(...)` `richText(Text)` `column(...)` `row(...)` `panel("标题", ...)` `spacer()`；`InlineToolkit.scope(条件, 子元素)` 条件隐藏（面板收起） |
+| `.id().focusable().onKeyEvent(...)` | 自定义按键惯例 | 可聚焦元素**必须显式 `.id("唯一id")`**（无 id 不进焦点链）；handler 返回 `EventResult.HANDLED` 吃掉该键 |
+| 焦点 | 谁在接收按键 | 多个可聚焦元素用 Tab 切换；`runner().focusManager().focusedId()` 查当前焦点（框架不画焦点标识，应用自绘 ▶） |
+| `TextAreaState` | 输入框编辑模型 | `insert(...)` / `text()` / `clear()`；配 `Toolkit.textArea(state)` 得到完整输入框（光标/多行/中文免写键盘代码） |
+| `Bindings` | 键位定制 | `config.bindings().toBuilder().rebind(KeyTrigger.ctrl('c'), Actions.QUIT).build()`——rebind 是整组替换 |
+
+### 第 6 课：行内模式（衔接 code-tui）
+
+```java
+public class Chat extends InlineApp {
+    protected int height() { return 4; }              // 空态 live 区高度（钉在终端底部）
+    protected InlineTuiConfig configure(int h) { ... }
+    protected Element render() { ... }                // live 区（还会变的东西）
+    // 定稿内容走另一条通道：runner().println("...") 下沉 scrollback，不再重绘
+}
+```
+
+| API | 角色 | 关键用法 |
+|---|---|---|
+| `InlineApp` 钩子 | 行内应用骨架 | `height()` / `render()` / `configure(int)` / `onStart()`；工具方法 `runner()` / `println(...)` / `quit()`；`run()` 自举 |
+| `InlineTuiConfig` | 行内配置 | `builder(n)` n=初始行数；`.bracketedPaste(true)` 括号粘贴（多行粘贴整体到达，不拆成逐键） |
+| 定时驱动 | 流式输出等 | `runner().scheduleRepeating(runnable, Duration)`；状态改动包进 `runOnRenderThread(...)`（上游 UiRunnable 执行后不触发重绘，行内示例因此保留默认 tick） |
+
 ## 每课动手自测（读懂 ≠ 会用，各改一处再跑）
 
 | 课 | 动手 |
