@@ -21,7 +21,7 @@ Java 后端开发者从零学会 Agent 开发的教学项目（Apache-2.0），�
 | `springai-agent-demo` | 第②步：`@Tool` 工具调用、对话记忆、多步 Agent | 少量 |
 | `springai-boot-demo` | 第③步：Spring Boot starter 自动装配 + MCP | 无 |
 | `springai-jline-demo` | 第④步：JLine 3 终端基础 | 无 |
-| `springai-tamboui-demo` | 第⑤步：TamboUI 终端 UI 框架入门课程（六课递进，衔接 code-tui 视图） | 少量 |
+| `springai-tamboui-demo` | 第⑤步：TamboUI 终端 UI 框架入门课程（八课递进：创建→渲染模型→文本→组件→布局→事件→DSL→行内，衔接 code-tui 视图） | 少量 |
 | `springai-code-tui` | 第⑥步：编码智能体（主要开发阵地，绝大多数测试在这里） | 全量 |
 | `springai-tamboui-inline-patch` | 构建辅助：TamboUI 兼容层/shadow，**不发布到远程仓库** | 有 |
 
