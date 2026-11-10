@@ -10,7 +10,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 第 1 课的 diff 视图（两帧 Buffer 的差异图）：不同的格子标 ■，相同的留空——
+ * 第 2 课的 diff 视图（两帧 Buffer 的差异图）：不同的格子标 ■，相同的留空——
  * 把「框架只把变化的 Cell 发给终端」从一句话变成亲眼所见。
  */
 class FrameDiffViewTest {

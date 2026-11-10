@@ -13,9 +13,9 @@ import io.github.javaside.springai.tamboui.TambouiDemo;
 import java.time.Duration;
 
 /**
- * 第 4 课 事件与交互 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 6 课 事件与交互 —— 基于 TamboUI 0.4.0 实测 API。
  *
- * <p>在第 3 课的同一块面板上加交互：j/k（或 ↓/↑）移动课程选中，TickEvent 驱动 Gauge
+ * <p>在上一课（布局）的同一块面板上加交互：j/k（或 ↓/↑）移动课程选中，TickEvent 驱动 Gauge
  * 走动。骨架是 TUI 交互的全部范式：</p>
  *
  * <pre>事件 → 状态迁移（EventDashboardState）→（状态变了才）返回 true 请求重绘 → 下一帧自然反映</pre>
@@ -35,7 +35,7 @@ public final class EventsDemo implements TambouiDemo {
 
     @Override
     public int order() {
-        return 4;
+        return 6;
     }
 
     @Override

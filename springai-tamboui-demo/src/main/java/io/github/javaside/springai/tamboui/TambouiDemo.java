@@ -4,7 +4,7 @@ package io.github.javaside.springai.tamboui;
  * 一个 TamboUI 示例。对照 core-demo 的 {@code Demo} 接口：菜单按 {@link #order()} 排序、
  * 显示 {@link #title()}、选中后调 {@link #run()}。
  *
- * <p>每课运行期间都会接管终端（第 1–5 课全屏备用屏幕、第 6 课行内模式），因此约定
+ * <p>每课运行期间都会接管终端（第 1–7 课全屏备用屏幕、第 8 课行内模式），因此约定
  * {@code run()} 返回即代表本课完全收场、终端已复原（各课自行 try-with-resources
  * 关闭 runner）。实际运行时每课在独立子进程里执行，见 {@code TambouiDemoApplication}。</p>
  */

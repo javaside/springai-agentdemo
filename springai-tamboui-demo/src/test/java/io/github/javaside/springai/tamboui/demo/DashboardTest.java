@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 第 3 课测试：布局切分（纯逻辑）与整帧绘制（离屏渲染）。
+ * 第 5 课测试：布局切分（纯逻辑）与整帧绘制（离屏渲染）。
  *
  * <p>布局断言把 0.4.0 Layout 引擎在 100×30 屏上的实际切分结果钉死——引擎口径变化（如
  * 取整规则）会在此红灯。</p>
@@ -45,7 +45,7 @@ class DashboardTest {
         DashboardPainter.paint(frame, state);
 
         String header = rowText(buf, 0).replace("·", "");   // 去续格标记后断言文本
-        assertTrue(header.contains("第 3 课"), "标题应渲染在头部区域: " + header);
+        assertTrue(header.contains("第 5 课"), "标题应渲染在头部区域: " + header);
 
         // List（StatefulWidget）：选中行带 ▶ 高亮符号，状态在 ListState 里外部持有
         boolean foundHighlight = false;
@@ -53,7 +53,7 @@ class DashboardTest {
         for (int y = 4; y < 20; y++) {
             String row = rowText(buf, y).replace("·", "");
             if (row.contains("▶")) foundHighlight = true;
-            if (row.contains("第 1 课") || row.contains("第 6 课")) foundItem = true;   // 钉真实条目文本
+            if (row.contains("第 1 课") || row.contains("第 8 课")) foundItem = true;   // 钉真实条目文本
         }
         assertTrue(foundHighlight, "List 选中行应有 ▶ 高亮");
         assertTrue(foundItem, "List 条目应可见");

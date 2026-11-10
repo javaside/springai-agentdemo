@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 第 4 课状态机测试：事件只改状态，返回「是否需要重绘」。
+ * 第 6 课状态机测试：事件只改状态，返回「是否需要重绘」。
  *
  * <p>这是 TUI 交互的全部骨架：KeyEvent/进帧回调 → 状态迁移 →（需要时）请求重绘。
  * 状态机纯逻辑化后可脱离终端单测。</p>

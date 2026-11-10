@@ -22,19 +22,19 @@ import static dev.tamboui.toolkit.Toolkit.text;
 import static dev.tamboui.toolkit.Toolkit.textArea;
 
 /**
- * 第 5 课 Toolkit DSL —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 7 课 Toolkit DSL —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p>同一类需求换一种写法：不再自己切 Rect、自己写 handleKeyEvent——
  * {@code render()} 只声明<b>整棵 UI 树</b>（panel/column/row/textArea），布局、焦点、
  * 输入编辑全部交给框架。这是官方推荐的日常主力层级。</p>
  *
  * <p>演示的应用是「课程笔记」：左边输入（原生 textArea，多行编辑/光标/中文输入免写一行
- * 键盘代码——对比第 4 课），右边统计面板（每帧由 render() 从状态现算），输入为空时出现
+ * 键盘代码——对比第 6 课），右边统计面板（每帧由 render() 从状态现算），输入为空时出现
  * 提示面板、有内容即收起（{@code scope} 隐藏 = 面板消失）。</p>
  *
  * <p><b>Toolkit 层的自定义按键惯例</b>：给元素挂 {@code .focusable().onKeyEvent(…)}——
  * 本课的「目标行数」面板即此写法（聚焦后按 +/- 调整）。多个可聚焦元素时用 Tab 切换焦点
- * （这正是第 6 课/code-tui 解绑焦点导航的原因：它们只有一个输入框，Tab 要留给编辑）。</p>
+ * （这正是第 8 课/code-tui 解绑焦点导航的原因：它们只有一个输入框，Tab 要留给编辑）。</p>
  *
  * <p><b>本课核心认知</b>：声明式 = 只描述「UI 应该长什么样（随状态）」，框架决定
  * 「怎么画、怎么把事件送到焦点元素」。</p>
@@ -51,7 +51,7 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
 
     @Override
     public int order() {
-        return 5;
+        return 7;
     }
 
     @Override
@@ -94,7 +94,7 @@ public final class ToolkitDslDemo extends ToolkitApp implements TambouiDemo {
         // Tab 一按，▶ 在两个面板标题间跳动，焦点状态肉眼可见。
         String focusedId = runner() == null ? null : runner().focusManager().focusedId();
         return column(
-                panel("第 5 课 · Toolkit DSL——render() 只声明这棵树",
+                panel("第 7 课 · Toolkit DSL——render() 只声明这棵树",
                         text("布局/焦点/输入编辑都是框架的事；每个按键后框架重跑 render()，UI 自然跟随状态")),
                 row(
                         panel(FocusMarks.title("笔记（原生 textArea）", NOTES_ID.equals(focusedId)),

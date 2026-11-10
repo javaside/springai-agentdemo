@@ -33,8 +33,10 @@ public final class TambouiDemoApplication {
     /** 示例清单（供给方式：每次 get() 产生新实例）。菜单与 --lesson 子进程共用这份注册。 */
     static List<Supplier<TambouiDemo>> demoSuppliers() {
         return List.of(
+                io.github.javaside.springai.tamboui.demo.CreateTuiDemo::new,
                 io.github.javaside.springai.tamboui.demo.HelloTuiDemo::new,
                 io.github.javaside.springai.tamboui.demo.TextStyleDemo::new,
+                io.github.javaside.springai.tamboui.demo.WidgetsGalleryDemo::new,
                 io.github.javaside.springai.tamboui.demo.WidgetsLayoutDemo::new,
                 io.github.javaside.springai.tamboui.demo.EventsDemo::new,
                 io.github.javaside.springai.tamboui.demo.ToolkitDslDemo::new,

@@ -32,7 +32,7 @@
 | ② | [springai-agent-demo](springai-agent-demo/README.md) | 工具 + 记忆 + 循环 | `@Tool` 工具调用、对话记忆、多步 Agent |
 | ③ | [springai-boot-demo](springai-boot-demo/README.md) | （工程化） | Spring Boot 自动装配、MCP |
 | ④ | [springai-jline-demo](springai-jline-demo/README.md) | （界面） | JLine 3 终端界面基础 |
-| ⑤ | [springai-tamboui-demo](springai-tamboui-demo/README.md) | （界面·框架） | TamboUI 终端 UI 框架入门课程（六课：渲染模型→文本→布局→事件→DSL→行内） |
+| ⑤ | [springai-tamboui-demo](springai-tamboui-demo/README.md) | （界面·框架） | TamboUI 终端 UI 框架入门课程（八课：创建→渲染模型→文本→组件→布局→事件→DSL→行内） |
 | ⑥ | [springai-code-tui](springai-code-tui/README.md) | 全部组装 | 真正的命令行编码智能体 |
 
 > **两类读者**：想学 Agent 开发 → 从下方第 1 步开始；只想用终端编码智能体 →
@@ -43,7 +43,7 @@
 
 > 全程用 [DeepSeek](https://platform.deepseek.com/)（国内可直连、价格低）做对话模型，
 > 一个 API Key 就能跑通全部核心示例（第 3 步的 MCP 示例为可选，需另备 Node.js 环境）。
-> 预期投入：第 1–5 步每步半天左右（第 1 步最长，7 个示例 + 首次启动下载 90MB 模型；第 5 步六课约一小时，不需要 API key）；
+> 预期投入：第 1–5 步每步半天左右（第 1 步最长，7 个示例 + 首次启动下载 90MB 模型；第 5 步八课跟做约两小时，不需要 API key）；
 > API 费用预计在个位数人民币（示例 prompt 都很短）。**第 6 步例外**：默认模型偏强推理、加上子 Agent
 > 并发，重度使用一天的花费是几十元量级——可在 `/model` 切换更便宜的模型、用 `/context` 盯用量。
 
@@ -133,19 +133,22 @@ Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `T
 
 第 4 步学会了跟终端打交道（原始模式、按键），但直接拿它写一个完整 TUI 还差一层框架。
 这一步用 [TamboUI](https://tamboui.dev)（Java 版 ratatui，code-tui 的 UI 层）把这一层补上：
-**六课递进的入门课程**，跟着做完就能用框架写自己的终端应用，最后一课衔接到第 6 步
-code-tui 的视图。不需要任何 API key。
+**八课入门课程**，每课「跟做（往自己的备忘录程序加代码）→ 对照示例 → 试一试」，
+学完手里有一个自己写的完整应用，最后一课衔接到第 6 步 code-tui 的视图。
+不需要任何 API key。
 
 | 课 | 主题 | 本课核心认知 |
 |---|------|-------------|
-| 1 | Hello TUI——渲染模型 | UI 是状态的纯函数；框架 diff 只发变化的格子 |
-| 2 | 文本与样式 | 富文本从带样式的片段（Span）开始；宽度是渲染口径 |
-| 3 | 组件与布局 | 先切区域（Layout/Constraint）再放组件（Block/List/Gauge） |
-| 4 | 事件与交互 | 事件只改状态，「请求重绘」是状态通往屏幕的唯一桥梁 |
-| 5 | Toolkit DSL | 声明式：render() 只声明 UI 树，布局焦点输入全交给框架 |
-| 6 | 行内模式——衔接 code-tui | live 区 + scrollback 双通道；CodeTuiView 的缩影 |
+| 1 | 创建 TUI 应用 | 五种创建方式；EventHandler 与 Renderer 是骨架两条腿 |
+| 2 | 渲染模型 | Buffer 是画面、Frame 是入口；框架 diff 只发变化的格子 |
+| 3 | 文本与样式 | 富文本从带样式的片段（Span）开始；宽度是渲染口径 |
+| 4 | 组件画廊 | 无状态/有状态组件；状态外置 |
+| 5 | 布局 | 先切区域（Layout/Constraint）再放组件 |
+| 6 | 事件与交互 | 事件只改状态，「请求重绘」是状态通往屏幕的唯一桥梁 |
+| 7 | Toolkit DSL | 声明式：render() 只声明 UI 树，布局焦点输入全交给框架 |
+| 8 | 行内模式——衔接 code-tui | live 区 + scrollback 双通道；CodeTuiView 的缩影 |
 
-**✅ 自测**：不看源码说出「一次按键之后屏幕为什么会变」——从事件到状态到重绘的完整链路。
+**✅ 自测（毕业题）**：不看教程从零写一个全屏应用（布局+组件+按键交互）——写出来即毕业。
 
 ### 第 6 步 · springai-code-tui —— 拼成一个真正的 Agent
 

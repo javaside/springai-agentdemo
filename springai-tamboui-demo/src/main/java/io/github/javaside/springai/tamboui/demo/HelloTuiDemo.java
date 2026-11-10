@@ -16,9 +16,9 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 1 课 Hello TUI——渲染模型 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 2 课 渲染模型——画面是什么 —— 基于 TamboUI 0.4.0 实测 API。
  *
- * <p><b>这一课要建立的三句话</b>（后面五课全部踩在它上面）：</p>
+ * <p><b>这一课要建立的三句话</b>（后面六课全部踩在它上面）：</p>
  * <ol>
  *   <li>终端屏幕是一张<b>字符网格</b>（Buffer = Cell 二维数组，一格一个字符+样式）；</li>
  *   <li>应用每次只做一件事：<b>把「这一屏现在该长什么样」整张画出来</b>——不留旧状态，
@@ -35,7 +35,7 @@ import io.github.javaside.springai.tamboui.TambouiDemo;
  */
 public final class HelloTuiDemo implements TambouiDemo {
 
-    /** 状态只有一个位：显示帧 A 还是帧 B。第 4 课会把「状态驱动 UI」展开成完整范式。 */
+    /** 状态只有一个位：显示帧 A 还是帧 B。第 6 课会把「状态驱动 UI」展开成完整范式。 */
     private boolean showFrameB;
 
     /** 仅供测试构造指定帧（离屏渲染用例）。 */
@@ -49,7 +49,7 @@ public final class HelloTuiDemo implements TambouiDemo {
 
     @Override
     public int order() {
-        return 1;
+        return 2;
     }
 
     @Override
@@ -150,12 +150,12 @@ public final class HelloTuiDemo implements TambouiDemo {
         }
         System.out.println("""
 
-                本课核心认知（后面五课都踩在这上面）：
+                本课核心认知（后面六课都踩在这上面）：
                 1. 画面由 Buffer 表示（Cell 字符网格，一格一个字符）；Frame 不是画面，
                    是渲染入口（renderWidget 把组件画进 Buffer）；
                 2. render 只管「整屏描述当前状态」——翻转一个布尔位，就是重画整屏的理由；
                 3. 框架做 diff，只把 ■ 的格子发给终端。
-                第 3 课组件的 render(Rect, Buffer) 是「往网格的一块区域画」；第 4 课的
+                第 5 课组件的 render(Rect, Buffer) 是「往网格的一块区域画」；第 6 课的
                 「改状态→请求重绘」之所以成立，正因为重绘 = 重新描述整屏。
                 """);
     }

@@ -4,7 +4,7 @@ import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
 
 /**
- * 第 4 课的交互状态机（纯逻辑、可单测）：事件只改状态并回答「是否需要重绘」。
+ * 第 6 课的交互状态机（纯逻辑、可单测）：事件只改状态并回答「是否需要重绘」。
  *
  * <p>键盘 j/k（或 ↓/↑）移动课程选中项，TickEvent 每到一次 Gauge 前进一格并回绕。
  * TickEvent 自带距上次 tick 的真实时长（elapsedSeconds()）与帧计数（frameCount()）；

@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 把一帧 Buffer 网格转成带行号的可打印文本（第 1 课教具）。
+ * 把一帧 Buffer 网格转成带行号的可打印文本（第 2 课教具）。
  *
  * <p>格式：每行 {@code y=<行号> |<该行 Cell 内容>|}。这是<b>网格视角</b>：每个 Cell 恰好一个
  * 可见字符——宽字符（如中文）占「主格 + 续格」，续格以 · 呈现（实测 0.4.0：Buffer.setString

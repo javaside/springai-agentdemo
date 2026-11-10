@@ -7,7 +7,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 第 2 课的数据源测试：演示文本（三粒度/颜色来源/对齐）与宽度基础示例。
+ * 第 3 课的数据源测试：演示文本（三粒度/颜色来源/对齐）与宽度基础示例。
  *
  * <p>宽度部分只教健康口径的基础事实：ASCII 1 列、CJK 2 列、混合求和——宽度测量的
  * 深水区（组合序列等）不属于入门课范围。</p>

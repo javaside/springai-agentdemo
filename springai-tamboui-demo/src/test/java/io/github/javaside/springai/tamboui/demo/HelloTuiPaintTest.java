@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 第 1 课的手写格子：paint 里用 frame.buffer().set(...) 直接往网格写当前帧标记（A/B）——
+ * 第 2 课的手写格子：paint 里用 frame.buffer().set(...) 直接往网格写当前帧标记（A/B）——
  * 让 Buffer 在课程代码里现形（renderWidget 把 Buffer 封装在身后，学员此前在代码里看不到它）。
  * 该格同时出现在屏幕右上角与退出后的 diff 视图（■）中。
  */
