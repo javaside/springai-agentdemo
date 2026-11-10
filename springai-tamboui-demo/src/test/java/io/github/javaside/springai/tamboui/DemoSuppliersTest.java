@@ -28,8 +28,8 @@ class DemoSuppliersTest {
     @Test
     void demosInTeachingOrder() {
         List<Supplier<TambouiDemo>> suppliers = TambouiDemoApplication.demoSuppliers();
-        assertEquals(6, suppliers.size());
-        assertEquals(List.of(1, 2, 3, 4, 5, 6),
+        assertEquals(8, suppliers.size());
+        assertEquals(List.of(1, 2, 3, 4, 5, 6, 7, 8),
                 suppliers.stream().map(s -> s.get().order()).toList());
     }
 }

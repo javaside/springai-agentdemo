@@ -10,7 +10,7 @@ import dev.tamboui.text.Text;
 import java.util.List;
 
 /**
- * 第 2 课的数据源（纯逻辑、可单测）：演示文本与宽度基础示例。
+ * 第 3 课的数据源（纯逻辑、可单测）：演示文本与宽度基础示例。
  *
  * <p>富文本三粒度：{@link Span}（带样式的字符串片段）→ {@link Line}（一行，多个 Span 拼接）
  * → {@link Text}（多行段落）。样式是<b>不可变</b>的——每个方法返回新实例，链式调用即组合。</p>
@@ -40,7 +40,7 @@ public final class TextStyleShowcase {
     /** 课程主演示文本（10 行）。 */
     public static Text demoText() {
         return Text.from(
-                Line.from(Span.styled("第 2 课 · 文本与样式", Style.create().fg(Color.CYAN).bold())),
+                Line.from(Span.styled("第 3 课 · 文本与样式", Style.create().fg(Color.CYAN).bold())),
                 Line.from(Span.raw("")),
                 Line.from(Span.styled("三粒度：", Style.create().bold()),
                         Span.styled("Span(片段)", Style.create().fg(Color.YELLOW)),
@@ -61,7 +61,7 @@ public final class TextStyleShowcase {
                 Line.from(Span.styled("右对齐 →", Style.create().fg(Color.GRAY))).right());
     }
 
-    /** 宽度基础示例行（与 CharWidth 现场一致；续格概念见第 1 课 FrameDump 的 ·）。 */
+    /** 宽度基础示例行（与 CharWidth 现场一致；续格概念见第 2 课 FrameDump 的 ·）。 */
     public static List<WidthExample> widthExamples() {
         return List.of(
                 new WidthExample("A", CharWidth.of("A")),

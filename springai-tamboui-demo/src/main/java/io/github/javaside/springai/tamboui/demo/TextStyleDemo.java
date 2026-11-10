@@ -15,14 +15,14 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 2 课 文本与样式 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 3 课 文本与样式 —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p>全屏展示：富文本三粒度（Span→Line→Text）、Style 不可变方法链、颜色三种来源
  * （命名色 / 256 色 indexed / RGB）、行对齐、Paragraph 自动折行（WRAP_WORD），
  * 以及宽度口径的基础事实（ASCII 1 列、CJK 2 列）。</p>
  *
  * <p><b>本课核心认知</b>：终端富文本的一切都从「带样式的字符串片段（Span）」开始；
- * 宽度是渲染口径——中文占 2 列，第 1 课 Buffer 网格里的「主格+续格(·)」就是它的形态。</p>
+ * 宽度是渲染口径——中文占 2 列，第 2 课 Buffer 网格里的「主格+续格(·)」就是它的形态。</p>
  */
 public final class TextStyleDemo implements TambouiDemo {
 
@@ -32,7 +32,7 @@ public final class TextStyleDemo implements TambouiDemo {
 
     @Override
     public int order() {
-        return 2;
+        return 3;
     }
 
     @Override
@@ -65,7 +65,7 @@ public final class TextStyleDemo implements TambouiDemo {
                 .append(Line.from(Span.styled(WRAP_SENTENCE, Style.create().fg(Color.GRAY))))
                 .append(Line.from(Span.raw("")))
                 .append(Line.from(Span.styled(widthNote.toString(), Style.create().fg(Color.YELLOW))))
-                .append(Line.from(Span.styled("（第 1 课网格里的 主格+续格· 就是 2 列宽字符的形态）",
+                .append(Line.from(Span.styled("（第 2 课网格里的 主格+续格· 就是 2 列宽字符的形态）",
                         Style.create().fg(Color.YELLOW))))
                 .append(Line.from(Span.styled("按 q / Ctrl+C 退出", Style.create().fg(Color.GRAY))).centered());
 

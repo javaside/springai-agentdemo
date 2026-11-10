@@ -7,7 +7,7 @@ import dev.tamboui.layout.Rect;
 import java.util.List;
 
 /**
- * 第 3 课的布局定义（纯逻辑、可单测）：把整屏切成三段，中段再左右切分。
+ * 第 5 课的布局定义（纯逻辑、可单测）：把整屏切成三段，中段再左右切分。
  *
  * <p>约束式布局的语言只有一句：<b>给一个 Rect 和一组 {@link Constraint}，
  * {@link Layout#split} 返回切好的子 Rect 列表</b>——length(n) 固定行/列数、

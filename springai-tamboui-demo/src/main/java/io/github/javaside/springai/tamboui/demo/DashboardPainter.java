@@ -12,7 +12,7 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import java.util.List;
 
 /**
- * 第 3 课的整帧绘制（离屏可单测）：按 {@link DashboardLayout} 切分区域，
+ * 第 5 课的整帧绘制（离屏可单测）：按 {@link DashboardLayout} 切分区域，
  * 各区域放一个组件——头（Paragraph + Block 标题）、左（ListWidget，StatefulWidget）、
  * 右（Gauge）、尾（提示行）。
  *
@@ -23,21 +23,21 @@ import java.util.List;
 public final class DashboardPainter {
 
     private static final List<String> LESSONS = List.of(
-            "第 1 课 渲染模型", "第 2 课 文本与样式", "第 3 课 组件与布局（List 在此）",
-            "第 4 课 事件与交互", "第 5 课 Toolkit DSL", "第 6 课 行内模式");
+            "第 1 课 创建 TUI 应用", "第 2 课 渲染模型", "第 3 课 文本与样式", "第 4 课 组件画廊",
+            "第 5 课 布局（本课）", "第 6 课 事件与交互", "第 7 课 Toolkit DSL", "第 8 课 行内模式");
 
     private DashboardPainter() {
     }
 
     private static final String DEFAULT_FOOTER =
-            "布局语言：length(n) 固定 · percentage(n) 比例 · fill() 吃剩余——切分可嵌套 | 按 q / Ctrl+C 退出";
+            "画廊的手摆区域 → 本课的约束切分：length(n) 固定 · percentage(n) 比例 · fill() 吃剩余，可嵌套 | 按 q / Ctrl+C 退出";
 
-    /** 画一帧完整课程面板。listState 由调用方持有（第 3 课静态展示用）。 */
+    /** 画一帧完整课程面板。listState 由调用方持有（第 5 课静态展示用）。 */
     public static void paint(Frame frame, ListState listState) {
         paint(frame, listState, 62, DEFAULT_FOOTER);
     }
 
-    /** 动态版（第 4 课交互用）：Gauge 比例与尾行文本随状态变化——同一棵布局，不同的状态。 */
+    /** 动态版（第 6 课交互用）：Gauge 比例与尾行文本随状态变化——同一棵布局，不同的状态。 */
     public static void paint(Frame frame, ListState listState, int gaugePercent, String footerText) {
         var parts = DashboardLayout.split(frame.area());
         var header = parts.get(0);
@@ -49,7 +49,7 @@ public final class DashboardPainter {
                 Paragraph.builder()
                         .text(dev.tamboui.text.Text.from(
                                 dev.tamboui.text.Line.from(dev.tamboui.text.Span.styled(
-                                        "第 3 课 · 组件与布局",
+                                        "第 5 课 · 布局",
                                         dev.tamboui.style.Style.create()
                                                 .fg(dev.tamboui.style.Color.CYAN).bold()))))
                         .block(Block.builder().borders(Borders.BOTTOM_ONLY).build())

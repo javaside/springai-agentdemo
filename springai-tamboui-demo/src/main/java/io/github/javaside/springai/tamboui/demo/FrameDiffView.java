@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 第 1 课的 diff 视图（纯逻辑）：对比两帧 Buffer，不同格子标 ■、相同留空。
+ * 第 2 课的 diff 视图（纯逻辑）：对比两帧 Buffer，不同格子标 ■、相同留空。
  * 这就是「框架视角」——它每帧做的事即此图：找出 ■ 的格子，只把这些发给终端。
  */
 public final class FrameDiffView {

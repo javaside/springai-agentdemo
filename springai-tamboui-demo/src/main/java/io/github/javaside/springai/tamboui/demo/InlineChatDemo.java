@@ -31,7 +31,7 @@ import static dev.tamboui.toolkit.Toolkit.richText;
 import static dev.tamboui.toolkit.Toolkit.text;
 
 /**
- * 第 6 课 行内模式——衔接 code-tui —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 8 课 行内模式——衔接 code-tui —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p>前五课都是全屏（备用屏幕）；行内模式相反：终端照常滚动，一小块「live 区」钉在底部、
  * 原地刷新——这正是聊天式 CLI（如 code-tui）需要的形态：历史对话留在 scrollback，
@@ -77,7 +77,7 @@ public final class InlineChatDemo extends InlineApp implements TambouiDemo {
 
     @Override
     public int order() {
-        return 6;
+        return 8;
     }
 
     @Override

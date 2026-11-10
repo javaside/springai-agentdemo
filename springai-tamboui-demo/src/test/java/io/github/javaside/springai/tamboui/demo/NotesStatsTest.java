@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 第 5 课的纯逻辑：笔记统计（字数按字符计、行数按行计、非空行数）。
+ * 第 7 课的纯逻辑：笔记统计（字数按字符计、行数按行计、非空行数）。
  * 声明式 UI 里 render() 每帧都读它——纯函数化后可单测。
  */
 class NotesStatsTest {

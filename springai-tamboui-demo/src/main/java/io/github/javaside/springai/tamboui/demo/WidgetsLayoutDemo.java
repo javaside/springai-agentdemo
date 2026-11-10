@@ -9,7 +9,7 @@ import dev.tamboui.widgets.list.ListState;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 3 课 组件与布局 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 5 课 布局 —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p>全屏静态面板：头部 Paragraph + Block 底边框，中段左右两栏（ListWidget 课程目录 +
  * Gauge 进度条），尾部提示。布局由 {@link DashboardLayout} 用 Layout/Constraint 切分，
@@ -25,17 +25,17 @@ public final class WidgetsLayoutDemo implements TambouiDemo {
 
     @Override
     public int order() {
-        return 3;
+        return 5;
     }
 
     @Override
     public String title() {
-        return "组件与布局（Block / List / Gauge / Layout 切分）";
+        return "布局——Layout/Constraint 约束切分（画廊的手摆区域升级版）";
     }
 
     @Override
     public void run() throws Exception {
-        listState.select(2);   // 高亮「第 3 课」那行
+        listState.select(4);   // 高亮「第 5 课 布局（本课）」那行
         try (TuiRunner runner = TuiRunner.create()) {
             EventHandler handler = (Event event, TuiRunner r) -> {
                 if (event instanceof KeyEvent key && key.isQuit()) {
