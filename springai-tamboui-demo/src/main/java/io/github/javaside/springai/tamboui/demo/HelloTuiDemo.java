@@ -14,26 +14,20 @@ import io.github.javaside.springai.tamboui.TambouiDemo;
 /**
  * 第 2 课 放大镜下的表格 —— 基于 TamboUI 0.4.0 实测 API。
  *
- * <p>回答三个问题，全在画面上：</p>
- * <ul>
- *   <li><b>画面是 Frame 还是 Buffer？</b>——画面 = <b>Buffer</b> 这张表的内容照着显示；
- *       <b>Frame 不是画面</b>，是填表时手里的工具（底部结论行写明）。</li>
- *   <li><b>「每格一字符」什么意思？</b>——屏幕中央的「放大镜」把这张表的前 10 格 × 5 行
- *       <b>每格用 [ ] 框出</b>：一格一字符肉眼可数，中文一字占两格（[你][·]），
- *       空白也是格；★ 就在放大镜里移动（h/j/k/l）。</li>
- *   <li><b>想画出画面怎么操作？</b>——三招：{@code set} 写一格、{@code setString} 写一串、
- *       {@code renderWidget} 画组件（本类 paint 各用了一次，底部结论行同款提示）。</li>
- * </ul>
+ * <p>正文只有 {@link #paint} 的几行概念用法：Frame 画说明、Buffer 拿表本体、
+ * Cell 写一格（★，h/j/k/l 移动）。屏幕中央的「放大镜」是教学道具
+ * （{@link Magnifier}，一格一字符肉眼可数），一行调用，不必读其实现。</p>
+ *
+ * <p>做界面的正道见 README 第 2 课「定心丸」：万能公式 = renderWidget(组件, 区域)。</p>
  */
 public final class HelloTuiDemo implements TambouiDemo {
-
-    /** 放大镜参数：显示表格前 10 格（列）× 5 行。 */
-    static final int MAG_COLS = 10;
-    static final int MAG_ROWS = 5;
 
     /** ★ 在表格中的位置（列 x、行 y）——被钳在放大镜范围内，始终可见。 */
     int starX = 3;
     int starY = 2;
+
+    /** 退出打印用的最后一屏快照。 */
+    private Buffer lastFrame;
 
     @Override
     public int order() {
@@ -48,26 +42,15 @@ public final class HelloTuiDemo implements TambouiDemo {
     @Override
     public void run() throws Exception {
         try (TuiRunner runner = TuiRunner.create()) {
-            Renderer renderer = this::paint;
-            runner.run(this::onKey, renderer);
+            runner.run(this::onKey, this::paint);
         }
-
-        System.out.println("\n—— 刚才那屏，在 Buffer（字符表格）里的样子 ——");
-        System.out.println("（第 y 行 = 屏幕第 y 行，一格 = 一个字符；· 是宽字符占的第二格）");
+        System.out.println("\n—— 刚才那屏在 Buffer 里的样子（一格一字符；· 是宽字符第二格）——");
         if (lastFrame != null) {
             FrameDump.dump(lastFrame).forEach(l -> System.out.println("  " + l));
         }
-        System.out.println("""
-
-                一句话收束三概念：
-                · 画面 = Buffer 的内容（屏幕显示的就是这张表照着画）
-                · Frame 不是画面，是填表工具（area 问尺寸 / renderWidget 批量画 / buffer 把表递给你）
-                · Cell 是一格的内容（一个字符 + 样式）
-                操作三招：set 写一格 · setString 写一串 · renderWidget 画组件
-                """);
     }
 
-    /** 按键：h/j/k/l 移动 ★（钳在放大镜 10×5 范围内，始终看得见）；q 退出。 */
+    /** 按键：h/j/k/l 移动 ★（钳在放大镜 10×5 内）；q 退出。 */
     boolean onKey(Event event, TuiRunner r) {
         if (event instanceof KeyEvent key && key.isQuit()) {
             r.quit();
@@ -75,55 +58,35 @@ public final class HelloTuiDemo implements TambouiDemo {
         }
         if (event instanceof KeyEvent key) {
             if (key.isChar('h')) { starX = Math.max(0, starX - 1); return true; }
-            if (key.isChar('l')) { starX = Math.min(MAG_COLS - 1, starX + 1); return true; }
+            if (key.isChar('l')) { starX = Math.min(Magnifier.COLS - 1, starX + 1); return true; }
             if (key.isChar('k')) { starY = Math.max(0, starY - 1); return true; }
-            if (key.isChar('j')) { starY = Math.min(MAG_ROWS - 1, starY + 1); return true; }
+            if (key.isChar('j')) { starY = Math.min(Magnifier.ROWS - 1, starY + 1); return true; }
         }
         return false;
     }
 
-    /** 退出打印用的最后一屏快照。 */
-    private Buffer lastFrame;
-
-    /** 画一帧。包内可见供离屏测试。 */
+    /** 画一帧：三概念各一行 + 教具一行。包内可见供离屏测试。 */
     void paint(Frame frame) {
-        int cols = frame.area().width();
-        int rows = frame.area().height();
-
-        // ── Frame 的动作：area() 问尺寸 + renderWidget 画顶部两行说明（落在第 0、1 行）──
+        // ① Frame：area() 问尺寸；renderWidget 画顶部说明（落在第 0、1 行）
         frame.renderWidget(Paragraph.from(
-                "表格尺寸：" + cols + " 列 × " + rows + " 行（拖动窗口，数字会变）\n"
+                "表格尺寸：" + frame.area().width() + " 列 × " + frame.area().height()
+                        + " 行（拖动窗口，数字会变）\n"
                         + "h←  j↓  k↑  l→ 移动 ★（在放大镜里） · q 退出"),
                 frame.area());
 
-        // ── Buffer / Cell 的动作：拿到表格本体，把一格内容（Cell）写进 (starX, starY) ──
+        // ② Buffer：拿到表格本体；③ Cell：一格内容——写进 (starX, starY)，★ 随按键移动
         Buffer grid = frame.buffer();
-        Cell star = new Cell("★", Style.create());
-        grid.set(starX, starY, star);
+        grid.set(starX, starY, new Cell("★", Style.create()));
 
-        // ── 放大镜：把这张表前 10 格 × 5 行，每格用 [ ] 框出来投在屏幕中央 ──
-        //    一格一字符肉眼可数；中文一字占两格（主格[你]+续格[·]）；空白也是格。
-        //    注意读写分区：读的是第 0-4 行，写的是第 5 行以下——放大镜自己的文字
-        //    不会盖住它要展示的内容（set/setString 都是硬写，位置要自己负责）。
-        int magY = 6;   // 放大镜投影像的起始行（标题在第 5 行）
-        grid.setString(1, magY - 1, "放大镜：Buffer 的前 " + MAG_COLS + " 格 × " + MAG_ROWS
-                + " 行（每格 [ ] 框出；· 是宽字符的第二格）", Style.create());
-        for (int y = 0; y < MAG_ROWS; y++) {
-            StringBuilder sb = new StringBuilder("第" + y + "行 ");
-            for (int x = 0; x < MAG_COLS; x++) {
-                Cell c = grid.get(x, y);
-                String ch = c.isContinuation() ? "·"
-                        : (c.symbol() == null || c.symbol().isEmpty() ? " " : c.symbol());
-                sb.append("[").append(ch).append("]");
-            }
-            grid.setString(1, magY + y, sb.toString(), Style.create());
-        }
+        // 教具（不必读实现）：把左上 10 格 × 5 行每格 [ ] 框出投到屏幕中央
+        Magnifier.project(frame, Magnifier.COLS, Magnifier.ROWS, 6);
 
-        // ── 底部结论：回答「画面是谁」和「怎么操作」──
-        grid.setString(1, rows - 3, "看到的画面 = Buffer 这张表；Frame 不是画面，"
-                + "是填表工具（area 问尺寸 · renderWidget 批量画 · buffer 把表递给你）", Style.create());
-        grid.setString(1, rows - 2, "操作三招：set 写一格 · setString 写一串 · renderWidget 画组件"
-                + "（本程序三种各用了一次）", Style.create());
+        // 底部结论：画面 = Buffer；Frame 是工具；操作三招
+        int rows = frame.area().height();
+        grid.setString(1, rows - 3, "看到的画面 = Buffer 这张表；Frame 是填表工具（area/renderWidget/buffer）",
+                Style.create());
+        grid.setString(1, rows - 2, "操作三招：set 写一格 · setString 写一串 · renderWidget 画组件",
+                Style.create());
 
         lastFrame = grid.copy();
     }

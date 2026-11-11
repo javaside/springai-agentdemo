@@ -25,7 +25,7 @@ class HelloTuiPaintTest {
     @Test
     void magnifierBoxesEveryCellIncludingTheStar() {
         Buffer buf = paint(new HelloTuiDemo(), 60, 20);
-        String starRow = rowText(buf, 6 + 2);            // 放大镜「第2行」投在真实 y=8
+        String starRow = rowText(buf, 6 + 2);            // 放大镜「第2行」投在真实 y=8（targetY=6）
         assertTrue(starRow.contains("[★]"), "★ 应以框格形式出现在放大镜中: " + starRow);
         // 第 0 行放的是顶部说明文字：中文一字占两格 → 放大镜里出现 [x][·] 相邻形态
         String row0 = rowText(buf, 6 + 0);
