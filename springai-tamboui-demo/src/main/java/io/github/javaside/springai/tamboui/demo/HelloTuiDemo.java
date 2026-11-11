@@ -1,7 +1,9 @@
 package io.github.javaside.springai.tamboui.demo;
 
 import dev.tamboui.buffer.Buffer;
+import dev.tamboui.buffer.Cell;
 import dev.tamboui.layout.Rect;
+import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
 import dev.tamboui.tui.TuiRunner;
 import dev.tamboui.tui.event.Event;
@@ -10,7 +12,7 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 2 课 做出第一个界面 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 2 课 画出第一个界面，认识画面底下的三个角色 —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p><b>画界面只有一件事</b>：{@code renderWidget(组件, 区域)}——组件给内容，
  * 区域给位置。本课用它三次，拼出一个备忘录面板：标题、待办内容、底部提示，
@@ -60,18 +62,25 @@ public final class HelloTuiDemo implements TambouiDemo {
         return false;
     }
 
-    /** 画一帧：一个界面 = 三块内容放进三个区域。包内可见供离屏测试。 */
+    /**
+     * 画一帧：用三个核心概念画出一个真实的备忘录界面。
+     * 包内可见供离屏测试。
+     */
     void paint(Frame frame) {
-        // 区域（Rect）= 起点（第几列，第几行）+ 宽高（多少格 × 多少行）
-        Rect titleArea = new Rect(4, 1, 30, 3);            // 标题区：第 1 行、第 4 列起，30×3
-        Rect contentArea = new Rect(4, 5, 30, 8);          // 内容区：第 5 行起，30×8
-        Rect footerArea = new Rect(4, frame.area().height() - 3, 50, 2);   // 底栏：贴着屏幕底部
-
-        // 画界面 = renderWidget(组件, 区域)，要几块就调几次
+        // ── 概念① Frame：渲染入口——area() 问尺寸；renderWidget(组件, 区域) 批量画 ──
+        //    区域（Rect）= 起点（第几列，第几行）+ 宽高（多少格 × 多少行）
+        Rect titleArea = new Rect(4, 1, 30, 2);          // 标题区：第 1 行、第 4 列起
+        Rect listArea = new Rect(4, 4, 30, 6);           // 列表区：第 4 行起
+        Rect footerArea = new Rect(4, frame.area().height() - 3, 60, 2);   // 底栏：贴屏幕底
         frame.renderWidget(Paragraph.from("我的备忘录"), titleArea);
-        frame.renderWidget(Paragraph.from("买牛奶\n写周报\n复习「区域 + 组件」"), contentArea);
-        frame.renderWidget(Paragraph.from("界面 = renderWidget(组件, 区域)；拖动窗口底栏仍贴底 · q 退出"),
-                footerArea);
+        frame.renderWidget(Paragraph.from("买牛奶\n写周报\n复习 Buffer/Cell/Frame"), listArea);
+        frame.renderWidget(Paragraph.from("q 退出（退出后打印这张表）"), footerArea);
+
+        // ── 概念② Buffer：从 Frame 拿到表格本体——画面此刻的数据 ──
+        Buffer grid = frame.buffer();
+
+        // ── 概念③ Cell：一格内容（字符+样式）——往第一条待办前写一个 ● 标记 ──
+        grid.set(3, 4, new Cell("●", Style.create()));
 
         lastFrame = frame.buffer().copy();
     }

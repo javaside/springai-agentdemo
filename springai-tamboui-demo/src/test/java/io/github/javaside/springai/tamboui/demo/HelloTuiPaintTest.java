@@ -5,6 +5,7 @@ import dev.tamboui.layout.Rect;
 import dev.tamboui.terminal.Frame;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -14,17 +15,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class HelloTuiPaintTest {
 
     @Test
-    void threeBlocksLandInTheirRegions() {
+    void threeConceptsEachVisibleInThePaint() {
         Buffer buf = paint(60, 20);
-        assertTrue(rowText(buf, 1).contains("我的备忘录"), "标题应在第 1 行（titleArea.y=1）");
-        assertTrue(rowText(buf, 5).contains("买牛奶"), "首条内容应在第 5 行（contentArea.y=5）");
-        assertTrue(rowText(buf, 6).contains("写周报"));
+        // Frame 的 renderWidget：三块内容各就各位
+        assertTrue(rowText(buf, 1).contains("我的备忘录"), "标题应在第 1 行");
+        assertTrue(rowText(buf, 4).contains("买牛奶"), "首条待办应在第 4 行（listArea.y=4）");
+        // Buffer + Cell：第一条待办前的 ● 是 set 写进 (3,4) 的一格
+        assertEquals("●", buf.get(3, 4).symbol());
     }
 
     @Test
     void footerSticksToBottomAndFollowsWindowHeight() {
-        assertTrue(rowText(paint(60, 20), 17).contains("renderWidget"), "20 行屏：底栏在 17 行");
-        assertTrue(rowText(paint(60, 30), 27).contains("renderWidget"), "30 行屏：底栏跟着到 27 行");
+        assertTrue(rowText(paint(60, 20), 17).contains("退出"), "20 行屏：底栏在 17 行");
+        assertTrue(rowText(paint(60, 30), 27).contains("退出"), "30 行屏：底栏跟着到 27 行");
     }
 
     // ---- 工具 ----
