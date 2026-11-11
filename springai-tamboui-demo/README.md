@@ -77,424 +77,60 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
 
 ### 运行
 
-菜单选 **2**：三条带各出自谁一目了然；按 **h/j/k/l** 移动 ★（每按一次就是
-往另一格写一个 Cell）；**拖动窗口**看顶部尺寸数字变（area() 现场读）；按 **q 退出**
-打印整屏表格（一格一字符、中文占主+续两格）。
+菜单选 **1**：屏幕上就是五式对照表——而那个程序本身正是方式②的实跑。
+`CreateTuiDemo.java` 全文 40 余行，且只用了本课教过的 API（样式与富文本是
+第 3 课的内容，本课示例全部纯字符串——每课示例都遵守这条规矩：不出现还没
+教过的东西）。
 
-**定心丸：那做界面到底用什么？**——不是这三个。Buffer/Cell/Frame 是**理解层**
-（知道界面=表格、组件=替你填表），日常干活的**万能公式**只有一行：
-
-```java
-frame.renderWidget(组件, 区域);   // 组件给内容，区域给位置——这就是做界面
-```
-
-想要文字→Paragraph 组件；颜色→第 3 课样式；边框/列表/进度条→第 4 课组件；
-摆多个位置→第 5 课布局切区域；按键有反应→第 6 课事件。类比：Buffer/Cell 之于
-TUI = char 数组之于字符串——一切建在它上面，但你写字用 String，不手动拼数组。
-
-**自测**：Buffer / Cell / Frame 各回答三问——是什么、为什么存在、什么时候用；paint 三行各对应哪个对象？
+**自测**：不看示例，说出五种方式的名字；`EventHandler` 与 `Renderer` 各自的方法签名与职责。
 
 ---
 
-## 第 3 课 · 文本与样式
+## 第 2 课 · 画出第一个界面，认识画面底下的三个角色
 
-**本课学什么**：写带样式的文字——富文本三粒度（Span/Line/Text）、样式链、
-颜色三种来源、超宽行为（Overflow）、宽度口径。
+**本课学什么**：两件事，缺一不可——
 
-### 示例：TextStyleDemo 的核心构造
+1. **会做**：用 `renderWidget(组件, 区域)` 画出第一个真实界面（备忘录面板）——
+   这是「会用这个框架」的最小能力，后面六课都在这条公式上加东西；
+2. **认识**：Buffer / Cell / Frame 三个核心概念各自的岗位——画面 = Buffer
+   （一张 Cell 表格）的数据；你通过 Frame 这个工具包把内容填进去；渲染到
+   终端的是框架（TuiRunner），不是你。
 
-```java
-// 三粒度：Span(带样式的片段) → Line(一行) → Text(段落)
-Line title = Line.from(
-        Span.styled("第 3 课 · 文本与样式", Style.create().fg(Color.CYAN).bold()),
-        Span.raw("  "),
-        Span.styled("副标题", Style.create().fg(Color.rgb(70, 130, 180))));
-Text full = TextStyleShowcase.demoText()
-        .append(Line.from(Span.raw("")))                       // Text 不可变：append 返回新实例
-        .append(Line.from(Span.styled("折行段…", Style.create().fg(Color.GRAY))));
-frame.renderWidget(Paragraph.builder().text(full)
-        .overflow(Overflow.WRAP_WORD).build(), frame.area());  // 不设 overflow 则默认 CLIP 截断！
-```
-
-### 讲解
-
-- **Span → Line → Text**：一个带样式的字符串片段；一行由多个 Span 拼接
-  （`left()/centered()/right()` 设对齐）；多行组成段落。想加行就 `append(...)`——
-  **Text 不可变**，每个方法返回新实例；
-- **Style 不可变链**：`Style.create().fg(...).bold().italic().underlined()`，
-  链上每个点都返回新对象——组合即安全；
-- **颜色三种来源**：命名色 `Color.RED`、256 色 `Color.indexed(208)`、真彩
-  `Color.rgb(70,130,180)`；
-- **Overflow 是新手第一坑**：`Paragraph` 默认 **CLIP（截断）**——长文本被静默裁掉；
-  要折行必须显式 `.overflow(Overflow.WRAP_WORD)`，另有 `ELLIPSIS` 省略号；
-- **宽度口径**：`CharWidth.of("中")` = 2。终端对齐按**渲染宽度**算，不按字符个数——
-  第 2 课网格里的「主格+续格(·)」就是它的形态。
-
-### 运行
-
-菜单选 **3**：三粒度、三种颜色、对齐、折行、宽度示例一屏全览。
-
-**自测**：Paragraph 默认超宽行为是什么？中文为什么在网格里占两格？
-
----
-
-## 第 4 课 · 组件画廊
-
-**本课学什么**：常用组件怎么用——Paragraph、Block（边框容器）、List+ListState（列表）、
-Gauge（进度条）；以及无状态/有状态组件的分野。
-
-### 示例：GalleryPainter 的四段核心
-
-```java
-// ① Paragraph：多行文本（可挂边框）
-frame.renderWidget(Paragraph.builder().text(text)
-        .block(Block.builder().borders(Borders.TOP_ONLY).build()).build(), paragraphArea);
-
-// ② Block：最基础的容器——边框+标题，常挂在别的组件的 .block(...) 上
-Block block = Block.builder().borders(Borders.ALL)
-        .borderType(BorderType.ROUNDED).title("② Block").build();
-block.render(area, frame.buffer());          // 也可以单独画
-
-// ③ ListWidget + ListState：列表——有状态组件，状态外部持有
-frame.renderStatefulWidget(ListWidget.builder()
-        .items("一", "二", "三").highlightSymbol("▶ ")
-        .block(...).build(), listArea, listState);   // 注意：多传一个状态
-
-// ④ Gauge：进度条
-frame.renderWidget(Gauge.builder().ratio(0.62)
-        .label(Span.styled("课程进度 62%", green)).block(...).build(), gaugeArea);
-```
-
-### 讲解
-
-- 组件分两种：**无状态**——`renderWidget(组件, 区域)` 直接画（Paragraph/Gauge/Block）；
-  **有状态**——`renderStatefulWidget(组件, 区域, 状态)`，如列表的选中/滚动由
-  `ListState` 在组件外持有。**状态外置**正是「UI = 状态的纯函数」能成立的原因；
-- **Block** 官方称「最基础的容器」：`borders(...)` 哪些边、`borderType(...)` 线型
-  （PLAIN/ROUNDED/DOUBLE/THICK…）、`title(...)` 标题；
-- TamboUI 全部 **26 个组件、8 大类**（容器/文本/选择/数据可视化/动画/输入/工具/Markdown），
-  全景见参考手册的官方链接——课程演示最常用的四个。
-
-### 运行
-
-菜单选 **4**：四块演示区逐个亮相。注意四块区域目前是**手写的 Rect 坐标**——
-下一课把手摆升级成约束切分。
-
-**自测**：无状态与有状态组件的渲染调用差在哪？为什么状态要外置？
-
----
-
-## 第 5 课 · 布局
-
-**本课学什么**：把手摆坐标升级成**约束切分**——Layout 与 Constraint 是
-ratatui 系框架布局的全部语言。
-
-### 示例：DashboardLayout 的切分
-
-```java
-/** 整屏三段：固定 3 行头 + 60% 中段 + 剩余全给尾。 */
-public static List<Rect> split(Rect screen) {
-    return Layout.vertical()
-            .constraints(Constraint.length(3),      // 固定 3 行
-                    Constraint.percentage(60),       // 按比例
-                    Constraint.fill())               // 吃掉剩余
-            .split(screen);                          // → 切好的子区域列表
-}
-
-/** 中段再左右切：List 占 60%，Gauge 吃剩余——切分可嵌套。 */
-public static List<Rect> splitMiddle(Rect middle) {
-    return Layout.horizontal()
-            .constraints(Constraint.percentage(60), Constraint.fill())
-            .split(middle);
-}
-```
-
-### 讲解
-
-- 一句口诀：**先切区域，再往区域放组件**。`Layout.vertical()/horizontal()`
-  .`constraints(...)`.`split(大区域)` 返回 `List<Rect>`，每个子区域照常
-  `renderWidget` / `renderStatefulWidget`；
-- 约束四种常用：`length(n)` 固定、`percentage(n)` 比例、`fill()` 吃剩余、
-  `min/max` 上下限（另有 ratio/fit）；
-- **嵌套**是布局的威力所在：拿子区域再 `split` 就是多面板——示例里中段先上下切、
-  再左右切，两行代码；
-- 窗口缩放时框架自动重切重绘——区域跟着比例伸缩，不用你算一个坐标。
-
-### 运行
-
-菜单选 **5**：头（固定）/ 中段（60%，再切成 List+Gauge）/ 尾（吃剩余）——
-正是第 4 课画廊「手摆区域」的约束版。拉伸终端窗口看区域自适应。
-
-**自测**：想实现「顶部 3 行、底部 1 行、中间平分两栏」，约束怎么写？
-
----
-
-## 第 6 课 · 事件与交互
-
-**本课学什么**：让应用动起来——「事件 → 状态 → 请求重绘 → 下一帧反映」这条链路，
-是 TUI 交互的全部。
-
-### 示例：EventsDemo 的状态机与接线
-
-```java
-// 状态机（纯逻辑，可单测）：事件只改状态，并回答「是否需要重绘」
-public boolean onKey(KeyEvent key) {
-    if (key.isChar('j') || key.isKey(KeyCode.DOWN)) {
-        lessonIndex = Math.min(LESSON_COUNT - 1, lessonIndex + 1);
-        lastKey = key.toString();
-        return true;     // 状态变了
-    }
-    if (key.isChar('k') || key.isKey(KeyCode.UP)) { /* 对称，略 */ }
-    return false;        // 无关键：状态没变，不请求重绘
-}
-
-// handler 接线：事件交给状态机，渲染交给面板
-EventHandler handler = (event, r) -> {
-    if (event instanceof KeyEvent key) {
-        if (key.isQuit()) { r.quit(); return false; }
-        boolean changed = state.onKey(key);
-        listState.select(state.lessonIndex());   // 状态对象是唯一事实源
-        return changed;
-    }
-    if (event instanceof TickEvent) { state.onTick(); return true; }   // 动画
-    return false;
-};
-```
-
-### 讲解
-
-- 事件三类：**KeyEvent**（`isChar('j')` 字符判定、`isKey(KeyCode.UP/ENTER/ESCAPE)`、
-  `isQuit()`——默认 q/Q/Ctrl+C，**Esc 是 cancel 动作、不退出**）；
-  **TickEvent**（周期重绘脉冲，自带 `elapsedSeconds()`/`frameCount()`，
-  真实时间动画直接读）；**ResizeEvent**（缩放自动重绘，通常无需处理）；
-- **铁律：事件只改状态，渲染只看状态**。两者经 handler 的返回值（是否重绘）桥接；
-  状态机因此能抽成纯类离线单测（示例正是如此）；
-- 开 tick：`TuiConfig.builder().tickRate(Duration.ofMillis(100)).build()` 传给
-  `TuiRunner.create(config)`；**按需重绘**（没变返回 false）是省终端字节的基本纪律；
-- 中文输入法提示：`isChar('+')` 只匹配半角——全角 ＋ 需自己兼容
-  （第 7 课示例的 `isPlus` 就是现成写法）。
-
-### 运行
-
-菜单选 **6**：j/k 或方向键移动选中、Tick 驱动 Gauge 走动、底部显示最近按键。
-
-**自测**：按一次 j 之后屏幕为什么会变？把链路五环（事件→状态→返回值→重绘→新帧）说全。
-
----
-
-## 第 7 课 · Toolkit DSL（声明式）
-
-**本课学什么**：同样的应用换一种省事的写法——`render()` 只声明 UI 树，
-布局/焦点/输入编辑全交给框架（官方推荐的日常主力）。
-
-### 示例：ToolkitDslDemo 的骨架与交互惯例
-
-```java
-public final class ToolkitDslDemo extends ToolkitApp {
-    private final TextAreaState notes = new TextAreaState();
-    private int targetLines = 3;
-
-    @Override
-    protected TuiConfig configure() {              // 键位定制：退出只留 Ctrl+C（要能打字）
-        TuiConfig base = super.configure();
-        return base.toBuilder().bracketedPaste(true)
-                .bindings(base.bindings().toBuilder()
-                        .rebind(KeyTrigger.ctrl('c'), Actions.QUIT).build()).build();
-    }
-
-    @Override
-    protected void onStart() { notes.insert("在这里记点什么…"); }
-
-    @Override
-    protected Element render() {                   // 只声明这棵树——没有一行自绘
-        String focusedId = runner().focusManager().focusedId();
-        return column(
-                panel("第 7 课 · Toolkit DSL——render() 只声明这棵树",
-                        text("布局/焦点/输入编辑都是框架的事")),
-                row(
-                        panel(FocusMarks.title("笔记（原生 textArea）", "notes-input".equals(focusedId)),
-                                textArea(notes).id("notes-input")),      // 输入框：零键盘代码
-                        column(
-                                panel("统计（每帧现算）", richText(stats)),
-                                panel(FocusMarks.title("行数目标", "target".equals(focusedId)),
-                                        text("目标: " + targetLines + " 行")).id("target")
-                                        .focusable().onKeyEvent(this::onTargetKey))));
-    }
-}
-```
-
-### 讲解
-
-- `ToolkitApp` 三件套：`render()` 返回整棵树（声明式）、`configure()` 定制键位、
-  `new Xxx().run()` 自举——不用自己建 runner；
-- 工厂（`Toolkit.*`）：`text/richText/column/row/panel/spacer`；
-  `InlineToolkit.scope(条件, 子元素)` 条件隐藏（面板收起）；
-- **`textArea(state)` 一行得到完整输入框**：多行编辑、光标、中文输入免写键盘代码——
-  对比第 6 课手写的 handler，这是声明式的直接收益；
-- **自定义按键惯例**：`.id("唯一id").focusable().onKeyEvent(k -> HANDLED/UNHANDLED)`。
-  两个坑：可聚焦元素**必须显式 id**（无 id 不进焦点链）；多个可聚焦元素用 **Tab** 切换
-  焦点，而**框架不画焦点标识**——示例用 `focusManager().focusedId()` 给标题加 ▶ 自绘；
-- `configure` 里 `rebind` 是**整组替换**：`rebind(KeyTrigger.ctrl('c'), Actions.QUIT)`
-  之后退出只剩 Ctrl+C（默认的 q/Q 会被输入框吃掉反而误触发）。
-
-### 运行
-
-菜单选 **7**：Tab 切焦点（看 ▶ 跳动）、+/- 调行数目标、输入框打中文，
-统计面板实时对照达标。
-
-**自测**：为什么这个应用的退出键只剩 Ctrl+C？两个可聚焦元素怎么互相切换？
-
----
-
-## 第 8 课 · 行内模式——衔接 code-tui
-
-**本课学什么**：换到行内轴——终端照常滚动、底部一小块 live 区原地刷新；
-理解「**live 区差分重绘 + 定稿内容 println 下沉**」双通道。这是 code-tui 主视图的形态。
-
-### 示例：InlineChatDemo 的骨架
-
-```java
-public final class InlineChatDemo extends InlineApp {
-    private final FakeStreamer streamer;    // 假流式（定时吐字的模型替身）
-
-    @Override
-    protected int height() { return 4; }              // 空态 live 区高度（钉在终端底部）
-
-    @Override
-    protected InlineTuiConfig configure(int h) {
-        return super.configure(h).toBuilder().bracketedPaste(true).build();
-    }
-
-    @Override
-    protected Element render() {                      // live 区：只放「还会变的东西」
-        return column(
-                scope(streamer != null && !tail.isEmpty(), richText(残行)),   // 流式残行原地刷新
-                scope(streamer != null, text("⟐ 生成中…")),                    // 用完即收起
-                inputElement(),                                                  // 输入框
-                statusLine());
-    }
-
-    private void onStreamTick() {                     // 定时驱动：残行刷新；定稿行下沉
-        streamer.advance();
-        for (String line : streamer.drainNewlySettled()) {
-            runner().println(line);                   // ← 第二条通道：沉入 scrollback，不再重绘
-        }
-    }
-}
-```
-
-### 讲解
-
-- **行内 vs 全屏**：行内保留 scrollback（聊天/进度类 CLI 的需要），live 区钉在底部、
-  原地刷新；全屏则整个终端都是你的、退出复原；
-- **双通道各司其职**：live 区（`render()` 声明）只放还会变的东西——残行、面板、
-  输入框、状态行；定稿内容立刻 `runner().println(...)` 沉入 scrollback，从此不再重绘；
-- `scope(条件, 子元素)` 隐藏时占位归零 → 「生成中…」面板用完即收起，零额外代码；
-- `InlineApp` 钩子：`height()` / `render()` / `configure(int)` / `onStart()`；
-  定时驱动用 `runner().scheduleRepeating(...)`，状态改动包进 `runOnRenderThread(...)`；
-- **衔接 code-tui**：`CodeTuiView` 就是本课的放大版（javadoc 里有逐钩子对照表）。
-  生产上 code-tui 用仓库的 inline-patch 对行内渲染做了工程加固——一句话了解，
-  见参考手册「衔接 code-tui」。
-
-### 运行
-
-菜单选 **8**：输入框打字（中文 OK）、Enter 发送——用户行与假流式的定稿行逐行
-沉入上方 scrollback，残行在 live 区原地刷新，流完「⟐ 生成中…」收起。
-
-**自测**：为什么聊天记录要走 println 下沉而不是留在 live 区反复重绘？
-
----
-
-## 毕业自测
-
-八课读完，用三个问题检验（答案都在正文里）：
-
-1. 五种创建方式各自什么时候用？——第 1 课；
-2. 按一次按键之后屏幕为什么会变？——第 6 课五环链路；
-3. 什么时候选行内模式？双通道怎么分？——第 8 课。
-
-能全答上来，第⑥步 code-tui 的源码就在等你——`CodeTuiView` 是第 8 课的放大版，
-`implementation-map.md` 是它的地图。
-
----
-# 参考手册（正文学完后回来查）
-
-## 术语表（附官方英文原词，便于对照官方文档与 javadoc）
-
-| 中文 | 官方英文 | 含义 |
-|---|---|---|
-| 差分 | diff（官方句 "Buffer is diffed — only changed cells are sent to the terminal"） | 框架逐格对比新旧两帧的 Buffer，只把内容不同的格子发给终端——1920 格的屏改 20 格，就只发 20 格 |
-| 立即模式 | immediate mode（"immediate-mode rendering"） | 渲染函数每帧从零全量描述整屏、不留旧状态（"the UI is always a pure function of your application state"）；与「保留组件树的声明式」相对 |
-| 中间缓冲 | intermediate buffer system | Widgets 先画进 Buffer、不直写终端——差分的前提 |
-| 备用屏幕 | alternate screen | 终端的一块独立画布，进入后原内容不动、退出即复原——全屏应用的载体 |
-| 原始模式 | raw mode | 关闭终端默认的「逐行回显/行缓冲」，按键即刻到达程序——TUI 接管输入的前提 |
-| 网格 / 格 | buffer / cell | 画面本身（字符网格）/ 网格中的一格（一个字符 + 样式） |
-| 续格 | continuation cell | 宽字符（如中文）在网格中占的第二格，符号为空、`isContinuation()` 为真 |
-| 滚回区 | scrollback | 终端向上滚动可见的历史输出区；行内模式保留它，全屏模式不经过它 |
-| 常驻区 | live region（Inline Toolkit 语义） | 行内模式中钉在终端底部、原地刷新的区域（输入框/进行中的输出） |
-| 括号粘贴 | bracketed paste | 终端把粘贴内容包在 ESC[200~/201~ 标记里整体发送，程序据此区分「粘贴」与「逐键」 |
-| 有状态/无状态组件 | stateful / stateless widget | 状态是否在组件外持有并由调用方传入（如 ListState） |
-| 全角/半角 | full-width / half-width | 同一字符的中文输入法形态（＋）与 ASCII 形态（+）——按键判定两者都要兼容 |
-
-## 每课 API 速查
-
-### 第 1 课 · 创建应用
-
-```java
-try (TuiRunner runner = TuiRunner.create()) {      // 进备用屏幕 + 原始模式
-    runner.run(handler, renderer);
-}
-```
-
-| 类 | 角色 | 关键用法 |
-|---|---|---|
-| `TuiRunner` | 全屏发动机 | `create()` / `run(handler, renderer)` / `quit()`；try-with-resources 复原终端 |
-| `EventHandler` | 事件处理 | `(event, runner) -> boolean`：返回是否需要重绘 |
-| `Renderer` | 画帧函数 | `frame -> {...}`：整帧重画，不看上一帧 |
-| `TuiConfig` | 运行配置 | `builder().tickRate(...)` / `bracketedPaste(true)` 等 → `TuiRunner.create(config)` |
-
-### 第 2 课 · 做出第一个界面
-
-**本课学什么**：画界面的唯一核心动作 `renderWidget(组件, 区域)`——组件给内容、
-区域给位置；用它拼出一个真正的界面（备忘录面板）。画面底下的机器（Buffer/Cell/Frame）
-在本课结尾「背后机制」里讲清——理解即可，日常做界面不直接碰。
-
-### 示例：一个界面 = 三块内容放进三个区域（demo 全文 50 余行）
+### 示例：三概念各就各位，画出真实界面（demo 全文 50 余行）
 
 ```java
 void paint(Frame frame) {
-    // 区域（Rect）= 起点（第几列，第几行）+ 宽高（多少格 × 多少行）
-    Rect titleArea = new Rect(4, 1, 30, 3);      // 标题区：第 1 行、第 4 列起，30×3
-    Rect contentArea = new Rect(4, 5, 30, 8);    // 内容区：第 5 行起，30×8
-    Rect footerArea = new Rect(4, frame.area().height() - 3, 50, 2);   // 底栏：贴屏幕底
-
-    // 画界面 = renderWidget(组件, 区域)，要几块调几次
+    // ── 概念① Frame：渲染入口——area() 问尺寸；renderWidget(组件, 区域) 批量画 ──
+    //    区域（Rect）= 起点（第几列，第几行）+ 宽高（多少格 × 多少行）
+    Rect titleArea = new Rect(4, 1, 30, 2);        // 标题区：第 1 行、第 4 列起
+    Rect listArea = new Rect(4, 4, 30, 6);         // 列表区：第 4 行起
+    Rect footerArea = new Rect(4, frame.area().height() - 3, 60, 2);   // 底栏：贴屏幕底
     frame.renderWidget(Paragraph.from("我的备忘录"), titleArea);
-    frame.renderWidget(Paragraph.from("买牛奶\n写周报\n复习「区域 + 组件」"), contentArea);
-    frame.renderWidget(Paragraph.from("…q 退出"), footerArea);
+    frame.renderWidget(Paragraph.from("买牛奶\n写周报\n复习 Buffer/Cell/Frame"), listArea);
+    frame.renderWidget(Paragraph.from("q 退出（退出后打印这张表）"), footerArea);
+
+    // ── 概念② Buffer：从 Frame 拿到表格本体——画面此刻的数据 ──
+    Buffer grid = frame.buffer();
+
+    // ── 概念③ Cell：一格内容（字符 + 样式）——往第一条待办前写一个 ● ──
+    grid.set(3, 4, new Cell("●", Style.create()));
 }
 ```
 
-屏幕效果：左上标题、中间三行待办、贴底一行提示——这就是一个界面。
+屏幕效果：左上标题、第一条待办前一个 ●、下面两行待办、贴底一行提示。
 
-### 讲解 A：界面怎么拼
+### 讲解：三个角色怎么配合
 
-- **组件给内容**：`Paragraph.from("文字")` 是最简单的组件（多行文本，`\n` 分行）；
-- **区域给位置**：`Rect(x, y, 宽, 高)`——从第 y 行第 x 列起、占多少格宽多少行。
-  x 列 y 行都从 0 数；**set 的坐标习惯（列,行）在这里同样适用**；
-- **`renderWidget(组件, 区域)` 把组件画进区域**：组件从区域左上角开始铺；
-- `frame.area().height() - 3` 让底栏贴屏幕底——**尺寸永远从 area() 现场读**，
-  拖动窗口底栏仍贴底（跑一遍试试）。
+**区域（Rect）**：`new Rect(x, y, 宽, 高)` = 从第 y 行第 x 列起、占多少格宽多少行；
+x 列 y 行都从 0 数（坐标顺序「列在前」与底层 set 一致）。底栏用
+`frame.area().height() - 3` 现场算——尺寸永远从 `area()` 读，拖窗口底栏仍贴底。
 
-### 讲解 B：背后机制（Buffer / Cell / Frame 各在什么岗位）
-
-先给结论——**你负责往 Buffer 里填内容（借组件之手），框架负责把 Buffer 渲染到终端；
-Frame 是你填表时的工具包，不是渲染器**：
+**流水线**（谁在干什么，一图定分工）：
 
 ```
 框架决定重绘 → 调你的 paint(frame)，递给你 Frame（工具包）
-                  ├─ frame.renderWidget(组件, 区域)  ← 组件把每个字逐格写进 Buffer 的 Cell
-                  └─ （逃生口）frame.buffer().set(x, y, cell) ← 你直接写一格
+                  ├─ frame.renderWidget(组件, 区域)   ← 组件把每个字逐格写进 Buffer 的 Cell
+                  └─ frame.buffer().set(x, y, cell)   ← 或你直接写一格（如 ●）
                   ▼
             Buffer（一张 Cell 表格）= 画面此刻的样子（纯数据，还没上屏）
                   │  paint 返回后……
@@ -502,19 +138,22 @@ Frame 是你填表时的工具包，不是渲染器**：
             TuiRunner（框架）：拿 Buffer 与上一帧 diff → 只把变化的格子发终端 → 屏幕更新
 ```
 
-- **Buffer**：画面数据。屏幕 = 一张行列确定的字符表格（拖窗口行列会变），Buffer 就是这张表在程序里的样子；
-- **Cell**：一格 = 一个字符 + 样式。界面上的每个字——标题的「我」「的」、内容每行——最终都是一格；中文一字占两格（主格+续格）；
-- **Frame**：渲染函数的参数，包着这帧的 Buffer 并附带工具（`area()` 问尺寸、`renderWidget` 批量画、`buffer()` 拿表）。**每帧一张，画完作废**；
-- 证据：demo 退出后打印整屏网格（`y=行号 |每格一字符|`）——你看到的界面与那张表逐格对应。
-
-（底层操作清单 `set/get/setString` 与坐标坑见参考手册——日常用组件，这些留作查阅。）
+- **Buffer 是画面数据**：屏幕 = 一张行列确定的字符表格（拖窗口行列会变），
+  Buffer 就是这张表在程序里的样子；
+- **Cell 是一格**：一个字符 + 样式。界面上的每个字——标题、待办、●——最终
+  都是一格；中文一字占两格（主格 + 续格）；
+- **Frame 是工具包，不是渲染器**：包着这帧的 Buffer，附带 `area()`（问尺寸）、
+  `renderWidget`（批量画）、`buffer()`（给表本体）。每帧一张，画完作废；
+  **渲染到终端的是 TuiRunner（框架）**——它 diff 前后两帧、只发变化的格子。
 
 ### 运行
 
-菜单选 **2**：看备忘录面板；**拖动窗口**看底栏始终贴底（area() 现场读）；
-按 **q 退出**看整屏网格——界面上的每个字都在那张表里有自己的一格。
+菜单选 **2**：看备忘录面板（● 在第一条待办前）；**拖动窗口**看底栏始终贴底
+（area() 现场读）；按 **q 退出**——退出后打印整屏网格（`y=行号 |每格一字符|`），
+界面上的每个字在那张表里都有自己的一格：这就是 Buffer 的长相。
 
-**自测**：`renderWidget` 的两个参数各管什么？Buffer/Cell/Frame 谁是画面、谁是工具、谁负责渲染到终端？
+**自测**：`renderWidget` 的两个参数各管什么？Buffer / Cell / Frame——谁是画面、
+谁是工具、谁负责渲染到终端？（退出打印的那张表是谁？● 在表里的坐标是多少？）
 
 ---
 
@@ -839,6 +478,7 @@ public final class InlineChatDemo extends InlineApp {
 `implementation-map.md` 是它的地图。
 
 ---
+
 # 参考手册（正文学完后回来查）
 
 ## 术语表（附官方英文原词，便于对照官方文档与 javadoc）
@@ -875,13 +515,24 @@ try (TuiRunner runner = TuiRunner.create()) {      // 进备用屏幕 + 原始�
 | `Renderer` | 画帧函数 | `frame -> {...}`：整帧重画，不看上一帧 |
 | `TuiConfig` | 运行配置 | `builder().tickRate(...)` / `bracketedPaste(true)` 等 → `TuiRunner.create(config)` |
 
-### 第 2 课 · 渲染模型
+### 第 2 课 · 第一个界面与三个角色
 
-| 类 | 角色 | 关键用法 |
-|---|---|---|
-| `Buffer` | **画面本身**（Cell 网格） | `get(x,y)/set(x,y,Cell)`；宽字符占主格+续格 |
-| `Cell` | 一格 | `new Cell("★", Style)`；`symbol()/isContinuation()` |
-| `Frame` | 渲染入口（不是画面） | `area()` / `renderWidget(组件, 区域)` / `buffer()` |
+| API | 关键用法 |
+|---|---|
+| `Rect` | `new Rect(x, y, 宽, 高)`：区域 = 起点 + 宽高；x 列 y 行从 0 数 |
+| `renderWidget` | `frame.renderWidget(组件, 区域)`：组件给内容、区域给位置——画界面的唯一核心动作 |
+| `frame.area()` | 现场读画布尺寸（`.width()/.height()`），永不记死数字 |
+| 底层三角色 | Buffer=画面数据（Cell 表格）；Frame=工具包（area/renderWidget/buffer）；渲染到终端的是 TuiRunner |
+
+底层操作（日常用组件，这些留作查阅）：
+
+```java
+Buffer grid = frame.buffer();
+grid.set(x, y, new Cell("★", Style.create()));   // 写一格（列在前、行在后）
+grid.get(x, y).symbol()                          // 读一格的字符
+grid.setString(x, y, "一串文字", style)           // 写一串（自动分格，中文占两格；返回占了几列）
+```
+
 
 ### 第 3 课 · 文本与样式
 
