@@ -1,11 +1,6 @@
 package io.github.javaside.springai.tamboui.demo;
 
-import dev.tamboui.style.Color;
-import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
-import dev.tamboui.text.Line;
-import dev.tamboui.text.Span;
-import dev.tamboui.text.Text;
 import dev.tamboui.tui.EventHandler;
 import dev.tamboui.tui.Renderer;
 import dev.tamboui.tui.TuiRunner;
@@ -61,32 +56,25 @@ public final class CreateTuiDemo implements TambouiDemo {
         }
     }
 
-    /** 画一帧：五种创建方式对照表。Frame 是渲染入口，renderWidget 把组件画进区域。 */
+    /**
+     * 画一帧：五种创建方式对照表。
+     *
+     * <p>有意只用纯字符串（{@code Paragraph.from(String)}）——样式、富文本是第 3 课的内容，
+     * 第 1 课的示例不允许出现还没教过的 API。</p>
+     */
     private void paint(Frame frame) {
-        Text text = Text.from(
-                Line.from(Span.styled("第 1 课 · 创建 TUI 应用", Style.create().fg(Color.CYAN).bold())).centered(),
-                Line.from(Span.raw("")).centered(),
-                Line.from(Span.styled("五种创建方式（两轴：全屏/行内 × 声明式/事件循环）",
-                        Style.create().bold())),
-                row("① 全屏·声明式", "extends ToolkitApp → run()", "大多数应用首选（第 7 课）"),
-                row("② 全屏·事件循环", "TuiRunner.create() + run(handler, renderer)", "本程序即是——直观展示两条腿"),
-                row("③ 行内·声明式", "extends InlineApp → run()", "聊天式 CLI（第 8 课）"),
-                row("④ 行内·事件循环", "InlineTuiRunner.create(config) + run(...)", "行内+自定义事件"),
-                row("⑤ 立即模式", "Terminal + Backend 全手工", "最底层，知道即可"),
-                Line.from(Span.raw("")),
-                Line.from(Span.styled("每种的完整最小代码与跟做步骤见模块 README 第 1 课",
-                        Style.create().fg(Color.YELLOW))),
-                Line.from(Span.styled("按 q / Ctrl+C 退出（Esc 是框架的 cancel 动作，不退出）",
-                        Style.create().fg(Color.GRAY))).centered());
-        frame.renderWidget(Paragraph.builder().text(text).build(), frame.area());
-    }
-
-    private static Line row(String name, String entry, String note) {
-        return Line.from(
-                Span.styled(name, Style.create().fg(Color.GREEN).bold()),
-                Span.raw("  "),
-                Span.styled(entry, Style.create().fg(Color.WHITE)),
-                Span.raw("  —  "),
-                Span.styled(note, Style.create().fg(Color.GRAY)));
+        String text = "第 1 课 · 创建 TUI 应用\n"
+                + "\n"
+                + "五种创建方式（两轴：全屏/行内 × 声明式/事件循环）：\n"
+                + "  ① 全屏·声明式    extends ToolkitApp → run()              大多数应用首选（第 7 课）\n"
+                + "  ② 全屏·事件循环  TuiRunner.create() + run(handler, renderer)   本程序=此式\n"
+                + "  ③ 行内·声明式    extends InlineApp → run()               聊天式 CLI（第 8 课）\n"
+                + "  ④ 行内·事件循环  InlineTuiRunner.create(config) + run    行内 + 自定义事件\n"
+                + "  ⑤ 立即模式       Terminal + Backend 全手工              最底层，知道即可\n"
+                + "\n"
+                + "本程序就是方式②的最小实跑；完整最小代码与讲解见模块 README 第 1 课\n"
+                + "\n"
+                + "按 q / Ctrl+C 退出";
+        frame.renderWidget(Paragraph.from(text), frame.area());
     }
 }

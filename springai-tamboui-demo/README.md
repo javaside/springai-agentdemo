@@ -77,8 +77,10 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
 
 ### 运行
 
-菜单选 **1**：屏幕上就是这张五式对照表——而那个程序本身正是方式②的实跑，
-`CreateTuiDemo.java` 全文只有 40 行。
+菜单选 **1**：屏幕上就是这张五式对照表——而那个程序本身正是方式②的实跑。
+`CreateTuiDemo.java` 全文只有 40 余行，且**只用了本课教过的 API**
+（样式与富文本是第 3 课的内容，本课示例全部用纯字符串——每课示例都遵守
+这条规矩：不出现还没教过的东西）。
 
 **自测**：不看示例，说出五种方式的名字；`EventHandler` 与 `Renderer` 各自的方法签名与职责。
 
@@ -103,6 +105,7 @@ private void paint(Frame frame) {
     Buffer grid = frame.buffer();
     grid.set(grid.area().width() - 2, 0,
             new Cell(showFrameB ? "B" : "A", Style.create().fg(Color.YELLOW).bold()));
+            // ↑ 样式链是第 3 课的内容，这里照抄即可；格子内容只有字符 B/A
 }
 ```
 
