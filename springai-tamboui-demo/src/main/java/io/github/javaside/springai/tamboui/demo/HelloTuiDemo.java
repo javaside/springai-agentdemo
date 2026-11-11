@@ -20,6 +20,19 @@ import io.github.javaside.springai.tamboui.TambouiDemo;
  * <p>核心是这三个类的<b>意思和使用</b>；方法 = 画一个简单的备忘录界面，
  * 在画的过程中把三个类各用起来（对照见 README 的「使用 × 本例对照」表）。</p>
  *
+ * <p><b>界面草图</b>（跑起来长这样，每块谁写的标在右边——对照 paint 读）：</p>
+ * <pre>
+ *         我的备忘录                ← frame.renderWidget(Paragraph, titleArea)
+ *         ────────────             ← grid.setString(4, 3, "─…")
+ *     ●   买牛奶                    ← ●：grid.set(3, 4, new Cell("●", …))
+ *         写周报                    ← frame.renderWidget(Paragraph, listArea)
+ *         复习 Buffer/Cell/Frame
+ *         q 退出（退出后打印这张表） ← frame.renderWidget(Paragraph, footerArea)
+ * </pre>
+ *
+ * <p><b>关系一句话</b>：Cell 是 Buffer 里的一格，Buffer 由 Cell 组成
+ * （像 char[][] 与它的每个元素）；Frame 包着这一帧的 Buffer 递给你。</p>
+ *
  * <p>画面底下发生了什么（Buffer/Cell/Frame）见退出后打印的网格图与 README
  * 「背后机制」一节——它们是理解层，日常做界面不直接碰。</p>
  */
