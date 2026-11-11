@@ -56,7 +56,7 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
     （官方约定：事件处理返回 true 才重绘）；
   - **`Renderer`**——`void render(Frame frame)`，渲染回调：仅在需要重绘时被调用，
     把这一帧的完整内容画进传入的 `Frame`（官方约定为立即模式：每帧全量描述）。
-    效率靠**差分（diff）**保证：框架保留上一帧的网格，新帧画完后逐格对比，
+    效率靠**差分**保证（官方用词 **diff**，原句 "Buffer is diffed — only changed cells are sent to the terminal"）：框架保留上一帧的网格，新帧画完后逐格对比，
     只把内容不同的格子发给终端（一屏 80×24 共 1920 格，改 20 格就只发 20 格的
     指令）——「你写整屏的描述，框架算最小更新」，第 2 课可亲眼看到；
 
@@ -458,20 +458,22 @@ public final class InlineChatDemo extends InlineApp {
 ---
 # 参考手册（正文学完后回来查）
 
-## 术语表
+## 术语表（附官方英文原词，便于对照官方文档与 javadoc）
 
-| 术语 | 含义 |
-|---|---|
-| 差分（diff） | 框架逐格对比新旧两帧的 Buffer，只把内容不同的格子发给终端——1920 格的屏改 20 格，就只发 20 格 |
-| 立即模式 | 渲染函数每帧从零全量描述整屏、不留旧状态的写法（「UI 是状态的纯函数」）；与「保留组件树的声明式」相对 |
-| 备用屏幕 | 终端的一块独立画布（alternate screen），进入后原内容不动、退出即复原——全屏应用的载体 |
-| 原始模式（raw mode） | 关闭终端默认的「逐行回显/行缓冲」，按键即刻到达程序——TUI 接管输入的前提 |
-| Buffer / Cell | 画面本身（字符网格）/ 网格中的一格（一个字符 + 样式） |
-| 续格 | 宽字符（如中文）在网格中占的第二格，符号为空、`isContinuation()` 为真 |
-| scrollback | 终端向上滚动可见的历史输出区；行内模式保留它，全屏模式不经过它 |
-| live 区 | 行内模式中钉在终端底部、原地刷新的区域（输入框/进行中的输出） |
-| 括号粘贴 | 终端把粘贴内容包在 ESC[200~/201~ 标记里整体发送，程序据此区分「粘贴」与「逐键」 |
-| 全角/半角 | 同一字符的中文输入法形态（＋）与 ASCII 形态（+）——按键判定两者都要兼容 |
+| 中文 | 官方英文 | 含义 |
+|---|---|---|
+| 差分 | diff（官方句 "Buffer is diffed — only changed cells are sent to the terminal"） | 框架逐格对比新旧两帧的 Buffer，只把内容不同的格子发给终端——1920 格的屏改 20 格，就只发 20 格 |
+| 立即模式 | immediate mode（"immediate-mode rendering"） | 渲染函数每帧从零全量描述整屏、不留旧状态（"the UI is always a pure function of your application state"）；与「保留组件树的声明式」相对 |
+| 中间缓冲 | intermediate buffer system | Widgets 先画进 Buffer、不直写终端——差分的前提 |
+| 备用屏幕 | alternate screen | 终端的一块独立画布，进入后原内容不动、退出即复原——全屏应用的载体 |
+| 原始模式 | raw mode | 关闭终端默认的「逐行回显/行缓冲」，按键即刻到达程序——TUI 接管输入的前提 |
+| 网格 / 格 | buffer / cell | 画面本身（字符网格）/ 网格中的一格（一个字符 + 样式） |
+| 续格 | continuation cell | 宽字符（如中文）在网格中占的第二格，符号为空、`isContinuation()` 为真 |
+| 滚回区 | scrollback | 终端向上滚动可见的历史输出区；行内模式保留它，全屏模式不经过它 |
+| 常驻区 | live region（Inline Toolkit 语义） | 行内模式中钉在终端底部、原地刷新的区域（输入框/进行中的输出） |
+| 括号粘贴 | bracketed paste | 终端把粘贴内容包在 ESC[200~/201~ 标记里整体发送，程序据此区分「粘贴」与「逐键」 |
+| 有状态/无状态组件 | stateful / stateless widget | 状态是否在组件外持有并由调用方传入（如 ListState） |
+| 全角/半角 | full-width / half-width | 同一字符的中文输入法形态（＋）与 ASCII 形态（+）——按键判定两者都要兼容 |
 
 ## 每课 API 速查
 
