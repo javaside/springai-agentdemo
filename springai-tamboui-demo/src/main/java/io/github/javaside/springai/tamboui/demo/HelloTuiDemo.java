@@ -1,8 +1,6 @@
 package io.github.javaside.springai.tamboui.demo;
 
-import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
-import dev.tamboui.layout.Rect;
 import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
 import dev.tamboui.tui.EventHandler;
@@ -14,35 +12,30 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 2 课 网格实验室——Buffer / Cell / Frame —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 2 课 三个对象的用法演示 —— 基于 TamboUI 0.4.0 实测 API。
  *
- * <p>本课示例的任务：<b>三个核心概念各有自己的演示位</b>——</p>
+ * <p>本课不做功能，只教三样东西各怎么用一下、各看到一次效果——paint 里
+ * <b>每个概念恰好一行</b>：</p>
+ *
  * <ul>
- *   <li><b>Cell（一格）</b>：◆ 与右上角 A/B 角标都是 {@code grid.set(x, y, cell)} 手写的一格——
- *       按空格后代码只翻转一个布尔位，但这两个 Cell 的内容随之换掉；</li>
- *   <li><b>Buffer（整屏数据）</b>：下半屏的「观察窗」把当前帧左上 30 格 × 5 行<b>实时</b>
- *       以网格形式再显示一遍（画中画）——上面动，下面同步动，因为它们是同一张表格；</li>
- *   <li><b>Frame（渲染入口）</b>：上面的一切都经它完成——{@code area()} 给画布、
- *       {@code renderWidget(组件, 区域)} 画说明文字、{@code buffer()} 拿网格本体读写。</li>
+ *   <li><b>Frame.area()</b>：问「这张表多大」。屏幕上显示实时尺寸——拖动窗口，数字跟着变；</li>
+ *   <li><b>Frame.renderWidget(...)</b>：往表里批量画一段文字（第 1 课已见过，框架替你填格）；</li>
+ *   <li><b>frame.buffer().set(x, y, new Cell("★"))</b>：拿到表格本体，往某一格填一个 ★。
+ *       按 h/j/k/l 移动 ★——每按一次，就是「往另一个格子写一个 Cell」。</li>
  * </ul>
  *
- * <p>退出后打印全帧网格与 diff 视图（■=框架实际发给终端的格子）——立即模式与差分的证据。</p>
- *
- * <p>示例纪律：只用本课及第 1 课教过的 API（纯字符串 + {@code Paragraph.from}；
- * Cell 的样式参数给 {@code Style.create()} 空样式即可，样式链是第 3 课的内容）。</p>
+ * <p>退出后把最后一屏的表格原样打印出来（FrameDump）——亲眼确认
+ * 「看到的画面 = 这张字符表格」。</p>
  */
 public final class HelloTuiDemo implements TambouiDemo {
 
-    /** 状态只有一个位：显示帧 A 还是帧 B（第 6 课会把「状态驱动 UI」展开成完整范式）。 */
-    private boolean showFrameB;
+    /** ★ 在表格中的位置（列 x、行 y）。这就是本课的全部状态。 */
+    int starX = 10;
+    int starY = 5;
 
-    /** 退出后打印教具用的两帧快照（渲染线程写、run() 返回后主线程读，先后有序）。 */
-    private Buffer lastFrameA;
-    private Buffer lastFrameB;
-
-    /** 观察窗参数：显示当前帧左上 30 格 × 5 行。 */
-    static final int OBS_WIDTH = 30;
-    static final int OBS_HEIGHT = 5;
+    /** 最近一帧的画布尺寸（paint 里更新，onKey 用它把 ★ 挡在表格边界内）。 */
+    private int lastWidth = 80;
+    private int lastHeight = 24;
 
     @Override
     public int order() {
@@ -51,116 +44,66 @@ public final class HelloTuiDemo implements TambouiDemo {
 
     @Override
     public String title() {
-        return "网格实验室——Buffer / Cell / Frame";
+        return "Buffer / Cell / Frame 的用法——移动 ★";
     }
 
     @Override
     public void run() throws Exception {
         try (TuiRunner runner = TuiRunner.create()) {
             Renderer renderer = this::paint;
-            EventHandler handler = (Event event, TuiRunner r) -> {
-                if (event instanceof KeyEvent key && key.isQuit()) {
-                    r.quit();
-                    return false;
-                }
-                if (event instanceof KeyEvent key && key.isChar(' ')) {
-                    showFrameB = !showFrameB;
-                    return true;   // 状态变了 → 请求重绘（下一帧自然反映新状态）
-                }
-                return false;
-            };
-            runner.run(handler, renderer);
+            runner.run(this::onKey, renderer);
         }
 
-        printTakeaway();
-    }
-
-    /** 仅供测试构造指定帧（离屏渲染用例）。 */
-    void setFrameBForTest(boolean frameB) {
-        this.showFrameB = frameB;
-    }
-
-    /**
-     * 画一帧（示例只出现已教 API）。
-     * 包内可见供离屏测试。
-     */
-    void paint(Frame frame) {
-        int width = frame.area().width();
-        int height = frame.area().height();
-        int half = height / 2;
-
-        // ── Frame 工具一/二：area() 画布 + renderWidget 画组件 ──
-        // 主区（上半）：说明文字用纯字符串渲染（样式是第 3 课的内容）
-        String which = showFrameB ? "帧 B" : "帧 A";
-        String main = "第 2 课 · 网格实验室——Buffer / Cell / Frame\n"
-                + "\n"
-                + "现在是 " + which + "。下面观察窗里的 ◆ 和右上角的 " + (showFrameB ? "B" : "A")
-                + " 都是代码用 grid.set(...) 手写的一格（Cell）。\n"
-                + "按【空格】切换帧——只翻转一个布尔变量，整帧重画，观察窗同步变化。\n"
-                + "按 q 退出：退出后打印全帧网格与 diff（■=框架实际发给终端的格子）。";
-        frame.renderWidget(Paragraph.from(main), new Rect(1, 1, width - 2, half - 2));
-
-        // ── Frame 工具三：buffer() 拿网格本体，直接读写「一格」（Cell 的直接演示）──
-        Buffer grid = frame.buffer();
-        // ◆：帧 A 在左、帧 B 在右（位置刻意落在观察窗的取景范围内）
-        int dotX = showFrameB ? 22 : 6;
-        grid.set(dotX, 3, new Cell("◆", Style.create()));   // 空样式：样式链是第 3 课内容
-        // 右上角手写角标 A/B——同样是一格
-        grid.set(OBS_WIDTH - 4, 0, new Cell(showFrameB ? "B" : "A", Style.create()));
-
-        // ── Buffer 的直接演示：观察窗（画中画）──
-        // 读当前帧左上 OBS_WIDTH×OBS_HEIGHT 的格子，实时以网格文本回放到下半屏——
-        // 上下两块动的是同一张表，这就是「Buffer = 整屏内容的数据版」。
-        int obsY = half;
-        frame.renderWidget(Paragraph.from("观察窗：同一帧的 Buffer，左上 " + OBS_WIDTH + " 格 × "
-                + OBS_HEIGHT + " 行（实时同步）"), new Rect(1, obsY, width - 2, 2));
-        for (int y = 0; y < OBS_HEIGHT && obsY + 2 + y < height; y++) {
-            StringBuilder sb = new StringBuilder("y=" + y + " |");
-            for (int x = 0; x < OBS_WIDTH; x++) {
-                Cell cell = grid.get(x, y);
-                // 续格（宽字符占的第二格）用 · 呈现，让「一格一字符」肉眼可数
-                sb.append(cell.isContinuation() ? "·" : (cell.symbol() == null ? " " : cell.symbol()));
-            }
-            sb.append('|');
-            grid.setString(1, obsY + 2 + y, sb.toString(), Style.create());
-        }
-
-        // 留两帧快照：退出后的教学打印用
-        if (showFrameB) {
-            lastFrameB = grid.copy();
-        } else {
-            lastFrameA = grid.copy();
-        }
-    }
-
-    /** 退出全屏后的教学打印：全帧网格 + diff 视图。 */
-    private void printTakeaway() {
-        System.out.println("\n—— 运行时看到的两屏 vs 下面三张图，对应关系 ——");
-        System.out.println("· 运行时的整屏画面 = Buffer 这张字符网格照着画到终端的结果：");
-        System.out.println("  网格第 y 行 = 屏幕第 y 行，一格 = 屏幕一个字符位（· 为宽字符续格）；");
-        System.out.println("· 帧 A 网格 = 按空格之前那屏的底稿；帧 B 网格 = 按空格之后那屏的底稿；");
-        System.out.println("· diff 视图不是画面——是两张底稿的差异清单（■），框架每次只发这些格子。");
-        if (lastFrameA != null) {
-            System.out.println("\n帧 A（那屏的底稿）：");
-            FrameDump.dump(lastFrameA).forEach(l -> System.out.println("  " + l));
-        }
-        if (lastFrameB != null) {
-            System.out.println("帧 B（那屏的底稿）：");
-            FrameDump.dump(lastFrameB).forEach(l -> System.out.println("  " + l));
-        }
-        if (lastFrameA != null && lastFrameB != null) {
-            System.out.println("\n—— 两帧的 diff（■ = 框架实际发给终端的格子，其余一个字节都不发）——");
-            FrameDiffView.between(lastFrameA, lastFrameB).forEach(l -> System.out.println("  " + l));
+        // 退出后：把最后一屏的表格打印出来（保存快照见 paint 末尾）
+        System.out.println("\n—— 刚才那屏，在 Buffer（字符表格）里的样子 ——");
+        System.out.println("（第 y 行 = 屏幕第 y 行，一格 = 一个字符；· 是宽字符占的第二格）");
+        if (lastFrame != null) {
+            FrameDump.dump(lastFrame).forEach(l -> System.out.println("  " + l));
         }
         System.out.println("""
-
-                本课核心认知（后面六课都踩在这上面）：
-                1. 画面由 Buffer 表示（Cell 字符网格，一格一个字符）；Frame 不是画面，
-                   是渲染入口（renderWidget 把组件画进 Buffer）；
-                2. render 只管「整屏描述当前状态」——翻转一个布尔位，就是重画整屏的理由；
-                3. 框架做 diff，只把 ■ 的格子发给终端。
-                第 5 课组件的 render(Rect, Buffer) 是「往网格的一块区域画」；第 6 课的
-                「改状态→请求重绘」之所以成立，正因为重绘 = 重新描述整屏。
+                
+                本课三行代码，三个对象：
+                · frame.area()                → 表多大（拖窗口，屏幕上数字会变）
+                · frame.renderWidget(组件,区域) → 批量往表里画（框架替你填格）
+                · frame.buffer().set(x,y,Cell) → 拿到表本体，往一格填一个字符（★ 就是那格）
                 """);
+    }
+
+    /** 按键：h/j/k/l 移动 ★（往新格子写）；q 退出。返回值 = 是否需要重绘。 */
+    boolean onKey(Event event, TuiRunner r) {
+        if (event instanceof KeyEvent key && key.isQuit()) {
+            r.quit();
+            return false;
+        }
+        if (event instanceof KeyEvent key) {
+            // 边界用最近一帧的画布尺寸（TuiRunner 无公开尺寸查询，paint 时记下即可）
+            if (key.isChar('h')) { starX = Math.max(1, starX - 2); return true; }
+            if (key.isChar('l')) { starX = Math.min(lastWidth - 2, starX + 2); return true; }
+            if (key.isChar('k')) { starY = Math.max(2, starY - 1); return true; }
+            if (key.isChar('j')) { starY = Math.min(lastHeight - 2, starY + 1); return true; }
+        }
+        return false;
+    }
+
+    /** 退出打印用的最后一屏快照。 */
+    private dev.tamboui.buffer.Buffer lastFrame;
+
+    /** 画一帧：每个概念一行。包内可见供离屏测试。 */
+    void paint(Frame frame) {
+        // ① Frame.area()：问这张表多大——下面的文字因此永远显示实时尺寸
+        lastWidth = frame.area().width();
+        lastHeight = frame.area().height();
+        String size = lastWidth + " 列 × " + lastHeight + " 行";
+
+        // ② Frame.renderWidget：往表里批量画文字（框架替你把每个字符填进格子）
+        frame.renderWidget(Paragraph.from(
+                "表格尺寸：" + size + "（拖动窗口，数字会变）\n"
+                        + "h←  j↓  k↑  l→ 移动 ★   ·   q 退出（退出后打印这张表）"),
+                frame.area());
+
+        // ③ frame.buffer().set(列, 行, Cell)：拿到表本体，往一格填一个字符
+        frame.buffer().set(starX, starY, new Cell("★", Style.create()));
+
+        lastFrame = frame.buffer().copy();
     }
 }
