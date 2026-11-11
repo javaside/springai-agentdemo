@@ -86,12 +86,13 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
 
 ---
 
-## 第 2 课 · 三个核心类：Buffer、Cell、Frame
+## 第 2 课 · 渲染模型——画面是什么
 
-**本课核心**：学会这三个类的**意思**（各是什么）和**使用**（怎么用）。
-方法 = 画一个简单的备忘录界面——三个类在画的过程中各用起来，用到了才算学会。
+**本课学什么**：框架里表示「屏幕」的三个类——Buffer、Cell、Frame 各是什么、
+为什么存在、什么时候用；以及差分渲染（diff）为什么让整屏重画变得高效。
+方法 = 画一个简单的备忘录界面，三个类在画的过程中各用起来。
 
-**用 Java 的话说**（先看这个，比喻都不如这三行准）：
+**用 Java 的话说**（三问里的「是什么」，比喻都不如这三行准）：
 
 ```
 Buffer ≈ Cell[24][90] 二维数组           // 屏幕多少行多少列，数组就多大
@@ -555,7 +556,7 @@ try (TuiRunner runner = TuiRunner.create()) {      // 进备用屏幕 + 原始�
 | `Renderer` | 画帧函数 | `frame -> {...}`：整帧重画，不看上一帧 |
 | `TuiConfig` | 运行配置 | `builder().tickRate(...)` / `bracketedPaste(true)` 等 → `TuiRunner.create(config)` |
 
-### 第 2 课 · Buffer、Cell、Frame
+### 第 2 课 · 渲染模型（Buffer/Cell/Frame）
 
 | API | 关键用法 |
 |---|---|

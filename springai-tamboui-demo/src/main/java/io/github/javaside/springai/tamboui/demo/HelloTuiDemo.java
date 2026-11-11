@@ -12,7 +12,7 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 2 课 三个核心类：Buffer、Cell、Frame —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 2 课 渲染模型——画面是什么（Buffer / Cell / Frame） —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p>核心是这三个类的<b>意思和使用</b>；方法 = 画一个简单的备忘录界面，
  * 在画的过程中把三个类各用起来（对照见 README 的「意思 × 使用」表）。</p>
@@ -48,7 +48,7 @@ public final class HelloTuiDemo implements TambouiDemo {
 
     @Override
     public String title() {
-        return "Buffer / Cell / Frame——画界面的三个核心类";
+        return "渲染模型——画面是什么（Buffer / Cell / Frame）";
     }
 
     @Override
