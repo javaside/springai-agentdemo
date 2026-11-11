@@ -76,7 +76,10 @@ public final class HelloTuiDemo implements TambouiDemo {
             return false;
         }
         if (event instanceof KeyEvent key) {
-            // 边界用最近一帧的画布尺寸（TuiRunner 无公开尺寸查询，paint 时记下即可）
+            // 边界用最近一帧的画布尺寸（TuiRunner 无公开尺寸查询，paint 时记下即可）。
+            // starY 下限取 2 是「人肉防撞」：上面的文字占第 0、1 行，★ 最低压到第 2 行——
+            // set 是硬写一格，若让 ★ 走进文字区，字会被顶掉（位置自己负责）。
+            // 「位置自动排、互不打架」要等第 5 课的布局（区域切分）。
             if (key.isChar('h')) { starX = Math.max(1, starX - 2); return true; }
             if (key.isChar('l')) { starX = Math.min(lastWidth - 2, starX + 2); return true; }
             if (key.isChar('k')) { starY = Math.max(2, starY - 1); return true; }
@@ -95,7 +98,8 @@ public final class HelloTuiDemo implements TambouiDemo {
         lastHeight = frame.area().height();
         String size = lastWidth + " 列 × " + lastHeight + " 行";
 
-        // ② Frame.renderWidget：往表里批量画文字（框架替你把每个字符填进格子）
+        // ② Frame.renderWidget：往表里批量画文字——从区域左上角 (0,0) 起逐行铺，
+        //    本例两行文字落在第 0、1 行（框架内部就是替你逐字符填格，坐标它算）
         frame.renderWidget(Paragraph.from(
                 "表格尺寸：" + size + "（拖动窗口，数字会变）\n"
                         + "h←  j↓  k↑  l→ 移动 ★   ·   q 退出（退出后打印这张表）"),
