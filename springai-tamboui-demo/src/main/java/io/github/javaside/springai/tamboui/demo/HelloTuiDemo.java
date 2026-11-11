@@ -98,9 +98,9 @@ public final class HelloTuiDemo implements TambouiDemo {
         );
         frame.renderWidget(Paragraph.builder().text(text).build(), frame.area());
 
-        // Buffer 在这里现形：renderWidget 只是把「批量画进网格」封装了，网格本体一直在
-        // Frame 手里。下面直接往网格「右上角那格」写当前帧标记（A/B）——手工写一格，
-        // 与组件画的内容落到同一张 Buffer 上；按空格切换后，这一格也会出现在 diff 的 ■ 里。
+        // Frame.buffer() 返回网格本体（Buffer）：renderWidget 是「批量画进网格」的封装，
+        // 网格本身始终可直接读写。下面手工往右上角写当前帧标记（A/B）——与组件内容
+        // 落在同一张 Buffer 上；按空格切换后，这一格也会出现在 diff 的 ■ 里。
         dev.tamboui.buffer.Buffer grid = frame.buffer();
         int markX = grid.area().width() - 2;
         grid.set(markX, 0, new dev.tamboui.buffer.Cell(showFrameB ? "B" : "A",
