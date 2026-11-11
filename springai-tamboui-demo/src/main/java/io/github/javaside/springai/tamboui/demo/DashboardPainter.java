@@ -23,7 +23,7 @@ import java.util.List;
 public final class DashboardPainter {
 
     private static final List<String> LESSONS = List.of(
-            "第 1 课 创建 TUI 应用", "第 2 课 第一个界面", "第 3 课 文本与样式", "第 4 课 组件画廊",
+            "第 1 课 创建 TUI 应用", "第 2 课 Buffer/Cell/Frame", "第 3 课 文本与样式", "第 4 课 组件画廊",
             "第 5 课 布局（本课）", "第 6 课 事件与交互", "第 7 课 Toolkit DSL", "第 8 课 行内模式");
 
     private DashboardPainter() {
