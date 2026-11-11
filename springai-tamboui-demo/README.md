@@ -49,8 +49,17 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
 
 - **`TuiRunner.create()`** 接管终端（raw 模式 + 备用屏幕）。try-with-resources 不是
   可选风格：不 `close()` 终端就是「坏的」，资源语句保证任何退出路径都复原；
-- **骨架有两条腿**：`EventHandler` 回答「发生了什么、要不要重画」（返回 boolean），
-  `Renderer` 回答「这一屏长什么样」。后面所有课都在丰富这两条腿；
+- **`runner.run(handler, renderer)` 的两个参数是两个函数式接口，也是框架与你的代码的分工边界**：
+  - **`EventHandler`**——`boolean handle(Event event, TuiRunner runner)`，事件回调：
+    TuiRunner 每从终端收到一个事件（按键/粘贴/缩放/定时脉冲）就调用它一次；
+    返回 `true` 表示「状态已变化，需要重绘」，返回 `false` 则本次不重绘
+    （官方约定：事件处理返回 true 才重绘）；
+  - **`Renderer`**——`void render(Frame frame)`，渲染回调：仅在需要重绘时被调用，
+    把这一帧的完整内容画进传入的 `Frame`（官方约定为立即模式：每帧全量描述，
+    差分由框架完成）；
+
+  即：事件循环、终端 I/O、差分是 TuiRunner 的职责，「处理输入」与「描述画面」
+  由这两个回调提供——后续课程引入的组件、布局、状态，最终都落在它们的实现里；
 - **创建方法一共有五种**（两轴：全屏/行内 × 声明式/事件循环，外加最底层立即模式）：
 
 | 方式 | 入口 | 适用 |
@@ -69,7 +78,7 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
 菜单选 **1**：屏幕上就是这张五式对照表——而那个程序本身正是方式②的实跑，
 `CreateTuiDemo.java` 全文只有 40 行。
 
-**自测**：不看示例，说出五种方式的名字和「哪两条腿」指什么。
+**自测**：不看示例，说出五种方式的名字；`EventHandler` 与 `Renderer` 各自的方法签名与职责。
 
 ---
 
@@ -87,8 +96,8 @@ private void paint(Frame frame) {
     // 组件批量画进网格：Paragraph 画进整个屏幕区域
     frame.renderWidget(Paragraph.builder().text(text).build(), frame.area());
 
-    // Buffer 现形：网格本体一直在 Frame 手里，可以直接读写一格——
-    // 往右上角手写当前帧标记 A/B
+    // Frame.buffer() 返回网格本体（Buffer），支持直接读写任意格——
+    // 这里往右上角手写当前帧标记 A/B
     Buffer grid = frame.buffer();
     grid.set(grid.area().width() - 2, 0,
             new Cell(showFrameB ? "B" : "A", Style.create().fg(Color.YELLOW).bold()));
@@ -435,7 +444,7 @@ public final class InlineChatDemo extends InlineApp {
 
 ## 毕业自测
 
-八课读完，三问验货（都在正文里出现过）：
+八课读完，用三个问题检验（答案都在正文里）：
 
 1. 五种创建方式各自什么时候用？——第 1 课；
 2. 按一次按键之后屏幕为什么会变？——第 6 课五环链路；
