@@ -1,5 +1,6 @@
 package io.github.javaside.springai.tamboui.demo;
 
+import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
 import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
@@ -91,23 +92,30 @@ public final class HelloTuiDemo implements TambouiDemo {
     /** 退出打印用的最后一屏快照。 */
     private dev.tamboui.buffer.Buffer lastFrame;
 
-    /** 画一帧：每个概念一行。包内可见供离屏测试。 */
+    /** 画一帧：三个概念在代码里各是有名有姓的变量。包内可见供离屏测试。 */
     void paint(Frame frame) {
-        // ① Frame.area()：问这张表多大——下面的文字因此永远显示实时尺寸
-        lastWidth = frame.area().width();
-        lastHeight = frame.area().height();
-        String size = lastWidth + " 列 × " + lastHeight + " 行";
+        // ── 概念① Frame：框架递进渲染函数的参数（这一帧的工作台）──
+        int cols = frame.area().width();          // 问它：这张表多少列
+        int rows = frame.area().height();         //        多少行
 
-        // ② Frame.renderWidget：往表里批量画文字——从区域左上角 (0,0) 起逐行铺，
-        //    本例两行文字落在第 0、1 行（框架内部就是替你逐字符填格，坐标它算）
+        // 用它批量画文字（框架替你逐字符填格；两行文字落在第 0、1 行）
         frame.renderWidget(Paragraph.from(
-                "表格尺寸：" + size + "（拖动窗口，数字会变）\n"
+                "表格尺寸：" + cols + " 列 × " + rows + " 行（拖动窗口，数字会变）\n"
                         + "h←  j↓  k↑  l→ 移动 ★   ·   q 退出（退出后打印这张表）"),
                 frame.area());
 
-        // ③ frame.buffer().set(列, 行, Cell)：拿到表本体，往一格填一个字符
-        frame.buffer().set(starX, starY, new Cell("★", Style.create()));
+        // ── 概念② Buffer：从 Frame 手里拿到表格本体，装进自己的变量 ──
+        Buffer grid = frame.buffer();
 
-        lastFrame = frame.buffer().copy();
+        // ── 概念③ Cell：一格的内容（字符 + 样式），造出来放进变量 ──
+        Cell star = new Cell("★", Style.create());
+
+        // 三个对象各就各位后的操作：往第 starY 行第 starX 列写这格（h/j/k/l 移动的就是它）
+        grid.set(starX, starY, star);
+        // Buffer 也能自己写一串（不经过组件）——屏幕最底下那行字就是它写的
+        grid.setString(1, rows - 2, "↑ 上面是 Frame 画的；这行是 grid.setString 直接写进表格的",
+                Style.create());
+
+        lastFrame = grid.copy();
     }
 }

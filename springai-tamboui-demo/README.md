@@ -93,6 +93,74 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
 **本课学什么**：框架里表示「屏幕」的三个类——Buffer、Cell、Frame 各是什么、
 为什么存在、什么时候用；以及差分渲染（diff）为什么让整屏重画变得高效。
 
+### 示例：三个概念在代码里各是有名有姓的变量
+
+```java
+void paint(Frame frame) {                        // ── 概念① Frame：框架递进来的参数 ──
+    int cols = frame.area().width();             //    动作：问这张表多少列
+    int rows = frame.area().height();            //          多少行
+    frame.renderWidget(Paragraph.of(说明文字), frame.area());   //    动作：批量画文字
+
+    Buffer grid = frame.buffer();                // ── 概念② Buffer：拿到表格本体，装进变量 ──
+    Cell star = new Cell("★", Style.create());   // ── 概念③ Cell：一格内容（字符+样式）──
+
+    grid.set(starX, starY, star);                //    往第 starY 行第 starX 列写这格（h/j/k/l 移动它）
+    grid.writeString(1, rows - 2, "这行是 grid.writeString 直接写进表格的", ...);   // Buffer 自己写一串
+}
+```
+
+（完整可运行版见 `HelloTuiDemo.java`，全文 20 余行。）屏幕上三处内容各出自谁，
+一眼可辨：顶部两行说明 = **Frame** 的 `renderWidget` 画的；移动的 ★ =
+**Buffer.set** 写的 **Cell**；最底下一行小字 = **Buffer.writeString** 直接写的。
+
+### 讲解
+
+- **`TuiRunner.create()`** 接管终端（raw 模式 + 备用屏幕）。try-with-resources 不是
+  可选风格：不 `close()` 终端就是「坏的」，资源语句保证任何退出路径都复原；
+- **`runner.run(handler, renderer)` 的两个参数是两个函数式接口，也是框架与你的代码的分工边界**：
+  - **`EventHandler`**——`boolean handle(Event event, TuiRunner runner)`，事件回调：
+    TuiRunner 每从终端收到一个事件（按键/粘贴/缩放/定时脉冲）就调用它一次；
+    返回 `true` 表示「状态已变化，需要重绘」，返回 `false` 则本次不重绘
+    （官方约定：事件处理返回 true 才重绘）；
+  - **`Renderer`**——`void render(Frame frame)`，渲染回调：仅在需要重绘时被调用，
+    把这一帧的完整内容画进传入的 `Frame`（官方约定为立即模式：每帧全量描述）。
+    效率靠**差分**保证（官方用词 **diff**，原句 "Buffer is diffed — only changed cells are sent to the terminal"）：框架保留上一帧的网格，新帧画完后逐格对比，
+    只把内容不同的格子发给终端（一屏 80×24 共 1920 格，改 20 格就只发 20 格的
+    指令）——「你写整屏的描述，框架算最小更新」，第 2 课可亲眼看到；
+
+  即：事件循环、终端 I/O、差分是 TuiRunner 的职责，「处理输入」与「描述画面」
+  由这两个回调提供——后续课程引入的组件、布局、状态，最终都落在它们的实现里；
+- **创建方法一共有五种**（两轴：全屏/行内 × 声明式/事件循环，外加最底层立即模式）：
+
+| 方式 | 入口 | 适用 |
+|---|---|---|
+| ① 全屏·声明式 | `extends ToolkitApp` → `run()` | **大多数应用首选**（第 7 课） |
+| ② 全屏·事件循环 | `TuiRunner.create()` + `run(handler, renderer)` | 直观、控制力强（本课） |
+| ③ 行内·声明式 | `extends InlineApp` → `run()` | 聊天式 CLI（第 8 课） |
+| ④ 行内·事件循环 | `InlineTuiRunner.create(config)` + `run(...)` | 行内 + 自定义事件（片段见参考手册） |
+| ⑤ 立即模式 | `Terminal` + `Backend` 全手工 | 最底层，知道即可（片段见参考手册） |
+
+- 全屏 = 接管整个终端（工具面板类）；行内 = 终端照常滚动、底部一小块原地刷新
+  （聊天/进度类）。方式越靠上框架托管越多、代码越少，越靠下控制力越强。
+
+### 运行
+
+菜单选 **2**：
+
+- 屏幕第一行显示**实时表格尺寸**——拖动终端窗口，数字跟着变（`area()` 现场读的效果）；
+- 按 **h/j/k/l** 移动 ★——每次移动就是往表格的另一格写一个 Cell；
+- 按 **q 退出**——退出后把最后一屏的表格原样打印出来（`y=行号 |每格一个字符|`），
+  亲眼确认「看到的画面 = 这张字符表格」。
+
+**自测**：不看示例，说出五种方式的名字；`EventHandler` 与 `Renderer` 各自的方法签名与职责。
+
+---
+
+## 第 2 课 · 渲染模型——画面是什么
+
+**本课学什么**：框架里表示「屏幕」的三个类——Buffer、Cell、Frame 各是什么、
+为什么存在、什么时候用；以及差分渲染（diff）为什么让整屏重画变得高效。
+
 ### 示例：整个 demo 的 paint 只有三行用法（每行一个对象）
 
 ```java
