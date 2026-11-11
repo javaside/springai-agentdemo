@@ -1,8 +1,7 @@
 package io.github.javaside.springai.tamboui.demo;
 
 import dev.tamboui.buffer.Buffer;
-import dev.tamboui.buffer.Cell;
-import dev.tamboui.style.Style;
+import dev.tamboui.layout.Rect;
 import dev.tamboui.terminal.Frame;
 import dev.tamboui.tui.TuiRunner;
 import dev.tamboui.tui.event.Event;
@@ -11,25 +10,19 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 2 课 三个概念，三条带 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 2 课 做出第一个界面 —— 基于 TamboUI 0.4.0 实测 API。
  *
- * <p>屏幕自上而下三条带，每条带标注「是谁写的」——三个核心概念的用法
- * 一屏对齐：</p>
- * <ul>
- *   <li><b>顶部两行</b>：Frame 的 {@code renderWidget} 画的（含 {@code area()} 实时尺寸）；</li>
- *   <li><b>中间一行</b>：Buffer 的 {@code setString} 直接写的（没经过组件）；</li>
- *   <li><b>★</b>：Cell 用 {@code set} 写的一格（h/j/k/l 移动）。</li>
- * </ul>
+ * <p><b>画界面只有一件事</b>：{@code renderWidget(组件, 区域)}——组件给内容，
+ * 区域给位置。本课用它三次，拼出一个备忘录面板：标题、待办内容、底部提示，
+ * 放进三个手写的区域（Rect = 起点 + 宽高）。</p>
+ *
+ * <p>画面底下发生了什么（Buffer/Cell/Frame）见退出后打印的网格图与 README
+ * 「背后机制」一节——它们是理解层，日常做界面不直接碰。</p>
  */
 public final class HelloTuiDemo implements TambouiDemo {
 
-    /** ★ 的位置（列 x、行 y）。 */
-    int starX = 10;
-    int starY = 5;
-
-    /** 退出打印用的快照与最近画布尺寸（onKey 钳边界用）。 */
+    /** 退出打印用的快照。 */
     private Buffer lastFrame;
-    private int lastRows = 24;
 
     @Override
     public int order() {
@@ -38,7 +31,7 @@ public final class HelloTuiDemo implements TambouiDemo {
 
     @Override
     public String title() {
-        return "三个概念，三条带——Buffer / Cell / Frame";
+        return "第一个界面：区域 + 组件（退出看背后机制）";
     }
 
     @Override
@@ -46,48 +39,40 @@ public final class HelloTuiDemo implements TambouiDemo {
         try (TuiRunner runner = TuiRunner.create()) {
             runner.run(this::onKey, this::paint);
         }
-        System.out.println("\n—— 刚才那屏在 Buffer 里的样子（一格一字符；· 是宽字符第二格）——");
+        System.out.println("""
+                
+                —— 背后机制：刚才那屏在 Buffer（字符表格）里的样子 ——
+                每个字符占一格（中文一字占两格，· 是第二格）；
+                组件画出来的每个字，最终都躺在这张表的格子里。
+                分工：你（借组件之手）填 Buffer；渲染到终端的是 TuiRunner（框架），
+                Frame 只是填表时的工具包——不是渲染器。
+                """);
         if (lastFrame != null) {
             FrameDump.dump(lastFrame).forEach(l -> System.out.println("  " + l));
         }
     }
 
-    /** 按键：h/j/k/l 移动 ★（钳在顶部文字与中间行之间的空带内）；q 退出。 */
+    /** 本课只处理一件事：退出。交互（按键改状态）是第 6 课的正题。 */
     boolean onKey(Event event, TuiRunner r) {
         if (event instanceof KeyEvent key && key.isQuit()) {
             r.quit();
-            return false;
-        }
-        if (event instanceof KeyEvent key) {
-            if (key.isChar('h')) { starX = Math.max(1, starX - 2); return true; }
-            if (key.isChar('l')) { starX = Math.min(lastFrame == null ? 80 : lastFrame.area().width() - 2, starX + 2); return true; }
-            if (key.isChar('k')) { starY = Math.max(3, starY - 1); return true; }
-            if (key.isChar('j')) { starY = Math.min(lastRows / 2 - 1, starY + 1); return true; }
         }
         return false;
     }
 
-    /** 画一帧：三条带各出自谁，一眼可辨。包内可见供离屏测试。 */
+    /** 画一帧：一个界面 = 三块内容放进三个区域。包内可见供离屏测试。 */
     void paint(Frame frame) {
-        int rows = frame.area().height();
-        lastRows = rows;
+        // 区域（Rect）= 起点（第几列，第几行）+ 宽高（多少格 × 多少行）
+        Rect titleArea = new Rect(4, 1, 30, 3);            // 标题区：第 1 行、第 4 列起，30×3
+        Rect contentArea = new Rect(4, 5, 30, 8);          // 内容区：第 5 行起，30×8
+        Rect footerArea = new Rect(4, frame.area().height() - 3, 50, 2);   // 底栏：贴着屏幕底部
 
-        // ── 带一（第 0、1 行）：Frame——area() 问尺寸 + renderWidget 批量画 ──
-        frame.renderWidget(Paragraph.from(
-                "↑ 顶部：Frame 的 renderWidget 画的（尺寸 " + frame.area().width()
-                        + " 列 × " + rows + " 行，拖窗口会变）\n"
-                        + "h←  j↓  k↑  l→ 移动 ★ · q 退出（退出后打印这张表）"),
-                frame.area());
+        // 画界面 = renderWidget(组件, 区域)，要几块就调几次
+        frame.renderWidget(Paragraph.from("我的备忘录"), titleArea);
+        frame.renderWidget(Paragraph.from("买牛奶\n写周报\n复习「区域 + 组件」"), contentArea);
+        frame.renderWidget(Paragraph.from("界面 = renderWidget(组件, 区域)；拖动窗口底栏仍贴底 · q 退出"),
+                footerArea);
 
-        Buffer grid = frame.buffer();
-
-        // ── 带二（屏幕中间一行）：Buffer——setString 直接写，不经过组件 ──
-        grid.setString(1, rows / 2, "← 中间这行：Buffer 的 setString 直接写的（没经过组件）",
-                Style.create());
-
-        // ── 带三（★）：Cell——set 写一格 ──
-        grid.set(starX, starY, new Cell("★", Style.create()));
-
-        lastFrame = grid.copy();
+        lastFrame = frame.buffer().copy();
     }
 }

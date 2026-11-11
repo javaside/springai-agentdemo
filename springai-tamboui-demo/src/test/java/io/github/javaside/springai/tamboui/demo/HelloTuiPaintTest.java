@@ -3,38 +3,34 @@ package io.github.javaside.springai.tamboui.demo;
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.layout.Rect;
 import dev.tamboui.terminal.Frame;
-import dev.tamboui.tui.event.KeyEvent;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 第 2 课「三条带」的离屏测试：每条带各出自谁——
- * 顶部=Frame.renderWidget、中间行=Buffer.setString、★=Cell+set。
+ * 第 2 课「第一个界面」的离屏测试：三块内容各就各位（区域决定位置），
+ * 底栏贴着屏幕底（证明用 frame.area() 现场读尺寸）。
  */
 class HelloTuiPaintTest {
 
     @Test
-    void threeBandsEachFromItsOwner() {
-        Buffer buf = paint(new HelloTuiDemo(), 60, 20);
-        assertTrue(rowText(buf, 0).contains("renderWidget"), "带一应标明 Frame 所画");
-        assertTrue(rowText(buf, 10).contains("setString"), "带二（rows/2=10）应标明 Buffer 直写");
-        assertEquals("★", buf.get(10, 5).symbol(), "带三 ★ 应落在 (starX, starY)");
+    void threeBlocksLandInTheirRegions() {
+        Buffer buf = paint(60, 20);
+        assertTrue(rowText(buf, 1).contains("我的备忘录"), "标题应在第 1 行（titleArea.y=1）");
+        assertTrue(rowText(buf, 5).contains("买牛奶"), "首条内容应在第 5 行（contentArea.y=5）");
+        assertTrue(rowText(buf, 6).contains("写周报"));
     }
 
     @Test
-    void keysMoveTheStarCell() {
-        HelloTuiDemo demo = new HelloTuiDemo();
-        paint(demo, 60, 20);
-        demo.onKey(KeyEvent.ofChar('l'), null);
-        demo.onKey(KeyEvent.ofChar('j'), null);
-        assertEquals("★", paint(demo, 60, 20).get(12, 6).symbol());
+    void footerSticksToBottomAndFollowsWindowHeight() {
+        assertTrue(rowText(paint(60, 20), 17).contains("renderWidget"), "20 行屏：底栏在 17 行");
+        assertTrue(rowText(paint(60, 30), 27).contains("renderWidget"), "30 行屏：底栏跟着到 27 行");
     }
 
     // ---- 工具 ----
 
-    private static Buffer paint(HelloTuiDemo demo, int width, int height) {
+    private static Buffer paint(int width, int height) {
+        HelloTuiDemo demo = new HelloTuiDemo();
         Buffer buf = Buffer.empty(new Rect(0, 0, width, height));
         demo.paint(Frame.forTesting(buf));
         return buf;
