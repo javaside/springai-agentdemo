@@ -1,14 +1,12 @@
 package io.github.javaside.springai.tamboui.demo;
 
 import dev.tamboui.buffer.Buffer;
+import dev.tamboui.buffer.Cell;
 import dev.tamboui.layout.Rect;
-import dev.tamboui.style.Color;
 import dev.tamboui.style.Style;
 import dev.tamboui.terminal.Frame;
-import dev.tamboui.text.Line;
-import dev.tamboui.text.Span;
-import dev.tamboui.text.Text;
 import dev.tamboui.tui.EventHandler;
+import dev.tamboui.tui.Renderer;
 import dev.tamboui.tui.TuiRunner;
 import dev.tamboui.tui.event.Event;
 import dev.tamboui.tui.event.KeyEvent;
@@ -16,36 +14,35 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 2 课 渲染模型——画面是什么 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 2 课 网格实验室——Buffer / Cell / Frame —— 基于 TamboUI 0.4.0 实测 API。
  *
- * <p><b>这一课要建立的三句话</b>（后面六课全部踩在它上面）：</p>
- * <ol>
- *   <li>终端屏幕是一张<b>字符网格</b>（Buffer = Cell 二维数组，一格一个字符+样式）；</li>
- *   <li>应用每次只做一件事：<b>把「这一屏现在该长什么样」整张画出来</b>——不留旧状态，
- *       画面永远是当前状态的完整描述（“UI 是状态的纯函数”）；</li>
- *   <li>框架拿本帧与上一帧对比，<b>只把变化的格子发给终端</b>（差分渲染）。</li>
- * </ol>
+ * <p>本课示例的任务：<b>三个核心概念各有自己的演示位</b>——</p>
+ * <ul>
+ *   <li><b>Cell（一格）</b>：◆ 与右上角 A/B 角标都是 {@code grid.set(x, y, cell)} 手写的一格——
+ *       按空格后代码只翻转一个布尔位，但这两个 Cell 的内容随之换掉；</li>
+ *   <li><b>Buffer（整屏数据）</b>：下半屏的「观察窗」把当前帧左上 30 格 × 5 行<b>实时</b>
+ *       以网格形式再显示一遍（画中画）——上面动，下面同步动，因为它们是同一张表格；</li>
+ *   <li><b>Frame（渲染入口）</b>：上面的一切都经它完成——{@code area()} 给画布、
+ *       {@code renderWidget(组件, 区域)} 画说明文字、{@code buffer()} 拿网格本体读写。</li>
+ * </ul>
  *
- * <p><b>演示方式</b>：按<b>空格</b>在「帧 A ↔ 帧 B」之间切换——代码只翻转一个
- * 状态位，画面随之整屏重画（第 2 句）；退出后并排打印两帧网格与
- * {@link FrameDiffView}（■=变化的格子），即框架实际做的事（第 3 句）。</p>
+ * <p>退出后打印全帧网格与 diff 视图（■=框架实际发给终端的格子）——立即模式与差分的证据。</p>
  *
- * <p>全屏模式（{@link TuiRunner} + 备用屏幕）：运行期间接管终端，退出即复原。
- * 默认退出键 q/Q/Ctrl+C（Esc 绑定的是 cancel 动作）。</p>
+ * <p>示例纪律：只用本课及第 1 课教过的 API（纯字符串 + {@code Paragraph.from}；
+ * Cell 的样式参数给 {@code Style.create()} 空样式即可，样式链是第 3 课的内容）。</p>
  */
 public final class HelloTuiDemo implements TambouiDemo {
 
-    /** 状态只有一个位：显示帧 A 还是帧 B。第 6 课会把「状态驱动 UI」展开成完整范式。 */
+    /** 状态只有一个位：显示帧 A 还是帧 B（第 6 课会把「状态驱动 UI」展开成完整范式）。 */
     private boolean showFrameB;
-
-    /** 仅供测试构造指定帧（离屏渲染用例）。 */
-    void setFrameBForTest(boolean frameB) {
-        this.showFrameB = frameB;
-    }
 
     /** 退出后打印教具用的两帧快照（渲染线程写、run() 返回后主线程读，先后有序）。 */
     private Buffer lastFrameA;
     private Buffer lastFrameB;
+
+    /** 观察窗参数：显示当前帧左上 30 格 × 5 行。 */
+    static final int OBS_WIDTH = 30;
+    static final int OBS_HEIGHT = 5;
 
     @Override
     public int order() {
@@ -54,15 +51,13 @@ public final class HelloTuiDemo implements TambouiDemo {
 
     @Override
     public String title() {
-        return "Hello TUI——渲染模型（空格切两帧，退出看 diff）";
+        return "网格实验室——Buffer / Cell / Frame";
     }
 
     @Override
     public void run() throws Exception {
         try (TuiRunner runner = TuiRunner.create()) {
-            // 渲染函数：只看状态、整屏重画——不看上一帧、不算增量（那是框架的事）
-            dev.tamboui.tui.Renderer renderer = this::paint;
-            // 事件处理：返回值 = 是否需要重绘。空格翻转状态位（变了→true），退出键退出。
+            Renderer renderer = this::paint;
             EventHandler handler = (Event event, TuiRunner r) -> {
                 if (event instanceof KeyEvent key && key.isQuit()) {
                     r.quit();
@@ -80,57 +75,66 @@ public final class HelloTuiDemo implements TambouiDemo {
         printTakeaway();
     }
 
-    /** 画一帧：整屏描述当前状态（帧 A 或帧 B，只差一个状态位）。包内可见供离屏测试。 */
+    /** 仅供测试构造指定帧（离屏渲染用例）。 */
+    void setFrameBForTest(boolean frameB) {
+        this.showFrameB = frameB;
+    }
+
+    /**
+     * 画一帧（示例只出现已教 API）。
+     * 包内可见供离屏测试。
+     */
     void paint(Frame frame) {
+        int width = frame.area().width();
+        int height = frame.area().height();
+        int half = height / 2;
+
+        // ── Frame 工具一/二：area() 画布 + renderWidget 画组件 ──
+        // 主区（上半）：说明文字用纯字符串渲染（样式是第 3 课的内容）
         String which = showFrameB ? "帧 B" : "帧 A";
-        String dotAt = showFrameB ? "                    ◆（帧 B：◆ 挪到了右边）" : "◆（帧 A）";
-        Text text = Text.from(
-                Line.from(Span.styled("你好，TamboUI！现在是 " + which, Style.create().fg(Color.CYAN).bold())).centered(),
-                Line.from(Span.raw("")).centered(),
-                Line.from(Span.styled(dotAt, Style.create().fg(Color.GREEN))).centered(),
-                Line.from(Span.raw("")).centered(),
-                Line.from(Span.styled("按【空格】在帧 A ↔ 帧 B 之间切换——注意：代码只翻转一个布尔位，画面整屏重画",
-                        Style.create().fg(Color.GRAY))).centered(),
-                Line.from(Span.styled("退出后将打印：两帧的网格 + diff 视图（■=框架实际发给终端的格子）",
-                        Style.create().fg(Color.GRAY))).centered(),
-                Line.from(Span.styled("按 q / Ctrl+C 退出（Esc 是框架的 cancel 动作，不退出）",
-                        Style.create().fg(Color.YELLOW))).centered()
-        );
-        frame.renderWidget(Paragraph.builder().text(text).build(), frame.area());
+        String main = "第 2 课 · 网格实验室——Buffer / Cell / Frame\n"
+                + "\n"
+                + "现在是 " + which + "。下面观察窗里的 ◆ 和右上角的 " + (showFrameB ? "B" : "A")
+                + " 都是代码用 grid.set(...) 手写的一格（Cell）。\n"
+                + "按【空格】切换帧——只翻转一个布尔变量，整帧重画，观察窗同步变化。\n"
+                + "按 q 退出：退出后打印全帧网格与 diff（■=框架实际发给终端的格子）。";
+        frame.renderWidget(Paragraph.from(main), new Rect(1, 1, width - 2, half - 2));
 
-        // Frame.buffer() 返回网格本体（Buffer）：renderWidget 是「批量画进网格」的封装，
-        // 网格本身始终可直接读写。下面手工往右上角写当前帧标记（A/B）——与组件内容
-        // 落在同一张 Buffer 上；按空格切换后，这一格也会出现在 diff 的 ■ 里。
-        dev.tamboui.buffer.Buffer grid = frame.buffer();
-        int markX = grid.area().width() - 2;
-        grid.set(markX, 0, new dev.tamboui.buffer.Cell(showFrameB ? "B" : "A",
-                Style.create().fg(Color.YELLOW).bold()));
+        // ── Frame 工具三：buffer() 拿网格本体，直接读写「一格」（Cell 的直接演示）──
+        Buffer grid = frame.buffer();
+        // ◆：帧 A 在左、帧 B 在右（位置刻意落在观察窗的取景范围内）
+        int dotX = showFrameB ? 22 : 6;
+        grid.set(dotX, 3, new Cell("◆", Style.create()));   // 空样式：样式链是第 3 课内容
+        // 右上角手写角标 A/B——同样是一格
+        grid.set(OBS_WIDTH - 4, 0, new Cell(showFrameB ? "B" : "A", Style.create()));
 
-        // 留两帧快照：退出后的教学打印用。没按过空格时帧 B 快照缺失，退场时离屏补画一份。
+        // ── Buffer 的直接演示：观察窗（画中画）──
+        // 读当前帧左上 OBS_WIDTH×OBS_HEIGHT 的格子，实时以网格文本回放到下半屏——
+        // 上下两块动的是同一张表，这就是「Buffer = 整屏内容的数据版」。
+        int obsY = half;
+        frame.renderWidget(Paragraph.from("观察窗：同一帧的 Buffer，左上 " + OBS_WIDTH + " 格 × "
+                + OBS_HEIGHT + " 行（实时同步）"), new Rect(1, obsY, width - 2, 2));
+        for (int y = 0; y < OBS_HEIGHT && obsY + 2 + y < height; y++) {
+            StringBuilder sb = new StringBuilder("y=" + y + " |");
+            for (int x = 0; x < OBS_WIDTH; x++) {
+                Cell cell = grid.get(x, y);
+                // 续格（宽字符占的第二格）用 · 呈现，让「一格一字符」肉眼可数
+                sb.append(cell.isContinuation() ? "·" : (cell.symbol() == null ? " " : cell.symbol()));
+            }
+            sb.append('|');
+            grid.setString(1, obsY + 2 + y, sb.toString(), Style.create());
+        }
+
+        // 留两帧快照：退出后的教学打印用
         if (showFrameB) {
-            lastFrameB = frame.buffer().copy();
+            lastFrameB = grid.copy();
         } else {
-            lastFrameA = frame.buffer().copy();
+            lastFrameA = grid.copy();
         }
     }
 
-    /** 退出全屏后的教学打印：两帧网格 + diff 视图，把渲染模型三句话钉在眼睛上。 */
+    /** 退出全屏后的教学打印：全帧网格 + diff 视图。 */
     private void printTakeaway() {
-        // 若某一帧没被画过（用户没按空格），离屏补画——教具必须两帧齐全
-        if (lastFrameA == null || lastFrameB == null) {
-            boolean cur = showFrameB;
-            for (boolean b : new boolean[]{false, true}) {
-                if (b == cur ? (b ? lastFrameB : lastFrameA) == null : false) {
-                    continue;
-                }
-                Buffer off = Buffer.empty(new Rect(0, 0, 80, 12));
-                Frame fake = Frame.forTesting(off);
-                boolean keep = showFrameB;
-                showFrameB = b;
-                paint(fake);
-                showFrameB = keep;
-            }
-        }
         System.out.println("\n—— 运行时看到的两屏 vs 下面三张图，对应关系 ——");
         System.out.println("· 运行时的整屏画面 = Buffer 这张字符网格照着画到终端的结果：");
         System.out.println("  网格第 y 行 = 屏幕第 y 行，一格 = 屏幕一个字符位（· 为宽字符续格）；");
