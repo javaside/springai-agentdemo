@@ -20,7 +20,9 @@ class HelloTuiPaintTest {
         // Frame 的 renderWidget：三块内容各就各位
         assertTrue(rowText(buf, 1).contains("我的备忘录"), "标题应在第 1 行");
         assertTrue(rowText(buf, 4).contains("买牛奶"), "首条待办应在第 4 行（listArea.y=4）");
-        // Buffer + Cell：第一条待办前的 ● 是 set 写进 (3,4) 的一格
+        // Buffer 自己的动作：setString 画标题下分隔线（第 3 行）
+        assertTrue(rowText(buf, 3).contains("──────"), "分隔线应由 setString 画出");
+        // Cell：第一条待办前的 ● 是 set 写进 (3,4) 的一格
         assertEquals("●", buf.get(3, 4).symbol());
     }
 

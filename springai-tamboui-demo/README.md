@@ -86,18 +86,28 @@ try (TuiRunner runner = TuiRunner.create()) {          // ① 创建运行器：
 
 ---
 
-## 第 2 课 · Buffer、Cell、Frame——画界面的三个核心类
+## 第 2 课 · 三个核心类：Buffer、Cell、Frame
 
-**本课学什么**：这三个类各是什么、画界面时各干什么、怎么用。学完你能：
-在屏幕指定位置画出文字块，并说清这些字在程序里怎么存储（Buffer 的格子）、
-怎么显示到终端（框架对比前后两帧、只发变化的部分）。
+**本课核心**：学会这三个类的**意思**（各是什么）和**使用**（怎么用）。
+方法 = 画一个简单的备忘录界面——三个类在画的过程中各用起来，用到了才算学会。
+
+**意思一句话**：
 
 - **Buffer**：一张字符表格——屏幕显示的画面就存在它里面；
 - **Cell**：表格里的一格——一个字符加样式，画界面的最小单位；
-- **Frame**：画这一屏时框架递给你的工具（问尺寸 area()、批量画 renderWidget、
-  拿表格 buffer()）。
+- **Frame**：画这一屏时框架递给你的工具（问尺寸、批量画、拿表格）。
 
-### 示例：用三个类画一个备忘录界面（demo 全文 50 余行）
+**使用 × 本例对照**（左边是类的方法，右边是它在备忘录界面里干的那件事）：
+
+| 类.方法 | 在本例界面里做的事 |
+|---|---|
+| `frame.area()` | 问屏幕多高 → 底栏贴底 |
+| `frame.renderWidget(组件, 区域)` | 画标题、待办、底栏三块文字 |
+| `frame.buffer()` | 拿到表格本体（画面数据） |
+| `grid.setString(x, y, "─…")` | 标题下画分隔线（Buffer 自己写一串） |
+| `grid.set(x, y, new Cell("●", …))` | 第一条待办前写 ●（写一格 Cell） |
+
+### 示例：画一个备忘录界面，三个类各用起来（demo 全文 50 余行）
 
 ```java
 void paint(Frame frame) {
@@ -516,7 +526,7 @@ try (TuiRunner runner = TuiRunner.create()) {      // 进备用屏幕 + 原始�
 | `Renderer` | 画帧函数 | `frame -> {...}`：整帧重画，不看上一帧 |
 | `TuiConfig` | 运行配置 | `builder().tickRate(...)` / `bracketedPaste(true)` 等 → `TuiRunner.create(config)` |
 
-### 第 2 课 · 画界面的三个核心类
+### 第 2 课 · Buffer、Cell、Frame
 
 | API | 关键用法 |
 |---|---|
