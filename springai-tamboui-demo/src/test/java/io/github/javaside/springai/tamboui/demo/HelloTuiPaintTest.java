@@ -24,6 +24,13 @@ class HelloTuiPaintTest {
     }
 
     @Test
+    void gridWritesItsOwnFooterLine() {
+        // Buffer 不经过组件、自己写的底行（60×20 → 落在 y=18）
+        Buffer buf = paint(new HelloTuiDemo(), 60, 20);
+        assertTrue(rowText(buf, 18).contains("setString"), "底行应由 grid.writeString 写入");
+    }
+
+    @Test
     void sizeLineReflectsArea() {
         Buffer buf = paint(new HelloTuiDemo(), 60, 20);
         assertTrue(rowText(buf, 0).contains("60"), "尺寸行应显示实时列数: " + rowText(buf, 0));
