@@ -12,7 +12,7 @@ import dev.tamboui.widgets.paragraph.Paragraph;
 import io.github.javaside.springai.tamboui.TambouiDemo;
 
 /**
- * 第 2 课 画出第一个界面，认识画面底下的三个角色 —— 基于 TamboUI 0.4.0 实测 API。
+ * 第 2 课 Buffer、Cell、Frame——画界面的三个核心类 —— 基于 TamboUI 0.4.0 实测 API。
  *
  * <p><b>画界面只有一件事</b>：{@code renderWidget(组件, 区域)}——组件给内容，
  * 区域给位置。本课用它三次，拼出一个备忘录面板：标题、待办内容、底部提示，
@@ -33,7 +33,7 @@ public final class HelloTuiDemo implements TambouiDemo {
 
     @Override
     public String title() {
-        return "第一个界面：区域 + 组件（退出看背后机制）";
+        return "Buffer / Cell / Frame——画界面的三个核心类";
     }
 
     @Override
