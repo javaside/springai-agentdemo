@@ -151,14 +151,31 @@ void paint(Frame frame) {
     frame.renderWidget(Paragraph.from("q 退出（退出后打印这张表）"), footerArea);
 
     // ── 概念② Buffer：从 Frame 拿到表格本体——画面此刻的数据 ──
+    //    它自己也能写：setString 从某格起写一串（这里画标题下的分隔线）
     Buffer grid = frame.buffer();
+    grid.setString(4, 3, "────────────", Style.create());
 
     // ── 概念③ Cell：一格内容（字符 + 样式）——往第一条待办前写一个 ● ──
     grid.set(3, 4, new Cell("●", Style.create()));
 }
 ```
 
-屏幕效果：左上标题、第一条待办前一个 ●、下面两行待办、贴底一行提示。
+**运行起来屏幕长这样**——每一块是谁写的，标在旁边：
+
+```
+        我的备忘录                ← frame.renderWidget(Paragraph, titleArea)
+        ────────────             ← grid.setString(4, 3, "─…")
+    ●   买牛奶                    ← ●：grid.set(3, 4, new Cell("●", …))
+        写周报                    ← frame.renderWidget(Paragraph, listArea)
+        复习 Buffer/Cell/Frame
+        q 退出（退出后打印这张表） ← frame.renderWidget(Paragraph, footerArea)（贴底）
+```
+
+**Buffer 和 Cell 的关系**：**Cell 是 Buffer 里的一格；Buffer 由 Cell 组成**——
+就像 `char[][]` 数组和它的每个元素：表格是整体，格子是元素。屏幕上"我的备忘录"
+五个字，在程序里就是 Buffer 里 10 个 Cell（中文一字占两格）；整个屏幕 90 列 × 24 行
+= 2160 个格子，就是一张由 2160 个 Cell 组成的 Buffer。**Frame 包着这一帧的
+Buffer 递给你**——你通过它画内容、通过它直接拿 Buffer。
 
 ### 讲解：三个类怎么配合画出一个界面
 
