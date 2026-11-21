@@ -186,7 +186,7 @@ Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `T
 - JDK 17+、Maven 3.9+（只下载发布包的读者可跳过 Maven）
 - 一个 [DeepSeek](https://platform.deepseek.com/) API Key：`export DEEPSEEK_API_KEY=<你的 Key>`
   （Windows PowerShell：`$env:DEEPSEEK_API_KEY="<你的 Key>"`）
-- 技术栈：Spring AI 2.0.0（教学路线主线）；Spring Boot 4.0.7（仅第 3 步 boot 模块作为依赖使用，父工程用它统一第三方库版本）
+- 技术栈：Spring AI 2.1.0（教学路线主线，2.0 系）；Spring Boot 4.2.0（仅第 3 步 boot 模块作为依赖使用，父工程用它统一第三方库版本）
 
 ### 构建并运行
 
