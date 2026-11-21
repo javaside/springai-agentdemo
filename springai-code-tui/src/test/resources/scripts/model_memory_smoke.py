@@ -5,11 +5,11 @@
 
   进程 A  启动 → 状态栏是默认模型 deepseek-v4-pro
           → /model → 数字快选第 2 项 → Enter
-          → scrollback 出现「⚙ 已切换模型 · deepseek-v4-flash」
+          → scrollback 出现「⚙ 已切换模型 · deepseek-flash」
           → <root>/.codetui/model.json 落盘
           → /exit
   进程 B  同一个 cwd、**不带 -c** 启动
-          → 状态栏一上来就是 deepseek-v4-flash
+          → 状态栏一上来就是 deepseek-flash
           → 且没有「现在不可用」的回退提示
 
 为什么单测替代不了：restoreLastModel 可以写得完全正确，却因为在 main 里
@@ -42,7 +42,7 @@ from clear_smoke import (  # noqa: E402
 )
 
 DEFAULT_MODEL = "deepseek-v4-pro"      # DeepSeekProvider.models() 的第 1 项
-PICKED_MODEL = "deepseek-v4-flash"     # 第 2 项——数字快选按 '2'
+PICKED_MODEL = "deepseek-flash"     # 第 2 项——数字快选按 '2'
 SWITCH_LINE = "⚙ 已切换模型"
 FALLBACK_MARK = "现在不可用"           # restoreLastModel 的回退提示
 
@@ -112,9 +112,10 @@ def main():
         else:
             with open(pref) as f:
                 data = json.load(f)
-            if data.get("lastModel") != PICKED_MODEL:
-                failures.append("A: model.json 里是 %r，期望 %r"
-                                % (data.get("lastModel"), PICKED_MODEL))
+            # 新格式（ModelPreference）：providerId + modelId 双键（旧单键 lastModel 仅读取兼容）。
+            if data.get("modelId") != PICKED_MODEL:
+                failures.append("A: model.json 里是 %r，期望 modelId=%r"
+                                % (data, PICKED_MODEL))
             else:
                 print("A: model.json OK -> %s" % PICKED_MODEL)
 
