@@ -75,7 +75,7 @@
         <spring-boot.version>4.2.0</spring-boot.version>
         <!-- 社区项目 spring-ai-agent-utils（提供 SkillsTool 等），0.14.0 起要求 Spring AI 2.1 + Boot 4.2 -->
         <spring-ai-agent-utils.version>0.14.0</spring-ai-agent-utils.version>
-        <jline.version>3.30.13</jline.version>
+        <jline.version>3.30.17</jline.version>
         <!-- TamboUI（Java TUI，仿 ratatui）；group dev.tamboui，实测有 tamboui-bom -->
         <tamboui.version>0.4.0</tamboui.version>
     </properties>
@@ -131,7 +131,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-dependency-plugin</artifactId>
-                    <version>3.8.1</version>
+                    <version>3.11.0</version>
                 </plugin>
                 <!-- 仅 boot 模块使用 -->
                 <plugin>
