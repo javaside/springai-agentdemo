@@ -2,6 +2,27 @@
  * Copyright TamboUI Contributors
  * SPDX-License-Identifier: MIT
  */
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SHADOW 类（springai-tamboui-inline-patch）：本文件是 tamboui-core 0.7.0
+ * dev.tamboui.buffer.Buffer 的整类复制（2026-11-21 rebase，diff 走 0.7 的
+ * run-based DiffResult 协议）+ setString/withLines 的组合序列宽度修正。
+ * 运行期靠本模块 jar 在 classpath 上排在 tamboui-core 之前优先加载。
+ *
+ * 相对 0.7.0 原版的差异（升级 tamboui 时须重新 diff 对齐）：
+ * 1. setString：keycap（[0-9#*] FE0F? 20E3）组合按终端实际渲染 2 列布格
+ *    （base cell + CONTINUATION）。原版把 FE0F/20E3 当零宽拼进 base cell，
+ *    整序列按 1 列布格而终端画 2 列，行内后续 cell 全部错位（2026-10-09
+ *    输入框错位 + Terminal.app SIGBUS 崩溃事故）。「文本符号+VS16」2026-10-09
+ *    DSR 实测回调为 1 列（VS16 走零宽路径并入 base cell symbol）。
+ * 2. setString：C1 控制字符（U+0080–U+009F）与 C0/DEL 同样替换为空格显示
+ *    （原样写终端会被解释为控制码）。仅影响显示 cell，存储/发送原文不变。
+ * 3. withLines：总宽换 TerminalWidth.of（与 setString 布格同口径）。
+ * 4. setString：删 ZWJ 拼格机制（Terminal.app TTBuffer 无 ZWJ 合并记账，
+ *    `👨ZWJ👩`=5 列 DSR 实测；ZWJ 由 shadow CharWidth 记 1 列独立布格）。
+ * 5. setString javadoc 的布格语义列表按上述 shadow 口径维护（勿回抄上游）。
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
 package dev.tamboui.buffer;
 
 import java.util.Arrays;
@@ -280,13 +301,15 @@ public final class Buffer {
      * preserving background colors and other style attributes that were previously set.
      * This matches the behavior of ratatui.rs.
      * <p>
-     * Handles grapheme clusters correctly:
+     * SHADOW 布格语义（异于上游 0.7 原文，见文件头差异清单）：
      * <ul>
-     *   <li>ZWJ sequences: characters after ZWJ are appended to the preceding cell</li>
+     *   <li>keycap（[0-9#*] FE0F? 20E3）：2 列布格（base + continuation）</li>
+     *   <li>组合序列整体宽度走 {@link TerminalWidth}（combiningSequenceLength 切分）</li>
+     *   <li>VS16 零宽并入 base cell symbol（1 列）</li>
+     *   <li>ZWJ 独立 1 列（不拼格）</li>
+     *   <li>C1 控制字符（U+0080–U+009F）替换为空格显示</li>
      *   <li>Regional Indicator pairs: combined into a single 2-wide cell</li>
      *   <li>Skin tone modifiers: appended to preceding cell (zero-width)</li>
-     *   <li>Emoji presentation sequences: a 1-wide base glyph followed by VS16 is
-     *       promoted to a 2-wide cell with a continuation</li>
      * </ul>
      *
      * @param x the x coordinate
@@ -403,7 +426,7 @@ public final class Buffer {
             String symbol = (codePoint < 0x20 || codePoint == 0x7F
                     || (codePoint >= 0x80 && codePoint <= 0x9F))
                     ? " "
-                    : codePoint < 128 ? ASCII_STRINGS[codePoint] : new String(Character.toChars(codePoint));
+                    : symbolFor(codePoint);   // SHADOW→0.7：glyph 驻留（U+2500-28FF 复用实例），diff 的 equals 恒等快路径依赖它
 
             if (charWidth == 2 && col + 1 >= area.right()) {
                 // Wide char at rightmost column: no room for continuation, replace with space

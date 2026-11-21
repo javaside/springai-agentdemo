@@ -9,7 +9,7 @@ import java.lang.reflect.Method;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 真清屏：TamboUI 0.4.0 未公开清屏 API，故反射进内联运行器的私有 {@code Backend} 调 {@code clear()} 并写
+ * 真清屏：TamboUI 0.7.0 未公开清屏 API，故反射进内联运行器的私有 {@code Backend} 调 {@code clear()} 并写
  * {@code ESC[3J}（抹掉回滚缓冲），再把 {@code InlineDisplay} 的相对光标记账（{@code lastCursorY} /
  * {@code currentHeight}）归零——否则下一帧渲染会光标漂移。
  *

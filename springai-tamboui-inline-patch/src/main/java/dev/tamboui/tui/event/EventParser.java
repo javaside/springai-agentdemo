@@ -7,9 +7,7 @@ package dev.tamboui.tui.event;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InterruptedIOException;
 import java.util.OptionalInt;
-import java.util.concurrent.locks.LockSupport;
 
 import dev.tamboui.terminal.Backend;
 import dev.tamboui.tui.bindings.BindingSets;
@@ -21,12 +19,25 @@ import dev.tamboui.tui.bindings.Bindings;
  * Handles escape sequences for standard terminal input, mouse events (SGR mode,
  * and the X10 format of terminals without it), and progressive keyboard enhancements
  * (Kitty keyboard protocol {@code CSI u}).
+ *
+ * <p><b>springai-tamboui-inline-patch shadow 类</b>（与 {@code InlineTuiRunner} 同机制：
+ * code-tui 的 Class-Path 顺序保证本 jar 先于 tamboui-tui 加载）。以 0.7.0 上游为底座
+ * rebase（2026-11-21），Kitty/X10 与输入解码修复（#611/#517/#481）全量继承；与上游的
+ * 差异都在粘贴链路：① {@link #readPasteContent} 把上游「单次 50ms 超时即放弃」改为
+ * <b>累计静默 500ms</b> 才放弃——大粘贴（几百 KB 日志）时终端分块灌 pty、块间间隙一旦
+ * 超过 50ms，粘贴事件被提前掐断，剩余字节回到普通按键解析：日志里的 {@code \n} 变
+ * Enter、在 code-tui 里触发「贴入即分批自动发送」（人手敲不出 ESC[200~ 起始标记，
+ * 无副作用；EOF 时上游 0.7 抛 {@code EOFException}，本 shadow 返回已读部分，下次
+ * 读取仍会结束）；② 批量快路径扫到终止符后，同一读取块里<b>溢出</b>的字节回灌给
+ * 下一次解析（{@code OVERSHOOT_*} / {@code BacklogBackend}）——Terminal.app 多文件
+ * 拖拽每文件发一条独立括号粘贴、背靠背连发（2026-10-14 od 取证），不回灌的话后续
+ * 整条粘贴被静默丢弃，实报症状「一次拖 5 张图只显示 1-2 张」。行为契约见
+ * {@code EventParserPasteTest} / {@code EventParserBulkPasteTest}。库升级时须重对本类做 diff。
  */
 public final class EventParser {
 
     private static final int ESC = 27;
     private static final int PEEK_TIMEOUT = 50;
-    private static final String PASTE_END = "\u001b[201~";
 
     /**
      * 括号粘贴的<b>累计静默预算</b>：读超时后只要总静默没超过这个窗口就继续等下一块。
@@ -963,18 +974,6 @@ public final class EventParser {
         }
     }
 
-    private static boolean endsWith(StringBuilder sb, String suffix) {
-        int offset = sb.length() - suffix.length();
-        if (offset < 0) {
-            return false;
-        }
-        for (int i = 0; i < suffix.length(); i++) {
-            if (sb.charAt(offset + i) != suffix.charAt(i)) {
-                return false;
-            }
-        }
-        return true;
-    }
 
     private static Event parseVT(String params, Bindings bindings) {
         String[] parts = params.split(";", -1);
