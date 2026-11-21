@@ -652,12 +652,12 @@ public final class InlineTuiRunner implements AutoCloseable {
 
             if (targetTime != null && !now.isBefore(targetTime)) {
                 Instant previous = lastTick.getAndSet(now);
-                Duration elapsed = Duration.between(previous, now);
-
                 nextTickTime.set(targetTime.plus(config.tickRate()));
 
                 long frame = frameCount.incrementAndGet();
-                eventQueue.offer(TickEvent.of(frame, elapsed));
+                // tamboui 0.6+：TickEvent.of(long)——elapsed 概念上游移除（RenderClock 计时替代）。
+                // shadow 保留 Instant 计时调度（防卡死定制耦合在 nextTickTime 上），仅去掉 elapsed 传参。
+                eventQueue.offer(TickEvent.of(frame));
             }
         }
     }
