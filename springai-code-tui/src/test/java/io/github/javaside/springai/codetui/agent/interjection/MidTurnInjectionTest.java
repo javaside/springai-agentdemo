@@ -5,6 +5,7 @@ import io.github.javaside.springai.codetui.agent.CodingAgent;
 import io.github.javaside.springai.codetui.agent.llm.DeepSeekProvider;
 import io.github.javaside.springai.codetui.agent.llm.ProviderRegistry;
 import io.github.javaside.springai.codetui.agent.seam.StubListener;
+import io.github.javaside.springai.codetui.agent.session.RewritableInMemorySessionRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -133,7 +134,7 @@ class MidTurnInjectionTest {
 
         ChatClient client = ChatClient.builder(InterjectingChatModel.wrap(model, interjections))
                 .defaultTools((Object) slowTool(entered, gate))
-                .defaultAdvisors(SessionMemoryAdvisor.builder(sessions).defaultUserId("u").build())
+                .defaultAdvisors(SessionMemoryAdvisor.builder(sessions).build())   // 官方 2.1.0 Builder 无 defaultUserId
                 .build();
 
         String sid = "interjection-session";
@@ -174,7 +175,8 @@ class MidTurnInjectionTest {
     @Test
     @DisplayName("回合末补历史发生在通知 listener 之前")
     void interjectionPersistedBeforeTurnCompleteNotification() throws Exception {
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（补历史要整表改写），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = DefaultSessionService.builder().sessionRepository(repo).build();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch gate = new CountDownLatch(1);
@@ -184,7 +186,7 @@ class MidTurnInjectionTest {
 
         ChatClient client = ChatClient.builder(InterjectingChatModel.wrap(model, interjections))
                 .defaultTools((Object) slowTool(entered, gate))
-                .defaultAdvisors(SessionMemoryAdvisor.builder(sessions).defaultUserId("u").build())
+                .defaultAdvisors(SessionMemoryAdvisor.builder(sessions).build())   // 官方 2.1.0 Builder 无 defaultUserId
                 .build();
 
         // onTurnComplete 那一刻的会话历史快照。断言放到回调之外——回调里抛异常会被 reactive 链吞掉。

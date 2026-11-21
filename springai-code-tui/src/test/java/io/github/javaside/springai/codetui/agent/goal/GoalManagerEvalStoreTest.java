@@ -10,7 +10,6 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
-import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -19,7 +18,6 @@ import org.springframework.ai.session.compaction.CompactionTrigger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -56,9 +54,8 @@ class GoalManagerEvalStoreTest {
 
     /**
      * 记录型 {@link SessionService}（读端）：getEvents 回放一份共享事件表。
-     * 注意 {@code SessionService.findById} 返回 {@code Session}、{@code SessionRepository.findById}
-     * 返回 {@code Optional<Session>}——两接口同名不同型，<b>无法由同一个类实现</b>，故写成
-     * 「一份事件表 + service/repo 两个视图」（C1 中段插入的读写两端）。
+     * 注意 service 与 repo 是「一份事件表 + 两个视图」（C1 中段插入的读写两端）——保持两视图分离
+     * 是刻意为之：repo 视图要计数 CAS 调用与版本号，service 视图保持纯读端。
      */
     private static class RecordingStore implements SessionService {
         final List<SessionEvent> events = new CopyOnWriteArrayList<>();
@@ -68,9 +65,12 @@ class GoalManagerEvalStoreTest {
         @Override public List<Message> getMessages(String id) { return events.stream().map(SessionEvent::getMessage).toList(); }
         @Override public Session create(CreateSessionRequest r) { throw new UnsupportedOperationException(); }
         @Override public Session findById(String id) { return null; }
-        @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
+        // 官方 2.1.0：findByUserId 并入 findByMetadata；appendEvents/getEventVersion 为新抽象方法，本桩给最小实现
+        @Override public List<Session> findByMetadata(String name, String value) { throw new UnsupportedOperationException(); }
         @Override public void delete(String id) { throw new UnsupportedOperationException(); }
         @Override public int deleteExpiredSessions(Instant i) { throw new UnsupportedOperationException(); }
+        @Override public boolean appendEvents(String id, List<SessionEvent> evts, long expectedVersion) { throw new UnsupportedOperationException(); }
+        @Override public long getEventVersion(String id) { return events.size(); }
         @Override public CompactionResult compact(String id, CompactionTrigger t, CompactionStrategy s) {
             throw new UnsupportedOperationException();
         }
@@ -114,11 +114,13 @@ class GoalManagerEvalStoreTest {
     }
 
     /**
-     * 同一份事件表的 {@link SessionRepository} 视图（C1 写回端；R2 后 GoalManager 只走 3 参 CAS
-     * 变体）。本桩以 {@code events.size()} 充当版本号——直接改表（fold 桩/竞态注入）即自然 +1，
+     * 同一份事件表的仓库视图（C1 写回端；R2 后 GoalManager 只走 3 参 CAS 变体）。
+     * 官方 2.1.0 无历史改写入口，GoalManager.bindSession 的仓库参数已收紧为项目自有的
+     * {@link io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository}，本桩随之换接口；
+     * 以 {@code events.size()} 充当版本号——直接改表（fold 桩/竞态注入）即自然 +1，
      * 与 {@code FileSessionRepository}「version 随每次成功写回 +1」的语义对齐。
      */
-    private static class RecordingRepo implements SessionRepository {
+    private static class RecordingRepo implements io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository {
         final List<SessionEvent> events;
         /** 3 参 CAS 变体被调次数：断言写回确实走 CAS 路径、且重试次数符合预期。 */
         int casCalls;
@@ -144,10 +146,13 @@ class GoalManagerEvalStoreTest {
             return true;
         }
         @Override public Session save(Session s) { throw new UnsupportedOperationException(); }
-        @Override public Optional<Session> findById(String id) { throw new UnsupportedOperationException(); }
-        @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
-        @Override public List<String> findExpiredSessionIds(Instant before) { throw new UnsupportedOperationException(); }
+        @Override public Session findById(String id) { throw new UnsupportedOperationException(); }
+        // 官方 2.1.0 新抽象方法：本桩不走这些路径，给最小实现
+        @Override public boolean saveIfAbsent(Session s) { return false; }
+        @Override public List<Session> findByMetadata(String name, String value) { return List.of(); }
+        @Override public int deleteExpiredSessions(Instant before) { return 0; }
         @Override public void delete(String id) { throw new UnsupportedOperationException(); }
+        @Override public boolean appendEvents(String id, List<SessionEvent> evts, long expectedVersion) { return false; }
         @Override public long getEventVersion(String id) { return events.size(); }
         @Override public List<SessionEvent> findEvents(String id, EventFilter f) { return List.copyOf(events); }
     }

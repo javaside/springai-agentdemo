@@ -42,10 +42,13 @@ class CodingAgentContextTest {
         @Override public List<Message> getMessages(String id) { return messages; }
         @Override public Session create(CreateSessionRequest r) { throw new UnsupportedOperationException(); }
         @Override public Session findById(String id) { throw new UnsupportedOperationException(); }
-        @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
+        // 官方 2.1.0：findByUserId 并入 findByMetadata；appendEvents/getEventVersion 为新抽象方法，本桩用不到，给最小实现
+        @Override public List<Session> findByMetadata(String name, String value) { throw new UnsupportedOperationException(); }
         @Override public void delete(String id) { throw new UnsupportedOperationException(); }
         @Override public int deleteExpiredSessions(Instant i) { throw new UnsupportedOperationException(); }
         @Override public void appendEvent(SessionEvent e) { throw new UnsupportedOperationException(); }
+        @Override public boolean appendEvents(String id, List<SessionEvent> events, long expectedVersion) { throw new UnsupportedOperationException(); }
+        @Override public long getEventVersion(String id) { return 0L; }
         @Override public CompactionResult compact(String id, CompactionTrigger t, CompactionStrategy s) {
             throw new UnsupportedOperationException();
         }
@@ -99,9 +102,9 @@ class CodingAgentContextTest {
                 event(new UserMessage("hello")),
                 event(new AssistantMessage("world!!")),
                 event(new AssistantMessage("again")));
-        // 拼接文本 = "hello\n" + "world!!\n"（各 +1 换行）；LEN_ESTIMATOR 直接返回长度。
-        List<Message> messages = List.of(new UserMessage("hello"), new AssistantMessage("world!!"));
-        CodingAgent agent = agentOver(new StubSessionService(events, messages), LEN_ESTIMATOR);
+        // 官方 2.1.0：/context 读活跃视图，事件与消息同源（桩 getEvents(id, filter) 恒返同一列表）。
+        // 拼接文本 = "hello\n" + "world!!\n" + "again\n"（各 +1 换行）；LEN_ESTIMATOR 直接返回长度。
+        CodingAgent agent = agentOver(new StubSessionService(events, null), LEN_ESTIMATOR);
 
         ContextStats s = agent.contextStats();
 
@@ -110,7 +113,7 @@ class CodingAgentContextTest {
         assertEquals(2, s.assistantEvents(), "助手事件数");
         assertEquals(0, s.toolEvents(), "工具事件数");
         assertEquals(0, s.otherEvents(), "其他事件数");
-        assertEquals(("hello\n" + "world!!\n").length(), s.estimatedTokens(), "估算 token = 拼接文本长度");
+        assertEquals(("hello\n" + "world!!\n" + "again\n").length(), s.estimatedTokens(), "估算 token = 拼接文本长度");
         // 策略数直接映射自 AgentTools 常量（同包可见），保证 /context 展示与实际装配一致。
         assertEquals(AgentTools.autoCompactionThreshold(null), s.tokenThreshold());
         assertEquals(AgentTools.CONTEXT_WINDOW_TOKENS, s.contextWindow());

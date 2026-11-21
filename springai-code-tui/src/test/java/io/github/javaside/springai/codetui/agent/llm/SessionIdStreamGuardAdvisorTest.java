@@ -3,6 +3,7 @@ package io.github.javaside.springai.codetui.agent.llm;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -62,7 +63,7 @@ class SessionIdStreamGuardAdvisorTest {
     }
 
     private static SessionMemoryAdvisor memory(SessionService svc) {
-        return SessionMemoryAdvisor.builder(svc).defaultUserId("u").build();   // 无压缩，隔离被测逻辑
+        return SessionMemoryAdvisor.builder(svc).build();   // 无压缩，隔离被测逻辑（官方 2.1.0 Builder 无 defaultUserId）
     }
 
     /** 用给定 model + advisors 跑一轮流式；吞掉可能的终止异常（no-guard 场景 after() 会抛），以便随后断言落盘状态。 */
@@ -88,8 +89,11 @@ class SessionIdStreamGuardAdvisorTest {
         runTurn(client, "guard-1");
 
         List<Message> msgs = svc.getMessages("guard-1");
-        assertEquals(2, msgs.size(), "user + 合成 assistant 都应落盘（守卫补了携 context 的一条）");
-        assertInstanceOf(AssistantMessage.class, msgs.get(msgs.size() - 1), "尾部是 assistant，历史合法（无连续 user）");
+        // 2026-11-21 spring-ai 2.1.0 起：官方 after() 的 shouldPersist 过滤无内容 reply（空文本、
+        // 无 tool calls、无 media）——守卫补的空转 assistant 不再落库。守卫的核心目标（空流不抛
+        // No session ID、会话不被写坏）由官方行为兜住，本用例改为钉「只落 user 且不损坏」。
+        assertEquals(1, msgs.size(), "仅 user 落盘；空内容合成 assistant 不再落库（官方 2.1.0 shouldPersist）");
+        assertInstanceOf(UserMessage.class, msgs.get(msgs.size() - 1), "尾部仅剩 user，会话未被写坏");
     }
 
     @Test

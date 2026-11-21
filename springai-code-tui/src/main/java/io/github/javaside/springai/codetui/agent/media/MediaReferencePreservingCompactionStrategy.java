@@ -68,14 +68,17 @@ public final class MediaReferencePreservingCompactionStrategy implements Compact
     @Override
     public CompactionResult compact(CompactionRequest request) {
         CompactionResult r = delegate.compact(request);
-        List<String> lines = harvest(r.archivedEvents());
+        List<String> lines = harvest(r.coveredEvents());
         if (lines.isEmpty()) return r;   // 纯 no-op：没有引用被压掉就什么都不塞，别拿空清单占上下文
-        List<SessionEvent> compacted = new ArrayList<>();
-        compacted.add(manifestEvent(lines, r, request));   // 插在最前，紧邻摘要
-        compacted.addAll(r.compactedEvents());
-        // 计数原样透传：eventsRemoved() 由 archivedEvents 长度算出、tokensEstimatedSaved 是 delegate 的账，
+        // 官方 2.1.0 的 CompactionResult 是 covered/pinned/preserved + summary(List<Message>)：
+        // 清单并入 summary 尾部——toEvents 会把它与摘要一起包装成 synthetic 事件追加，
+        // 落在 preserved 窗口之前，与旧「插在摘要后」的位置语义一致。
+        List<Message> summary = new ArrayList<>(r.summary());
+        summary.add(manifestMessage(lines));
+        // 计数原样透传：coveredEventCount() 由 coveredEvents 长度算出、tokensEstimatedSaved 是 delegate 的账，
         // 这里既没归档也没省 token，改任何一个都是编造。
-        return new CompactionResult(compacted, r.archivedEvents(), r.tokensEstimatedSaved());
+        return new CompactionResult(r.coveredEvents(), r.pinnedEvents(), r.preservedEvents(),
+                List.copyOf(summary), r.tokensEstimatedSaved(), r.strategy());
     }
 
     /** 供装配处/测试穿透装饰链。 */
@@ -205,38 +208,16 @@ public final class MediaReferencePreservingCompactionStrategy implements Compact
     }
 
     /**
-     * 造清单事件。
-     *
-     * <p>sessionId 取自被归档的事件而非 {@code request.session()}：归档事件必然存在（否则不会走到这里），
-     * 且它就是这条清单该归属的会话；builder 的 sessionId 默认是空串，不给会直接断言失败。
+     * 造清单消息（官方 2.1.0 起清单并入 summary，不再自建 SessionEvent——sessionId 与 synthetic
+     * 事件标记都由 {@code CompactionResult.toEvents} 统一落）。
      */
-    private SessionEvent manifestEvent(List<String> lines, CompactionResult r, CompactionRequest request) {
+    private Message manifestMessage(List<String> lines) {
         StringBuilder b = new StringBuilder(MANIFEST_HEADER);
         for (String line : lines) b.append('\n').append(line);
-
-        UserMessage msg = UserMessage.builder()
+        // ★ 标记写在 Message 上：VisionMaterializer.isSynthetic 判的是消息，不是事件。
+        return UserMessage.builder()
                 .text(b.toString())
-                // ★ 标记写在 Message 上：VisionMaterializer.isSynthetic 判的是消息，不是事件。
                 .metadata(Map.of(VisionMaterializer.SYNTHETIC_KEY, true))
                 .build();
-
-        return SessionEvent.builder()
-                .sessionId(sessionId(r, request))
-                .message(msg)
-                // 事件层同样标记，语义与摘要事件对齐（两者都不是用户真说过的话）。
-                .metadata(Map.of(
-                        SessionEvent.METADATA_SYNTHETIC, true,
-                        SessionEvent.METADATA_COMPACTION_SOURCE, "media-reference-manifest",
-                        VisionMaterializer.SYNTHETIC_KEY, true))
-                .build();
-    }
-
-    private String sessionId(CompactionResult r, CompactionRequest request) {
-        for (SessionEvent ev : r.archivedEvents()) {
-            if (ev != null && ev.getSessionId() != null && !ev.getSessionId().isBlank()) {
-                return ev.getSessionId();
-            }
-        }
-        return request != null && request.session() != null ? request.session().id() : "unknown";
     }
 }

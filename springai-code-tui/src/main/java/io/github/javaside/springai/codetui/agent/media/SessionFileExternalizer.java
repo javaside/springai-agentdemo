@@ -40,6 +40,7 @@ public final class SessionFileExternalizer {
         boolean changed = false;
 
         for (SessionEvent ev : events) {
+            if (!ev.hasMessage()) { out.add(ev); continue; }   // 压缩 boundary 等无消息事件：原样保留
             Message m = ev.getMessage();
             if (!(m instanceof ToolResponseMessage trm)) { out.add(ev); continue; }
 
@@ -81,7 +82,7 @@ public final class SessionFileExternalizer {
     private Map<String, String> collectToolCallArgs(List<SessionEvent> events) {
         Map<String, String> map = new HashMap<>();
         for (SessionEvent ev : events) {
-            if (ev.getMessage() instanceof AssistantMessage am && am.hasToolCalls()) {
+            if (ev.hasMessage() && ev.getMessage() instanceof AssistantMessage am && am.hasToolCalls()) {
                 for (AssistantMessage.ToolCall tc : am.getToolCalls()) map.put(tc.id(), tc.arguments());
             }
         }
@@ -145,8 +146,7 @@ public final class SessionFileExternalizer {
     private static SessionEvent withResponses(SessionEvent ev, List<ToolResponseMessage.ToolResponse> kept) {
         SessionEvent.Builder b = SessionEvent.builder()
                 .id(ev.getId()).sessionId(ev.getSessionId()).timestamp(ev.getTimestamp())
-                .message(ToolResponseMessage.builder().responses(kept).build())
-                .branch(ev.getBranch());
+                .message(ToolResponseMessage.builder().responses(kept).build());
         if (ev.getMetadata() != null) b.metadata(ev.getMetadata());
         return b.build();
     }

@@ -151,7 +151,7 @@ public final class BoundedSummarizationCompactionStrategy implements CompactionS
         long total = SessionTokenEstimator.estimateEvents(events, estimator);
         boolean forceByEventCount = maxEventsToKeep > 0 && events.size() > maxEventsToKeep;
         if (!forceByEventCount && total <= targetBudget) {
-            return new CompactionResult(events, List.of(), 0);
+            return CompactionResult.unchanged();   // 官方 2.1.0：无需压缩时返回 unchanged，不产生任何事件
         }
 
         EventSplit split = splitEvents(events, targetBudget);
@@ -180,12 +180,16 @@ public final class BoundedSummarizationCompactionStrategy implements CompactionS
                 MAX_TOTAL_CALLS - callsLeft[0], merged.startsWith("Earlier history was too large"));
 
         List<SessionEvent> compacted = new ArrayList<>(kept.size() + 2);
-        compacted.add(synthetic(request, new UserMessage("[Earlier conversation summary]")));
-        compacted.add(synthetic(request, new AssistantMessage(merged)));
+        compacted.add(syntheticEvent(request.session().id(), new UserMessage("[Earlier conversation summary]")));
+        compacted.add(syntheticEvent(request.session().id(), new AssistantMessage(merged)));
         compacted.addAll(kept);
         int saved = (int) Math.max(0L, Math.min(Integer.MAX_VALUE,
                 total - SessionTokenEstimator.estimateEvents(compacted, estimator)));
-        return new CompactionResult(compacted, archived, saved);
+        // 官方 2.1.0 六参：covered=被摘要替代、pinned 空（本项目无钉住机制）、preserved=保留窗口、
+        // summary=两条消息（toEvents 会包装成 synthetic 事件 + boundary 追加，不再销毁原日志）。
+        // compacted 仅留作 saved 的估算口径（2 条合成消息 + kept），不再作为结果返回。
+        List<Message> summary = List.of(new UserMessage("[Earlier conversation summary]"), new AssistantMessage(merged));
+        return new CompactionResult(archived, List.of(), kept, summary, saved, SUMMARY_SOURCE);
     }
 
     /** 主算法:乐观全量 → 区间学习 → 切块;返回 null 即「走本地兜底」。 */
@@ -389,12 +393,16 @@ public final class BoundedSummarizationCompactionStrategy implements CompactionS
         }
 
         List<SessionEvent> compacted = new ArrayList<>(kept.size() + 2);
-        compacted.add(synthetic(request, new UserMessage("[Earlier conversation summary]")));
-        compacted.add(synthetic(request, new AssistantMessage(merged)));
+        compacted.add(syntheticEvent(request.session().id(), new UserMessage("[Earlier conversation summary]")));
+        compacted.add(syntheticEvent(request.session().id(), new AssistantMessage(merged)));
         compacted.addAll(kept);
         int saved = (int) Math.max(0L, Math.min(Integer.MAX_VALUE,
                 total - SessionTokenEstimator.estimateEvents(compacted, estimator)));
-        return new CompactionResult(compacted, archived, saved);
+        // 官方 2.1.0 六参：covered=被摘要替代、pinned 空（本项目无钉住机制）、preserved=保留窗口、
+        // summary=两条消息（toEvents 会包装成 synthetic 事件 + boundary 追加，不再销毁原日志）。
+        // compacted 仅留作 saved 的估算口径（2 条合成消息 + kept），不再作为结果返回。
+        List<Message> summary = List.of(new UserMessage("[Earlier conversation summary]"), new AssistantMessage(merged));
+        return new CompactionResult(archived, List.of(), kept, summary, saved, SUMMARY_SOURCE);
     }
 
     // ==================== 共用工具 ====================
@@ -446,7 +454,9 @@ public final class BoundedSummarizationCompactionStrategy implements CompactionS
      * 把归档/保留切成孤儿 tool_result,发给模型即报 400(见框架自带 {@code CompactionUtils.snapToTurnStart})。
      */
     private static boolean isTurnStart(SessionEvent event) {
-        return event.isRootEvent() && event.getMessageType() == MessageType.USER;
+        // 官方 2.1.0 起直接用 SessionEvent.isTurnStart()（= MESSAGE 事件 + USER 消息）；
+        // 社区版 0.5.0 的 isRootEvent（branch 判定）随 branch 概念一并移除，单 agent 会话语义等价。
+        return event.isTurnStart();
     }
 
     private List<List<SessionEvent>> chunks(List<SessionEvent> events, long chunkBudget) {
@@ -535,10 +545,6 @@ public final class BoundedSummarizationCompactionStrategy implements CompactionS
             }
         }
         return out.toString();
-    }
-
-    private SessionEvent synthetic(CompactionRequest request, Message message) {
-        return syntheticEvent(request.session().id(), message);
     }
 
     private static SessionEvent syntheticEvent(String sessionId, Message message) {

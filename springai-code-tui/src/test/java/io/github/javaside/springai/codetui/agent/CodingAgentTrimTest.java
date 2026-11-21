@@ -1,5 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
+import io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository;
+import io.github.javaside.springai.codetui.agent.session.RewritableInMemorySessionRepository;
 import io.github.javaside.springai.codetui.agent.session.SessionEvents;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -30,7 +32,7 @@ import io.github.javaside.springai.codetui.agent.seam.StubListener;
  */
 class CodingAgentTrimTest {
 
-    private static CodingAgent agent(SessionService svc, SessionRepository repo, String sid) {
+    private static CodingAgent agent(SessionService svc, HistoryRewritingRepository repo, String sid) {
         return new CodingAgent(null, new StubListener(), sid, new AtomicLong(),
                 svc, null, null, List.of(), null, repo);
     }
@@ -38,7 +40,7 @@ class CodingAgentTrimTest {
     /** 建会话（真实流程里由 SessionMemoryAdvisor.before 创建；测试需手动建，否则 appendMessage 报 Session not found）。 */
     private static SessionService session(SessionRepository repo, String sid) {
         SessionService svc = DefaultSessionService.builder().sessionRepository(repo).build();
-        svc.create(CreateSessionRequest.builder().id(sid).userId("u").build());
+        svc.create(CreateSessionRequest.builder().id(sid).build());
         return svc;
     }
 
@@ -65,7 +67,9 @@ class CodingAgentTrimTest {
     @Test
     void trim_keepsCompletedRound_dropsDanglingToolCall() {
         String sid = "trim-1";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         // 已完成回合：user + assistant 文本
         svc.appendMessage(sid, new UserMessage("q1"));
@@ -84,7 +88,9 @@ class CodingAgentTrimTest {
     @Test
     void cleanPrefixLength_multiTaskPlan_keepsThroughLastCompletedTask() {
         String sid = "trim-2";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         // user, 计划回合, 任务1, 任务2 均已完成（每个 assistant(tool_calls) 都有配对 tool 结果），任务3 悬空
         svc.appendMessage(sid, new UserMessage("做 3 个任务"));   // 0
@@ -106,7 +112,9 @@ class CodingAgentTrimTest {
     @Test
     void cleanPrefixLength_multiId_partialCoverageIsNotClean() {
         String sid = "trim-3";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         svc.appendMessage(sid, new UserMessage("q"));            // 0
         svc.appendMessage(sid, asstCalls("a", "b"));             // 1 一次两个 tool_call
@@ -126,7 +134,9 @@ class CodingAgentTrimTest {
     @Test
     void trim_cleanHistory_isNoOp() {
         String sid = "trim-4";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         svc.appendMessage(sid, new UserMessage("q1"));
         svc.appendMessage(sid, asstCalls("c1"));
@@ -146,7 +156,9 @@ class CodingAgentTrimTest {
         // 层①：上一回合被取消后，迟到的子 agent 写入可能给会话留下坏数据（此处用孤儿 tool 结果模拟）。
         // 活进程会话常驻内存永不重载，若出站不净化，下一条请求（含 /continue）必 400。验证 submit 顶部先净化。
         String sid = "outbound-1";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         svc.appendMessage(sid, new UserMessage("q1"));
         svc.appendMessage(sid, new AssistantMessage("a1"));
@@ -166,7 +178,9 @@ class CodingAgentTrimTest {
         // 下一回合 SessionMemoryAdvisor.before 会无条件再追加新 user → 两条连续 user → DeepSeek 400（模型都没跑）。
         // 故 submit 在发送前把「尾部残留 user」折进出站消息并从会话删除，断开这个 400 循环。
         String sid = "fold-1";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         svc.appendMessage(sid, new UserMessage("q1"));
         svc.appendMessage(sid, new AssistantMessage("a1"));
@@ -182,7 +196,9 @@ class CodingAgentTrimTest {
     @Test
     void submit_noTrailingUser_foldIsNoOp() {
         String sid = "fold-2";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         svc.appendMessage(sid, new UserMessage("q1"));
         svc.appendMessage(sid, new AssistantMessage("done"));   // 尾部是 assistant → 折叠应无操作
@@ -195,7 +211,9 @@ class CodingAgentTrimTest {
     @Test
     void trim_nullRepository_isNoOpAndDoesNotCrash() {
         String sid = "trim-5";
-        InMemorySessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（官方 2.1.0 无改写入口），
+        // 内存场景用测试夹具 RewritableInMemorySessionRepository 补齐整表替换语义。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService svc = session(repo, sid);
         svc.appendMessage(sid, new UserMessage("q"));
         svc.appendMessage(sid, asstCalls("dangling"));

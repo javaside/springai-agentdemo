@@ -12,8 +12,8 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.SessionEvent;
-import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -117,7 +117,7 @@ public final class CodingAgent implements SubmitHandler {
     private final List<SkillInfo> skills;   // 固定技能清单（测试桩用）；生产走 reloadableSkill 实时取
     private final ToolCallback skillTool;   // 被 ToolEventCallback 装饰的 Skill 工具（可空）；手动 /skill 发送前调用它
     private final ReloadableSkillTool reloadableSkill;   // 可空：生产路径的可重载技能源（/reload 命令触发重扫）
-    private final SessionRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel）
+    private final io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository;   // 可空：取消回合时回滚会话到回合前快照（见 submit 的 doOnCancel；用自有扩展接口：官方 2.1.0 无历史改写入口）
     private final SubagentRunner subagentRunner;   // 可空（测试桩）：取消回合时 shutdownNow 在飞并行子 agent + 供 busy 闸门查在飞数
     /**
      * 可空（测试桩/未接线）：自定义子 agent 重载协调者——{@code /reload} 经它重扫六层 agent 目录并喂
@@ -205,7 +205,7 @@ public final class CodingAgent implements SubmitHandler {
     public CodingAgent(ChatClient chatClient, AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills, ToolCallback skillTool,
-                       SessionRepository sessionRepository) {
+                       io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository) {
         this.chatClient = chatClient;
         this.registry = null;
         this.clientsByProvider = null;
@@ -257,7 +257,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill) {
         this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
                 tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, null);
@@ -268,7 +268,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner) {
         this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
                 tokenCountEstimator, skills, skillTool, sessionRepository, reloadableSkill, subagentRunner, null);
@@ -279,7 +279,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer) {
         this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
@@ -292,7 +292,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry) {
         this(registry, clientsByProvider, listener, sessionId, activeTurnId, sessionService, manualStrategy,
@@ -305,7 +305,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine) {
@@ -322,7 +322,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine,
@@ -340,7 +340,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine,
@@ -371,7 +371,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine,
@@ -389,7 +389,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine,
@@ -415,7 +415,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine,
@@ -444,7 +444,7 @@ public final class CodingAgent implements SubmitHandler {
                        AgentListener listener, String sessionId, AtomicLong activeTurnId,
                        SessionService sessionService, CompactionStrategy manualStrategy,
                        TokenCountEstimator tokenCountEstimator, List<SkillInfo> skills,
-                       ToolCallback skillTool, SessionRepository sessionRepository,
+                       ToolCallback skillTool, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                        ReloadableSkillTool reloadableSkill, SubagentRunner subagentRunner,
                        SessionFileExternalizer fileExternalizer, McpRegistry mcpRegistry,
                        PermissionEngine permissionEngine,
@@ -712,7 +712,8 @@ public final class CodingAgent implements SubmitHandler {
                                       java.util.concurrent.atomic.AtomicBoolean resumeFromQuota) {
         trimDanglingToolCalls();
         List<SessionEvent> events = sessionService.getEvents(sid);
-        boolean tailIsUser = !events.isEmpty() && events.get(events.size() - 1).getMessage() instanceof UserMessage;
+        boolean tailIsUser = !events.isEmpty() && events.get(events.size() - 1).hasMessage()
+                && events.get(events.size() - 1).getMessage() instanceof UserMessage;
         ResumeShape shape = tailIsUser ? ResumeShape.FROM_TEXT : ResumeShape.FROM_TOOLS;
         if (shape == ResumeShape.FROM_TEXT) {
             stripTrailingTurnUser(sid);
@@ -770,6 +771,10 @@ public final class CodingAgent implements SubmitHandler {
         List<SessionEvent> kept = new java.util.ArrayList<>(events.size());
         boolean changed = false;
         for (SessionEvent e : events) {
+            if (!e.hasMessage()) {
+                kept.add(e);   // 压缩 boundary 等无消息事件：保留（getMessage 对其抛异常）
+                continue;
+            }
             Message m = e.getMessage();
             if (m instanceof UserMessage um && um.getText() != null && um.getText().isEmpty()) {
                 changed = true;   // 续跑伪影 blank user：丢弃
@@ -1253,7 +1258,7 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public boolean sessionExists(String sessionId) {
         return sessionRepository != null && sessionId != null
-                && sessionRepository.findById(sessionId).isPresent();
+                && sessionRepository.findById(sessionId) != null;
     }
 
     @Override
@@ -1485,7 +1490,7 @@ public final class CodingAgent implements SubmitHandler {
         try {
             listener.onCompactionStarted("manual");
             CompactionResult result = sessionService.compact(sessionId, req -> true, manualStrategy);
-            listener.onCompactionFinished(result.eventsRemoved(), result.tokensEstimatedSaved());
+            listener.onCompactionFinished(result.coveredEventCount(), result.tokensEstimatedSaved());
         } catch (RuntimeException e) {
             listener.onCompactionFailed(String.valueOf(e.getMessage()));
         } catch (Error e) {
@@ -1510,10 +1515,12 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public ContextStats contextStats() {
         String sid = sessionId;   // 快照一次：contextStats 内两读 sessionId，/clear 换 volatile 会致撕裂读（事件按旧会话、消息按新会话）
-        List<SessionEvent> events = sessionService.getEvents(sid);
+        // 官方 2.1.0 append-only：被压缩覆盖的事件永久留在日志，/context 的口径是「下一回合真正会进
+        // prompt 的历史」，必须读活跃视图（与 SessionMemoryAdvisor 注入 prompt 的 filter 同源）。
+        List<SessionEvent> events = sessionService.getEvents(sid, EventFilter.active());
         int user = 0, assistant = 0, tool = 0, other = 0;
-        for (SessionEvent e : events) {
-            MessageType type = e.getMessageType();
+        for (SessionEvent e : events) {   // 官方 2.1.0 的 SessionEvent 无 getMessageType（boundary 等事件无消息），从消息上取
+            MessageType type = e.hasMessage() ? e.getMessage().getMessageType() : null;
             if (type == MessageType.USER) {
                 user++;
             } else if (type == MessageType.ASSISTANT) {
@@ -1526,7 +1533,7 @@ public final class CodingAgent implements SubmitHandler {
         }
         // 分桶与总数出自同一次遍历（buckets.total()），保证 /context 上「总数 == 各分类之和」恒成立。
         SessionTokenEstimator.Buckets buckets =
-                SessionTokenEstimator.estimateMessagesByType(sessionService.getMessages(sid), tokenCountEstimator);
+                SessionTokenEstimator.estimateMessagesByType(sessionService.getActiveMessages(sid), tokenCountEstimator);
         long tokens = buckets.total();
         VisionSnapshot vision = snapshotOf(visionModels, registry);
         TokenUsageAccumulator.Snapshot usage = usageAccumulator == null
@@ -1659,6 +1666,7 @@ public final class CodingAgent implements SubmitHandler {
             return events.size();
         }
         for (int i = events.size() - 1; i >= 0; i--) {
+            if (!events.get(i).hasMessage()) continue;   // 压缩 boundary 无消息，getMessage 抛
             if (events.get(i).getMessage() instanceof org.springframework.ai.chat.messages.ToolResponseMessage trm
                     && trm.getResponses().stream().anyMatch(r -> anchorToolCallId.equals(r.id()))) {
                 return i + 1;

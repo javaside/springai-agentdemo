@@ -12,6 +12,8 @@ import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig;
 import io.github.javaside.springai.codetui.agent.llm.StreamRetryConfig.StreamRetryMode;
 import io.github.javaside.springai.codetui.agent.llm.UsageRecordingChatModel;
 import io.github.javaside.springai.codetui.agent.seam.StubListener;
+import io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository;
+import io.github.javaside.springai.codetui.agent.session.RewritableInMemorySessionRepository;
 import io.github.javaside.springai.codetui.agent.session.TokenUsageAccumulator;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentRunner;
 import io.github.javaside.springai.codetui.agent.subagent.SubagentSpec;
@@ -33,8 +35,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
-import org.springframework.ai.session.InMemorySessionRepository;
-import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
@@ -46,11 +46,9 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -173,7 +171,7 @@ class CodingAgentTurnResumeTest {
     /** 带真实 SessionMemoryAdvisor + Interjecting 装饰层的 ChatClient（interjections 与 CodingAgent 共用同一实例）。 */
     static ChatClient client(ChatModel raw, SessionService sessions, Interjections interjections, Object... tools) {
         ChatClient.Builder b = ChatClient.builder(InterjectingChatModel.wrap(raw, interjections))
-                .defaultAdvisors(SessionMemoryAdvisor.builder(sessions).defaultUserId("u").build());
+                .defaultAdvisors(SessionMemoryAdvisor.builder(sessions).build());   // 官方 2.1.0 Builder 无 defaultUserId
         if (tools.length > 0) {
             b = b.defaultTools(tools);
         }
@@ -181,7 +179,7 @@ class CodingAgentTurnResumeTest {
     }
 
     /** 全参构造（registry + 单 entry clientsByProvider）。runner 可空。 */
-    static CodingAgent agent(SessionService sessions, SessionRepository repo, ChatClient chat,
+    static CodingAgent agent(SessionService sessions, HistoryRewritingRepository repo, ChatClient chat,
                              RecordingListener listener, String sid, AtomicLong turnIds,
                              Interjections interjections, SubagentRunner runner, StreamRetryConfig cfg,
                              TokenUsageAccumulator usage) {
@@ -297,7 +295,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("1 形状①文本断流：续跑轮出站恰一条 user=问题+notice；尾部 user 被删又由 before 重落")
     void case01_fromTextResume() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case01";
         Interjections interjections = new Interjections();
@@ -332,7 +331,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("2 形状①+插话：takeAllForResumeUser 并入同一条 user；Interjecting 早退不产生第二条 user")
     void case02_fromTextWithInterjection() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case02";
         Interjections interjections = new Interjections();
@@ -377,7 +377,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("3 形状②工具循环中断：notice 走 Interjecting 注入，无独立 .user()")
     void case03_fromToolsResume() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case03";
         Interjections interjections = new Interjections();
@@ -415,7 +416,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("4 ①→② 成功：末轮 FROM_TOOLS 产生的 blank user 由 handleComplete 清除")
     void case04_blanksPurgedOnComplete() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case04";
         Interjections interjections = new Interjections();
@@ -448,7 +450,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("5 上限耗尽：错误文案含已自动重试+根因；handleErrorWithRetryPrefix 清 blank")
     void case05_exhaustionUnwrapsAndPurges() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case05";
         Interjections interjections = new Interjections();
@@ -497,7 +500,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("6 白名单外错误不续跑：直接 onError、无 retry 事件")
     void case06_nonWhitelistedNoRetry() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case06";
         Interjections interjections = new Interjections();
@@ -661,7 +665,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("9 同 turnId：断流续跑全程事件带同一 turnId")
     void case09_sameTurnIdAcrossResume() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case09";
         Interjections interjections = new Interjections();
@@ -694,7 +699,8 @@ class CodingAgentTurnResumeTest {
     @DisplayName("10 L2 关闭（L1_ONLY 与 OFF）：SII 不续跑、无 onRetryScheduled")
     void case10_l2Disabled() throws Exception {
         for (StreamRetryMode mode : List.of(StreamRetryMode.L1_ONLY, StreamRetryMode.OFF)) {
-            SessionRepository repo = InMemorySessionRepository.builder().build();
+            // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+            RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
             SessionService sessions = sessions(repo);
             String sid = "case10-" + mode;
             Interjections interjections = new Interjections();
@@ -720,7 +726,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("11 L1 桥：桩模型层 Retrying 的 report 经 onL1Retry → onRetryScheduled(turnId,2,7,1000,reason)")
     void case11_l1BridgeCounts() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case11";
         Interjections interjections = new Interjections();
@@ -768,7 +775,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("12 零重试错误文案干净：onError 不含已自动重试")
     void case12_zeroRetryErrorNoPrefix() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case12";
         Interjections interjections = new Interjections();
@@ -793,7 +801,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("13 ①→② 混变：续跑轮 <system-notice> 恰出现 1 次（来自历史 user 文本），末条非注入条")
     void case13_mixedShapesNoDuplicateNotice() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case13";
         Interjections interjections = new Interjections();
@@ -826,7 +835,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("14 ②→① 边界误判：重放问题、会话含两份问题文本、形状合法、不丢数据")
     void case14_misjudgedBoundaryKeepsData() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case14";
         Interjections interjections = new Interjections();
@@ -849,7 +859,9 @@ class CodingAgentTurnResumeTest {
                 .filter(m -> m instanceof UserMessage)
                 .filter(m -> m.getText() != null && m.getText().startsWith("问题"))
                 .count();
-        assertEquals(2, questions, "重放使会话含两份问题文本（声明的误判行为，不丢数据）");
+        // 2026-11-21 spring-ai 2.1.0 起：重放轮 client.prompt() 不调 .user()，官方 before() 不再
+        // 兜底落库（stores nothing）——误判边界不再产生第二份问题文本，数据不丢（上一份仍在）且更干净。
+        assertEquals(1, questions, "重放轮不再重复落库问题文本；误判路径仍不丢数据（上一份问题在）");
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -858,7 +870,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("15 续跑后新回合卫生：新 submit 首轮出站无 notice")
     void case15_newTurnHygiene() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case15";
         Interjections interjections = new Interjections();
@@ -928,7 +941,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("17 断在首个 tool_call：trim→判定后为①，续跑轮出站恰一条 user 且含 notice")
     void case17_breakAtFirstToolCall() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case17";
         Interjections interjections = new Interjections();
@@ -958,7 +972,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("18 ①→① 连断两轮后成功：会话内 <system-notice> 恰出现 1 次（notice 不叠加）")
     void case18_doubleFromTextNoticeNotStacked() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case18";
         Interjections interjections = new Interjections();
@@ -1000,7 +1015,8 @@ class CodingAgentTurnResumeTest {
     @Test
     @DisplayName("19 L1-only 耗尽：桥路径 6 次 onL1Retry 后终败；onError 含「传输 6 次/续跑 0 次」")
     void case19_l1OnlyExhaustionPrefix() throws Exception {
-        SessionRepository repo = InMemorySessionRepository.builder().build();
+        // CodingAgent 的仓库参数已收紧为 HistoryRewritingRepository（取消回合要整表回滚），内存场景用测试夹具补位。
+        RewritableInMemorySessionRepository repo = new RewritableInMemorySessionRepository();
         SessionService sessions = sessions(repo);
         String sid = "case19";
         Interjections interjections = new Interjections();
@@ -1044,33 +1060,22 @@ class CodingAgentTurnResumeTest {
 
     // ── SessionRepository 包装桩 ───────────────────────────────────────────────
 
-    /** 计数 replaceEvents（dispose 后不再增长的断言载体）。 */
-    static final class CountingRepo implements SessionRepository {
-        final InMemorySessionRepository delegate = InMemorySessionRepository.builder().build();
+    /**
+     * 计数 replaceEvents（dispose 后不再增长的断言载体）。
+     * 基座换成 {@link RewritableInMemorySessionRepository}：官方 2.1.0 的 InMemory 无改写入口，
+     * 整表替换由夹具以 delete→save→appendEvents 重建实现。
+     */
+    static final class CountingRepo extends RewritableInMemorySessionRepository {
         final AtomicLong replaceCount = new AtomicLong();
 
-        @Override public Session save(Session s) { return delegate.save(s); }
-        @Override public Optional<Session> findById(String id) { return delegate.findById(id); }
-        @Override public List<Session> findByUserId(String userId) { return delegate.findByUserId(userId); }
-        @Override public List<String> findExpiredSessionIds(Instant before) { return delegate.findExpiredSessionIds(before); }
-        @Override public void delete(String sessionId) { delegate.delete(sessionId); }
-        @Override public void appendEvent(SessionEvent e) { delegate.appendEvent(e); }
         @Override public void replaceEvents(String sessionId, List<SessionEvent> events) {
             replaceCount.incrementAndGet();
-            delegate.replaceEvents(sessionId, events);
-        }
-        @Override public boolean replaceEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
-            return delegate.replaceEvents(sessionId, events, expectedVersion);
-        }
-        @Override public long getEventVersion(String sessionId) { return delegate.getEventVersion(sessionId); }
-        @Override public List<SessionEvent> findEvents(String sessionId, EventFilter filter) {
-            return delegate.findEvents(sessionId, filter);
+            super.replaceEvents(sessionId, events);
         }
     }
 
     /** arm 后第 gateAt 次 findEvents 卡闸门（Esc 窗口用）。 */
-    static final class GatedRepo implements SessionRepository {
-        final InMemorySessionRepository delegate = InMemorySessionRepository.builder().build();
+    static final class GatedRepo extends RewritableInMemorySessionRepository {
         final int gateAt;
         final AtomicLong sinceArm = new AtomicLong();
         final AtomicBoolean armed = new AtomicBoolean();
@@ -1093,18 +1098,7 @@ class CodingAgentTurnResumeTest {
                     }
                 }
             }
-            return delegate.findEvents(sessionId, filter);
+            return super.findEvents(sessionId, filter);
         }
-        @Override public Session save(Session s) { return delegate.save(s); }
-        @Override public Optional<Session> findById(String id) { return delegate.findById(id); }
-        @Override public List<Session> findByUserId(String userId) { return delegate.findByUserId(userId); }
-        @Override public List<String> findExpiredSessionIds(Instant before) { return delegate.findExpiredSessionIds(before); }
-        @Override public void delete(String sessionId) { delegate.delete(sessionId); }
-        @Override public void appendEvent(SessionEvent e) { delegate.appendEvent(e); }
-        @Override public void replaceEvents(String sessionId, List<SessionEvent> events) { delegate.replaceEvents(sessionId, events); }
-        @Override public boolean replaceEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
-            return delegate.replaceEvents(sessionId, events, expectedVersion);
-        }
-        @Override public long getEventVersion(String sessionId) { return delegate.getEventVersion(sessionId); }
     }
 }

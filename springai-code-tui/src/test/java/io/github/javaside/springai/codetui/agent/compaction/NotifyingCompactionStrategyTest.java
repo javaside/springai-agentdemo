@@ -44,8 +44,9 @@ class NotifyingCompactionStrategyTest {
     @Test
     void success_firesStartedThenFinished_withResultCounts() {
         CapturingListener listener = new CapturingListener();
-        // archivedEvents 为空 → eventsRemoved()==0；tokensEstimatedSaved==1234
-        CompactionResult result = new CompactionResult(List.of(), List.of(), 1234);
+        // archivedEvents 为空 → coveredEventCount()==0；tokensEstimatedSaved==1234。
+        // 官方 2.1.0 六参：旧三参 (compacted, archived, tokens) → covered←archived（空）、preserved←compacted（空）、summary 空。
+        CompactionResult result = new CompactionResult(List.of(), List.of(), List.of(), List.of(), 1234, "test");
         AtomicReference<CompactionRequest> seen = new AtomicReference<>();
         CompactionStrategy spyDelegate = req -> { seen.set(req); return result; };
 
@@ -54,7 +55,7 @@ class NotifyingCompactionStrategyTest {
 
         assertEquals(result, out, "应透传 delegate 的结果");
         assertEquals("manual", listener.startedReason);
-        assertEquals(result.eventsRemoved(), listener.finishedRemoved, "转发 eventsRemoved");
+        assertEquals(result.coveredEventCount(), listener.finishedRemoved, "转发 coveredEventCount");
         assertEquals(1234, listener.finishedSaved, "转发 tokensEstimatedSaved");
         assertNull(listener.failedMessage, "成功路径不应发 failed（与 finished 互斥）");
     }

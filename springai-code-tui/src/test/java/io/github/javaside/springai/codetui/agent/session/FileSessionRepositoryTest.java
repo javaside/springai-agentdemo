@@ -10,6 +10,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 
 import java.io.IOException;
@@ -24,6 +25,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -40,8 +42,10 @@ class FileSessionRepositoryTest {
     }
 
     private static Session session(String sid) {
-        return Session.builder().id(sid).userId("u").createdAt(Instant.now())
-                .expiresAt(Instant.now().plusSeconds(3600)).metadata(Map.of()).build();
+        // 官方 2.1.0 的 Session 无 userId，按索引查询改走 metadata：principalName 是官方约定的归属键。
+        return Session.builder().id(sid).createdAt(Instant.now())
+                .expiresAt(Instant.now().plusSeconds(3600))
+                .metadata(java.util.Map.of(SessionAttributes.PRINCIPAL_NAME, "u")).build();
     }
 
     private static AssistantMessage asstCalls(String... ids) {
@@ -193,21 +197,21 @@ class FileSessionRepositoryTest {
         FileSessionRepository writer = new FileSessionRepository(dir);
         writer.save(session(SID));
         writer.appendEvent(ev(SID, new UserMessage("x")));
-        // 新仓库指向同目录：构造不应预加载任何会话（惰性）——findByUserId 只见已加载的（空）
+        // 新仓库指向同目录：构造不应预加载任何会话（惰性）——findByMetadata 只见已加载的（空）
         FileSessionRepository lazy = new FileSessionRepository(dir);
-        assertTrue(lazy.findByUserId("u").isEmpty(), "构造不 eager load，未访问前 map 为空");
+        assertTrue(lazy.findByMetadata(SessionAttributes.PRINCIPAL_NAME, "u").isEmpty(), "构造不 eager load，未访问前 map 为空");
         // 一旦按 id 访问，才惰性载入
         assertEquals(1, lazy.findEvents(SID, EventFilter.all()).size(), "访问该 id 时才载入");
-        assertFalse(lazy.findByUserId("u").isEmpty(), "载入后可见");
+        assertFalse(lazy.findByMetadata(SessionAttributes.PRINCIPAL_NAME, "u").isEmpty(), "载入后可见");
     }
 
     @Test
     void latestSessionIdPicksNewestByMtime(@TempDir Path dir) throws Exception {
         assertTrue(FileSessionRepository.latestSessionId(dir).isEmpty(), "空目录无最近会话");
         FileSessionRepository repo = new FileSessionRepository(dir);
-        repo.save(Session.builder().id("s-old").userId("u").createdAt(Instant.now()).metadata(Map.of()).build());
+        repo.save(Session.builder().id("s-old").createdAt(Instant.now()).metadata(Map.of()).build());
         repo.appendEvent(ev("s-old", new UserMessage("旧")));
-        repo.save(Session.builder().id("s-new").userId("u").createdAt(Instant.now()).metadata(Map.of()).build());
+        repo.save(Session.builder().id("s-new").createdAt(Instant.now()).metadata(Map.of()).build());
         repo.appendEvent(ev("s-new", new UserMessage("新")));
         // 显式设置 mtime，避免同毫秒下不确定
         Files.setLastModifiedTime(dir.resolve("s-old.json"), FileTime.fromMillis(1_000_000L));
@@ -216,6 +220,65 @@ class FileSessionRepositoryTest {
     }
 
     // ── fork（/resume 面板 f 键与 /fork 命令的仓库侧实现）────────────────────
+
+    @Test
+    void boundaryEventRoundTripsAcrossReopen(@TempDir Path dir) {
+        FileSessionRepository repo = new FileSessionRepository(dir);
+        repo.save(session(SID));
+        // 官方 2.1.0 压缩 boundary：COMPACTION 类型 + payload、无消息。落盘/重载必须完整往返。
+        SessionEvent boundary = SessionEvent.builder()
+                .sessionId(SID)
+                .type(org.springframework.ai.session.EventType.COMPACTION)
+                .payload(Map.of("coveredEventCount", 3, "strategy", "test"))
+                .build();
+        repo.appendEvent(boundary);
+
+        FileSessionRepository reopened = new FileSessionRepository(dir);
+        List<SessionEvent> all = reopened.findEvents(SID, EventFilter.all());
+        assertEquals(1, all.size(), "boundary 事件应完整读回");
+        assertEquals(org.springframework.ai.session.EventType.COMPACTION, all.get(0).getType());
+        assertEquals(3, all.get(0).getPayload().get("coveredEventCount"), "payload 应无损往返");
+    }
+
+    @Test
+    void compactedSessionSurvivesSanitizeAndReopen(@TempDir Path dir) {
+        FileSessionRepository repo = new FileSessionRepository(dir);
+        org.springframework.ai.session.SessionService svc =
+                org.springframework.ai.session.DefaultSessionService.builder()
+                        .sessionRepository(repo).build();
+        repo.save(session(SID));
+        for (int i = 1; i <= 6; i++) {
+            repo.appendEvent(ev(SID, new UserMessage("m" + i)));
+        }
+        org.springframework.ai.session.compaction.CompactionStrategy strategy = req -> new org.springframework.ai.session.compaction.CompactionResult(
+                req.events().subList(0, 3), List.of(), req.events().subList(3, req.events().size()),
+                List.of(new AssistantMessage("summary")), 100, "test");
+        svc.compact(SID, req -> true, strategy);
+
+        // 红点①：整日志含 boundary，sanitize（加载即净化的路径）不得抛 getMessage 的 IllegalStateException。
+        List<SessionEvent> sanitized = SessionEvents.sanitize(repo.findEvents(SID, EventFilter.all()));
+        // sanitize 的契约是净化+折叠（连续 user 合并），事件数会变；关键断言是 boundary 透传、内容不丢。
+        assertTrue(sanitized.stream().anyMatch(
+                        e -> e.getType() == org.springframework.ai.session.EventType.COMPACTION),
+                "boundary 事件应被 sanitize 原样透传");
+        assertTrue(sanitized.stream().anyMatch(
+                        e -> e.hasMessage() && "summary".equals(e.getMessage().getText())),
+                "summary 事件应在 sanitize 后存活");
+        // 含 boundary 的日志跳过折叠（id 是活跃视图的寻址依据），m1..m6 应各自原样保留。
+        for (int i = 1; i <= 6; i++) {
+            String expect = "m" + i;
+            assertTrue(sanitized.stream().anyMatch(
+                            e -> e.hasMessage() && expect.equals(e.getMessage().getText())),
+                    "user 消息 " + expect + " 应原样保留（跳过折叠，id 不丢）");
+        }
+
+        // 红点②：重开（模拟重启 -c）不得把落了 boundary 的会话文件当损坏丢弃。
+        FileSessionRepository reopened = new FileSessionRepository(dir);
+        assertNotNull(reopened.findById(SID), "压缩后的会话文件必须能重载（不被当坏文件跳过）");
+        List<SessionEvent> active = reopened.findEvents(SID, EventFilter.active());
+        assertEquals(4, active.size(), "活跃视图 = summary + 后 3 条");
+        assertTrue(active.stream().anyMatch(e -> e.hasMessage() && "summary".equals(e.getMessage().getText())));
+    }
 
     @Test
     void forkCopiesEventsToNewId_andSourceUntouched(@TempDir Path dir) {

@@ -60,13 +60,17 @@ class MediaReferencePreservingCompactionStrategyTest {
     }
 
     /** 假 delegate：原样吐出给定的压缩结果，不碰 LLM。 */
-    private static CompactionStrategy delegateReturning(List<SessionEvent> compacted, List<SessionEvent> archived) {
-        CompactionResult r = new CompactionResult(compacted, archived, 4321);
+    private static CompactionStrategy delegateReturning(List<SessionEvent> summaryEvents, List<SessionEvent> archived) {
+        // 官方 2.1.0 语义化映射：本组用例给第一个参数装的一直是合成摘要事件 → 分离进 summary()
+        // （取其 Message）；被归档事件 → coveredEvents；preserved 空（本组用例不关注保留窗口）。
+        CompactionResult r = new CompactionResult(archived, List.of(), List.of(),
+                summaryEvents.stream().map(SessionEvent::getMessage).toList(), 4321, "test");
         return req -> r;
     }
 
     private static String manifestText(CompactionResult out) {
-        return out.compactedEvents().get(0).getMessage().getText();
+        // 官方 2.1.0：清单并入 summary() 尾部（manifestMessage 追加在 delegate 摘要之后），取末条。
+        return out.summary().get(out.summary().size() - 1).getText();
     }
 
     /**
@@ -77,7 +81,7 @@ class MediaReferencePreservingCompactionStrategyTest {
      * 看着像被杀掉了，其实没有一条断言真的验证了内容。全给真请求，每一次变红都是内容变红。
      */
     private static CompactionRequest request(SessionEvent... allEvents) {
-        Session session = Session.builder().id(SESSION_ID).userId("u").build();
+        Session session = Session.builder().id(SESSION_ID).build();
         return CompactionRequest.of(session, List.of(allEvents));
     }
 
@@ -93,7 +97,7 @@ class MediaReferencePreservingCompactionStrategyTest {
 
         CompactionResult out = s.compact(request());
 
-        assertEquals(2, out.compactedEvents().size(), "清单应插在摘要之前");
+        assertEquals(2, out.summary().size(), "清单应追加在摘要之后");
         String text = manifestText(out);
         assertTrue(text.startsWith(MediaReferencePreservingCompactionStrategy.MANIFEST_HEADER),
                 "首行应是清单抬头，实际：" + text);
@@ -101,7 +105,7 @@ class MediaReferencePreservingCompactionStrategyTest {
         assertTrue(text.contains(".codetui/artifacts/b7e2f1a0.png"),
                 "path 是唯一寻址依据，必须逐字保留，实际：" + text);
         assertTrue(text.contains("image/png") && text.contains("1440x900"), "应带类型与尺寸：" + text);
-        assertSame(summary, out.compactedEvents().get(1), "摘要事件本身不应被改动");
+        assertSame(summary.getMessage(), out.summary().get(0), "摘要消息本身不应被改动（装饰器只复制列表不动元素）");
         assertEquals(4321, out.tokensEstimatedSaved(), "delegate 的 token 账应原样透传");
     }
 
@@ -112,7 +116,7 @@ class MediaReferencePreservingCompactionStrategyTest {
                 List.of(user(ref("a3f8c200", "login.png", ".codetui/artifacts/a3f8c200.png",
                         "image/png", 800, 600)))));
 
-        Message manifest = s.compact(request()).compactedEvents().get(0).getMessage();
+        Message manifest = s.compact(request()).summary().get(1);
 
         // 不带标记的话，这条新造的 user 消息会成为「最后一条非合成 UserMessage」，把出站兑现的回合锚点带偏。
         assertTrue(VisionMaterializer.isSynthetic(manifest), "清单消息必须带 synthetic 标记");
@@ -125,14 +129,14 @@ class MediaReferencePreservingCompactionStrategyTest {
         SessionEvent alive = user("刚贴的\n" + ref("c0ffee00", "fresh.png",
                 ".codetui/artifacts/c0ffee00.png", "image/png", 100, 100));
         CompactionResult inner = new CompactionResult(
-                List.of(summary, alive), List.of(user("你好"), assistant("好的")), 4321);
+                List.of(user("你好"), assistant("好的")), List.of(), List.of(summary, alive), List.of(), 4321, "test");
         CompactionStrategy s = new MediaReferencePreservingCompactionStrategy(req -> inner);
 
         CompactionResult out = s.compact(request(summary, alive, user("你好"), assistant("好的")));
 
         assertSame(inner, out, "无引用被压掉时应原样返回 delegate 的结果（纯 no-op，连新 record 都不该造）");
-        assertEquals(2, out.compactedEvents().size(), "不应插任何事件");
-        assertSame(summary, out.compactedEvents().get(0), "compactedEvents 应原样保留");
+        assertEquals(2, out.preservedEvents().size(), "不应插任何事件");
+        assertSame(summary, out.preservedEvents().get(0), "preservedEvents 应原样保留");
     }
 
     @Test
@@ -201,7 +205,7 @@ class MediaReferencePreservingCompactionStrategyTest {
 
         CompactionResult out = s.compact(request());
 
-        assertEquals(1, out.compactedEvents().size(), "assistant 里的引用不该触发清单，实际：" + out.compactedEvents());
+        assertEquals(1, out.summary().size(), "assistant 里的引用不该触发清单，实际：" + out.summary());
     }
 
     @Test

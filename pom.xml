@@ -68,14 +68,13 @@
         <java.version>17</java.version>
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- 2.0.1 修了「Reactor 取消不关闭底层流」（2.0.0 取消后连接仍占用，重试会叠加）；
-             同时按 index 合并工具调用分片。升级需同步：springai-code-tui 里两个强绑定的 SDK client 版本。 -->
-        <spring-ai.version>2.0.1</spring-ai.version>
-        <spring-boot.version>4.0.7</spring-boot.version>
-        <!-- 社区项目 spring-ai-agent-utils（提供 SkillsTool 等），针对 Spring AI 2.0 -->
-        <spring-ai-agent-utils.version>0.13.0</spring-ai-agent-utils.version>
-        <!-- 社区项目 spring-ai-session：事件溯源会话记忆 + 回合/token 感知压缩，替代滑窗记忆 -->
-        <spring-ai-session.version>0.5.0</spring-ai-session.version>
+        <!-- 2.1.0 关键变化：消息 parts 重构（流式 chunk text 永不为 null）、DeepSeek 流式改走
+             chatCompletionStreamRaw、session 模块收编官方、ChatMemory 进入废弃期（3.0 移除）。
+             升级需同步：springai-code-tui 里两个强绑定的 SDK client 版本。 -->
+        <spring-ai.version>2.1.0</spring-ai.version>
+        <spring-boot.version>4.2.0</spring-boot.version>
+        <!-- 社区项目 spring-ai-agent-utils（提供 SkillsTool 等），0.14.0 起要求 Spring AI 2.1 + Boot 4.2 -->
+        <spring-ai-agent-utils.version>0.14.0</spring-ai-agent-utils.version>
         <jline.version>3.30.13</jline.version>
         <!-- TamboUI（Java TUI，仿 ratatui）；group dev.tamboui，实测有 tamboui-bom -->
         <tamboui.version>0.4.0</tamboui.version>
@@ -99,14 +98,9 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <!-- spring-ai-session 版本统一管理（org.springaicommunity:spring-ai-session-bom，最新 0.5.0） -->
-            <dependency>
-                <groupId>org.springaicommunity</groupId>
-                <artifactId>spring-ai-session-bom</artifactId>
-                <version>${spring-ai-session.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
+            <!-- 会话记忆用 spring-ai 2.1.0 官方收编的 session 模块（spring-ai-bom 管理版本），
+                 坐标见 springai-code-tui/pom.xml：spring-ai-session + spring-ai-session-advisor。
+                 社区版 org.springaicommunity:spring-ai-session-bom 同包名，共存会类路径双胞，已移除。 -->
             <!-- TamboUI 版本统一管理（实测：dev.tamboui:tamboui-bom 存在，版本 0.2.0/0.3.0/0.4.0） -->
             <dependency>
                 <groupId>dev.tamboui</groupId>
