@@ -77,7 +77,7 @@
         <spring-ai-agent-utils.version>0.14.0</spring-ai-agent-utils.version>
         <jline.version>3.30.17</jline.version>
         <!-- TamboUI（Java TUI，仿 ratatui）；group dev.tamboui，实测有 tamboui-bom -->
-        <tamboui.version>0.4.0</tamboui.version>
+        <tamboui.version>0.7.0</tamboui.version>
     </properties>
 
     <dependencyManagement>
@@ -101,7 +101,7 @@
             <!-- 会话记忆用 spring-ai 2.1.0 官方收编的 session 模块（spring-ai-bom 管理版本），
                  坐标见 springai-code-tui/pom.xml：spring-ai-session + spring-ai-session-advisor。
                  社区版 org.springaicommunity:spring-ai-session-bom 同包名，共存会类路径双胞，已移除。 -->
-            <!-- TamboUI 版本统一管理（实测：dev.tamboui:tamboui-bom 存在，版本 0.2.0/0.3.0/0.4.0） -->
+            <!-- TamboUI 版本统一管理（实测：dev.tamboui:tamboui-bom 存在（0.7.0 在用）） -->
             <dependency>
                 <groupId>dev.tamboui</groupId>
                 <artifactId>tamboui-bom</artifactId>

@@ -4,27 +4,23 @@
  */
 /*
  * ═══════════════════════════════════════════════════════════════════════════
- * SHADOW 类（springai-tamboui-inline-patch）：本文件是 tamboui-core 0.4.0
- * dev.tamboui.buffer.Buffer 的整类复制 + setString/withLines 的组合序列宽度
- * 修正。运行期靠本模块 jar 在 classpath 上排在 tamboui-core 之前优先加载
- * （同 InlineTuiRunner shadow 机制，见本模块 pom 注释）。
+ * SHADOW 类（springai-tamboui-inline-patch）：本文件是 tamboui-core 0.7.0
+ * dev.tamboui.buffer.Buffer 的整类复制（2026-11-21 rebase，diff 走 0.7 的
+ * run-based DiffResult 协议）+ setString/withLines 的组合序列宽度修正。
+ * 运行期靠本模块 jar 在 classpath 上排在 tamboui-core 之前优先加载。
  *
- * 相对 0.4.0 原版的差异（升级 tamboui 时须重新 diff 对齐）：
+ * 相对 0.7.0 原版的差异（升级 tamboui 时须重新 diff 对齐）：
  * 1. setString：keycap（[0-9#*] FE0F? 20E3）组合按终端实际渲染 2 列布格
- *    （base cell + CONTINUATION，照抄 Regional Indicator flag 模式）——原版把
- *    FE0F/20E3 当零宽拼进 base cell，整序列按 1 列布格，终端画 2 列，行内后续
- *    cell 全部错位（2026-10-09 输入框错位 + Terminal.app SIGBUS 崩溃事故，见
- *    TerminalWidth 类注释与仓库 spec 文档）。「文本符号+VS16」曾同期按 2 列布格，
- *    2026-10-09 DSR 实测回调为 1 列（VS16 走零宽路径并入 base cell symbol）。
- * 2. setString：C1 控制字符（U+0080–U+009F）与 C0/DEL 同样替换为空格显示——
- *    原样写给终端会被解释为控制码（U+009B=CSI 吞后续字符、U+0085=NEL 挪光标），
- *    破坏差分绘制。仅影响显示 cell，调用方存储/发送的原文不变。
+ *    （base cell + CONTINUATION）。原版把 FE0F/20E3 当零宽拼进 base cell，
+ *    整序列按 1 列布格而终端画 2 列，行内后续 cell 全部错位（2026-10-09
+ *    输入框错位 + Terminal.app SIGBUS 崩溃事故）。「文本符号+VS16」2026-10-09
+ *    DSR 实测回调为 1 列（VS16 走零宽路径并入 base cell symbol）。
+ * 2. setString：C1 控制字符（U+0080–U+009F）与 C0/DEL 同样替换为空格显示
+ *    （原样写终端会被解释为控制码）。仅影响显示 cell，存储/发送原文不变。
  * 3. withLines：总宽换 TerminalWidth.of（与 setString 布格同口径）。
- * 4. setString：删 ZWJ 拼格机制（原版 appendToLast：ZWJ 后一码点拼进前 cell）。
- *    Terminal.app TTBuffer 不做 ZWJ 字形合并记账（2026-10-11 DSR 实测
- *    `👨ZWJ👩`=5 列 = 2+1+2），拼格是虚构口径；现 ZWJ 由 shadow CharWidth
- *    记 1 列、走常规独立布格路径。宽度表同轮修正见 CharWidth 文件头
- *    （Cf 格式字符 ZWSP/ZWNJ/软连字符等 0→1 列，抖音 ZWNJ 粘贴事故）。
+ * 4. setString：删 ZWJ 拼格机制（Terminal.app TTBuffer 无 ZWJ 合并记账，
+ *    `👨ZWJ👩`=5 列 DSR 实测；ZWJ 由 shadow CharWidth 记 1 列独立布格）。
+ * 5. setString javadoc 的布格语义列表按上述 shadow 口径维护（勿回抄上游）。
  * ═══════════════════════════════════════════════════════════════════════════
  */
 package dev.tamboui.buffer;
@@ -51,6 +47,15 @@ public final class Buffer {
 
     // Pre-allocated single-char strings for ASCII codepoints to avoid repeated allocation
     private static final String[] ASCII_STRINGS = new String[128];
+    // Lazily interned symbols for U+2500..U+28FF (box drawing, block elements, geometric shapes,
+    // misc symbols, braille): the glyphs borders, sparklines and canvases emit every frame.
+    // Sharing the instance lets String.equals() exit on identity in Buffer.diff().
+    private static final int GLYPH_BASE = 0x2500;
+    private static final String[] GLYPH_STRINGS = new String[0x2900 - GLYPH_BASE];
+    // No character below U+1100 (the first Hangul Jamo) is wide: a one-char symbol below it
+    // can't be half of a wide character, which keeps set() cheap for the common case.
+    private static final int FIRST_WIDE_CODE_POINT = 0x1100;
+
     static {
         for (int i = 0; i < 128; i++) {
             ASCII_STRINGS[i] = String.valueOf((char) i);
@@ -64,6 +69,29 @@ public final class Buffer {
     private Buffer(Rect area, Cell[] content) {
         this.area = area;
         this.content = content;
+    }
+
+    /**
+     * Returns the shared {@link String} for a code point, so that cells holding the same glyph
+     * share one instance and {@link String#equals} can exit on identity when buffers are diffed.
+     *
+     * @param codePoint the code point to render
+     * @return the symbol for that code point
+     */
+    private static String symbolFor(int codePoint) {
+        if (codePoint < 128) {
+            return ASCII_STRINGS[codePoint];
+        }
+        int idx = codePoint - GLYPH_BASE;
+        if (idx >= 0 && idx < GLYPH_STRINGS.length) {
+            String s = GLYPH_STRINGS[idx];
+            if (s == null) {
+                s = String.valueOf((char) codePoint);
+                GLYPH_STRINGS[idx] = s; // benign race: equal immutable values
+            }
+            return s;
+        }
+        return new String(Character.toChars(codePoint));
     }
 
     /**
@@ -106,12 +134,10 @@ public final class Buffer {
         }
 
         // Find the maximum display width
-        // SHADOW: 总宽换 TerminalWidth（keycap/VS16 组合按 2 列），与 setString
-        // 布格同口径——否则 withLines 造出的 Buffer 面积比内容实际占位小 1 列/组合。
         int maxWidth = 0;
         for (String line : lines) {
             if (line != null) {
-                int width = TerminalWidth.of(line);
+                int width = TerminalWidth.of(line);   // SHADOW: withLines 总宽用组合序列宽度真相源
                 maxWidth = Math.max(maxWidth, width);
             }
         }
@@ -196,6 +222,9 @@ public final class Buffer {
 
     /**
      * Sets the cell at the given position.
+     * <p>
+     * A wide character that loses one of its two cells to this write is replaced by a space,
+     * so its other half does not stay behind.
      *
      * @param x the x coordinate
      * @param y the y coordinate
@@ -203,8 +232,55 @@ public final class Buffer {
      */
     public void set(int x, int y, Cell cell) {
         if (area.contains(x, y)) {
-            content[index(x, y)] = cell;
+            int i = index(x, y);
+            Cell old = content[i];
+            content[i] = cell;
+            if (old != cell) {
+                keepWideCharsWhole(i, x, old, cell);
+            }
         }
+    }
+
+    /**
+     * Repairs the wide character that the cell at index {@code i} (column {@code x}) was half
+     * of, now that it changed from {@code old} to {@code cell}.
+     * <p>
+     * A wide character takes two cells, the second a {@link Cell#CONTINUATION}. Backends skip
+     * continuation cells and let the wide character advance the cursor by two, so a
+     * continuation without its wide character, or a wide character without its continuation,
+     * shifts the rest of the row by a column on screen and leaves stale glyphs behind. The
+     * half that is left is turned into a space with its style kept.
+     */
+    private void keepWideCharsWhole(int i, int x, Cell old, Cell cell) {
+        // Assumes a cell is at most 2 columns wide (CharWidth caps a cluster at 2), so a wide
+        // character has exactly one continuation. length() counts chars, not columns: 5 for a ZWJ emoji.
+        String oldSymbol = old.symbol();
+        int length = oldSymbol.length();
+        if (length == 0) {
+            // Was the right half of the wide character to the left, unless it stays one.
+            if (!cell.isContinuation() && x > area.left()) {
+                Cell wide = content[i - 1];
+                if (!wide.isContinuation()) {
+                    content[i - 1] = new Cell(" ", wide.style());
+                }
+            }
+        } else if ((length > 1 || oldSymbol.charAt(0) >= FIRST_WIDE_CODE_POINT) && x + 1 < area.right()
+                && content[i + 1].isContinuation() && !coversTwoCells(cell, oldSymbol)) {
+            // Was a wide character, and the new cell no longer covers its right half.
+            content[i + 1] = new Cell(" ", old.style());
+        }
+    }
+
+    /**
+     * Returns whether {@code cell}, written over a wide character with {@code oldSymbol}, is
+     * itself a wide character, so the caller keeps the continuation cell after it.
+     */
+    private static boolean coversTwoCells(Cell cell, String oldSymbol) {
+        String symbol = cell.symbol();
+        if (symbol.isEmpty()) {
+            return false;
+        }
+        return symbol.equals(oldSymbol) || CharWidth.of(symbol) == 2;
     }
 
     /**
@@ -225,9 +301,13 @@ public final class Buffer {
      * preserving background colors and other style attributes that were previously set.
      * This matches the behavior of ratatui.rs.
      * <p>
-     * Handles grapheme clusters correctly:
+     * SHADOW 布格语义（异于上游 0.7 原文，见文件头差异清单）：
      * <ul>
-     *   <li>ZWJ: SHADOW 独立 1 列布格（2026-10-11 去粘合，见文件头差异清单）</li>
+     *   <li>keycap（[0-9#*] FE0F? 20E3）：2 列布格（base + continuation）</li>
+     *   <li>组合序列整体宽度走 {@link TerminalWidth}（combiningSequenceLength 切分）</li>
+     *   <li>VS16 零宽并入 base cell symbol（1 列）</li>
+     *   <li>ZWJ 独立 1 列（不拼格）</li>
+     *   <li>C1 控制字符（U+0080–U+009F）替换为空格显示</li>
      *   <li>Regional Indicator pairs: combined into a single 2-wide cell</li>
      *   <li>Skin tone modifiers: appended to preceding cell (zero-width)</li>
      * </ul>
@@ -346,7 +426,7 @@ public final class Buffer {
             String symbol = (codePoint < 0x20 || codePoint == 0x7F
                     || (codePoint >= 0x80 && codePoint <= 0x9F))
                     ? " "
-                    : codePoint < 128 ? ASCII_STRINGS[codePoint] : new String(Character.toChars(codePoint));
+                    : symbolFor(codePoint);   // SHADOW→0.7：glyph 驻留（U+2500-28FF 复用实例），diff 的 equals 恒等快路径依赖它
 
             if (charWidth == 2 && col + 1 >= area.right()) {
                 // Wide char at rightmost column: no room for continuation, replace with space
@@ -397,25 +477,6 @@ public final class Buffer {
      * Looks backward from col-1 to find the first non-continuation cell.
      * Returns -1 if no base cell found within the area.
      */
-    private int findBaseCell(int col, int y) {
-        int searchCol = col - 1;
-        while (searchCol >= area.left()) {
-            Cell cell = get(searchCol, y);
-            if (!cell.isContinuation()) {
-                return searchCol;
-            }
-            searchCol--;
-        }
-        return -1;
-    }
-
-    /**
-     * Returns true if the code point is a Regional Indicator symbol (U+1F1E6-U+1F1FF).
-     */
-    private static boolean isRegionalIndicator(int codePoint) {
-        return codePoint >= 0x1F1E6 && codePoint <= 0x1F1FF;
-    }
-
     /**
      * SHADOW 新增：从 {@code string[i]} 起若是「终端按 2 列渲染的多码点组合」
      * （当前仅 keycap：{@code [0-9#*] FE0F? 20E3}），返回序列 char 长度；否则返回 0。
@@ -442,6 +503,25 @@ public final class Buffer {
             }
         }
         return 0;
+    }
+
+    private int findBaseCell(int col, int y) {
+        int searchCol = col - 1;
+        while (searchCol >= area.left()) {
+            Cell cell = get(searchCol, y);
+            if (!cell.isContinuation()) {
+                return searchCol;
+            }
+            searchCol--;
+        }
+        return -1;
+    }
+
+    /**
+     * Returns true if the code point is a Regional Indicator symbol (U+1F1E6-U+1F1FF).
+     */
+    private static boolean isRegionalIndicator(int codePoint) {
+        return codePoint >= 0x1F1E6 && codePoint <= 0x1F1FF;
     }
 
     /**
@@ -491,12 +571,53 @@ public final class Buffer {
     }
 
     /**
+     * Sets a line at the given position, cut to at most {@code maxWidth} display columns.
+     * <p>
+     * {@link #setLine(int, int, Line)} only stops at the edge of the buffer; this variant keeps the line within a
+     * widget's area, so that it does not draw over the widget's border or the widgets next to it. The line is cut by
+     * display width, keeping the style of each span, and a wide character that does not fit whole is left out.
+     *
+     * @param x the x coordinate
+     * @param y the y coordinate
+     * @param line the line to set
+     * @param maxWidth the maximum number of columns to write
+     * @return the x position after the last character written
+     */
+    public int setLine(int x, int y, Line line, int maxWidth) {
+        int col = x;
+        int remaining = maxWidth;
+        List<Span> spans = line.spans();
+        for (int i = 0; i < spans.size() && remaining > 0; i++) {
+            Span span = spans.get(i);
+            int spanWidth = CharWidth.of(span.content());
+            if (spanWidth <= remaining) {
+                col = setSpan(col, y, span);
+                remaining -= spanWidth;
+            } else {
+                String clipped = CharWidth.substringByWidth(span.content(), remaining);
+                if (!clipped.isEmpty()) {
+                    col = setSpan(col, y, new Span(clipped, span.style()));
+                }
+                break;
+            }
+        }
+        return col;
+    }
+
+    /**
      * Sets the style for all cells in the given area.
      *
      * @param area the area to set the style for
      * @param style the style to apply
      */
     public void setStyle(Rect area, Style style) {
+        if (Style.EMPTY.equals(style)) {
+            // An empty patch reproduces every field of the cell's own style, so patchStyle
+            // returns the identical Cell for every position: the whole pass cannot change the
+            // buffer. Widgets fill their background this way on every frame, so skipping it
+            // saves a pass over the widget's entire area.
+            return;
+        }
         Rect intersection = this.area.intersection(area);
         if (intersection.isEmpty()) {
             return;
@@ -575,33 +696,55 @@ public final class Buffer {
     }
 
     /**
-     * Calculates the differences between this buffer and another using a
-     * Data-Oriented Design approach with parallel arrays.
+     * Calculates the differences between this buffer and another as runs of
+     * horizontally adjacent changed cells (see {@link DiffResult}). The result
+     * references {@code other}'s cells directly; nothing is allocated per frame.
      * <p>
-     * The output {@link DiffResult} is <b>not cleared</b> before writing - the
-     * caller must call {@link DiffResult#clear()} after the result is no longer needed.
+     * Any previous content of {@code out} is discarded. The caller must still call
+     * {@link DiffResult#clear()} once the result has been drawn, to release the reference
+     * this method takes to {@code other}'s cells.
      *
      * @param other the buffer to compare with
-     * @param out the diff result to append updates to (not cleared by this method)
+     * @param out the diff result to write the runs into
      * @see DiffResult
      */
     public void diff(Buffer other, DiffResult out) {
+        out.bind(other.content, other.area);
+        int width = other.area.width();
+        int height = other.area.height();
+
         if (!this.area.equals(other.area)) {
-            for (int y = other.area.top(); y < other.area.bottom(); y++) {
-                for (int x = other.area.left(); x < other.area.right(); x++) {
-                    out.add(x, y, other.get(x, y));
-                }
+            // Area changed: every cell is dirty, one run per row. A zero-width target has
+            // nothing to draw, and an empty run would make xOf/yOf divide by the width.
+            if (width == 0) {
+                return;
+            }
+            for (int y = 0; y < height; y++) {
+                out.addRun(y * width, width);
             }
             return;
         }
 
-        for (int i = 0; i < content.length; i++) {
-            Cell thisCell = content[i];
-            Cell otherCell = other.content[i];
-            if (thisCell != otherCell && !thisCell.equals(otherCell)) {
-                int x = area.x() + (i % area.width());
-                int y = area.y() + (i / area.width());
-                out.add(x, y, otherCell);
+        Cell[] a = content;
+        Cell[] b = other.content;
+        for (int y = 0; y < height; y++) {
+            int rowStart = y * width;
+            int rowEnd = rowStart + width;
+            int runStart = -1;
+            for (int i = rowStart; i < rowEnd; i++) {
+                Cell thisCell = a[i];
+                Cell otherCell = b[i];
+                if (thisCell != otherCell && !thisCell.equals(otherCell)) {
+                    if (runStart < 0) {
+                        runStart = i;
+                    }
+                } else if (runStart >= 0) {
+                    out.addRun(runStart, i - runStart);
+                    runStart = -1;
+                }
+            }
+            if (runStart >= 0) {
+                out.addRun(runStart, rowEnd - runStart);
             }
         }
     }

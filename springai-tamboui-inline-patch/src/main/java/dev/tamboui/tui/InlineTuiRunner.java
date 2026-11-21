@@ -37,7 +37,10 @@ import dev.tamboui.tui.event.UiRunnable;
 /**
  * Event loop for inline displays.
  *
- * <p>本类是 {@code dev.tamboui:tamboui-tui:0.4.0} 的<b>同包同名 shadow（覆盖）类</b>，
+ * <p>本类是 {@code dev.tamboui:tamboui-tui:0.7.0} 的<b>同包同名 shadow（覆盖）类</b>
+ * （0.7 rebase 于 2026-11-21，采取<b>最小 rebase</b>：仅吸收 TickEvent.of(long) 等 API 破坏；
+ * Kitty keyboard protocol / TickTimer / windowTitle 刻意不吸收，事件循环与防卡死定制
+ * 保持 0.4 基线，取舍见 docs/superpowers/specs/2026-11-21-tamboui-0.7-upgrade-design.md），
  * 由 {@code springai-tamboui-inline-patch} 模块通过 classpath 顺序（该模块 jar 排在
  * {@code tamboui-tui} 之前，见 {@code springai-code-tui} 的 MANIFEST Class-Path）优先加载。
  *
@@ -86,7 +89,6 @@ public final class InlineTuiRunner implements AutoCloseable {
     private final boolean schedulerOwned;
     private final AtomicLong frameCount;
     private final Thread shutdownHook;
-    private final AtomicReference<Instant> lastTick;
     private final AtomicReference<Instant> nextTickTime;
     private final AtomicReference<Size> lastSize;
     private final TerminalInputReader inputReader;
@@ -120,7 +122,6 @@ public final class InlineTuiRunner implements AutoCloseable {
         this.running = new AtomicBoolean(true);
         this.cleanedUp = new AtomicBoolean(false);
         this.frameCount = new AtomicLong(0);
-        this.lastTick = new AtomicReference<>(Instant.now());
         this.nextTickTime = new AtomicReference<>(
                 config.tickRate() != null ? Instant.now().plus(config.tickRate()) : null);
         this.lastSize = new AtomicReference<>(readCurrentSize(backend));
@@ -651,13 +652,12 @@ public final class InlineTuiRunner implements AutoCloseable {
             Instant targetTime = nextTickTime.get();
 
             if (targetTime != null && !now.isBefore(targetTime)) {
-                Instant previous = lastTick.getAndSet(now);
-                Duration elapsed = Duration.between(previous, now);
-
                 nextTickTime.set(targetTime.plus(config.tickRate()));
 
                 long frame = frameCount.incrementAndGet();
-                eventQueue.offer(TickEvent.of(frame, elapsed));
+                // tamboui 0.6+：TickEvent.of(long)——elapsed 概念上游移除（RenderClock 计时替代）。
+                // shadow 保留 Instant 计时调度（防卡死定制耦合在 nextTickTime 上），仅去掉 elapsed 传参。
+                eventQueue.offer(TickEvent.of(frame));
             }
         }
     }
