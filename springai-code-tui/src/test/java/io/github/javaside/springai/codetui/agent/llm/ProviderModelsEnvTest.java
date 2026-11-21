@@ -82,7 +82,11 @@ class ProviderModelsEnvTest {
 
     @Test
     void openai_noEnv_builtInDefault() {
-        assertEquals("gpt-6-astra", new OpenAiProvider("key", null, null).defaultModel());
+        // 2026-11-17 GPT-6.2 发布后默认切 gpt-6.2-sol（官方 go-to 定位）；清单 11 项（6.2×2 + terra 新入，
+        // 6-astra/5.6 家族/5.5/5.4 保留回退）。
+        OpenAiProvider p = new OpenAiProvider("key", null, null);
+        assertEquals("gpt-6.2-sol", p.defaultModel());
+        assertEquals(11, p.models().size());
     }
 
     @Test

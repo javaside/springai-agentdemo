@@ -25,12 +25,18 @@ public final class OpenAiProvider implements LlmProvider {
     // 被取代的 gpt-6-sol 不接（与 6.1 同价且更旧，其模型页自指 6.1 为更新版）。
     // 2026-09-03 发布 GPT-6 Astra（官方模型页：1.05M 上下文 / 128K 输出 / 文本+图像输入 / effort 五档
     // low..max 无 none）。分阶段开放中：key 无 early access 会直接报模型不可用，届时 /model 切回 5.6 家族。
+    // 2026-11-17 发布 GPT-6.2 Astra/Sol（1.05M/128K，专业输出与计算机操作增强、价更低：Astra $8/$40、
+    // Sol $2/$10——Sol 定位日常主力）；2026-10-29 发布 GPT-6.1 Terra（$1/$5，比 6.1-sol 便宜 50%，
+    // 面向 agent 高并发）。默认改 gpt-6.2-sol（官方定位 go-to model；Astra 留给最难任务）。
     // 2026-07-09 发布 GPT-5.6 家族（新命名：数字=代，Sol/Terra/Luna=能力档）。
     // 裸 gpt-5.6 别名路由到 Sol；要确定性路由用带后缀的显式 id。旧 gpt-5.5/5.4 保留作回退。
     private static final List<ModelOption> MODELS = List.of(
-            new ModelOption("gpt-6-astra",  "gpt-6-astra",  "旗舰 · GPT-6 · 编码/研究/计算机操作"),
-            new ModelOption("gpt-6.1-sol",  "gpt-6.1-sol",  "旗舰 · GPT-6.1 · 近 Astra 性能，1/5 价"),
-            new ModelOption("gpt-5.6-sol",   "gpt-5.6-sol",   "旗舰 · 复杂推理/编码/安全"),
+            new ModelOption("gpt-6.2-sol",   "gpt-6.2-sol",   "主力 · GPT-6.2 · 日常编码/agent · 默认"),
+            new ModelOption("gpt-6.2-astra", "gpt-6.2-astra", "旗舰 · GPT-6.2 · 最难项目"),
+            new ModelOption("gpt-6.1-sol",   "gpt-6.1-sol",   "上代旗舰 · 近 Astra 性能，1/5 价"),
+            new ModelOption("gpt-6.1-terra", "gpt-6.1-terra", "均衡 · agent 高并发 · 六档可关"),
+            new ModelOption("gpt-6-astra",  "gpt-6-astra",  "上上代旗舰 · GPT-6"),
+            new ModelOption("gpt-5.6-sol",   "gpt-5.6-sol",   "旧旗舰 · 复杂推理/编码/安全"),
             new ModelOption("gpt-5.6-terra", "gpt-5.6-terra", "均衡 · 中档"),
             new ModelOption("gpt-6-luna",   "gpt-6-luna",   "快 · 便宜 · GPT-6"),
             new ModelOption("gpt-5.6-luna",  "gpt-5.6-luna",  "快 · 便宜"),
@@ -97,14 +103,17 @@ public final class OpenAiProvider implements LlmProvider {
 
     @Override
     public ThinkingCapabilities thinkingCapabilities(String modelId) {
-        // gpt-6-astra / gpt-6.1-sol（官方模型页）：reasoning.effort 五档 low..max，档位表无 none
-        // → 不支持关闭（6.1-sol 页原文明说 none 与 minimal 均不支持）。
-        if ("gpt-6-astra".equals(modelId) || "gpt-6.1-sol".equals(modelId)) {
+        // gpt-6.2-astra / gpt-6.2-sol（2026-11-17，官方模型页）与 gpt-6-astra / gpt-6.1-sol 同口径：
+        // reasoning.effort 五档 low..max，档位表无 none → 不支持关闭（6.1-sol 页原文明说 none 与
+        // minimal 均不支持，6.2 页同）。
+        if ("gpt-6.2-astra".equals(modelId) || "gpt-6.2-sol".equals(modelId)
+                || "gpt-6-astra".equals(modelId) || "gpt-6.1-sol".equals(modelId)) {
             return ThinkingCapabilities.effort(false, List.of("low", "medium", "high", "xhigh", "max"));
         }
+        // gpt-6.1-terra（2026-10-29，官方模型页）：六档 none..max → 可关闭。
         // gpt-6-luna（官方模型页）：六档含 none → 可关闭，强度五档 low..max。
-        if ("gpt-6-luna".equals(modelId)) {
-            return ThinkingCapabilities.effort(true, List.of("low", "medium", "high", "xhigh", "max"));
+        if ("gpt-6.1-terra".equals(modelId) || "gpt-6-luna".equals(modelId)) {
+            return ThinkingCapabilities.effort(true, List.of("none", "low", "medium", "high", "xhigh", "max"));
         }
         return ThinkingCapabilities.effort(true, List.of("low", "medium", "high"));
     }

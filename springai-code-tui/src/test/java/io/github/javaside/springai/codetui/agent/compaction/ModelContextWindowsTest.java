@@ -44,6 +44,14 @@ class ModelContextWindowsTest {
         assertEquals(1_000_000L, windows.resolve("anthropic", "claude-sonnet-5-5"));
     }
 
+    /** GPT-6.2 Astra/Sol（2026-11-17）与 GPT-6.1 Terra（2026-10-29），官方模型页核实：均 1.05M / 128K。 */
+    @Test
+    void openAiGpt62AndTerraWindowsAreBuiltIn() {
+        assertEquals(1_050_000L, windows.resolve("openai", "gpt-6.2-astra"));
+        assertEquals(1_050_000L, windows.resolve("openai", "gpt-6.2-sol"));
+        assertEquals(1_050_000L, windows.resolve("openai", "gpt-6.1-terra"));
+    }
+
     /** Claude 5.2 / Haiku 5.5（2026-11-09 / 2026-10-07 发布，官方与 ampcode 模型页核实）：均 1M 上下文。 */
     @Test
     void anthropicFable52AndHaiku55WindowsAreBuiltIn() {

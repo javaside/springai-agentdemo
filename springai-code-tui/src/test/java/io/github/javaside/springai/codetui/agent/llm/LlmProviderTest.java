@@ -70,7 +70,7 @@ class LlmProviderTest {
         OpenAiProvider p = new OpenAiProvider("fake-key");
         assertEquals("openai", p.id());
         assertTrue(p.available());
-        assertEquals("gpt-6-astra", p.defaultModel());
+        assertEquals("gpt-6.2-sol", p.defaultModel());   // 2026-11-17 GPT-6.2 发布后默认
         assertTrue(p.chatModel() != null);   // 实测网络无关：build() 从 options.apiKey 派生 client
         assertEquals("gpt-5.4", p.options("gpt-5.4").getModel());
     }
