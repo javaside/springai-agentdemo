@@ -25,6 +25,8 @@ public final class VisionModels {
             "gpt-6-astra",                     // ★ 2026-09-03 发布，文本+图像输入；只精确到 astra，
                                                //   gpt-6 家族其他成员未经核实不进名单（见防误伤测试）
             "gpt-6.1-sol",                     // ★ 2026-10-19 上线，文本+图像输入（官方模型页核实）
+            "gpt-6.1-terra",                   // ★ 2026-10-29 上线，视觉推理/computer use（官方模型页核实）
+            "gpt-6.2-astra", "gpt-6.2-sol",    // ★ 2026-11-17 发布，文本+图像输入（官方模型页核实）
             "gpt-6-luna",                      // ★ 2026-09-22 上线，文本+图像输入（官方模型页核实）
             "claude-",
             "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl",

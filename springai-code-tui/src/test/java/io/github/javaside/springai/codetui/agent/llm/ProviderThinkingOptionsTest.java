@@ -73,7 +73,9 @@ class ProviderThinkingOptionsTest {
         OpenAiProvider provider = new OpenAiProvider("k");
         assertTrue(provider.thinkingCapabilities("gpt-6-luna").supportsDisable(),
                 "luna 官方档位含 none → 可关闭");
-        assertEquals(List.of("low", "medium", "high", "xhigh", "max"),
+        // 档位表全量口径（与 terra 一致）：none + 五档强度。enabledEffort/disabled 的映射
+        // 分别由下面两个 options 断言钉住，不靠 effortValues 的形状重复表达。
+        assertEquals(List.of("none", "low", "medium", "high", "xhigh", "max"),
                 provider.thinkingCapabilities("gpt-6-luna").effortValues());
         assertEquals("max", ((OpenAiChatOptions) provider.options("gpt-6-luna",
                 ThinkingConfig.enabledEffort("max"))).getReasoningEffort());
@@ -126,6 +128,29 @@ class ProviderThinkingOptionsTest {
         assertEquals("max", options.getReasoningEffort());
         assertThrows(IllegalArgumentException.class, () -> provider
                 .options("glm-5.1", ThinkingConfig.enabledEffort("max")));
+    }
+
+    /**
+     * GPT-6.2 Astra/Sol（2026-11-17 发布，官方模型页核实）：reasoning.effort 五档 low..max、
+     * 不支持 none（同 6-astra/6.1-sol 口径）；GPT-6.1 Terra（2026-10-29 发布）：六档含 none
+     * 可关闭（$1/$5，比 6.1-sol 便宜 50%）。三者均必须已入内置清单。
+     */
+    @Test
+    void openAiGpt62AndTerraEffortTiers_andAreListed() {
+        OpenAiProvider provider = new OpenAiProvider("k");
+        for (String id : List.of("gpt-6.2-astra", "gpt-6.2-sol")) {
+            assertFalse(provider.thinkingCapabilities(id).supportsDisable(), id + " 不支持 none");
+            assertEquals(List.of("low", "medium", "high", "xhigh", "max"),
+                    provider.thinkingCapabilities(id).effortValues());
+            assertTrue(provider.models().stream().anyMatch(m -> m.id().equals(id)),
+                    id + " 必须在内置清单");
+        }
+        assertTrue(provider.thinkingCapabilities("gpt-6.1-terra").supportsDisable(),
+                "terra 支持 none 档（官方六档 none..max）");
+        assertEquals(List.of("none", "low", "medium", "high", "xhigh", "max"),
+                provider.thinkingCapabilities("gpt-6.1-terra").effortValues());
+        assertTrue(provider.models().stream().anyMatch(m -> m.id().equals("gpt-6.1-terra")),
+                "gpt-6.1-terra 必须在内置清单");
     }
 
     @Test
