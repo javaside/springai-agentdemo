@@ -87,10 +87,13 @@ class CodingAgentVisionStatsTest {
         @Override public List<Message> getMessages(String id) { return List.of(); }
         @Override public Session create(CreateSessionRequest r) { throw new UnsupportedOperationException(); }
         @Override public Session findById(String id) { throw new UnsupportedOperationException(); }
-        @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
+        // 官方 2.1.0：findByUserId 并入 findByMetadata；appendEvents/getEventVersion 为新抽象方法，本桩用不到，给最小实现
+        @Override public List<Session> findByMetadata(String name, String value) { throw new UnsupportedOperationException(); }
         @Override public void delete(String id) { throw new UnsupportedOperationException(); }
         @Override public int deleteExpiredSessions(Instant i) { throw new UnsupportedOperationException(); }
         @Override public void appendEvent(SessionEvent e) { throw new UnsupportedOperationException(); }
+        @Override public boolean appendEvents(String id, List<SessionEvent> events, long expectedVersion) { throw new UnsupportedOperationException(); }
+        @Override public long getEventVersion(String id) { return 0L; }
         @Override public CompactionResult compact(String id, CompactionTrigger t, CompactionStrategy s) {
             throw new UnsupportedOperationException();
         }

@@ -156,8 +156,7 @@ public final class SessionEvents {
                 .id(prevEv.getId())
                 .sessionId(prevEv.getSessionId())
                 .timestamp(prevEv.getTimestamp())
-                .message(m)
-                .branch(prevEv.getBranch());
+                .message(m);
         if (prevEv.getMetadata() != null) {
             b.metadata(prevEv.getMetadata());
         }
@@ -173,14 +172,13 @@ public final class SessionEvents {
         return a + "\n\n" + b;
     }
 
-    /** 用给定的（子集）tool 结果重建一条 tool 事件，保留其余元数据（id/sessionId/timestamp/branch/metadata）。 */
+    /** 用给定的（子集）tool 结果重建一条 tool 事件，保留其余元数据（id/sessionId/timestamp/metadata）。 */
     private static SessionEvent withResponses(SessionEvent ev, List<ToolResponseMessage.ToolResponse> kept) {
         SessionEvent.Builder b = SessionEvent.builder()
                 .id(ev.getId())
                 .sessionId(ev.getSessionId())
                 .timestamp(ev.getTimestamp())
-                .message(ToolResponseMessage.builder().responses(kept).build())
-                .branch(ev.getBranch());
+                .message(ToolResponseMessage.builder().responses(kept).build());
         if (ev.getMetadata() != null) {
             b.metadata(ev.getMetadata());
         }

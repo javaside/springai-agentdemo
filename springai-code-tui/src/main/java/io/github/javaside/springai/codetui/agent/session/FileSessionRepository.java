@@ -9,6 +9,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
+import org.springframework.ai.session.EventType;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
@@ -45,7 +46,7 @@ import java.util.stream.Stream;
  * 用 Jackson 3。加载时用 {@link SessionEvents#cleanPrefixLength} 裁掉悬空 {@code assistant(tool_calls)} 尾巴（防硬中断残留导致 400）。
  * 坏文件记日志跳过；所有 IO/错误只写文件日志（slf4j），绝不 stdout（会撕 TUI）。
  */
-public final class FileSessionRepository implements SessionRepository {
+public final class FileSessionRepository implements HistoryRewritingRepository {
 
     private static final Logger log = LoggerFactory.getLogger(FileSessionRepository.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -74,24 +75,44 @@ public final class FileSessionRepository implements SessionRepository {
     }
 
     @Override
-    public Optional<Session> findById(String sessionId) {
-        SessionData data = store.computeIfAbsent(sessionId, this::loadFromDisk);   // null 不入 map
-        return Optional.ofNullable(data).map(SessionData::session);
+    public boolean saveIfAbsent(Session session) {
+        // compute 内无法直接短路返回，借 absent 标志把「已存在」翻译回 saveIfAbsent 的 false。
+        boolean[] absent = { false };
+        store.compute(session.id(), (id, existing) -> {
+            SessionData base = (existing != null) ? existing : loadFromDisk(id);
+            if (base != null) {
+                return base;   // 已存在：保持原样
+            }
+            absent[0] = true;
+            SessionData data = new SessionData(session, List.of(), 0L);
+            persist(data);
+            return data;
+        });
+        return absent[0];
     }
 
     @Override
-    public List<Session> findByUserId(String userId) {
+    public Session findById(String sessionId) {   // 官方 2.1.0 契约：可空直接返回 null（不再包 Optional）
+        SessionData data = store.computeIfAbsent(sessionId, this::loadFromDisk);   // null 不入 map
+        return (data != null) ? data.session() : null;
+    }
+
+    @Override
+    public List<Session> findByMetadata(String name, String value) {
         // 惰性仓库仅见已加载会话（本地单用户单活动会话，够用）。
         return store.values().stream()
-                .filter(d -> userId.equals(d.session().userId()))
+                .filter(d -> value.equals(d.session().metadata().get(name)))
                 .map(SessionData::session).toList();
     }
 
     @Override
-    public List<String> findExpiredSessionIds(Instant before) {
-        return store.values().stream()
+    public int deleteExpiredSessions(Instant before) {
+        // 官方 2.1.0 把「查过期」并成「删过期」：逐个过期的删（store + 文件），返回删除数。
+        List<String> expired = store.values().stream()
                 .filter(d -> d.session().expiresAt() != null && d.session().expiresAt().isBefore(before))
                 .map(d -> d.session().id()).toList();
+        expired.forEach(this::delete);
+        return expired.size();
     }
 
     @Override
@@ -116,6 +137,28 @@ public final class FileSessionRepository implements SessionRepository {
             persist(data);
             return data;
         });
+    }
+
+    @Override
+    public boolean appendEvents(String sessionId, List<SessionEvent> events, long expectedVersion) {
+        // 官方 2.1.0 压缩流走这里：boundary+summary 以乐观锁追加，与并发 append 竞争时返回 false 由调用方 rebase。
+        boolean[] success = { false };
+        store.compute(sessionId, (id, existing) -> {
+            SessionData base = (existing != null) ? existing : loadFromDisk(id);
+            if (base == null) {
+                throw new IllegalArgumentException("Session not found: " + sessionId);
+            }
+            if (base.version() != expectedVersion) {
+                return base;               // CAS 未命中：不变，success 保持 false
+            }
+            success[0] = true;
+            List<SessionEvent> newEvents = new ArrayList<>(base.events());
+            newEvents.addAll(events);
+            SessionData data = base.withEvents(newEvents);
+            persist(data);
+            return data;
+        });
+        return success[0];
     }
 
     @Override
@@ -162,21 +205,9 @@ public final class FileSessionRepository implements SessionRepository {
         if (data == null) {
             return List.of();
         }
-        List<SessionEvent> matched = data.events().stream()
-                .filter(filter::matches)
-                .collect(Collectors.toCollection(ArrayList::new));
-        if (filter.lastN() != null && matched.size() > filter.lastN()) {
-            matched = matched.subList(matched.size() - filter.lastN(), matched.size());
-        }
-        if (filter.pageSize() != null) {
-            int pageNum = (filter.page() != null) ? filter.page() : 0;
-            int size = filter.pageSize();
-            int fromIdx = pageNum * size;
-            matched = (fromIdx >= matched.size())
-                    ? new ArrayList<>()
-                    : matched.subList(fromIdx, Math.min(fromIdx + size, matched.size()));
-        }
-        return List.copyOf(matched);
+        // 窗口/活跃视图/合成事件过滤全部内置在 EventFilter.apply（官方 2.1.0 引入 Window 与
+        // activeView，本项目原先手写的 lastN/page 分页已由其取代）。
+        return filter.apply(data.events());
     }
 
     /** 元数据 + 事件日志 + 单调 version 捆绑（同 InMemory 的私有模型）。 */
@@ -201,14 +232,13 @@ public final class FileSessionRepository implements SessionRepository {
         if (events.isEmpty()) {
             return Optional.empty();
         }
-        Session source = findById(sourceId).orElse(null);
+        Session source = findById(sourceId);
         if (source == null) {
             return Optional.empty();
         }
         String newId = SessionIds.newId();
         Session forked = Session.builder()
                 .id(newId)
-                .userId(source.userId())
                 .createdAt(Instant.now())
                 .expiresAt(null)
                 .metadata(source.metadata() == null ? Map.of() : source.metadata())
@@ -226,7 +256,7 @@ public final class FileSessionRepository implements SessionRepository {
         if (e.getMetadata() != null) {
             b.metadata(e.getMetadata());
         }
-        return b.branch(e.getBranch()).build();
+        return b.build();
     }
 
     // ── 静态：给启动方选「最近一次」会话（-c）──────────────────────────────
@@ -272,7 +302,6 @@ public final class FileSessionRepository implements SessionRepository {
             PersistedSession dto = MAPPER.readValue(json, PersistedSession.class);
             Session session = Session.builder()
                     .id(dto.id())
-                    .userId(dto.userId())
                     .createdAt(parseInstant(dto.createdAt()))
                     .expiresAt(dto.expiresAt() == null ? null : parseInstant(dto.expiresAt()))
                     .metadata(dto.metadata() == null ? Map.of() : dto.metadata())
@@ -329,34 +358,50 @@ public final class FileSessionRepository implements SessionRepository {
     private static PersistedSession toDto(SessionData data) {
         Session s = data.session();
         List<PersistedEvent> events = data.events().stream().map(FileSessionRepository::toDto).toList();
-        return new PersistedSession(s.id(), s.userId(),
+        // userId/branch 组件仅为读旧文件兼容保留（官方 2.1.0 的 Session/SessionEvent 已无这两个概念），新写恒 null。
+        return new PersistedSession(s.id(), null,
                 s.createdAt().toString(),
                 s.expiresAt() == null ? null : s.expiresAt().toString(),
                 s.metadata(), data.version(), events);
     }
 
     private static PersistedEvent toDto(SessionEvent e) {
-        Message m = e.getMessage();
+        // 官方 2.1.0 引入非 MESSAGE 事件（压缩 boundary：EventType.COMPACTION + payload、无消息）。
+        // 普通消息事件沿用 messageType 驱动的旧格式（旧文件零迁移）；boundary 走 eventType/payload 分支。
+        String eventType = (e.getType() == null || e.getType() == EventType.MESSAGE) ? null : e.getType().name();
+        String messageType = null;
+        Message m = null;
         List<ToolCallDto> toolCalls = null;
         List<ToolResponseDto> toolResponses = null;
-        if (m instanceof AssistantMessage am && am.hasToolCalls()) {
-            toolCalls = am.getToolCalls().stream()
-                    .map(tc -> new ToolCallDto(tc.id(), tc.type(), tc.name(), tc.arguments())).toList();
-        } else if (m instanceof ToolResponseMessage trm) {
-            toolResponses = trm.getResponses().stream()
-                    .map(tr -> new ToolResponseDto(tr.id(), tr.name(), tr.responseData())).toList();
+        if (eventType == null) {
+            m = e.getMessage();
+            messageType = m.getMessageType().name();
+            if (m instanceof AssistantMessage am && am.hasToolCalls()) {
+                toolCalls = am.getToolCalls().stream()
+                        .map(tc -> new ToolCallDto(tc.id(), tc.type(), tc.name(), tc.arguments())).toList();
+            } else if (m instanceof ToolResponseMessage trm) {
+                toolResponses = trm.getResponses().stream()
+                        .map(tr -> new ToolResponseDto(tr.id(), tr.name(), tr.responseData())).toList();
+            }
         }
         return new PersistedEvent(e.getId(), e.getSessionId(), e.getTimestamp().toString(),
-                m.getMessageType().name(), m.getText(), toolCalls, toolResponses, e.getMetadata(), e.getBranch());
+                messageType, m == null ? null : m.getText(), toolCalls, toolResponses, e.getMetadata(), null,
+                eventType, e.getPayload());
     }
 
     private static SessionEvent toEvent(PersistedEvent pe) {
         SessionEvent.Builder b = SessionEvent.builder()
                 .id(pe.id())
                 .sessionId(pe.sessionId())
-                .timestamp(parseInstant(pe.timestamp()))
-                .message(toMessage(pe))
-                .branch(pe.branch());
+                .timestamp(parseInstant(pe.timestamp()));
+        if (pe.eventType() != null) {   // 非 MESSAGE 事件（如压缩 boundary）：type+payload，无消息
+            b.type(EventType.of(pe.eventType()));
+            if (pe.payload() != null) {
+                b.payload(pe.payload());
+            }
+        } else {
+            b.message(toMessage(pe));
+        }
         if (pe.metadata() != null) {
             b.metadata(pe.metadata());
         }
@@ -401,9 +446,14 @@ public final class FileSessionRepository implements SessionRepository {
     record PersistedSession(String id, String userId, String createdAt, String expiresAt,
                             Map<String, Object> metadata, long version, List<PersistedEvent> events) {}
 
+    /**
+     * eventType/payload 是 2.1.0 官方 session 升级后新增的分支（压缩 boundary 无消息，靠
+     * {@code EventType.COMPACTION} + payload 还原视图）；为 null 即旧格式普通消息事件，旧文件零迁移。
+     */
     record PersistedEvent(String id, String sessionId, String timestamp, String messageType, String content,
                           List<ToolCallDto> toolCalls, List<ToolResponseDto> toolResponses,
-                          Map<String, Object> metadata, String branch) {}
+                          Map<String, Object> metadata, String branch,
+                          String eventType, Map<String, Object> payload) {}
 
     record ToolCallDto(String id, String type, String name, String arguments) {}
 

@@ -30,7 +30,7 @@ public final class NotifyingCompactionStrategy implements CompactionStrategy {
         listener.onCompactionStarted(reason);
         try {
             CompactionResult result = delegate.compact(request);
-            listener.onCompactionFinished(result.eventsRemoved(), result.tokensEstimatedSaved());
+            listener.onCompactionFinished(result.coveredEventCount(), result.tokensEstimatedSaved());
             return result;
         } catch (RuntimeException e) {
             listener.onCompactionFailed(String.valueOf(e.getMessage()));

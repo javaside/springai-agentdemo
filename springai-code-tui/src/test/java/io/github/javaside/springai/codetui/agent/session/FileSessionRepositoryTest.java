@@ -10,6 +10,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
+import org.springframework.ai.session.SessionAttributes;
 import org.springframework.ai.session.SessionEvent;
 
 import java.io.IOException;
@@ -40,8 +41,10 @@ class FileSessionRepositoryTest {
     }
 
     private static Session session(String sid) {
-        return Session.builder().id(sid).userId("u").createdAt(Instant.now())
-                .expiresAt(Instant.now().plusSeconds(3600)).metadata(Map.of()).build();
+        // 官方 2.1.0 的 Session 无 userId，按索引查询改走 metadata：principalName 是官方约定的归属键。
+        return Session.builder().id(sid).createdAt(Instant.now())
+                .expiresAt(Instant.now().plusSeconds(3600))
+                .metadata(java.util.Map.of(SessionAttributes.PRINCIPAL_NAME, "u")).build();
     }
 
     private static AssistantMessage asstCalls(String... ids) {
@@ -193,21 +196,21 @@ class FileSessionRepositoryTest {
         FileSessionRepository writer = new FileSessionRepository(dir);
         writer.save(session(SID));
         writer.appendEvent(ev(SID, new UserMessage("x")));
-        // 新仓库指向同目录：构造不应预加载任何会话（惰性）——findByUserId 只见已加载的（空）
+        // 新仓库指向同目录：构造不应预加载任何会话（惰性）——findByMetadata 只见已加载的（空）
         FileSessionRepository lazy = new FileSessionRepository(dir);
-        assertTrue(lazy.findByUserId("u").isEmpty(), "构造不 eager load，未访问前 map 为空");
+        assertTrue(lazy.findByMetadata(SessionAttributes.PRINCIPAL_NAME, "u").isEmpty(), "构造不 eager load，未访问前 map 为空");
         // 一旦按 id 访问，才惰性载入
         assertEquals(1, lazy.findEvents(SID, EventFilter.all()).size(), "访问该 id 时才载入");
-        assertFalse(lazy.findByUserId("u").isEmpty(), "载入后可见");
+        assertFalse(lazy.findByMetadata(SessionAttributes.PRINCIPAL_NAME, "u").isEmpty(), "载入后可见");
     }
 
     @Test
     void latestSessionIdPicksNewestByMtime(@TempDir Path dir) throws Exception {
         assertTrue(FileSessionRepository.latestSessionId(dir).isEmpty(), "空目录无最近会话");
         FileSessionRepository repo = new FileSessionRepository(dir);
-        repo.save(Session.builder().id("s-old").userId("u").createdAt(Instant.now()).metadata(Map.of()).build());
+        repo.save(Session.builder().id("s-old").createdAt(Instant.now()).metadata(Map.of()).build());
         repo.appendEvent(ev("s-old", new UserMessage("旧")));
-        repo.save(Session.builder().id("s-new").userId("u").createdAt(Instant.now()).metadata(Map.of()).build());
+        repo.save(Session.builder().id("s-new").createdAt(Instant.now()).metadata(Map.of()).build());
         repo.appendEvent(ev("s-new", new UserMessage("新")));
         // 显式设置 mtime，避免同毫秒下不确定
         Files.setLastModifiedTime(dir.resolve("s-old.json"), FileTime.fromMillis(1_000_000L));

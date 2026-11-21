@@ -115,7 +115,7 @@ import java.util.List;
  * {@link MediaReferencePreservingCompactionStrategy}，把被摘要掉的图片引用逐字捞回来（否则 sha 路径
  * 一被 LLM 改写，图就再也寻址不到）。装配见 {@link #autoCompaction} / {@link #manualCompaction}。
  *
- * <p><b>为何不挂 conversation_search 工具</b>：0.5.0 的压缩是<b>销毁式</b>的——
+ * <p><b>为何不挂 conversation_search 工具</b>：压缩是<b>视图遮蔽式</b>的（2.1.0 官方 append-only 后仍不落归档表）——
  * {@code DefaultSessionService.compactWith} 只把压缩后的集合经 {@code replaceEvents} 覆盖写回，
  * 被压掉的 {@code archivedEvents} 从不落库（JDBC 仓库亦然：整会话 DELETE 后重插压缩集，无归档表）。
  * 故 {@code conversation_search} 只能搜到「摘要 + 保留窗口」这批存活事件，而它们本就已被 advisor 注入 prompt，
@@ -697,7 +697,7 @@ public final class AgentTools {
 
         // 事件溯源会话记忆：文件仓库（<root>/.codetui/sessions/，按项目隔离，进程重启后可加载）+ 「回合/token 感知」压缩。
         // 单独持有仓库引用：取消回合时 CodingAgent 用它 replaceEvents 裁剪半截历史（DefaultSessionService 不暴露该能力）。
-        SessionRepository sessionRepository =
+        io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository =
                 new FileSessionRepository(root.resolve(".codetui").resolve("sessions"));
         SessionService sessionService = DefaultSessionService.builder()
                 .sessionRepository(sessionRepository)
@@ -732,8 +732,8 @@ public final class AgentTools {
                         summarizeChunk(auxClient),
                         snapshot, calibrationState, MANUAL_MAX_EVENTS_TO_KEEP));
 
+        // 官方 2.1.0 的 SessionMemoryAdvisor.Builder 无 defaultUserId（Session 已无 userId 概念），会话归属改由 sessionId 表达。
         SessionMemoryAdvisor memoryAdvisor = SessionMemoryAdvisor.builder(sessionService)
-                .defaultUserId(DEFAULT_USER_ID)
                 .build();
         PreflightCompactionAdvisor preflightCompaction = new PreflightCompactionAdvisor(
                 sessionService, autoThreshold, tokenCountEstimator, autoStrategy);
@@ -1203,7 +1203,7 @@ public final class AgentTools {
     public record AgentRuntime(java.util.Map<String, ChatClient> clients,
                                String activeProviderId,
                                SessionService sessionService,
-                               SessionRepository sessionRepository,
+                               io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                                CompactionStrategy manualStrategy,
                                TokenCountEstimator tokenCountEstimator,
                                List<SkillInfo> skills,

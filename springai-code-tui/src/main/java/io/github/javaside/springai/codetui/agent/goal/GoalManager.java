@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.SessionEvent;
-import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 
 import java.time.Clock;
@@ -145,7 +144,7 @@ public final class GoalManager implements UiChangeSource {
      * 评估结论不落库——repository 缺失时<b>中段插入无从写回</b>，静默跳过而非退回尾部追加）。
      */
     private volatile SessionService sessionService;
-    private volatile SessionRepository sessionRepository;
+    private volatile io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository;
     private volatile Supplier<String> sessionIdSupplier;
 
     /** 生产构造。 */
@@ -721,7 +720,7 @@ public final class GoalManager implements UiChangeSource {
      * sessionId 由 supplier 现取。三者任一未接线（null）时评估结论不落库；只在装配期调用一次，
      * volatile 字段直写即可。
      */
-    public void bindSession(SessionService sessionService, SessionRepository sessionRepository,
+    public void bindSession(SessionService sessionService, io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository sessionRepository,
                             Supplier<String> sessionIdSupplier) {
         this.sessionService = sessionService;
         this.sessionRepository = sessionRepository;
@@ -735,7 +734,7 @@ public final class GoalManager implements UiChangeSource {
      * 本方法跑在评估器线程，与 UI 线程的 fold RMW（{@code CodingAgent.submit} 的
      * {@code foldTrailingUserIntoOutbound} 等「getEvents → 改 → replaceEvents」读-改-写）天然交错，
      * 盲写无版本守卫的 {@code replaceEvents(sid, events)} 会把窗口内他人写入的用户事件整个覆盖掉
-     * （会话+磁盘同丢）。故写回走 {@link SessionRepository#replaceEvents(String, List, long)} CAS
+     * （会话+磁盘同丢）。故写回走 {@code HistoryRewritingRepository.replaceEvents(String, List, long)} CAS
      * 变体，重试环 ≤{@link #CAS_RETRIES} 次：<b>先</b>读版本（{@code getEventVersion}）<b>再</b>读
      * 事件（顺序不可反——CAS 命中 ⇔ 版本读之后无人写入 ⇔ 所读事件恰为该版本的状态；先读事件则可能
      * 拿旧表配新版本号照样盲写成功）；插入标记后 CAS 写回，版本不符（竞态）→ 重读重试；重试耗尽 →
@@ -756,7 +755,7 @@ public final class GoalManager implements UiChangeSource {
      */
     private void appendEvaluationEvent(String verdictLine, String reason) {
         SessionService ss;
-        SessionRepository repo;
+        io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository repo;
         String sid;
         synchronized (this) {
             ss = this.sessionService;

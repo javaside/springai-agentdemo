@@ -34,7 +34,7 @@ class BoundedSummarizationCalibrationTest {
     }
 
     private static CompactionRequest request(List<SessionEvent> events) {
-        return CompactionRequest.of(Session.builder().id("s").userId("u").build(), events);
+        return CompactionRequest.of(Session.builder().id("s").build(), events);
     }
 
     private static BoundedSummarizationCompactionStrategy strategy(
@@ -44,9 +44,10 @@ class BoundedSummarizationCalibrationTest {
                 calibration);
     }
 
-    /** 摘要产物文本(compacted[0] 是 "[Earlier conversation summary]" 标记,[1] 是摘要本体)。 */
+    /** 摘要产物文本(summary[0] 是 "[Earlier conversation summary]" 标记,[1] 是摘要本体)。 */
     private static String summaryText(CompactionResult result) {
-        return result.compactedEvents().get(1).getMessage().getText();
+        // 官方 2.1.0：旧 compacted[0]/[1] 两条合成事件分离为 summary() 的两条消息，语义等价迁移。
+        return result.summary().get(1).getText();
     }
 
     @Test
@@ -59,9 +60,11 @@ class BoundedSummarizationCalibrationTest {
 
         CompactionResult result = strategy.compact(request(events(470, 10)));
 
-        assertEquals(450, result.eventsRemoved(),
+        assertEquals(450, result.coveredEventCount(),
                 "手动 /compact 必须按事件窗口激进归档,不能因 total <= targetBudget 误报无可压缩内容");
-        assertEquals(AgentTools.MANUAL_MAX_EVENTS_TO_KEEP + 2, result.compactedEvents().size(),
+        // TODO(Task2 行为校准): 旧 compactedEvents = 摘要 2 事件 + 保留窗口，官方 2.1.0 的 preservedEvents
+        // 只剩保留窗口，「+ 2」的期望值口径待行为校准阶段重定。
+        assertEquals(AgentTools.MANUAL_MAX_EVENTS_TO_KEEP + 2, result.preservedEvents().size(),
                 "压缩产物应是摘要标记 + 摘要正文 + 最近 20 个事件");
     }
 
@@ -79,7 +82,9 @@ class BoundedSummarizationCalibrationTest {
         assertEquals(inputs.get(0).length(), calibration.get(KEY).knownGood(),
                 "成功后 knownGood 应更新为本次输入量 E");
         assertTrue(calibration.get(KEY).goodProven());
-        assertTrue(SessionTokenEstimator.estimateEvents(result.compactedEvents(), String::length) <= TARGET);
+        // TODO(Task2 行为校准): 旧 compactedEvents 含 2 条合成摘要事件，官方 2.1.0 的 preservedEvents 只剩
+        // 保留窗口，「落回预算」口径是否并入 summary 由行为校准阶段定。
+        assertTrue(SessionTokenEstimator.estimateEvents(result.preservedEvents(), String::length) <= TARGET);
     }
 
     // 场景 2:首次失败(超限、带数字)→ 按数字锚定预算切块,knownGood/knownBad 都学到
@@ -174,9 +179,12 @@ class BoundedSummarizationCalibrationTest {
         assertEquals(CalibrationState.Interval.INITIAL, calibration.get(KEY),
                 "绝不拿网络错误调预算");
         assertTrue(summaryText(result).contains("compacted locally"));
-        assertNull(result.compactedEvents().get(1).getMessage().getText().isEmpty() ? "x" : null,
+        // 官方 2.1.0：兜底摘要本体即 summary()[1]（旧 compacted[1] 的等价迁移）
+        assertFalse(result.summary().get(1).getText().isEmpty(),
                 "兜底摘要不能为空");
-        assertTrue(SessionTokenEstimator.estimateEvents(result.compactedEvents(), String::length) <= TARGET);
+        // TODO(Task2 行为校准): 旧 compactedEvents 含 2 条合成摘要事件，官方 2.1.0 的 preservedEvents 只剩
+        // 保留窗口，「落回预算」口径是否并入 summary 由行为校准阶段定。
+        assertTrue(SessionTokenEstimator.estimateEvents(result.preservedEvents(), String::length) <= TARGET);
     }
 
     // 场景 7:安全阀——数字锚定出的预算跌破 16k 下限 → 不切块,直接本地兜底

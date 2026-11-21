@@ -30,7 +30,7 @@ class PreflightCompactionAdvisorTest {
     void compactsPersistedHistoryBeforeModelReceivesNextRequest() {
         SessionService sessions = DefaultSessionService.builder()
                 .sessionRepository(InMemorySessionRepository.builder().build()).build();
-        sessions.create(CreateSessionRequest.builder().id("s").userId("u").build());
+        sessions.create(CreateSessionRequest.builder().id("s").build());
         for (int i = 0; i < 8; i++) {
             sessions.appendEvent(SessionEvent.builder().sessionId("s")
                     .message(new UserMessage("x".repeat(100))).build());
@@ -46,17 +46,17 @@ class PreflightCompactionAdvisorTest {
             }
         };
         CompactionStrategy deterministic = request -> {
+            // 官方 2.1.0 六参：旧三参 (compacted, archived, tokens) → covered←archived、preserved←保留尾部
+            // （旧 compacted 除合成摘要外的部分）、summary←合成摘要消息、tokens 透传。
             List<SessionEvent> archived = List.copyOf(request.events().subList(0, 6));
-            List<SessionEvent> compacted = new ArrayList<>();
-            compacted.add(SessionEvent.builder().sessionId("s")
-                    .message(new AssistantMessage("summary")).build());
-            compacted.addAll(request.events().subList(6, request.events().size()));
-            return new CompactionResult(compacted, archived, 500);
+            List<SessionEvent> kept = List.copyOf(request.events().subList(6, request.events().size()));
+            return new CompactionResult(archived, List.of(), kept,
+                    List.of(new AssistantMessage("summary")), 500, "test");
         };
         ChatClient client = ChatClient.builder(model)
                 .defaultAdvisors(
                         new PreflightCompactionAdvisor(sessions, 400, deterministic),
-                        SessionMemoryAdvisor.builder(sessions).defaultUserId("u").build())
+                        SessionMemoryAdvisor.builder(sessions).build())   // 官方 2.1.0 Builder 无 defaultUserId
                 .build();
 
         client.prompt().user("new").advisors(a -> a.param(

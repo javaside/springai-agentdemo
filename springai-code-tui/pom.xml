@@ -31,16 +31,16 @@
              绕过 spring-ai 每请求从 ClientOptions.timeout 重建超时的行为。
              版本必须与 spring-ai 传入的 *-java-core 严格一致（spring-ai-bom 不管这两个 artifact）：
              错配会在运行期以 NoSuchMethodError 之类的方式炸裂、编译期却看不出来。
-             改 spring-ai.version 时，同步核对 2.0.1 对应 openai 4.49.0 / anthropic 2.52.0。 -->
+             改 spring-ai.version 时，同步核对 2.1.0 对应 openai 4.101.0 / anthropic 3.8.0。 -->
         <dependency>
             <groupId>com.openai</groupId>
             <artifactId>openai-java-client-okhttp</artifactId>
-            <version>4.49.0</version>
+            <version>4.101.0</version>
         </dependency>
         <dependency>
             <groupId>com.anthropic</groupId>
             <artifactId>anthropic-java-client-okhttp</artifactId>
-            <version>2.52.0</version>
+            <version>3.8.0</version>
         </dependency>
         <!-- DeepSeek 阻塞路径用 HttpComponentsClientHttpRequestFactory（见 DeepSeekProvider）：
              2.0.0 时它由 anthropic-java-core 传递带入，2.0.1 的该 SDK 不再声明，必须显式依赖，
@@ -59,10 +59,17 @@
             <artifactId>spring-ai-agent-utils</artifactId>
             <version>${spring-ai-agent-utils.version}</version>
         </dependency>
-        <!-- 事件溯源会话记忆（替代 MessageChatMemoryAdvisor 滑窗）：内存仓库 + 压缩策略，版本走父 BOM -->
+        <!-- 事件溯源会话记忆（替代 MessageChatMemoryAdvisor 滑窗）：内存仓库 + 压缩策略。
+             2.1.0 起由 spring-ai 官方收编，坐标 org.springframework.ai，版本走 spring-ai-bom：
+             核心 API 在 spring-ai-session，SessionMemoryAdvisor 在 spring-ai-session-advisor。
+             社区版 spring-ai-session-management 同包名（org.springframework.ai.session.*），不可共存。 -->
         <dependency>
-            <groupId>org.springaicommunity</groupId>
-            <artifactId>spring-ai-session-management</artifactId>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-session</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-session-advisor</artifactId>
         </dependency>
         <!-- MCP 客户端：只用其 SyncMcpToolCallback 适配层（Tool→ToolCallback）；
              传递带入 io.modelcontextprotocol.sdk:mcp-core（含 stdio/SSE/Streamable 传输）。 -->

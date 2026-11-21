@@ -145,8 +145,7 @@ public final class SessionFileExternalizer {
     private static SessionEvent withResponses(SessionEvent ev, List<ToolResponseMessage.ToolResponse> kept) {
         SessionEvent.Builder b = SessionEvent.builder()
                 .id(ev.getId()).sessionId(ev.getSessionId()).timestamp(ev.getTimestamp())
-                .message(ToolResponseMessage.builder().responses(kept).build())
-                .branch(ev.getBranch());
+                .message(ToolResponseMessage.builder().responses(kept).build());
         if (ev.getMetadata() != null) b.metadata(ev.getMetadata());
         return b.build();
     }

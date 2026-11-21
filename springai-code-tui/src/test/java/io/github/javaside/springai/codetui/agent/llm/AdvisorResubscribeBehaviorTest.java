@@ -122,7 +122,7 @@ class AdvisorResubscribeBehaviorTest {
     }
 
     private static SessionMemoryAdvisor memory(SessionService svc) {
-        return SessionMemoryAdvisor.builder(svc).defaultUserId("u").build();   // 无压缩，隔离被测逻辑
+        return SessionMemoryAdvisor.builder(svc).build();   // 无压缩，隔离被测逻辑（官方 2.1.0 Builder 无 defaultUserId）
     }
 
     /** V1 断言 1：首次订阅时 before() 向会话 append 本回合 user。 */

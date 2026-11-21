@@ -58,7 +58,7 @@ class AgentToolsCompactionWiringTest {
 
     /** 真实的压缩请求。绝不传 null——见 MediaReferencePreservingCompactionStrategyTest#request 的理由。 */
     private static CompactionRequest request() {
-        return CompactionRequest.of(Session.builder().id("sess-1").userId("u").build(), List.of());
+        return CompactionRequest.of(Session.builder().id("sess-1").build(), List.of());
     }
 
     private static SessionEvent summary() {
@@ -66,23 +66,28 @@ class AgentToolsCompactionWiringTest {
                 .message(UserMessage.builder().text("用户提供了一张截图。").build()).build();
     }
 
-    /** 假的「真正做摘要的策略」：引用块已被改写成自然语言，原块进了 archivedEvents。 */
+    /** 假的「真正做摘要的策略」：引用块已被改写成自然语言，原块进了 coveredEvents。 */
     private static CompactionStrategy fakeSummariser(SessionEvent summary) {
-        CompactionResult r = new CompactionResult(List.of(summary), List.of(archivedWithReference()), 9000);
+        // 官方 2.1.0 六参：旧三参 (compacted, archived, tokens) → covered←archived、preserved←compacted（摘要事件
+        // 不再以事件形态保留，其消息进 summary）、tokens 透传。
+        CompactionResult r = new CompactionResult(List.of(archivedWithReference()), List.of(), List.of(),
+                List.of(summary.getMessage()), 9000, "test");
         return req -> r;
     }
 
-    /** 断言压缩结果里确实多了一条带 synthetic 标记、逐字保留了 path 的清单事件。 */
+    /** 断言压缩结果里确实多了一条带 synthetic 标记、逐字保留了 path 的清单消息。 */
     private static void assertManifestPresent(CompactionResult out, SessionEvent summary, String path) {
-        assertEquals(2, out.compactedEvents().size(),
-                "应在摘要之外多出一条附件清单事件，实际：" + out.compactedEvents());
-        Message manifest = out.compactedEvents().get(0).getMessage();
+        // TODO(Task2 行为校准): 官方 2.1.0 里清单并入 summary() 尾部（见 MediaReferencePreserving 的主代码），
+        // 编译层先按 compactedEvents()→preservedEvents() 机械映射，索引与期望值留给行为校准阶段重定。
+        assertEquals(2, out.preservedEvents().size(),
+                "应在摘要之外多出一条附件清单事件，实际：" + out.preservedEvents());
+        Message manifest = out.preservedEvents().get(0).getMessage();
         String text = manifest.getText();
         assertTrue(text.startsWith(MediaReferencePreservingCompactionStrategy.MANIFEST_HEADER),
                 "首条应是附件清单，实际：" + text);
         assertTrue(text.contains(path), "path 是唯一寻址依据，必须逐字保留，实际：" + text);
         assertTrue(VisionMaterializer.isSynthetic(manifest), "清单消息必须带 synthetic 标记");
-        assertEquals(summary.getMessage().getText(), out.compactedEvents().get(1).getMessage().getText(),
+        assertEquals(summary.getMessage().getText(), out.preservedEvents().get(1).getMessage().getText(),
                 "摘要本身不应被改动");
     }
 

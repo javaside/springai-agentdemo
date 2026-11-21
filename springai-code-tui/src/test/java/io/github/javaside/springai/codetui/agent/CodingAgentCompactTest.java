@@ -30,8 +30,9 @@ import io.github.javaside.springai.codetui.agent.seam.AskRequest;
 class CodingAgentCompactTest {
 
     // CompactionRequest.of 内部 Assert.notNull(session, ...)，故不能传 null——用一个占位 Session 满足契约。
-    private static final Session DUMMY_SESSION = Session.builder().id("sess-1").userId("test-user").build();
-    // CompactionResult.eventsRemoved() 派生自 archivedEvents.size()——传空表恒为 0，
+    // 官方 2.1.0 的 Session 无 userId 概念（会话归属由 sessionId 表达），占位 Session 只留 id。
+    private static final Session DUMMY_SESSION = Session.builder().id("sess-1").build();
+    // CompactionResult.coveredEventCount() 派生自 coveredEvents.size()——传空表恒为 0，
     // 会走「无可压缩内容」分支而非「已压缩...约省 N tokens」分支，故需一个占位事件。
     private static final SessionEvent DUMMY_EVENT =
             SessionEvent.builder().sessionId("sess-1").message(new UserMessage("x")).build();
@@ -52,17 +53,22 @@ class CodingAgentCompactTest {
         }
         @Override public Session create(CreateSessionRequest r) { throw new UnsupportedOperationException(); }
         @Override public Session findById(String id) { throw new UnsupportedOperationException(); }
-        @Override public List<Session> findByUserId(String u) { throw new UnsupportedOperationException(); }
+        // 官方 2.1.0：findByUserId 并入 findByMetadata；appendEvents/getEventVersion 为新抽象方法，本桩用不到，给最小实现
+        @Override public List<Session> findByMetadata(String name, String value) { throw new UnsupportedOperationException(); }
         @Override public void delete(String id) { throw new UnsupportedOperationException(); }
         @Override public int deleteExpiredSessions(Instant i) { throw new UnsupportedOperationException(); }
         @Override public void appendEvent(SessionEvent e) { throw new UnsupportedOperationException(); }
+        @Override public boolean appendEvents(String id, List<SessionEvent> events, long expectedVersion) { throw new UnsupportedOperationException(); }
+        @Override public long getEventVersion(String id) { return 0L; }
         @Override public List<SessionEvent> getEvents(String id, EventFilter f) { throw new UnsupportedOperationException(); }
     }
 
     @Test
     void runCompaction_forcesCompaction_andReportsFinishedExactlyOnce() {
         OrderRecordingListener listener = new OrderRecordingListener();
-        CompactionResult result = new CompactionResult(List.of(), List.of(DUMMY_EVENT), 999);
+        // 官方 2.1.0 六参：旧三参 (compacted, archived, tokens) → covered←archived、preserved←compacted（此处为空）、
+        // summary 空、tokens 透传。coveredEventCount()==1 维持「finished:1:999」的断言口径。
+        CompactionResult result = new CompactionResult(List.of(DUMMY_EVENT), List.of(), List.of(), List.of(), 999, "test");
         FakeSessionService fake = new FakeSessionService();
         CompactionStrategy manual = req -> result;   // 裸策略：runCompaction 从返回值自行上报，不叠加装饰器
 

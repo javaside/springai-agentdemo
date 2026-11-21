@@ -62,7 +62,7 @@ class SessionIdStreamGuardAdvisorTest {
     }
 
     private static SessionMemoryAdvisor memory(SessionService svc) {
-        return SessionMemoryAdvisor.builder(svc).defaultUserId("u").build();   // 无压缩，隔离被测逻辑
+        return SessionMemoryAdvisor.builder(svc).build();   // 无压缩，隔离被测逻辑（官方 2.1.0 Builder 无 defaultUserId）
     }
 
     /** 用给定 model + advisors 跑一轮流式；吞掉可能的终止异常（no-guard 场景 after() 会抛），以便随后断言落盘状态。 */

@@ -1,6 +1,7 @@
 package io.github.javaside.springai.codetui.agent;
 
 import io.github.javaside.springai.codetui.agent.session.FileSessionRepository;
+import io.github.javaside.springai.codetui.agent.session.HistoryRewritingRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -10,7 +11,6 @@ import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
-import org.springframework.ai.session.SessionRepository;
 import org.springframework.ai.session.SessionService;
 
 import java.nio.file.Files;
@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -42,7 +43,7 @@ class CodingAgentSessionFacadeTest {
     }
 
     private static Session session(String sid) {
-        return Session.builder().id(sid).userId("u").createdAt(Instant.now())
+        return Session.builder().id(sid).createdAt(Instant.now())
                 .expiresAt(Instant.now().plusSeconds(3600)).metadata(Map.of()).build();
     }
 
@@ -51,7 +52,7 @@ class CodingAgentSessionFacadeTest {
      * skills 必须传 List.of()——null 会在构造器 List.copyOf 处 NPE；其余依赖本测试不触及，传 null
      * （先例：{@code CodingAgentSwitchContextTest.agentWithAccumulator} 的注释与坑）。
      */
-    private static CodingAgent agentWith(SessionRepository repo, SessionService service) {
+    private static CodingAgent agentWith(HistoryRewritingRepository repo, SessionService service) {
         return new CodingAgent(null, null, null, "live-session", new AtomicLong(), service, null, null,
                 List.of(), null, repo, null, null, null, null, null, null, null, null, null, null,
                 0L, null);
@@ -113,7 +114,7 @@ class CodingAgentSessionFacadeTest {
         agent.deleteSession(SID);
 
         assertFalse(Files.exists(dir.resolve(SID + ".json")), "真删——文件不在了（门面若 no-op 此处红）");
-        assertTrue(repo.findById(SID).isEmpty(), "仓库侧也查不到该会话");
+        assertNull(repo.findById(SID), "仓库侧也查不到该会话（官方 2.1.0 findById 直接返 null）");
         assertFalse(agent.sessionExists(SID), "sessionExists 同步反映删除");
         assertDoesNotThrow(() -> agent.deleteSession(null),
                 "null 入参走守卫不抛——去掉守卫 delete(null) 会在 ConcurrentHashMap 处 NPE");
