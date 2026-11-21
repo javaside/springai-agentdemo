@@ -59,13 +59,17 @@ class ProviderModelsEnvTest {
     void anthropic_noEnv_builtInDefault() {
         AnthropicProvider p = new AnthropicProvider("key", null, null);
         assertEquals("claude-opus-5-5", p.defaultModel());
-        // 2026-10 在售：opus-5-5 / sonnet-5-5（2026-09 下旬发布）/ fable-5-1 / haiku-4-5；
-        // 上代 opus-5 / sonnet-5 与 fable-5、opus-4-8 保留为 legacy。
-        assertEquals(8, p.models().size());
+        // 2026-11 在售：opus-5-5 / sonnet-5-5 / fable-5-2（2026-11-09）/ haiku-5-5（2026-10-07）；
+        // fable-5-1 / haiku-4-5 与上代 opus-5 / sonnet-5 / fable-5、opus-4-8 保留为 legacy。
+        assertEquals(10, p.models().size());
         assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-sonnet-5-5")),
                 "新均衡档 claude-sonnet-5-5 应出现在内置清单");
+        assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-fable-5-2")),
+                "新旗舰 claude-fable-5-2 应出现在内置清单");
+        assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-haiku-5-5")),
+                "快档 claude-haiku-5-5 应出现在内置清单");
         assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-fable-5-1")),
-                "旗舰 claude-fable-5-1 应出现在内置清单");
+                "上代旗舰 claude-fable-5-1 应保留在清单");
         assertTrue(p.models().stream().anyMatch(m -> m.id().equals("claude-fable-5")),
                 "上代旗舰 claude-fable-5 应保留在清单末尾");
     }

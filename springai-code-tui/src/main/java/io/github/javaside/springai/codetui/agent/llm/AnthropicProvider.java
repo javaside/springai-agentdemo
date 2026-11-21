@@ -25,17 +25,22 @@ public final class AnthropicProvider implements LlmProvider {
 
     private static final int MAX_TOKENS = 8192;   // Anthropic 必填；可调
     // 2026-10 在售编号：opus-5-5 / sonnet-5-5（2026-09 下旬发布，官方推荐主力与均衡档）/ fable-5-1 / haiku-4-5；
-    // opus-5 / sonnet-5 / fable-5 / opus-4-8 转 legacy 仍可用（旧 sonnet-4-5、opus-4-5 是不存在的跳号）。
+    // 2026-11-09 新旗舰 fable-5-2（1M/128K，输出比 5.1 快 30%、API 价降 20%；Mythos 5.2 审查制不收录）；
+    // 2026-10-07 haiku-5-5（1M/128K，旧 haiku-4-5 仅 200K）。官方选型指南：多数编码任务继续用
+    // Opus 5.5（故默认不变），难题才切 fable-5-2。
+    // opus-5 / sonnet-5 / fable-5-1 / haiku-4-5 / opus-4-8 转 legacy 仍可用（旧 sonnet-4-5、opus-4-5 是不存在的跳号）。
     // ID 即 pinned snapshot，无日期后缀不是浮动别名。
     private static final List<ModelOption> MODELS = List.of(
             new ModelOption("claude-opus-5-5",    "claude-opus-5-5",    "复杂 agentic 编码 · 默认"),
-            new ModelOption("claude-fable-5-1",   "claude-fable-5-1",   "最强旗舰 · 长时程 agent"),
+            new ModelOption("claude-fable-5-2",   "claude-fable-5-2",   "最强旗舰 · 长时程硬任务"),
             new ModelOption("claude-sonnet-5-5",  "claude-sonnet-5-5",  "均衡 · 日常编码"),
-            new ModelOption("claude-haiku-4-5",   "claude-haiku-4-5",   "快 · 便宜"),
+            new ModelOption("claude-haiku-5-5",   "claude-haiku-5-5",   "快 · 便宜"),
+            new ModelOption("claude-fable-5-1",   "claude-fable-5-1",   "上代旗舰"),
             new ModelOption("claude-opus-5",      "claude-opus-5",      "上代 opus"),
             new ModelOption("claude-sonnet-5",    "claude-sonnet-5",    "上代 sonnet"),
             new ModelOption("claude-opus-4-8",    "claude-opus-4-8",    "更早 opus"),
-            new ModelOption("claude-fable-5",     "claude-fable-5",     "上代旗舰"));
+            new ModelOption("claude-fable-5",     "claude-fable-5",     "上代旗舰"),
+            new ModelOption("claude-haiku-4-5",   "claude-haiku-4-5",   "旧 haiku · 200K 窗口"));
 
     private static final LlmTimeouts TIMEOUTS = LlmTimeouts.fromEnv();
 
@@ -107,16 +112,19 @@ public final class AnthropicProvider implements LlmProvider {
 
     @Override
     public ThinkingCapabilities thinkingCapabilities(String modelId) {
-        // thinking always-on 名单（官方 thinking 支持表）：fable 全系一直如此；5.5 起 opus/sonnet 也转
-        // always-on（opus-5-5 标 Always on，sonnet-5-5 的 disabled 全档 400）。上代 opus-5/sonnet-5 仍接受
-        // disabled。按前缀判定：精确匹配会漏 pinned 日期快照与后续小版本；未知模型保守判可关闭。
+        // thinking always-on 名单（官方 thinking 支持表）：fable 全系一直如此（5-2 官方文档将其与
+        // Opus 5.5 等同列「不支持 extended thinking，用 adaptive」）；5.5 起 opus/sonnet/haiku 整代转
+        // always-on（opus-5-5 标 Always on，sonnet-5-5 的 disabled 全档 400；haiku-5-5 按同代一致性
+        // 判定，方向错误的代价只是「想关被拒」，判反则是 400）。上代 opus-5/sonnet-5 仍接受 disabled。
+        // 按前缀判定：精确匹配会漏 pinned 日期快照与后续小版本；未知模型保守判可关闭。
         return ThinkingCapabilities.effort(!thinkingAlwaysOn(modelId), List.of("low", "medium", "high", "max"));
     }
 
     private static boolean thinkingAlwaysOn(String modelId) {
         return modelId != null && (modelId.startsWith("claude-fable-")
                 || modelId.startsWith("claude-opus-5-5")
-                || modelId.startsWith("claude-sonnet-5-5"));
+                || modelId.startsWith("claude-sonnet-5-5")
+                || modelId.startsWith("claude-haiku-5-5"));
     }
 
     @Override

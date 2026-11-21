@@ -36,6 +36,9 @@ public final class ModelContextWindows {
             // claude 5.5（2026-09 下旬发布，官方模型总览核实）：opus-5-5 / sonnet-5-5 均 1M 上下文。
             Map.entry("anthropic:claude-opus-5-5", 1_000_000L),
             Map.entry("anthropic:claude-sonnet-5-5", 1_000_000L),
+            // claude 5.2 旗舰 / haiku 5.5（2026-11-09 / 2026-10-07 发布，官方与 ampcode 核实）：均 1M。
+            Map.entry("anthropic:claude-fable-5-2", 1_000_000L),
+            Map.entry("anthropic:claude-haiku-5-5", 1_000_000L),
             Map.entry("anthropic:claude-opus-5", 1_000_000L),
             Map.entry("anthropic:claude-fable-5", 1_000_000L),
             Map.entry("anthropic:claude-sonnet-5", 1_000_000L),
