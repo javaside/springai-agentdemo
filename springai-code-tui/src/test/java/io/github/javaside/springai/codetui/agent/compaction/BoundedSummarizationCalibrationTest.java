@@ -82,9 +82,8 @@ class BoundedSummarizationCalibrationTest {
         assertEquals(inputs.get(0).length(), calibration.get(KEY).knownGood(),
                 "成功后 knownGood 应更新为本次输入量 E");
         assertTrue(calibration.get(KEY).goodProven());
-        // TODO(Task2 行为校准): 旧 compactedEvents 含 2 条合成摘要事件，官方 2.1.0 的 preservedEvents 只剩
-        // 保留窗口，「落回预算」口径是否并入 summary 由行为校准阶段定。
-        assertTrue(SessionTokenEstimator.estimateEvents(result.preservedEvents(), String::length) <= TARGET);
+        // 官方 2.1.0 合成口径：summary（2 条合成摘要消息）+ 保留窗口合计落回预算。
+        assertTrue(compactionFootprint(result) <= TARGET);
     }
 
     // 场景 2:首次失败(超限、带数字)→ 按数字锚定预算切块,knownGood/knownBad 都学到
@@ -182,9 +181,8 @@ class BoundedSummarizationCalibrationTest {
         // 官方 2.1.0：兜底摘要本体即 summary()[1]（旧 compacted[1] 的等价迁移）
         assertFalse(result.summary().get(1).getText().isEmpty(),
                 "兜底摘要不能为空");
-        // TODO(Task2 行为校准): 旧 compactedEvents 含 2 条合成摘要事件，官方 2.1.0 的 preservedEvents 只剩
-        // 保留窗口，「落回预算」口径是否并入 summary 由行为校准阶段定。
-        assertTrue(SessionTokenEstimator.estimateEvents(result.preservedEvents(), String::length) <= TARGET);
+        // 官方 2.1.0 合成口径：summary（2 条合成摘要消息）+ 保留窗口合计落回预算。
+        assertTrue(compactionFootprint(result) <= TARGET);
     }
 
     // 场景 7:安全阀——数字锚定出的预算跌破 16k 下限 → 不切块,直接本地兜底
@@ -291,5 +289,12 @@ class BoundedSummarizationCalibrationTest {
                 "B 的首次请求不得是注定失败的全量(knownBad 短路必须跨策略实例生效)");
         assertTrue(secondInputs.stream().allMatch(in -> in.length() < e),
                 "B 的所有请求都必须低于已知失败量");
+    }
+
+    /** 官方 2.1.0 合成口径：summary 消息（含 2 条合成摘要）+ 保留窗口的 String::length 估算合计。 */
+    private static long compactionFootprint(org.springframework.ai.session.compaction.CompactionResult result) {
+        long summary = result.summary().stream()
+                .mapToLong(m -> m.getText() == null ? 0 : m.getText().length() + 1).sum();
+        return summary + SessionTokenEstimator.estimateEvents(result.preservedEvents(), String::length);
     }
 }

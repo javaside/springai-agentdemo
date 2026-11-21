@@ -34,6 +34,12 @@ public final class SessionEvents {
         Set<String> pending = new HashSet<>();
         int cleanLen = 0;
         for (int i = 0; i < events.size(); i++) {
+            // 官方 2.1.0 的非 MESSAGE 事件（如压缩 boundary）无消息，getMessage() 会抛——
+            // 视作中性：不参与配平也不打断配平（pending 已空时同样算已配平，尾部 boundary 不被误裁）。
+            if (!events.get(i).hasMessage()) {
+                if (pending.isEmpty()) cleanLen = i + 1;
+                continue;
+            }
             Message m = events.get(i).getMessage();
             if (m instanceof AssistantMessage am && am.hasToolCalls()) {
                 for (AssistantMessage.ToolCall tc : am.getToolCalls()) pending.add(tc.id());
@@ -67,8 +73,21 @@ public final class SessionEvents {
      */
     public static List<SessionEvent> sanitize(List<SessionEvent> events) {
         List<SessionEvent> a = removeOrphanToolResults(events);
-        List<SessionEvent> b = collapseConsecutiveSameRole(a);
+        // 官方 2.1.0 append-only：boundary payload 按事件 id 引用 summary/preserved 集合，
+        // 折叠会把多个事件合并成一个（只留首条 id），被引用的 id 随之消失——活跃视图就只剩 summary。
+        // 故日志里一旦出现非 MESSAGE 事件（说明已发生过压缩）就跳过折叠；裁剪/孤儿清理不改变保留
+        // 事件的 id，仍然安全。无压缩的会话行为不变（连续同角色 400 的历史修复仍生效）。
+        List<SessionEvent> b = hasNonMessageEvent(a) ? a : collapseConsecutiveSameRole(a);
         return trimToCleanPrefix(b);
+    }
+
+    private static boolean hasNonMessageEvent(List<SessionEvent> events) {
+        for (SessionEvent e : events) {
+            if (!e.hasMessage()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -80,6 +99,10 @@ public final class SessionEvents {
         Set<String> open = new HashSet<>();
         boolean changed = false;
         for (SessionEvent ev : events) {
+            if (!ev.hasMessage()) {
+                filtered.add(ev);   // 非 MESSAGE 事件（压缩 boundary 等）：原样透传，不参与 tool 配平
+                continue;
+            }
             Message m = ev.getMessage();
             if (m instanceof AssistantMessage am && am.hasToolCalls()) {
                 for (AssistantMessage.ToolCall tc : am.getToolCalls()) open.add(tc.id());
@@ -123,8 +146,13 @@ public final class SessionEvents {
         List<SessionEvent> out = new ArrayList<>(events.size());
         boolean changed = false;
         for (SessionEvent ev : events) {
+            if (!ev.hasMessage()) {
+                out.add(ev);   // 非 MESSAGE 事件（压缩 boundary 等）：不与任何消息合并
+                continue;
+            }
             if (!out.isEmpty()) {
-                Message prev = out.get(out.size() - 1).getMessage();
+                SessionEvent last = out.get(out.size() - 1);
+                Message prev = last.hasMessage() ? last.getMessage() : null;   // 前一个是 boundary 时不可合并
                 Message cur = ev.getMessage();
                 if (mergeableUsers(prev, cur) || mergeablePlainAssistants(prev, cur)) {
                     out.set(out.size() - 1, mergeText(out.get(out.size() - 1), ev));   // 保留首条信封

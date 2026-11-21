@@ -772,7 +772,7 @@ public final class GoalManager implements UiChangeSource {
                 List<SessionEvent> events = ss.getEvents(sid);
                 int lastAssistant = -1;
                 for (int i = events.size() - 1; i >= 0; i--) {
-                    if (events.get(i).getMessage() instanceof AssistantMessage) {
+                    if (events.get(i).hasMessage() && events.get(i).getMessage() instanceof AssistantMessage) {
                         lastAssistant = i;
                         break;
                     }

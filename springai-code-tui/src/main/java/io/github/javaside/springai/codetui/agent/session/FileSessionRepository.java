@@ -252,7 +252,13 @@ public final class FileSessionRepository implements HistoryRewritingRepository {
     private static SessionEvent retarget(SessionEvent e, String sessionId) {
         SessionEvent.Builder b = SessionEvent.builder()
                 .id(e.getId()).sessionId(sessionId).timestamp(e.getTimestamp())
-                .message(e.getMessage());
+                .type(e.getType());   // 压缩 boundary 等非 MESSAGE 事件也要活着进新会话（payload 一并带走）
+        if (e.getPayload() != null && !e.getPayload().isEmpty()) {
+            b.payload(e.getPayload());
+        }
+        if (e.hasMessage()) {
+            b.message(e.getMessage());
+        }
         if (e.getMetadata() != null) {
             b.metadata(e.getMetadata());
         }

@@ -115,12 +115,11 @@ import java.util.List;
  * {@link MediaReferencePreservingCompactionStrategy}，把被摘要掉的图片引用逐字捞回来（否则 sha 路径
  * 一被 LLM 改写，图就再也寻址不到）。装配见 {@link #autoCompaction} / {@link #manualCompaction}。
  *
- * <p><b>为何不挂 conversation_search 工具</b>：压缩是<b>视图遮蔽式</b>的（2.1.0 官方 append-only 后仍不落归档表）——
- * {@code DefaultSessionService.compactWith} 只把压缩后的集合经 {@code replaceEvents} 覆盖写回，
- * 被压掉的 {@code archivedEvents} 从不落库（JDBC 仓库亦然：整会话 DELETE 后重插压缩集，无归档表）。
- * 故 {@code conversation_search} 只能搜到「摘要 + 保留窗口」这批存活事件，而它们本就已被 advisor 注入 prompt，
- * 工具边际价值极低，遂不注册。要「搜回压缩掉的老原文」需另一种范式（append-only 不压缩 + eventFilter 约束注入 + JDBC 持久化），
- * 非本类目标。
+ * <p><b>为何不挂 conversation_search 工具</b>：2.1.0 官方 append-only 下被覆盖事件<b>确实留在日志里</b>
+ * （{@code SessionRepository.searchEvents} 也覆盖全日志），挂上它技术上可搜回老原文。但本项目主链路是
+ * 本地单文件会话（FileSessionRepository），advisor 每回合注入的是活跃视图，工具搜索的全日志对「当前
+ * 回合该看什么」的边际价值低于其上下文成本；要真正利用全日志检索需配 JDBC 仓库 + eventFilter 约束，
+ * 非本类目标，遂不注册。
  *
  * <p><b>turnId 走 ThreadLocal</b>：TodoWriteTool 的 todoEventHandler 只收 {@link Todos}、拿不到 turnId，
  * 而 handler 是在工具 call 内<b>同线程同步</b>触发的，所以直接读
@@ -230,7 +229,6 @@ public final class AgentTools {
     }
 
     /** 会话记忆的默认用户 id（单会话 TUI，仅作归属占位）。 */
-    private static final String DEFAULT_USER_ID = "code-tui-user";
 
     /** 记忆系统提示注入的 param 键；与 SYSTEM_TEMPLATE 里的 {AUTO_MEMORY} 占位符对应。 */
     private static final String AUTO_MEMORY_KEY = "AUTO_MEMORY";

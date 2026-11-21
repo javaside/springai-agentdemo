@@ -138,7 +138,7 @@ class BoundedSummarizationSplitBoundaryTest {
         CompactionResult result = s.compact(request(events));
 
         // 官方 2.1.0：preservedEvents 即保留窗口，无前导摘要事件可跳。
-        List<SessionEvent> kept = result.preservedEvents();;
+        List<SessionEvent> kept = result.preservedEvents();
         if (!kept.isEmpty()) {
             assertEquals(MessageType.USER, kept.get(0).getMessageType(),
                     "token 预算分支也必须从用户回合起点切开");

@@ -12,6 +12,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.advisor.SessionMemoryAdvisor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionResult;
@@ -711,7 +712,8 @@ public final class CodingAgent implements SubmitHandler {
                                       java.util.concurrent.atomic.AtomicBoolean resumeFromQuota) {
         trimDanglingToolCalls();
         List<SessionEvent> events = sessionService.getEvents(sid);
-        boolean tailIsUser = !events.isEmpty() && events.get(events.size() - 1).getMessage() instanceof UserMessage;
+        boolean tailIsUser = !events.isEmpty() && events.get(events.size() - 1).hasMessage()
+                && events.get(events.size() - 1).getMessage() instanceof UserMessage;
         ResumeShape shape = tailIsUser ? ResumeShape.FROM_TEXT : ResumeShape.FROM_TOOLS;
         if (shape == ResumeShape.FROM_TEXT) {
             stripTrailingTurnUser(sid);
@@ -769,6 +771,10 @@ public final class CodingAgent implements SubmitHandler {
         List<SessionEvent> kept = new java.util.ArrayList<>(events.size());
         boolean changed = false;
         for (SessionEvent e : events) {
+            if (!e.hasMessage()) {
+                kept.add(e);   // 压缩 boundary 等无消息事件：保留（getMessage 对其抛异常）
+                continue;
+            }
             Message m = e.getMessage();
             if (m instanceof UserMessage um && um.getText() != null && um.getText().isEmpty()) {
                 changed = true;   // 续跑伪影 blank user：丢弃
@@ -1509,7 +1515,9 @@ public final class CodingAgent implements SubmitHandler {
     @Override
     public ContextStats contextStats() {
         String sid = sessionId;   // 快照一次：contextStats 内两读 sessionId，/clear 换 volatile 会致撕裂读（事件按旧会话、消息按新会话）
-        List<SessionEvent> events = sessionService.getEvents(sid);
+        // 官方 2.1.0 append-only：被压缩覆盖的事件永久留在日志，/context 的口径是「下一回合真正会进
+        // prompt 的历史」，必须读活跃视图（与 SessionMemoryAdvisor 注入 prompt 的 filter 同源）。
+        List<SessionEvent> events = sessionService.getEvents(sid, EventFilter.active());
         int user = 0, assistant = 0, tool = 0, other = 0;
         for (SessionEvent e : events) {   // 官方 2.1.0 的 SessionEvent 无 getMessageType（boundary 等事件无消息），从消息上取
             MessageType type = e.hasMessage() ? e.getMessage().getMessageType() : null;
@@ -1525,7 +1533,7 @@ public final class CodingAgent implements SubmitHandler {
         }
         // 分桶与总数出自同一次遍历（buckets.total()），保证 /context 上「总数 == 各分类之和」恒成立。
         SessionTokenEstimator.Buckets buckets =
-                SessionTokenEstimator.estimateMessagesByType(sessionService.getMessages(sid), tokenCountEstimator);
+                SessionTokenEstimator.estimateMessagesByType(sessionService.getActiveMessages(sid), tokenCountEstimator);
         long tokens = buckets.total();
         VisionSnapshot vision = snapshotOf(visionModels, registry);
         TokenUsageAccumulator.Snapshot usage = usageAccumulator == null
@@ -1658,6 +1666,7 @@ public final class CodingAgent implements SubmitHandler {
             return events.size();
         }
         for (int i = events.size() - 1; i >= 0; i--) {
+            if (!events.get(i).hasMessage()) continue;   // 压缩 boundary 无消息，getMessage 抛
             if (events.get(i).getMessage() instanceof org.springframework.ai.chat.messages.ToolResponseMessage trm
                     && trm.getResponses().stream().anyMatch(r -> anchorToolCallId.equals(r.id()))) {
                 return i + 1;
