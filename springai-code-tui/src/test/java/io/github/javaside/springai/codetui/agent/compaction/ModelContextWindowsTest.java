@@ -44,6 +44,13 @@ class ModelContextWindowsTest {
         assertEquals(1_000_000L, windows.resolve("anthropic", "claude-sonnet-5-5"));
     }
 
+    /** Claude 5.2 / Haiku 5.5（2026-11-09 / 2026-10-07 发布，官方与 ampcode 模型页核实）：均 1M 上下文。 */
+    @Test
+    void anthropicFable52AndHaiku55WindowsAreBuiltIn() {
+        assertEquals(1_000_000L, windows.resolve("anthropic", "claude-fable-5-2"));
+        assertEquals(1_000_000L, windows.resolve("anthropic", "claude-haiku-5-5"));
+    }
+
     /** gpt-6-astra（2026-09-03 发布，OpenAI 官方模型页核实）：上下文 1,050,000 token。 */
     @Test
     void gpt6AstraWindowIsBuiltIn() {

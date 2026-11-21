@@ -152,6 +152,25 @@ class ProviderThinkingOptionsTest {
     }
 
     /**
+     * Claude 新旗舰 fable-5-2（2026-11-09）与 haiku-5-5（2026-10-07）：均 thinking always-on
+     * 不可禁用（fable 全系如此；haiku-5-5 按 5.5 世代一致性判定——opus-5-5/sonnet-5-5 的 disabled
+     * 全档 400 在先），effort 档位同既有口径 low/medium/high/max；且必须已入内置清单。
+     */
+    @Test
+    void anthropicFable52AndHaiku55CannotDisableThinking_andAreListed() {
+        AnthropicProvider provider = new AnthropicProvider("k");
+        for (String id : List.of("claude-fable-5-2", "claude-haiku-5-5")) {
+            assertFalse(provider.thinkingCapabilities(id).supportsDisable(), id + " 应为 thinking always-on");
+            assertThrows(IllegalArgumentException.class,
+                    () -> provider.options(id, ThinkingConfig.disabled()));
+            assertEquals(List.of("low", "medium", "high", "max"),
+                    provider.thinkingCapabilities(id).effortValues());
+            assertTrue(provider.models().stream().anyMatch(m -> m.id().equals(id)),
+                    id + " 必须在内置清单（漏配会选不到）");
+        }
+    }
+
+    /**
      * claude 5.5（2026-09 下旬发布，官方 thinking 支持表核实）thinking always-on：
      * opus-5-5 标 Always on、sonnet-5-5 的 disabled 全档 400——均不可禁用；effort 档位同 opus。
      * 上代 opus-5 / sonnet-5 接受 disabled，新模型接入不得把它们误伤成不可关闭。
