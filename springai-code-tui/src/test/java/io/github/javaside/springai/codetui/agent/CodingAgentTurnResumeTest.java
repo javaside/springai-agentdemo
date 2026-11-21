@@ -859,7 +859,9 @@ class CodingAgentTurnResumeTest {
                 .filter(m -> m instanceof UserMessage)
                 .filter(m -> m.getText() != null && m.getText().startsWith("问题"))
                 .count();
-        assertEquals(2, questions, "重放使会话含两份问题文本（声明的误判行为，不丢数据）");
+        // 2026-11-21 spring-ai 2.1.0 起：重放轮 client.prompt() 不调 .user()，官方 before() 不再
+        // 兜底落库（stores nothing）——误判边界不再产生第二份问题文本，数据不丢（上一份仍在）且更干净。
+        assertEquals(1, questions, "重放轮不再重复落库问题文本；误判路径仍不丢数据（上一份问题在）");
     }
 
     // ════════════════════════════════════════════════════════════════════════════

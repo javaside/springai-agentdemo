@@ -63,8 +63,9 @@ class PreflightCompactionAdvisorTest {
                 SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, "s"))
                 .stream().content().collectList().block();
 
-        assertEquals(5, sessions.getMessages("s").size(),
-                "模型调用前应先替换为 summary + 最近两条，再追加本轮 user/assistant");
+        // 官方 2.1.0 append-only：被压缩覆盖的事件仍在日志里（全量 11 条），活跃视图才是发给模型的历史。
+        assertEquals(5, sessions.getEvents("s", org.springframework.ai.session.EventFilter.active()).size(),
+                "模型调用前活跃视图应为 summary + 最近两条，再追加本轮 user/assistant");
         assertTrue(modelPromptSizes.get(0) < 400,
                 "模型第一次收到的就必须是压缩后历史，而不是先发送超限历史再 after 压缩");
     }

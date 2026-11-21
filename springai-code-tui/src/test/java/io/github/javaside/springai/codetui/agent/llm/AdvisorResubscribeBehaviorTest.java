@@ -184,10 +184,11 @@ class AdvisorResubscribeBehaviorTest {
                 .filter(m -> m instanceof UserMessage)
                 .map(m -> (UserMessage) m)
                 .toList();
-        assertEquals(2, users.size(), "两轮各追加一条 user");
+        // 2026-11-21 spring-ai 2.1.0 起：官方 before() 移除空 user 兜底——
+        // PromptHistory.lastUserOrToolResponseMessage 找不到时什么都不落（"A request without one
+        // stores nothing"）。2026-09-04 实测的「兜底落库空 user」行为不复存在，出站断言（②）不受影响。
+        assertEquals(1, users.size(), "不调 .user() 的那轮不再落库任何 user（官方 2.1.0 移除兜底）");
         assertEquals("上一轮问题", users.get(0).getText());
-        assertEquals("", users.get(1).getText(),
-                "不调 .user() 时 before() 仍落库一条空文本 UserMessage（getLastUserOrToolResponseMessage 兜底）");
 
         // ② 出站不含空 user：第二轮请求的 instructions 里不存在任何空文本 UserMessage。
         //    ⚠ noneMatch——不能写「最后一条 user 文本为空」：出站根本没有那条消息。
@@ -291,8 +292,11 @@ class AdvisorResubscribeBehaviorTest {
     void v3_reasoningOnlyChunk_hasNoText_zeroEmitCaliber() {
         // content=null 的 AssistantMessage：DeepSeek reasoning-only chunk 经 buildGeneration 的产物形态
         AssistantMessage reasoningOnly = DeepSeekAssistantMessageShaper.reasoningOnly("思考中…");
-        assertNull(reasoningOnly.getText(),
-                "V3：reasoning-only chunk 的 getText() 为 null（reasoning 在独立字段，不进文本）");
+        // 2026-11-21 spring-ai 2.1.0 起：流式 chunk 的 getText() 永不为 null——reasoning-only chunk
+        // 的 reasoning 进 ReasoningPart，无 text part 时 getText() 返回空串（官方 DeepSeekChatModel
+        // 对无 part 消息保留空 text part 的契约）。hasContent「text 非空」口径不受影响，零下发仍成立。
+        assertEquals("", reasoningOnly.getText(),
+                "V3：reasoning-only chunk 的 getText() 为空串而非 null（2.1.0 契约：chunk text 永不为 null）");
         assertTrue(!hasContent(reasoningOnly),
                 "V3：reasoning-only chunk 按 spec §3.2 hasContent（text 非空 或 hasToolCalls）判无内容——零下发计数不被思考流污染");
         assertFalse(reasoningOnly.hasToolCalls());

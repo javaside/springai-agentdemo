@@ -77,17 +77,16 @@ class AgentToolsCompactionWiringTest {
 
     /** 断言压缩结果里确实多了一条带 synthetic 标记、逐字保留了 path 的清单消息。 */
     private static void assertManifestPresent(CompactionResult out, SessionEvent summary, String path) {
-        // TODO(Task2 行为校准): 官方 2.1.0 里清单并入 summary() 尾部（见 MediaReferencePreserving 的主代码），
-        // 编译层先按 compactedEvents()→preservedEvents() 机械映射，索引与期望值留给行为校准阶段重定。
-        assertEquals(2, out.preservedEvents().size(),
-                "应在摘要之外多出一条附件清单事件，实际：" + out.preservedEvents());
-        Message manifest = out.preservedEvents().get(0).getMessage();
+        // 官方 2.1.0：清单并入 summary() 尾部（MediaReferencePreserving 主代码），preserved 不动。
+        assertEquals(2, out.summary().size(),
+                "应在摘要之外多出一条附件清单消息，实际：" + out.summary());
+        Message manifest = out.summary().get(1);
         String text = manifest.getText();
         assertTrue(text.startsWith(MediaReferencePreservingCompactionStrategy.MANIFEST_HEADER),
-                "首条应是附件清单，实际：" + text);
+                "末条应是附件清单，实际：" + text);
         assertTrue(text.contains(path), "path 是唯一寻址依据，必须逐字保留，实际：" + text);
         assertTrue(VisionMaterializer.isSynthetic(manifest), "清单消息必须带 synthetic 标记");
-        assertEquals(summary.getMessage().getText(), out.preservedEvents().get(1).getMessage().getText(),
+        assertEquals(summary.getMessage().getText(), out.summary().get(0).getText(),
                 "摘要本身不应被改动");
     }
 

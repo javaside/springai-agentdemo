@@ -77,11 +77,8 @@ class BoundedSummarizationSplitBoundaryTest {
 
     /** 保留窗口(摘要 2 条之后)必须以 root USER 事件开头,且不含孤儿 tool_result。 */
     private static void assertNoOrphanToolResult(CompactionResult result) {
-        // TODO(Task2 行为校准): 官方 2.1.0 的 preservedEvents 已不含前导 2 条合成摘要事件（它们分离进
-        // summary()），「跳过前 2 条」的 subList 口径已过时，编译层先机械映射，行为校准阶段重定 kept 的切法。
-        List<SessionEvent> compacted = result.preservedEvents();
-        // compacted[0]=synthetic USER 摘要标记, [1]=synthetic ASSISTANT 摘要正文, [2..]=保留窗口
-        List<SessionEvent> kept = compacted.subList(2, compacted.size());
+        // 官方 2.1.0：preservedEvents 即保留窗口本身（合成摘要分离进 summary()），无需再跳过前导 2 条。
+        List<SessionEvent> kept = result.preservedEvents();
         assertFalse(kept.isEmpty(), "应保留最近回合");
         assertEquals(MessageType.USER, kept.get(0).getMessageType(),
                 "保留窗口必须从真正的用户回合起点切开,不能以 assistant/tool 中途开头");
@@ -140,9 +137,8 @@ class BoundedSummarizationSplitBoundaryTest {
 
         CompactionResult result = s.compact(request(events));
 
-        // TODO(Task2 行为校准): 同 assertNoOrphanToolResult——subList(2, ...) 跳过合成摘要头的口径已过时。
-        List<SessionEvent> compacted = result.preservedEvents();
-        List<SessionEvent> kept = compacted.subList(2, compacted.size());
+        // 官方 2.1.0：preservedEvents 即保留窗口，无前导摘要事件可跳。
+        List<SessionEvent> kept = result.preservedEvents();;
         if (!kept.isEmpty()) {
             assertEquals(MessageType.USER, kept.get(0).getMessageType(),
                     "token 预算分支也必须从用户回合起点切开");

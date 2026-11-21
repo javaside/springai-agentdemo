@@ -60,18 +60,17 @@ class MediaReferencePreservingCompactionStrategyTest {
     }
 
     /** 假 delegate：原样吐出给定的压缩结果，不碰 LLM。 */
-    private static CompactionStrategy delegateReturning(List<SessionEvent> compacted, List<SessionEvent> archived) {
-        // 官方 2.1.0 六参：旧三参 (compacted, archived, tokens) → covered←archived、preserved←compacted
-        // （编译层原样搬运，TODO(Task2 行为校准)：合成摘要应分离进 summary()，口径待行为校准阶段重定）、
-        // pinned 空、summary 空、tokens 透传。
-        CompactionResult r = new CompactionResult(archived, List.of(), compacted, List.of(), 4321, "test");
+    private static CompactionStrategy delegateReturning(List<SessionEvent> summaryEvents, List<SessionEvent> archived) {
+        // 官方 2.1.0 语义化映射：本组用例给第一个参数装的一直是合成摘要事件 → 分离进 summary()
+        // （取其 Message）；被归档事件 → coveredEvents；preserved 空（本组用例不关注保留窗口）。
+        CompactionResult r = new CompactionResult(archived, List.of(), List.of(),
+                summaryEvents.stream().map(SessionEvent::getMessage).toList(), 4321, "test");
         return req -> r;
     }
 
     private static String manifestText(CompactionResult out) {
-        // TODO(Task2 行为校准): 官方 2.1.0 里清单并入 summary() 尾部，不再占据 compacted/preserved 的首位，
-        // 编译层先按 compactedEvents()→preservedEvents() 机械映射，索引留给行为校准阶段重定。
-        return out.preservedEvents().get(0).getMessage().getText();
+        // 官方 2.1.0：清单并入 summary() 尾部（manifestMessage 追加在 delegate 摘要之后），取末条。
+        return out.summary().get(out.summary().size() - 1).getText();
     }
 
     /**
@@ -98,8 +97,7 @@ class MediaReferencePreservingCompactionStrategyTest {
 
         CompactionResult out = s.compact(request());
 
-        // TODO(Task2 行为校准): 清单已并入 summary() 尾部，preservedEvents 的尺寸/索引口径待重定。
-        assertEquals(2, out.preservedEvents().size(), "清单应插在摘要之前");
+        assertEquals(2, out.summary().size(), "清单应追加在摘要之后");
         String text = manifestText(out);
         assertTrue(text.startsWith(MediaReferencePreservingCompactionStrategy.MANIFEST_HEADER),
                 "首行应是清单抬头，实际：" + text);
@@ -107,7 +105,7 @@ class MediaReferencePreservingCompactionStrategyTest {
         assertTrue(text.contains(".codetui/artifacts/b7e2f1a0.png"),
                 "path 是唯一寻址依据，必须逐字保留，实际：" + text);
         assertTrue(text.contains("image/png") && text.contains("1440x900"), "应带类型与尺寸：" + text);
-        assertSame(summary, out.preservedEvents().get(1), "摘要事件本身不应被改动");
+        assertSame(summary.getMessage(), out.summary().get(0), "摘要消息本身不应被改动（装饰器只复制列表不动元素）");
         assertEquals(4321, out.tokensEstimatedSaved(), "delegate 的 token 账应原样透传");
     }
 
@@ -118,8 +116,7 @@ class MediaReferencePreservingCompactionStrategyTest {
                 List.of(user(ref("a3f8c200", "login.png", ".codetui/artifacts/a3f8c200.png",
                         "image/png", 800, 600)))));
 
-        // TODO(Task2 行为校准): 清单已并入 summary() 尾部，preservedEvents[0] 不再是清单，索引待重定。
-        Message manifest = s.compact(request()).preservedEvents().get(0).getMessage();
+        Message manifest = s.compact(request()).summary().get(1);
 
         // 不带标记的话，这条新造的 user 消息会成为「最后一条非合成 UserMessage」，把出站兑现的回合锚点带偏。
         assertTrue(VisionMaterializer.isSynthetic(manifest), "清单消息必须带 synthetic 标记");
@@ -208,8 +205,7 @@ class MediaReferencePreservingCompactionStrategyTest {
 
         CompactionResult out = s.compact(request());
 
-        // TODO(Task2 行为校准): 清单已并入 summary() 尾部，preservedEvents 不再含清单事件。
-        assertEquals(1, out.preservedEvents().size(), "assistant 里的引用不该触发清单，实际：" + out.preservedEvents());
+        assertEquals(1, out.summary().size(), "assistant 里的引用不该触发清单，实际：" + out.summary());
     }
 
     @Test

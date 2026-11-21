@@ -62,10 +62,10 @@ class BoundedSummarizationCalibrationTest {
 
         assertEquals(450, result.coveredEventCount(),
                 "手动 /compact 必须按事件窗口激进归档,不能因 total <= targetBudget 误报无可压缩内容");
-        // TODO(Task2 行为校准): 旧 compactedEvents = 摘要 2 事件 + 保留窗口，官方 2.1.0 的 preservedEvents
-        // 只剩保留窗口，「+ 2」的期望值口径待行为校准阶段重定。
-        assertEquals(AgentTools.MANUAL_MAX_EVENTS_TO_KEEP + 2, result.preservedEvents().size(),
-                "压缩产物应是摘要标记 + 摘要正文 + 最近 20 个事件");
+        // 官方 2.1.0 口径：摘要分离进 summary()（标记 + 正文两条消息），preservedEvents 只剩保留窗口。
+        assertEquals(AgentTools.MANUAL_MAX_EVENTS_TO_KEEP, result.preservedEvents().size(),
+                "保留窗口 = 最近 20 个事件");
+        assertEquals(2, result.summary().size(), "摘要 = 标记 + 正文两条消息");
     }
 
     // 场景 1:窗口装得下 → 一次全量调用,knownGood 学到 E
