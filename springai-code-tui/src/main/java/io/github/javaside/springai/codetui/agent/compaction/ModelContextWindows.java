@@ -32,6 +32,9 @@ public final class ModelContextWindows {
             Map.entry("deepseek:deepseek-v4-flash", 1_000_000L),
             Map.entry("deepseek:deepseek-v4-flash-vision-exp", 1_000_000L),
             Map.entry("zhipu:glm-5.3", 1_000_000L),
+            // glm-5.4（2026-11-23，官方切换指南核实）：1M 上下文；同页建议压缩窗口 512000，
+            // 此处与 glm-5.3 同口径记满窗口 1M——压缩预算属另一层参数，由压缩器自行校准。
+            Map.entry("zhipu:glm-5.4", 1_000_000L),
             // 智谱视觉线（2026-09-01 官方文档核实）：flash 1M / 4.6v 128K / 4.5v 64K；
             // glm-4v / glm-4.1v 窗口未核实，不进表——落保守兜底，用户可经 CODETUI_CONTEXT_WINDOWS 覆盖。
             Map.entry("zhipu:glm-5.3-flash", 1_000_000L),

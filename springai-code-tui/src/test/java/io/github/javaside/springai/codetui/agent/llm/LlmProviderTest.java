@@ -87,7 +87,7 @@ class LlmProviderTest {
         ZhipuProvider p = new ZhipuProvider("fake-key");
         assertEquals("zhipu", p.id());
         assertTrue(p.available());
-        assertEquals("glm-5.3", p.defaultModel());
+        assertEquals("glm-5.4", p.defaultModel());   // 2026-11-23 起默认旗舰 glm-5.4（仅 coding 端点可用）
         assertFalse(p.models().isEmpty());
         assertTrue(p.chatModel() != null);   // 复用 OpenAiChatModel：build() 从 options 派生 client，网络无关
         assertEquals("glm-5.1", p.options("glm-5.1").getModel());
