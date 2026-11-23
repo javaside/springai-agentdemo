@@ -131,6 +131,25 @@ class ProviderThinkingOptionsTest {
     }
 
     /**
+     * 官方切换指南（2026-11-23）：glm-5.4 服务端映射三档 low/high/max，「关闭思考」也落到 low
+     * ——与 glm-5.3 系同构：effort 不可禁用、非法档位拒绝。
+     */
+    @Test
+    void zhipuGlm54CarriesEffortAndCannotDisable() {
+        ZhipuProvider provider = new ZhipuProvider("k");
+        OpenAiChatOptions options = (OpenAiChatOptions) provider
+                .options("glm-5.4", ThinkingConfig.enabledEffort("max"));
+        assertEquals(Map.of("type", "enabled"), options.getExtraBody().get("thinking"));
+        assertEquals("max", options.getReasoningEffort());
+        assertFalse(provider.thinkingCapabilities("glm-5.4").supportsDisable());
+        assertEquals(List.of("low", "high", "max"), provider.thinkingCapabilities("glm-5.4").effortValues());
+        assertThrows(IllegalArgumentException.class, () -> provider
+                .options("glm-5.4", ThinkingConfig.disabled()));
+        assertThrows(IllegalArgumentException.class, () -> provider
+                .options("glm-5.4", ThinkingConfig.enabledEffort("medium")));
+    }
+
+    /**
      * GPT-6.2 Astra/Sol（2026-11-17 发布，官方模型页核实）：reasoning.effort 五档 low..max、
      * 不支持 none（同 6-astra/6.1-sol 口径）；GPT-6.1 Terra（2026-10-29 发布）：六档含 none
      * 可关闭（$1/$5，比 6.1-sol 便宜 50%）。三者均必须已入内置清单。

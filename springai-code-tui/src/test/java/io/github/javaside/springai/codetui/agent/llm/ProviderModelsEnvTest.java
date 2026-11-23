@@ -34,7 +34,8 @@ class ProviderModelsEnvTest {
 
     @Test
     void zhipu_noEnv_builtInDefault() {
-        assertEquals("glm-5.3", new ZhipuProvider("key", null, null).defaultModel());
+        // 2026-11-23 起默认旗舰 glm-5.4（视觉+泛编码；仅 coding 端点可用，见 ZhipuProvider 注释）
+        assertEquals("glm-5.4", new ZhipuProvider("key", null, null).defaultModel());
     }
 
     @Test

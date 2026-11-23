@@ -69,12 +69,13 @@ class VisionModelsTest {
         assertTrue(VisionModels.enabledFor("false"), "刻意不认 false/0/no——只认 off，少一种猜法");
     }
 
-    /** 智谱视觉线 2025-12 起的新前缀（glm-4.6v / glm-5.3-flash / glm-5v），2026-09-01 接入。 */
+    /** 智谱视觉线 2025-12 起的新前缀（glm-4.6v / glm-5.3-flash / glm-5.4 / glm-5v）。 */
     @Test
     void zhipuNewVisionLineIsSupported() {
         assertTrue(VisionModels.supportsImage("glm-4.6v"), "glm-4.6v");
         assertTrue(VisionModels.supportsImage("glm-4.6v-flash"), "glm-4.6v-flash（免费档）");
         assertTrue(VisionModels.supportsImage("glm-5.3-flash"), "glm-5.3-flash（GLM-5 首个原生多模态）");
+        assertTrue(VisionModels.supportsImage("glm-5.4"), "glm-5.4（2026-11-23 上线，视觉+泛编码旗舰）");
         assertTrue(VisionModels.supportsImage("glm-5v-turbo"), "glm-5v 系（GLM-5V-Turbo，确切 id 未核实但前缀安全）");
     }
 

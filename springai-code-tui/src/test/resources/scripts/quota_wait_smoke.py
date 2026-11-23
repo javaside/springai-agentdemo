@@ -97,7 +97,7 @@ CTRL_U = b"\x15"
 # 北京时间固定 UTC+8：Asia/Shanghai 无夏令时，避免依赖 zoneinfo/机器时区。
 CST = timezone(timedelta(hours=8))
 
-MODEL_ID = "glm-5.3"                       # zhipu 默认模型（桩应答里回显用，不做断言）
+MODEL_ID = "glm-5.4"                       # zhipu 默认模型（2026-11-23 起旗舰 glm-5.4；桩应答回显用，不做断言）
 
 # 重置时刻 = 首个 429 时刻 + QUOTA_DELAY_S 秒。⚠ 必须与实现里的 MIN_QUOTA_WAIT_MS=30s 下限拉开
 # 足够大的差距（75 − 30 = 45s >> 容差 QUOTA_TOL_S=8s）：这样测的才是「真睡到重置时刻」而非下限
@@ -435,7 +435,7 @@ def main():
     # 不覆盖就打真网（烧真配额）。zhipu provider 走 spring-ai-openai（openai-java SDK），
     # baseUrl 后拼 /chat/completions，故桩端点的任意路径都会命中。
     env["ZHIPU_BASE_URL"] = base_url
-    env.pop("ZHIPU_MODELS", None)             # 用内置默认清单（glm-5.3）
+    env.pop("ZHIPU_MODELS", None)             # 用内置默认清单（glm-5.4）
     # 别让开发机上的其他 key 多挂 provider（会改默认模型，也可能真的发出网络请求）。
     for k in ("DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
               "OPENCODE_GO_API_KEY", "BOCHA_API_KEY", "BRAVE_API_KEY"):

@@ -29,6 +29,12 @@ class ModelContextWindowsTest {
         assertEquals(1_000_000L, windows.resolve("zhipu", "glm-5.3"), "既有条目不因新增而漂移");
     }
 
+    /** glm-5.4（2026-11-23 上线，官方切换指南核实）：1M 上下文，防落 128K 保守兜底。 */
+    @Test
+    void glm54WindowIsBuiltIn() {
+        assertEquals(1_000_000L, windows.resolve("zhipu", "glm-5.4"));
+    }
+
     /** Anthropic 2026-09 在售窗口（官方模型总览核实）：fable-5-1 / opus-5 / sonnet-5 均 1M。 */
     @Test
     void anthropicCurrentModelsWindowsAreBuiltIn() {
