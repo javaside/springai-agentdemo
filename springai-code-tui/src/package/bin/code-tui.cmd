@@ -1,13 +1,13 @@
 @echo off
-rem springai-code-tui å¯åŠ¨è„šæœ¬ï¼ˆWindowsï¼‰ã€‚è§£åŽ‹åŽç›´æŽ¥è¿è¡Œæœ¬è„šæœ¬ã€‚
-rem éœ€æ±‚ï¼šJDK 17+ã€‚
-rem é…ç½®ï¼šæŠŠ bin\config.env.example å¤åˆ¶ä¸º bin\config.env å¹¶å¡« API keyï¼ˆè‡³å°‘ä¸€å®¶ï¼‰ï¼›æˆ–ç›´æŽ¥ç”¨çŽ¯å¢ƒå˜é‡ã€‚
-rem   å®Œæ•´é…ç½®é¡¹ï¼ˆå„å®¶ *_API_KEY / *_BASE_URL / *_MODELSã€è”ç½‘æœç´¢ keyã€CODETUI_* ç­‰ï¼‰è§ bin\config.env.exampleã€‚
+rem springai-code-tui Æô¶¯½Å±¾£¨Windows£©¡£½âÑ¹ºóÖ±½ÓÔËÐÐ±¾½Å±¾¡£
+rem ÐèÇó£ºJDK 17+¡£
+rem ÅäÖÃ£º°Ñ bin\config.env.example ¸´ÖÆÎª bin\config.env ²¢Ìî API key£¨ÖÁÉÙÒ»¼Ò£©£»»òÖ±½ÓÓÃ»·¾³±äÁ¿¡£
+rem   ÍêÕûÅäÖÃÏî£¨¸÷¼Ò *_API_KEY / *_BASE_URL / *_MODELS¡¢ÁªÍøËÑË÷ key¡¢CODETUI_* µÈ£©¼û bin\config.env.example¡£
 setlocal
 set "APP_HOME=%~dp0.."
 
-rem åŠ è½½å¯é€‰ config.envï¼ˆKEY=VALUEï¼›# å¼€å¤´ä¸ºæ³¨é‡Šï¼‰ã€‚å–æ¶ˆæ³¨é‡Šçš„è¡Œè¦†ç›–åŒåçŽ¯å¢ƒå˜é‡ã€‚
-rem æŸ¥æ‰¾ï¼šCODETUI_CONFIG > bin\config.envï¼ˆä¸Žæœ¬è„šæœ¬åŒç›®å½•ï¼‰> %USERPROFILE%\.codetui\config.env
+rem ¼ÓÔØ¿ÉÑ¡ config.env£¨KEY=VALUE£»# ¿ªÍ·Îª×¢ÊÍ£©¡£È¡Ïû×¢ÊÍµÄÐÐ¸²¸ÇÍ¬Ãû»·¾³±äÁ¿¡£
+rem ²éÕÒ£ºCODETUI_CONFIG > bin\config.env£¨Óë±¾½Å±¾Í¬Ä¿Â¼£©> %USERPROFILE%\.codetui\config.env
 set "CONFIG="
 if defined CODETUI_CONFIG if exist "%CODETUI_CONFIG%" set "CONFIG=%CODETUI_CONFIG%"
 if not defined CONFIG if exist "%~dp0config.env" set "CONFIG=%~dp0config.env"
@@ -22,13 +22,21 @@ if defined JAVA_HOME (
     set "JAVA=java"
 )
 
-where "%JAVA%" >nul 2>nul
-if errorlevel 1 (
-    echo é”™è¯¯: æœªæ‰¾åˆ° javaã€‚è¯·å®‰è£… JDK 17+ æˆ–è®¾ç½® JAVA_HOME åŽé‡è¯•ã€‚ 1>&2
-    exit /b 1
+rem ¼ì²é java ÊÇ·ñ¿ÉÓÃ
+if "%JAVA%"=="java" (
+    where java >nul 2>nul
+    if errorlevel 1 (
+        echo ´íÎó: Î´ÕÒµ½ java¡£Çë°²×° JDK 17+ »òÉèÖÃ JAVA_HOME ºóÖØÊÔ¡£ 1>&2
+        exit /b 1
+    )
+) else (
+    if not exist "%JAVA%" (
+        echo ´íÎó: Î´ÕÒµ½ java¡£Çë°²×° JDK 17+ »òÉèÖÃ JAVA_HOME ºóÖØÊÔ¡£ 1>&2
+        exit /b 1
+    )
 )
 
-rem æ—¥å¿—ç›®å½•ï¼šé»˜è®¤å†™åˆ°å®‰è£…ç›®å½•ä¸‹ logs\ï¼Œä¸æ±¡æŸ“ç”¨æˆ·é¡¹ç›®ç›®å½•ï¼›åˆ›å»ºå¤±è´¥åˆ™å›žé€€åˆ° %USERPROFILE%\.codetui\logsã€‚
+rem ÈÕÖ¾Ä¿Â¼£ºÄ¬ÈÏÐ´µ½°²×°Ä¿Â¼ÏÂ logs\£¬²»ÎÛÈ¾ÓÃ»§ÏîÄ¿Ä¿Â¼£»´´½¨Ê§°ÜÔò»ØÍËµ½ %USERPROFILE%\.codetui\logs¡£
 set "LOG_DIR=%APP_HOME%\logs"
 mkdir "%LOG_DIR%" 2>nul
 if not exist "%LOG_DIR%\" (
