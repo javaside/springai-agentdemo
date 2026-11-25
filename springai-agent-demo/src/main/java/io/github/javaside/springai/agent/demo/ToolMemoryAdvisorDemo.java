@@ -14,7 +14,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import java.util.List;
 
 /**
- * 示例 4：ToolCallingAdvisor + MessageChatMemoryAdvisor，以及「两者顺序」的意义。
+ * 示例 7：ToolCallingAdvisor + MessageChatMemoryAdvisor，以及「两者顺序」的意义（ChatMemory，已弃用）。
  *
  * <p>背景知识（Spring AI 2.0 的变化）：
  * <ul>
@@ -41,6 +41,10 @@ import java.util.List;
  *
  * <p>本示例对同一个需要调用工具的问题，分别用两种顺序各跑一次，然后打印各自记忆里实际存了哪些消息，
  * 让“顺序的意义”一目了然。
+ *
+ * <p><b>已弃用，且结论只对 ChatMemory 成立</b>：{@link MessageChatMemoryAdvisor} 在 2.1.0 已标弃用（3.0 移除）。
+ * 它的继任者 {@code SessionMemoryAdvisor} 默认就在工具循环<b>内侧</b>，会话日志一定会记下工具调用与工具结果，
+ * 「模型看到什么」改由视图（{@code EventFilter} / 压缩）控制，不再靠 advisor 的先后——见示例 4。
  */
 public class ToolMemoryAdvisorDemo implements Demo {
 
@@ -52,12 +56,12 @@ public class ToolMemoryAdvisorDemo implements Demo {
 
     @Override
     public String title() {
-        return "ToolCallingAdvisor + 记忆：advisor 顺序的意义";
+        return "Advisor 顺序（ChatMemory，2.1 起已弃用）";
     }
 
     @Override
     public int order() {
-        return 4;
+        return 7;
     }
 
     @Override

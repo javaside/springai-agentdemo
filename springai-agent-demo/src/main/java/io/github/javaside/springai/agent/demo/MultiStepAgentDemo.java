@@ -4,7 +4,7 @@ import io.github.javaside.springai.agent.tools.DateTimeTools;
 import org.springframework.ai.chat.client.ChatClient;
 
 /**
- * 示例 3：多步 Agent（自动串联多个工具）。
+ * 示例 6：多步 Agent（自动串联多个工具）。
  *
  * <p>这是“智能体”最直观的体现：给一个需要多步推理 + 多次工具调用才能完成的任务，
  * 模型会自己规划步骤、连续调用工具，最后汇总答案。
@@ -31,7 +31,7 @@ public class MultiStepAgentDemo implements Demo {
 
     @Override
     public int order() {
-        return 3;
+        return 6;
     }
 
     @Override

@@ -13,6 +13,11 @@ import org.springframework.ai.chat.memory.MessageWindowChatMemory;
  * {@link MessageChatMemoryAdvisor} 在每次请求时自动把历史拼进去。
  *
  * <p>本示例发起两轮对话：第二轮的问题依赖第一轮的内容（指代“它”），以此验证“记住了”。
+ *
+ * <p><b>已弃用</b>：Spring AI 2.1.0 起 {@link ChatMemory}、{@link MessageWindowChatMemory} 与
+ * {@link MessageChatMemoryAdvisor} 都标了 {@code @Deprecated(forRemoval = true)}（3.0 移除），继任者是
+ * <b>会话记忆（Session）</b>，见示例 3。本示例保留，是为了读得懂旧代码和网上资料里的 ChatMemory 写法，
+ * 并和示例 3 并排对照：同一个两轮场景，两套 API 各自怎么接。
  */
 public class ChatMemoryDemo implements Demo {
 
@@ -24,7 +29,7 @@ public class ChatMemoryDemo implements Demo {
 
     @Override
     public String title() {
-        return "多轮对话记忆（ChatMemory）";
+        return "对话记忆（ChatMemory，2.1 起已弃用）";
     }
 
     @Override
