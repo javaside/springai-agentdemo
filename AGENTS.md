@@ -18,8 +18,8 @@ Java 后端开发者从零学会 Agent 开发的教学项目（Apache-2.0），�
 | 模块 | 角色 | 测试 |
 | --- | --- | --- |
 | `springai-core-demo` | 第①步：原始 API（对话/模板/流式/结构化输出/RAG） | 无 |
-| `springai-agent-demo` | 第②步：`@Tool` 工具调用、对话记忆、多步 Agent | 少量 |
-| `springai-boot-demo` | 第③步：Spring Boot starter 自动装配 + MCP | 无 |
+| `springai-agent-demo` | 第②步：`@Tool` 工具调用、对话记忆与会话记忆（Session Memory）、多步 Agent | 少量 |
+| `springai-boot-demo` | 第③步：Spring Boot starter 自动装配 + MCP + 会话落库（JDBC） | 无 |
 | `springai-jline-demo` | 第④步：JLine 3 终端基础 | 无 |
 | `springai-tamboui-demo` | 第⑤步：TamboUI 终端 UI 框架入门课程（八课递进：创建→渲染模型→文本→组件→布局→事件→DSL→行内，衔接 code-tui 视图） | 少量 |
 | `springai-code-tui` | 第⑥步：编码智能体（主要开发阵地，绝大多数测试在这里） | 全量 |
