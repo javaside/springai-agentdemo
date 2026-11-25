@@ -49,6 +49,12 @@ public class AutoConfigInspectDemo implements Demo {
                 "starter 自动配置（spring-ai-starter-model-deepseek）");
         inspect("ChatClient", ChatClient.class,
                 "我们手动 @Bean（见 config/ChatClientConfig，为了加默认系统提示词）");
+        inspect("DataSource", javax.sql.DataSource.class,
+                "starter 自动配置（spring-boot-starter-jdbc，由会话 JDBC starter 带入）");
+        inspect("SessionRepository", org.springframework.ai.session.SessionRepository.class,
+                "starter 自动配置（spring-ai-starter-model-session-jdbc）");
+        inspect("SessionService", org.springframework.ai.session.SessionService.class,
+                "starter 自动配置（spring-ai-autoconfigure-model-session）");
 
         System.out.println("结论：除了 ChatClient 是我们手写的，其余都是 starter 自动配置的。");
         System.out.println("想自定义自动配置的 Bean？在 application.properties 改对应的 spring.ai.* 配置即可。");

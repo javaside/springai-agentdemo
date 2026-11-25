@@ -42,6 +42,21 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-mcp-client</artifactId>
         </dependency>
+
+        <!--
+          会话 JDBC starter：自动配置 SessionRepository（JdbcSessionRepository）与 SessionService，
+          并带入 spring-boot-starter-jdbc（DataSource / JdbcTemplate / 事务管理器）。
+          它不带数据库驱动，所以下面单独加 H2（版本由 spring-boot-dependencies 管理）。
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-session-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 
     <build>
