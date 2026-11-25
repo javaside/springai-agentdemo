@@ -48,14 +48,20 @@ import java.util.function.Function;
  * mkdir -p /tmp/session-evidence
  * javac --release 17 -encoding UTF-8 -cp "$(cat /tmp/agent-cp.txt)" -d /tmp/session-evidence \
  *     dev/session-memory-evidence/SessionMemoryEvidence.java
- * java -Dfile.encoding=UTF-8 -cp "/tmp/session-evidence:$(cat /tmp/agent-cp.txt)" SessionMemoryEvidence
+ * java -Dfile.encoding=UTF-8 -Dlogback.configurationFile=springai-agent-demo/src/main/resources/logback.xml \
+ *     -cp "/tmp/session-evidence:$(cat /tmp/agent-cp.txt)" SessionMemoryEvidence
  * }</pre>
- * session 两个坐标进 agent-demo 的 pom 之前，classpath 需再追加 ~/.m2 里的
- * spring-ai-session-2.1.0.jar 与 spring-ai-session-advisor-2.1.0.jar。
  */
 public class SessionMemoryEvidence {
 
     static final AtomicInteger TOOL_CALL_IDS = new AtomicInteger();
+
+    /**
+     * 工具入参的属性名要与输入 schema 一致：javac 默认不开 -parameters，Spring 7 也不再从 LocalVariableTable
+     * 取形参名，所以下面 {@link Weather} 的 {@code @Tool} 形参在 schema 里叫 arg0——写成 {"city":..} 时
+     * 实参是 null，工具抛出的 NullPointerException 会被当成「工具结果」记进日志。
+     */
+    static final String WEATHER_ARGS = "{\"arg0\":\"北京\"}";
 
     public static void main(String[] args) {
         plainTurns();
@@ -89,7 +95,7 @@ public class SessionMemoryEvidence {
             if (isToolResult(p)) {
                 return text("北京今天晴。");
             }
-            return lastUserText(p).contains("天气") ? toolCall("getWeather", "{\"city\":\"北京\"}") : text("你好！");
+            return lastUserText(p).contains("天气") ? toolCall("getWeather", WEATHER_ARGS) : text("你好！");
         }, true);
         ChatClient client = ChatClient.builder(model).build();
         String sid = "session-tool";
@@ -191,7 +197,7 @@ public class SessionMemoryEvidence {
         // 坑 1：桩模型的 getOptions() 返回普通 ChatOptions → .tools(...) 被静默丢弃，工具循环根本不启动
         boolean[] toolRan = { false };
         List<Advisor> advisors = SessionAdvisors.builder(newService()).build();
-        ScriptedModel plainOptionsModel = new ScriptedModel(p -> toolCall("getWeather", "{\"city\":\"北京\"}"), false);
+        ScriptedModel plainOptionsModel = new ScriptedModel(p -> toolCall("getWeather", WEATHER_ARGS), false);
         ChatClient.builder(plainOptionsModel).build().prompt().user("北京天气怎么样？")
                 .tools(new Weather(() -> toolRan[0] = true))
                 .advisors(advisors).advisors(SessionAdvisors.session("s-pitfall-1")).call().content();
@@ -212,7 +218,7 @@ public class SessionMemoryEvidence {
             System.out.println("  [坑2] 同一个 CallResponseSpec 取第二次 → " + e);
         }
         // 工具循环直通时（如坑 1 的普通 ChatOptions）整条链在一次取值里被弹空，第二次取值就抛了
-        ScriptedModel passThrough = new ScriptedModel(p -> toolCall("getWeather", "{\"city\":\"北京\"}"), false);
+        ScriptedModel passThrough = new ScriptedModel(p -> toolCall("getWeather", WEATHER_ARGS), false);
         ChatClient.CallResponseSpec toolSpec = ChatClient.builder(passThrough).build().prompt().user("北京天气怎么样？")
                 .tools(new Weather())
                 .advisors(SessionAdvisors.builder(newService()).build()).advisors(SessionAdvisors.session("s-pitfall-2")).call();
@@ -227,7 +233,7 @@ public class SessionMemoryEvidence {
 
         // 坑 3：模型请求了没注册的工具 → ToolCallingAdvisor 总是自动注册，异常直接冒到调用方
         try {
-            ChatClient.builder(new ScriptedModel(p -> toolCall("getWeather", "{\"city\":\"北京\"}"), true)).build()
+            ChatClient.builder(new ScriptedModel(p -> toolCall("getWeather", WEATHER_ARGS), true)).build()
                     .prompt().user("北京天气怎么样？").call().content();
             System.out.println("  [坑3] 请求未注册的工具：未报错");
         }
@@ -270,10 +276,21 @@ public class SessionMemoryEvidence {
         for (int i = 0; i < log.size(); i++) {
             SessionEvent e = log.get(i);
             String role = e.hasMessage() ? e.getMessageType().getValue() : "(无消息)";
-            String body = !e.hasMessage() ? "-" : e.hasToolCalls()
-                    ? "🔧" + ((AssistantMessage) e.getMessage()).getToolCalls().stream()
-                            .map(tc -> tc.name() + tc.arguments()).toList()
-                    : clip(e.getMessage().getText());
+            String body;
+            if (!e.hasMessage()) {
+                body = "-";
+            }
+            else if (e.hasToolCalls()) {
+                body = "🔧" + ((AssistantMessage) e.getMessage()).getToolCalls().stream()
+                        .map(tc -> tc.name() + tc.arguments()).toList();
+            }
+            else if (e.getMessage() instanceof ToolResponseMessage toolResult) {
+                // 工具返回值落盘时是 JSON 字符串字面量（带一对引号）
+                body = "↩ " + clip(toolResult.getResponses().get(0).responseData());
+            }
+            else {
+                body = clip(e.getMessage().getText());
+            }
             System.out.printf("   [%2d] %-10s %-9s turnStart=%-5s synthetic=%-5s %-12s %s%n", i + 1, e.getType(), role,
                     e.isTurnStart(), e.isSynthetic(), viewIds.contains(e.getId()) ? "✓ 在视图" : "  已离开视图", body);
         }

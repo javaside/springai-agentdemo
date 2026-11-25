@@ -453,10 +453,9 @@ boot-demo 不加测试（§4）。它的证据是两份真机输出：首次运�
 ## 附录 A 取证程序与实测输出
 
 程序：[`dev/session-memory-evidence/SessionMemoryEvidence.java`](../../../dev/session-memory-evidence/SessionMemoryEvidence.java)。
-不属于任何模块的构建；复跑命令写在类注释里（session 两个坐标进 agent-demo 的 pom 之前，classpath 需追加
-`~/.m2` 里对应的两个 2.1.0 jar）。用脚本化模型，不联网、不需要 API key。
+不属于任何模块的构建；复跑命令写在类注释里。用脚本化模型，不联网、不需要 API key。
 
-2026-11-25 实测输出节选（完整输出 127 行；`✓ 在视图 / 已离开视图` 是程序按 `EventFilter.active()` 现算的）：
+2026-11-25 实测输出节选（完整输出 128 行；`✓ 在视图 / 已离开视图` 是程序按 `EventFilter.active()` 现算的）：
 
 **① 第 4、5 轮**——压缩后日志只多 1 条 `COMPACTION`，第 5 轮模型只收到 5 条：
 
@@ -481,8 +480,8 @@ boot-demo 不加测试（§4）。它的证据是两份真机输出：首次运�
    [ 1] MESSAGE    user      turnStart=true  synthetic=false   已离开视图      你好
    [ 2] MESSAGE    assistant turnStart=false synthetic=false   已离开视图      你好！
    [ 3] MESSAGE    user      turnStart=true  synthetic=false ✓ 在视图        北京天气怎么样？
-   [ 4] MESSAGE    assistant turnStart=false synthetic=false ✓ 在视图        🔧[getWeather{"city":"北京"}]
-   [ 5] MESSAGE    tool      turnStart=false synthetic=false ✓ 在视图
+   [ 4] MESSAGE    assistant turnStart=false synthetic=false ✓ 在视图        🔧[getWeather{"arg0":"北京"}]
+   [ 5] MESSAGE    tool      turnStart=false synthetic=false ✓ 在视图        ↩ "北京：晴，26℃，微风"
    [ 6] MESSAGE    assistant turnStart=false synthetic=false ✓ 在视图        北京今天晴。
    [ 7] COMPACTION (无消息)     turnStart=false synthetic=false   已离开视图      -
 ```
@@ -491,7 +490,7 @@ boot-demo 不加测试（§4）。它的证据是两份真机输出：首次运�
 
 ```
   searchEvents(query=暗号) 命中: [user:第1句，暗号是「海棠」, assistant:回声：第1句，暗号是「海棠」]
-  最终回答: 你最早说的是：{"results":[{"timestamp":"2026-11-24T…
+  最终回答: 你最早说的是：{"results":[{"timestamp":"2026-11-25T…
   模型每轮收到的消息类型: [user]
   模型每轮收到的消息类型: [user, assistant, user]
   模型每轮收到的消息类型: [user, assistant, user, assistant, user]
@@ -503,8 +502,8 @@ boot-demo 不加测试（§4）。它的证据是两份真机输出：首次运�
    [ 9] COMPACTION (无消息)     turnStart=false synthetic=false   已离开视图      -
    [10] MESSAGE    user      turnStart=true  synthetic=false ✓ 在视图        我最早说的暗号是什么？
    [11] MESSAGE    assistant turnStart=false synthetic=false ✓ 在视图        🔧[conversation_search{"query":"暗号"}]
-   [12] MESSAGE    tool      turnStart=false synthetic=false ✓ 在视图
-   [13] MESSAGE    assistant turnStart=false synthetic=false ✓ 在视图        你最早说的是：{"results":[{"timestamp":"2026-11-24T…
+   [12] MESSAGE    tool      turnStart=false synthetic=false ✓ 在视图        ↩ {"results":[{"timestamp":"2026-11-25T03:58:4…
+   [13] MESSAGE    assistant turnStart=false synthetic=false ✓ 在视图        你最早说的是：{"results":[{"timestamp":"2026-11-25T…
 ```
 
 **④ 带摘要的压缩**——边界后追加两条 `synthetic=true` 的事件：
