@@ -542,4 +542,50 @@ boot-demo 不加测试（§4）。它的证据是两份真机输出：首次运�
 
 ## 实施记录
 
-（实施后回填：真机输出、与设计的出入、§9 各项的验证结果。）
+分支 `feature/session-memory-demo`，按 `docs/superpowers/plans/2026-11-25-session-memory-demo.md` 的 Task 1–10 执行。
+设计稿提交 363c4c50 之后依次为 af63613、7b8b4ad、a69f1eb、e98a827、8773c20、8d6de22、db48cbb、87c7cd7、
+5d88f5d、8a0fdd3、dc04492。agent-demo 测试 20 例全绿（原有 6 + 新增 14），都不需要 API key。
+
+### 真机输出（DeepSeek，2026-11-25）
+
+- 示例 3 会话记忆：两轮之后日志 4 条，第 2 轮请求带上 2 条历史；第二轮答出「Java」。
+- 示例 4 会话压缩：条数表 (2,2)(4,4)(6,6)(9,4)(11,6)，与 §2.4 的实测一致；第二幕的工具回合 4 条整回合留在视图。
+- 示例 5 会话召回：两次真机都一次通过——模型调用 `conversation_search({"query":..,"match":"any"})`，答出海棠；
+  日志 / 视图 9/4 → 13/8。提问带「用会话搜索工具查」的引导（§9 第 1 项的兜底原样保留，没有试过去掉引导）。
+- boot-demo 会话落库：第一遍「已有 0 条」、第 1 问答不知道；第二遍「已有 6 条」、答出 A1024；
+  `AI_SESSION_EVENT` 从 6 行涨到 12 行。
+
+### 与设计的出入
+
+1. **工具入参的属性名（实施中新发现，设计时没料到）**：本仓库只有 `springai-code-tui/pom.xml` 开了
+   `-parameters`；agent-demo 等模块编译没开，而 Spring Framework 7 的 `DefaultParameterNameDiscoverer` 不再从
+   LocalVariableTable 取形参名，所以 `@Tool` 形参在工具 schema 里叫 `arg0`（实测：`WeatherTools.getWeather` 的
+   输入 schema 属性是 `arg0`，反射参数名也是 `arg0`）。桩模型若传 `{"city":..}`，实参为 null，工具抛出的
+   NullPointerException 文本会被当成「工具结果」记进日志——现象很隐蔽。处理：测试里的工具入参按输入 schema 的
+   属性名生成（`weatherArguments()` / `recallArguments()`），不写死；取证程序同步修正（8d6de22）；README 示例 4
+   用一句话解释了 `arg0`。真机不受影响：模型照 schema 传参，README 里原有的 `toolSearchTool({"arg0":..})` 即是例证；
+   `SessionRecallTools` 在 `spring-ai-session` jar 里、带 `-parameters` 编译，形参名正常。
+   **未处理、留给用户决定**：要不要给 agent-demo（或全仓）也开 `-parameters`，让形参名对模型可见。
+2. **示例输出**：真机上模型的回答动辄几段，事件行被撑成多行；压缩示例每轮问「第N句」时模型答非所问。
+   处理（8a0fdd3）：事件行折叠空白并截到 60 字（有用例钉住）；压缩示例改成每轮请模型记住一件事，
+   召回示例的闲聊轮换成三句日常话。条数与压缩行为不变。
+3. **召回示例的轮次日志只并入召回那一问**（计划写的是并入全部请求）：否则轮次编号会把前 4 轮也数进去。
+4. **测试数**：计划 18，实际 20——Task 3 多一个「入参落在关键词形参上」的辅助用例，输出修正多一个事件行用例。
+5. **boot-demo 的验证手段**：按设计不加测试，Task 6 / 7 的完成判据是构建 + 真机探测 / 两遍运行，不是测试命令。
+
+### §9 各项的验证结果
+
+1. 召回不确定性：带引导的提问两次真机均一次通过（见上）。
+2. 文件型 H2 的自动建表与 Bean：只加依赖与配置后启动，`JdbcSessionRepository`、`DefaultSessionService`、
+   `HikariDataSource` 三个 Bean 都在，`~/.springai-boot-demo/sessions.mv.db` 当场建出。用的是
+   `initialize-schema=always`，没有验证 Boot 默认的 `embedded` 模式是否覆盖文件型 H2。
+3. API key：可用，README 的输出都是真机跑出来的，没有「待补」。
+4. `spring-boot-starter-jdbc` 的副作用：本模块一启动就建出库文件（README 已注明），不必等到运行示例 4；
+   多出 Hikari 连接池与事务管理器。启动耗时没有量化对比。
+5. 改号：agent-demo README 的小节标题、菜单号与交叉引用已逐条复核，根 README 的「示例 N」也对过。
+6. CI 的 JDK 17 一侧：**未验证**——需要分支推送后在 Actions 里看，本机只有 JDK 21。
+
+### 顺带发现、没有动的陈旧内容
+
+- 根 `README.md` 写「先从 Spring AI 2.0 学起」、`AGENTS.md` 写「Spring AI 2.0.x」，而实际已是 2.1.0。
+- `springai-agent-demo/README.md` 两处把 `spring-ai-agent-utils` 写成 0.13.0，父 pom 里是 0.14.0。
