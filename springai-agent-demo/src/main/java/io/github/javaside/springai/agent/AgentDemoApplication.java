@@ -5,6 +5,7 @@ import io.github.javaside.springai.agent.demo.Demo;
 import io.github.javaside.springai.agent.demo.MultiStepAgentDemo;
 import io.github.javaside.springai.agent.demo.SessionCompactionDemo;
 import io.github.javaside.springai.agent.demo.SessionMemoryDemo;
+import io.github.javaside.springai.agent.demo.SessionRecallDemo;
 import io.github.javaside.springai.agent.demo.SkillToolDemo;
 import io.github.javaside.springai.agent.demo.TodoWriteToolDemo;
 import io.github.javaside.springai.agent.demo.ToolCallingDemo;
@@ -53,6 +54,7 @@ public class AgentDemoApplication {
                 new ChatMemoryDemo(chatClient),
                 new SessionMemoryDemo(chatClient),
                 new SessionCompactionDemo(chatClient),
+                new SessionRecallDemo(chatClient),
                 new MultiStepAgentDemo(chatClient),
                 new ToolMemoryAdvisorDemo(chatClient),
                 new ToolSearchDemo(chatClient),
