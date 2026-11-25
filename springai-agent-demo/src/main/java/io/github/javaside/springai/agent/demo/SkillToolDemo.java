@@ -19,7 +19,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * 示例 6：Skill（技能）能力 —— 用第三方社区库 spring-ai-agent-utils 的 {@link SkillsTool}。
+ * 示例 9：Skill（技能）能力 —— 用第三方社区库 spring-ai-agent-utils 的 {@link SkillsTool}。
  *
  * <p><b>什么是 Skill？</b>Skill = 一个含 <code>SKILL.md</code> 的文件夹，
  * SKILL.md 由「YAML frontmatter（name + description）」+「正文指令」两部分组成，
@@ -62,7 +62,7 @@ public class SkillToolDemo implements Demo {
 
     @Override
     public int order() {
-        return 6;
+        return 9;
     }
 
     @Override

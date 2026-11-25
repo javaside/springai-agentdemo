@@ -23,7 +23,7 @@ import org.springframework.ai.tool.toolsearch.index.regex.RegexToolIndex;
 import java.util.List;
 
 /**
- * 示例 5：工具搜索 / 动态工具发现（ToolSearchToolCallingAdvisor）。
+ * 示例 8：工具搜索 / 动态工具发现（ToolSearchToolCallingAdvisor）。
  *
  * <p>问题背景：工具一多，传统做法把【所有】工具定义一次性发给模型，既费 token，又容易让模型选错。
  *
@@ -59,7 +59,7 @@ public class ToolSearchDemo implements Demo {
 
     @Override
     public int order() {
-        return 5;
+        return 8;
     }
 
     @Override

@@ -30,7 +30,7 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * 示例 7：TodoWrite 任务清单 —— 用第三方社区库 spring-ai-agent-utils 的 {@link TodoWriteTool}。
+ * 示例 10：TodoWrite 任务清单 —— 用第三方社区库 spring-ai-agent-utils 的 {@link TodoWriteTool}。
  *
  * <p>TodoWrite 不是“业务待办存储”，而是给 Agent 自己用的任务管理工具：当用户给出复杂目标时，
  * 模型先把工作拆成结构化 todo，再随着执行推进把任务从 pending 改成 in_progress / completed。
@@ -63,7 +63,7 @@ public class TodoWriteToolDemo implements Demo {
 
     @Override
     public int order() {
-        return 7;
+        return 10;
     }
 
     @Override

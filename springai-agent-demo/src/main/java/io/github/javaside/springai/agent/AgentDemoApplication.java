@@ -3,12 +3,16 @@ package io.github.javaside.springai.agent;
 import io.github.javaside.springai.agent.demo.ChatMemoryDemo;
 import io.github.javaside.springai.agent.demo.Demo;
 import io.github.javaside.springai.agent.demo.MultiStepAgentDemo;
+import io.github.javaside.springai.agent.demo.SessionCompactionDemo;
+import io.github.javaside.springai.agent.demo.SessionMemoryDemo;
+import io.github.javaside.springai.agent.demo.SessionRecallDemo;
 import io.github.javaside.springai.agent.demo.SkillToolDemo;
 import io.github.javaside.springai.agent.demo.TodoWriteToolDemo;
 import io.github.javaside.springai.agent.demo.ToolCallingDemo;
 import io.github.javaside.springai.agent.demo.ToolMemoryAdvisorDemo;
 import io.github.javaside.springai.agent.demo.ToolSearchDemo;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.deepseek.api.DeepSeekApi;
@@ -42,20 +46,32 @@ public class AgentDemoApplication {
                         .build())
                 .build();
 
-        ChatClient chatClient = ChatClient.builder(chatModel)
+        new ConsoleMenu("Spring AI 智能体（Agent）示例（原始 API）", demos(buildChatClient(chatModel))).run();
+    }
+
+    /**
+     * 所有示例共享的 ChatClient。会话 advisors 不挂在这里：会话记忆 advisor 要求每个请求都带会话 id，
+     * 缺了会直接抛异常，所以由各个会话示例按请求传入（见 {@code SessionDemoSupport}）。
+     */
+    static ChatClient buildChatClient(ChatModel chatModel) {
+        return ChatClient.builder(chatModel)
                 .defaultSystem("你是一个会使用工具的中文 AI 助手。需要外部信息时请调用合适的工具，再据此回答。")
                 .build();
+    }
 
-        List<Demo> demos = List.of(
+    /** 全部示例，按菜单顺序排列（与各自的 {@code order()} 一致）。 */
+    static List<Demo> demos(ChatClient chatClient) {
+        return List.of(
                 new ToolCallingDemo(chatClient),
                 new ChatMemoryDemo(chatClient),
+                new SessionMemoryDemo(chatClient),
+                new SessionCompactionDemo(chatClient),
+                new SessionRecallDemo(chatClient),
                 new MultiStepAgentDemo(chatClient),
                 new ToolMemoryAdvisorDemo(chatClient),
                 new ToolSearchDemo(chatClient),
                 new SkillToolDemo(chatClient),
                 new TodoWriteToolDemo(chatClient)
         );
-
-        new ConsoleMenu("Spring AI 智能体（Agent）示例（原始 API）", demos).run();
     }
 }

@@ -20,7 +20,7 @@
 这是一个 Java 后端开发者**从零学会 Agent 开发**的实战项目。
 
 路线只有一条：先从 **Spring AI 2.0** 学起，把 Agent 开发的基本概念一个个跑通——对话、提示词模板、
-流式输出、结构化输出、RAG、工具调用、对话记忆、自动装配、终端界面与 TUI 框架；再用这些知识去读透一个
+流式输出、结构化输出、RAG、工具调用、对话记忆与会话记忆、自动装配、终端界面与 TUI 框架；再用这些知识去读透一个
 真正的编码智能体 **springai-code-tui**，完成实战。走完这条路，Agent 开发对你来说就不再是黑盒。
 
 全项目只有一个核心公式——**Agent = 模型 + 工具 + 记忆 + 循环**。六个模块按这条路线排列
@@ -29,8 +29,8 @@
 | 步 | 模块 | 对应公式 | 一句话 |
 |----|------|---------|--------|
 | ① | [springai-core-demo](springai-core-demo/README.md) | 模型 | 对话、模板、流式、结构化输出、RAG |
-| ② | [springai-agent-demo](springai-agent-demo/README.md) | 工具 + 记忆 + 循环 | `@Tool` 工具调用、对话记忆、多步 Agent |
-| ③ | [springai-boot-demo](springai-boot-demo/README.md) | （工程化） | Spring Boot 自动装配、MCP |
+| ② | [springai-agent-demo](springai-agent-demo/README.md) | 工具 + 记忆 + 循环 | `@Tool` 工具调用、对话记忆与会话记忆（Session Memory）、多步 Agent |
+| ③ | [springai-boot-demo](springai-boot-demo/README.md) | （工程化） | Spring Boot 自动装配、MCP、会话落库 |
 | ④ | [springai-jline-demo](springai-jline-demo/README.md) | （界面） | JLine 3 终端界面基础 |
 | ⑤ | [springai-tamboui-demo](springai-tamboui-demo/README.md) | （界面·框架） | TamboUI 终端 UI 框架入门课程（八课：创建→渲染模型→文本→组件→布局→事件→DSL→行内） |
 | ⑥ | [springai-code-tui](springai-code-tui/README.md) | 全部组装 | 真正的命令行编码智能体 |
@@ -73,7 +73,7 @@
 
 有了对话能力，接下来教模型调用你的 Java 代码。依然是纯 Java、手动创建。
 
-**建议先跑一遍示例 3「多步 Agent」**——看模型自己规划、连续调用工具完成任务，
+**建议先跑一遍示例 6「多步 Agent」**——看模型自己规划、连续调用工具完成任务，
 直观感受一次「智能」如何发生，再回头拆解零件。
 
 核心（Spring AI 原生）：
@@ -81,17 +81,20 @@
 | # | 示例 | 你将学到 |
 |---|------|---------|
 | 1 | 工具调用 | `@Tool` 定义方法、`tools(...)` 注册，模型按需调用 Java 代码 |
-| 2 | 对话记忆 | `MessageWindowChatMemory` + 记忆 Advisor，多轮对话不忘上文 |
-| 3 | 多步 Agent | 模型自动规划、连续调用多个工具完成一个任务（综合题） |
-| 4 | Advisor 顺序 | 记忆与工具 Advisor 的顺序决定中间消息是否入记忆（2 条 vs 6 条，一跑便知） |
+| 2 | 对话记忆（ChatMemory，已弃用） | `MessageWindowChatMemory` + 记忆 Advisor，多轮对话不忘上文；留着与示例 3 对照 |
+| 3 | 会话记忆 | 会话是只追加的事件日志，模型看到的是日志的视图（ChatMemory 的继任者） |
+| 4 | 会话压缩 | 压缩只往日志追加一条边界、不改写日志；边界永远落在回合之间 |
+| 5 | 会话召回 | 被压缩的内容仍在日志里，模型用 `conversation_search` 工具自己搜回来 |
+| 6 | 多步 Agent | 模型自动规划、连续调用多个工具完成一个任务（综合题） |
+| 7 | Advisor 顺序（ChatMemory，已弃用） | 记忆与工具 Advisor 的顺序决定中间消息是否入记忆（2 条 vs 6 条，一跑便知；只对 ChatMemory 成立） |
 
 进阶（第三方库增强件）：
 
 | # | 示例 | 你将学到 |
 |---|------|---------|
-| 5 | 工具搜索 | `ToolSearchToolCallingAdvisor` 按需发现工具，工具多时省 token |
-| 6 | Skill 技能 | 把「可复用的领域指令」按需注入对话 |
-| 7 | TodoWrite 任务清单 | 让 Agent 显式维护任务列表并实时展示进度 |
+| 8 | 工具搜索 | `ToolSearchToolCallingAdvisor` 按需发现工具，工具多时省 token |
+| 9 | Skill 技能 | 把「可复用的领域指令」按需注入对话 |
+| 10 | TodoWrite 任务清单 | 让 Agent 显式维护任务列表并实时展示进度 |
 
 **本步核心认知**：工具 + 记忆 + 模型自己的决策循环，就是 Agent 的全部。
 **工程提醒**：模型能「调用」你的代码，不等于它会「使用」你的代码——参数怎么设计、错误怎么反馈，都是工程问题。
@@ -112,6 +115,7 @@
 | 1 | 自动配置揭秘（建议先看）| 打印自动配置好的 Bean 来自哪个 jar（零成本，不调模型） |
 | 2 | 极简对话 | 注入即用的 `ChatClient`（由 starter 自动配置的 Builder 构建），底层全自动 |
 | 3 | MCP 客户端 | 几行 properties 即可接入外部 MCP Server（可选，需 Node.js；MCP 是什么见模块 README）|
+| 4 | 会话落库 | 会话 JDBC starter 自动配置 `SessionService`，会话日志进 H2 文件库，重启进程仍在 |
 
 **本步核心认知**：starter = 原始库 + 自动配置。跑一遍「自动配置揭秘」，对照第 1 步手动创建的对象，
 你就能弄清 Boot 替你做了什么。这也是初学者最容易迷糊的地方。
@@ -159,7 +163,7 @@ Agent 需要 UI。JLine 3 的 `TerminalBasics` 是一个单文件示例，按 `T
 |---|---|
 | 工具调用（第 2 步） | 文件读写、Shell、Grep/Glob、联网搜索（需另配搜索 Key）、网页抓取 |
 | 多步 Agent（第 2 步） | 自动规划并连续调用工具完成编码任务 |
-| 对话记忆（第 2 步） | 升级为事件溯源会话（每轮对话当事件追加存储、可重放）+ 自动压缩（接入 Advisor 链），另有跨会话长期记忆与 `AGENTS.md` 项目指令，详见模块 README |
+| 对话记忆 / 会话记忆（第 2 步） | 会话示例里的内存仓库换成文件仓库，窗口压缩换成按 token 预算触发的摘要压缩（接入 Advisor 链），另有跨会话长期记忆与 `AGENTS.md` 项目指令，详见模块 README |
 | MCP（第 3 步） | 本地 stdio + 远程 Streamable HTTP，`/mcp` 面板运行期启停，`/reload` / 面板 `r` 键重载配置（无需重启） |
 | 终端基础（第 4 步）+ TUI 框架（第 5 步） | 单栏对话式 TUI：流式输出、计划面板、任务面板、状态栏（TamboUI 行内模式 + Toolkit DSL） |
 
