@@ -43,6 +43,9 @@ jobs:
       - name: 测试 springai-tamboui-demo
         run: mvn -B -pl springai-tamboui-demo -am test
 
+      - name: 测试 springai-agent-demo
+        run: mvn -B -pl springai-agent-demo -am test
+
       - name: 编译其余模块
         run: mvn -B -DskipTests package
 
@@ -51,7 +54,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: surefire-reports-jdk${{ matrix.java }}
-          path: springai-code-tui/target/surefire-reports/
+          path: |
+            springai-code-tui/target/surefire-reports/
+            springai-agent-demo/target/surefire-reports/
           retention-days: 7
 
   dist:
