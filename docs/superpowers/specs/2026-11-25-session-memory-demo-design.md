@@ -585,6 +585,49 @@ boot-demo 不加测试（§4）。它的证据是两份真机输出：首次运�
 5. 改号：agent-demo README 的小节标题、菜单号与交叉引用已逐条复核，根 README 的「示例 N」也对过。
 6. CI 的 JDK 17 一侧：**未验证**——需要分支推送后在 Actions 里看，本机只有 JDK 21。
 
+### 终审（2026-11-25）
+
+全新上下文的评审员通看全分支（13 个提交）：无 Critical；一条 Important——boot-demo 的 H2 文件库同一时间只能被
+一个进程打开，而上一个实例还停在菜单上时再启动一个，新实例在启动阶段就报
+`Database may be already in use: ".../sessions.mv.db"`、连菜单都进不去，README 却没告诉读者（已实测复现并补文档）。
+另把评审员定为 Minor 的一条提为 Important 修掉：「自动配置揭秘」的引语在接入 starter 之后把 `DataSource` 等说成
+「在 core/agent 里都要手动 new」，已不成立（已改）。
+
+其余 Minor 没有动，留给维护者决定要不要顺手处理：
+
+- 压缩边界那一行标的是 `✗`，与图例「已被压缩覆盖」自相矛盾（`SessionCompactionDemo.renderLog` 及对应测试的期望）。
+- `SessionJdbcDemo` 的注释「会话 advisors 没有状态」不准确：`SessionTurnAdvisor` 持有一个 `compacting` 集合。
+- agent-demo README「落库见 springai-boot-demo」可以改成相对链接。
+- `SessionRecallDemo` 的 `SEED_TURNS` 与 `SMALL_TALK.size()` 是隐式耦合（`get(i - 2)`）。
+- `ScriptedChatModel` 只记消息条数；加记类型序列可以直接断言 prompt 的内容。
+
+评审员搁置、由实施者裁定不在本分支处理的：全仓或 agent-demo 要不要开 `-parameters`（留给用户）；本分支之前就
+陈旧的内容（根 README / `AGENTS.md` 的「Spring AI 2.0」、agent-demo README 的 agent-utils 0.13.0、两条无版本号
+外链、CI 失败报告不含 tamboui-demo）；`TodoWriteToolDemo` 仍用 `MessageChatMemoryAdvisor`（§5.5 的决定）；
+`initialize-schema` 用 `always`（§6）；召回那一问不带引导的情况没有验证；CI 的 JDK 17 一侧没有验证；取证程序不在
+任何构建里（附录 A）；并发开两个 boot-demo 实例不改成 `AUTO_SERVER`（README 已写明一次只开一个）。
+
+### TDD 与变异证据
+
+执行时每个用例都先看到红；下面是各任务的「红」与「变异变红」的实际现象（日志在执行工作区，清理后不保留）：
+
+- Task 1：红 = 测试编译失败（`SessionMemoryDemo` 不存在）。把历史读取挪到第二问之后 →
+  `expected: <[USER, ASSISTANT]> but was: <[USER, ASSISTANT, USER, ASSISTANT]>`。
+- Task 2：红 = 测试编译失败。第一次跑绿时 2 个用例没过，根因两处——计划里的断言拿压缩后前 8 条与压缩前的 6 条比
+  （必然不等），以及工具入参名（见上文「工具入参的属性名」）。变异 `TurnCountTrigger(maxTurns + 1)` → 4/4 红。
+- Task 3：红 = 测试编译失败。去掉 `sessionIdInToolContext(true)` →
+  `IllegalArgument ToolContext is required by the method as an argument`。
+  **计划 Task 3 Step 5 预测的是「搜索返回 no session id was provided」，预测有误**：不带工具上下文时工具循环
+  在调用前就拒绝，根本到不了工具方法内部。
+- Task 4：刻画库行为的两条用例直接通过（本仓库没有对应实现可红），用变异确认断言有效：`lastN(4)` 改 `lastN(6)` →
+  `expected: <[1, 3, 5, 5, 5]> but was: <[1, 3, 5, 7, 7]>`；`lastTurns(1)` 改 `lastTurns(2)` → 视图 id 不符。
+- Task 5：红 = 测试编译失败。共享 `ChatClient` 挂上会话 advisors →
+  `IllegalStateException: No session ID found in advisor context`；`order` 改回旧值 →
+  `expected: <[1..10]> but was: <[1, 2, 3, 4, 5, 3, 7, 8, 9, 10]>`。
+- 输出修正（8a0fdd3）：新用例先红（多行回答被原样打印），改完转绿。
+- Task 6 / 7：按设计不加测试，证据是真机探测（三个 Bean 均在）与两遍运行。
+- Task 8：CI 的同一条命令在本机跑 20 例全绿。
+
 ### 顺带发现、没有动的陈旧内容
 
 - 根 `README.md` 写「先从 Spring AI 2.0 学起」、`AGENTS.md` 写「Spring AI 2.0.x」，而实际已是 2.1.0。
