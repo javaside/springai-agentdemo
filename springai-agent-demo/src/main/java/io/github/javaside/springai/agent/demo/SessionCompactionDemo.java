@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
  * <p>跑完记得住的一句话：<b>压缩不改写日志，只追加一条边界；此后模型看到的是边界之后的视图，
  * 且边界永远落在回合之间。</b>
  *
- * <p>第一幕用 5 轮短问答看「日志只增、视图缩回」；第二幕让一轮里带上工具调用，看压缩不会把
+ * <p>第一幕用 5 轮对话（每轮请模型记住一件事）看「日志只增、视图缩回」；第二幕让一轮里带上工具调用，看压缩不会把
  * 「请求调用工具 → 工具返回」拆开（一个回合 = 一条用户消息及其后的全部内容）。
  */
 public class SessionCompactionDemo implements Demo {
@@ -42,6 +42,14 @@ public class SessionCompactionDemo implements Demo {
 
     /** 一轮纯问答固定追加 2 条事件（一问一答）。 */
     private static final int EVENTS_PER_PLAIN_TURN = 2;
+
+    /** 第一幕每轮请模型记住的一件事：句子短、有实际内容，模型答得也短，日志里一眼能看清。 */
+    private static final List<String> PLAIN_FACTS = List.of(
+            "请记住：我住在杭州。",
+            "请记住：我养了一只猫，叫团子。",
+            "请记住：我周末喜欢爬山。",
+            "请记住：我最近在学 Rust。",
+            "请记住：我最喜欢的编程语言是 Java。");
 
     private final ChatClient chatClient;
 
@@ -63,7 +71,7 @@ public class SessionCompactionDemo implements Demo {
     public void run() {
         ZoneId zone = ZoneId.systemDefault();
 
-        System.out.println("第一幕：5 轮短问答。视图超过 " + PLAIN_MAX_TURNS + " 个回合就压缩，只留最近 "
+        System.out.println("第一幕：5 轮对话，每轮请它记住一件事。视图超过 " + PLAIN_MAX_TURNS + " 个回合就压缩，只留最近 "
                 + PLAIN_KEEP_TURNS + " 个回合。\n");
         SessionService sessions = SessionDemoSupport.newSessions();
         String sessionId = "demo-compaction";
@@ -114,13 +122,14 @@ public class SessionCompactionDemo implements Demo {
                 .build();
     }
 
-    /** 在同一个会话上连问 turns 轮「第i句」，返回每轮结束后的（日志条数，视图条数）。 */
+    /** 在同一个会话上连聊 turns 轮（每轮请模型记住一件事），返回每轮结束后的（日志条数，视图条数）。 */
     static List<TurnStat> playPlainTurns(ChatClient chatClient, SessionService sessions, String sessionId,
             int turns) {
         List<Advisor> advisors = compactingAdvisors(sessions, PLAIN_MAX_TURNS, PLAIN_KEEP_TURNS);
         List<TurnStat> stats = new ArrayList<>();
         for (int i = 1; i <= turns; i++) {
-            SessionDemoSupport.ask(chatClient, advisors, sessionId, "第" + i + "句");
+            String turn = i <= PLAIN_FACTS.size() ? PLAIN_FACTS.get(i - 1) : "请记住：这是第" + i + "件事。";
+            SessionDemoSupport.ask(chatClient, advisors, sessionId, turn);
             stats.add(new TurnStat(sessions.getEvents(sessionId, EventFilter.all()).size(),
                     sessions.getEvents(sessionId, EventFilter.active()).size()));
         }

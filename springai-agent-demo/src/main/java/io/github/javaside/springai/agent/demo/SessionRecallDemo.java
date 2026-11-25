@@ -47,8 +47,11 @@ public class SessionRecallDemo implements Demo {
 
     private static final int KEEP_TURNS = 2;
 
-    /** 第 1 轮记住暗号，再聊 3 轮；第 4 轮后触发压缩，暗号那一轮离开视图。 */
+    /** 第 1 轮记住暗号，再聊 3 轮闲话；第 4 轮后触发压缩，暗号那一轮离开视图。 */
     private static final int SEED_TURNS = 4;
+
+    /** 第 2–4 轮的闲话：把暗号那一轮「挤出」最近两个回合。 */
+    private static final List<String> SMALL_TALK = List.of("今天天气不错。", "我中午吃了一碗面。", "下午还有一个会要开。");
 
     private final ChatClient chatClient;
 
@@ -107,7 +110,7 @@ public class SessionRecallDemo implements Demo {
             List<Advisor> extraAdvisors) {
         List<Advisor> advisors = recallAdvisors(sessions);
         for (int i = 1; i <= SEED_TURNS; i++) {
-            SessionDemoSupport.ask(chatClient, advisors, sessionId, i == 1 ? SECRET_TURN : "第" + i + "句，随便聊聊。");
+            SessionDemoSupport.ask(chatClient, advisors, sessionId, i == 1 ? SECRET_TURN : SMALL_TALK.get(i - 2));
         }
         int logSizeBefore = sessions.getEvents(sessionId, EventFilter.all()).size();
         int viewSizeBefore = sessions.getEvents(sessionId, EventFilter.active()).size();

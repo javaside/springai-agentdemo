@@ -2,6 +2,7 @@ package io.github.javaside.springai.agent.demo;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.session.EventType;
@@ -45,5 +46,21 @@ class SessionMemoryDemoTest {
                 SessionMemoryDemo.describeEvent(1, user, ZoneId.of("Asia/Shanghai")));
         assertEquals("#9  COMPACTION  3f2a9c41  10:12:40.000",
                 SessionMemoryDemo.describeEvent(9, boundary, ZoneId.of("Asia/Shanghai")));
+    }
+
+    @Test
+    void describeEventKeepsOneEventPerLine() {
+        // 真机上模型的回答动辄几段、带空行；日志里一条事件必须仍然占一行
+        SessionEvent multiLine = SessionEvent.builder().id("3f2a9c41").sessionId("user-1")
+                .timestamp(Instant.parse("2026-11-25T02:12:33.120Z"))
+                .message(AssistantMessage.builder().content("好的，已记住。\n\n\n我会在本次对话中记得。").build()).build();
+        SessionEvent longText = SessionEvent.builder().id("3f2a9c41").sessionId("user-1")
+                .timestamp(Instant.parse("2026-11-25T02:12:33.120Z"))
+                .message(UserMessage.builder().text("x".repeat(80)).build()).build();
+
+        assertEquals("#1  assistant  3f2a9c41  10:12:33.120  好的，已记住。 我会在本次对话中记得。",
+                SessionMemoryDemo.describeEvent(1, multiLine, ZoneId.of("Asia/Shanghai")));
+        assertEquals("#2  user       3f2a9c41  10:12:33.120  " + "x".repeat(60) + "…",
+                SessionMemoryDemo.describeEvent(2, longText, ZoneId.of("Asia/Shanghai")));
     }
 }

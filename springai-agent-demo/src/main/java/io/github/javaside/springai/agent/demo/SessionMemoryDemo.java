@@ -38,6 +38,9 @@ public class SessionMemoryDemo implements Demo {
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
 
+    /** 正文最多显示这么多字符：真机上模型的回答动辄几段，日志里一条事件要仍然占一行。 */
+    private static final int MAX_TEXT = 60;
+
     private final ChatClient chatClient;
 
     public SessionMemoryDemo(ChatClient chatClient) {
@@ -117,14 +120,20 @@ public class SessionMemoryDemo implements Demo {
         }
         // 工具「返回结果」的消息：内容在各条返回里
         if (message instanceof ToolResponseMessage toolResult) {
-            String data = toolResult.getResponses().stream()
+            String data = clean(toolResult.getResponses().stream()
                     .map(ToolResponseMessage.ToolResponse::responseData)
-                    .collect(Collectors.joining(" "))
-                    .replaceAll("\\s+", " ")
-                    .trim();
+                    .collect(Collectors.joining(" ")));
             return data.length() > 40 ? data.substring(0, 40) + "…" : data;
         }
-        return message.getText();
+        return truncate(clean(message.getText()));
+    }
+
+    private static String clean(String s) {
+        return s == null ? "" : s.replaceAll("\\s+", " ").trim();
+    }
+
+    private static String truncate(String s) {
+        return s.length() > MAX_TEXT ? s.substring(0, MAX_TEXT) + "…" : s;
     }
 
     /** 两轮对话的过程数据：两轮的回答、第 2 轮发出前活跃视图里的事件、两轮后的整份日志。 */
