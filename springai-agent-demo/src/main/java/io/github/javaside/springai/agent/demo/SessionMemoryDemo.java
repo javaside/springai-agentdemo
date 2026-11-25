@@ -2,6 +2,9 @@ package io.github.javaside.springai.agent.demo;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionService;
@@ -10,6 +13,7 @@ import org.springframework.ai.session.advisor.SessionAdvisors;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 示例 3：会话记忆（Session Memory）—— 会话是一份只追加的事件日志。
@@ -104,7 +108,23 @@ public class SessionMemoryDemo implements Demo {
     }
 
     private static String body(SessionEvent event) {
-        return event.getMessage().getText();
+        Message message = event.getMessage();
+        // 助手「请求调用工具」的消息：正文通常为空，真正的内容在工具调用里
+        if (message instanceof AssistantMessage assistant && assistant.hasToolCalls()) {
+            return assistant.getToolCalls().stream()
+                    .map(call -> "🔧 " + call.name() + "(" + call.arguments() + ")")
+                    .collect(Collectors.joining(" "));
+        }
+        // 工具「返回结果」的消息：内容在各条返回里
+        if (message instanceof ToolResponseMessage toolResult) {
+            String data = toolResult.getResponses().stream()
+                    .map(ToolResponseMessage.ToolResponse::responseData)
+                    .collect(Collectors.joining(" "))
+                    .replaceAll("\\s+", " ")
+                    .trim();
+            return data.length() > 40 ? data.substring(0, 40) + "…" : data;
+        }
+        return message.getText();
     }
 
     /** 两轮对话的过程数据：两轮的回答、第 2 轮发出前活跃视图里的事件、两轮后的整份日志。 */
