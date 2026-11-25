@@ -3,6 +3,7 @@ package io.github.javaside.springai.agent;
 import io.github.javaside.springai.agent.demo.ChatMemoryDemo;
 import io.github.javaside.springai.agent.demo.Demo;
 import io.github.javaside.springai.agent.demo.MultiStepAgentDemo;
+import io.github.javaside.springai.agent.demo.SessionMemoryDemo;
 import io.github.javaside.springai.agent.demo.SkillToolDemo;
 import io.github.javaside.springai.agent.demo.TodoWriteToolDemo;
 import io.github.javaside.springai.agent.demo.ToolCallingDemo;
@@ -49,6 +50,7 @@ public class AgentDemoApplication {
         List<Demo> demos = List.of(
                 new ToolCallingDemo(chatClient),
                 new ChatMemoryDemo(chatClient),
+                new SessionMemoryDemo(chatClient),
                 new MultiStepAgentDemo(chatClient),
                 new ToolMemoryAdvisorDemo(chatClient),
                 new ToolSearchDemo(chatClient),
