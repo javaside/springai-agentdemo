@@ -38,7 +38,9 @@ public class AutoConfigInspectDemo implements Demo {
                 「自动配置(auto-configuration)」是 Spring Boot 最核心的机制：
                 启动时它会根据 classpath 上有哪些 starter，自动创建并注册一批 Bean；
                 你无需写 @Bean / new，在构造器里声明类型就能注入使用。
-                下面这些 Bean 在 core/agent 里都要手动 new，这里却全是自动配置出来的：
+                下面前四个 Bean（EmbeddingModel / ChatModel / ChatClient.Builder / ChatClient）在 core/agent 里
+                都要手动 new，这里却是自动配置出来的；后三个（DataSource / SessionRepository / SessionService）
+                来自会话 JDBC starter，同样一行 new 都不用写：
                 """);
 
         inspect("EmbeddingModel", EmbeddingModel.class,

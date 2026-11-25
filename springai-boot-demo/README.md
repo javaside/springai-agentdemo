@@ -12,6 +12,11 @@ mvn -pl springai-boot-demo spring-boot:run
 # 或：mvn -pl springai-boot-demo -am package && java -jar springai-boot-demo/target/springai-boot-demo-<version>.jar
 ```
 
+> 注意：本模块**一启动**就会在 `~/.springai-boot-demo/` 下建出 H2 文件库（会话落库用的，见下文「会话落库」）。
+> H2 文件库同一时间只能被一个进程打开：想验证「重启不丢」，先在第一个实例里选 `0` 退出，再启动第二个。
+> 第一个还开着时就再启动一个，第二个会在启动阶段直接失败（`Database may be already in use:
+> ".../sessions.mv.db"`），连菜单都进不去。
+
 ## 示例清单
 
 | 菜单项 | 示例 | 关键类 | 你将学到 |
@@ -31,8 +36,9 @@ mvn -pl springai-boot-demo spring-boot:run
 | 业务代码 | 需要先接线再使用 | 直接 `@Autowired` / 构造器注入即用 |
 | 会话仓库 | 两行手动接线：`DefaultSessionService.builder().sessionRepository(InMemorySessionRepository…)` | 注入 `SessionService` 即用，仓库由 starter 配成 JDBC（示例 4） |
 
-运行「自动配置揭秘」示例，会看到容器里自动配置好的 `EmbeddingModel`、`ChatModel`、`ChatClient.Builder`
-分别来自哪个 jar——这就是 starter 在背后替你做的事。
+运行「自动配置揭秘」示例，会看到容器里自动配置好的 `EmbeddingModel`、`ChatModel`、`ChatClient.Builder`，
+以及会话 JDBC starter 带进来的 `DataSource`、`SessionRepository`、`SessionService`，分别来自哪个 jar——
+这就是 starter 在背后替你做的事。
 
 ## 会话落库（示例 4）
 
@@ -68,6 +74,10 @@ starter 自带 `spring-boot-starter-jdbc`（DataSource / JdbcTemplate / 事务�
 要自己加。`initialize-schema=always` 让它每次启动都执行建表脚本（H2 版全是 `CREATE TABLE IF NOT EXISTS`）——
 所以本模块一启动就会在用户目录下建出库文件，不必等到运行示例 4。用业务库时把 `spring.datasource.*` 指过去即可，
 starter 支持 PostgreSQL / MySQL / MariaDB / SQL Server / H2。
+
+H2 文件库同一时间只允许一个进程打开（这是模块级配置，启动时就要连库建表）：要演示「重启后还在」，
+**先在上一个实例里选 `0` 退出，再启动下一个**；上一个还开着时再启动，新实例会在启动阶段报
+`Database may be already in use` 而失败，连菜单都进不去。
 
 会话日志就是表里的行：`AI_SESSION`（会话）、`AI_SESSION_EVENT`（日志，一行一条事件）、`AI_SESSION_INDEX`
 （被索引的会话元数据）。示例固定用会话 `boot-demo-user`。第一遍运行（真实运行片段）：
